@@ -3,11 +3,15 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/shell"
 )
 
 func TestHookRunnerPreToolBlockByExitCode2(t *testing.T) {
@@ -148,6 +152,162 @@ func TestAgentDoesNotTriggerUserPromptOrStopHooks(t *testing.T) {
 	}
 	if calls != 0 {
 		t.Fatalf("expected 0 hook invocations in agent for UserPromptSubmit/Stop, got %d", calls)
+	}
+}
+
+func TestDefaultHookSpawnerUsesResolvedUnixShell(t *testing.T) {
+	oldResolveHookShell := resolveHookShell
+	resolveHookShell = shell.Resolver{GOOS: "linux"}.Resolve
+	defer func() {
+		resolveHookShell = oldResolveHookShell
+	}()
+
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "stdout.txt")
+	res := defaultHookSpawner(context.Background(), HookSpawnInput{
+		Command:   "printf %s \"$PWD\" > stdout.txt",
+		CWD:       dir,
+		TimeoutMS: 1000,
+	})
+	if res.SpawnErr != nil {
+		t.Fatalf("SpawnErr = %v", res.SpawnErr)
+	}
+	if res.ExitCode != 0 {
+		t.Fatalf("ExitCode = %d, stderr=%q", res.ExitCode, res.Stderr)
+	}
+	raw, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read stdout file failed: %v", err)
+	}
+	if got := strings.TrimSpace(string(raw)); got != dir {
+		t.Fatalf("PWD = %q, want %q", got, dir)
+	}
+}
+
+func TestDefaultHookSpawnerUsesResolvedWindowsPowerShellArgs(t *testing.T) {
+	oldResolveHookShell := resolveHookShell
+	var gotCommand string
+	resolveHookShell = func(command string) (shell.ShellSpec, error) {
+		gotCommand = command
+		return shell.Resolver{
+			GOOS: "windows",
+			LookPath: func(file string) (string, error) {
+				if file == "pwsh" {
+					return "echo", nil
+				}
+				return "", errors.New("not found")
+			},
+		}.Resolve(command)
+	}
+	defer func() {
+		resolveHookShell = oldResolveHookShell
+	}()
+
+	res := defaultHookSpawner(context.Background(), HookSpawnInput{Command: "Write-Output hi", TimeoutMS: 1000})
+	if res.SpawnErr != nil {
+		t.Fatalf("SpawnErr = %v", res.SpawnErr)
+	}
+	wantStdout := "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command Write-Output hi\n"
+	if res.Stdout != wantStdout {
+		t.Fatalf("Stdout = %q, want %q", res.Stdout, wantStdout)
+	}
+	if gotCommand != "Write-Output hi" {
+		t.Fatalf("resolver command = %q", gotCommand)
+	}
+}
+
+func TestDefaultHookSpawnerResolverFailureReturnsSpawnErr(t *testing.T) {
+	oldResolveHookShell := resolveHookShell
+	resolveHookShell = func(command string) (shell.ShellSpec, error) {
+		return shell.ShellSpec{}, errors.New("PowerShell is required on Windows")
+	}
+	defer func() {
+		resolveHookShell = oldResolveHookShell
+	}()
+
+	res := defaultHookSpawner(context.Background(), HookSpawnInput{Command: "Write-Output hi"})
+	if res.SpawnErr == nil {
+		t.Fatal("expected SpawnErr")
+	}
+	if !strings.Contains(res.SpawnErr.Error(), "PowerShell is required") {
+		t.Fatalf("SpawnErr = %v", res.SpawnErr)
+	}
+	if res.ExitCode != -1 {
+		t.Fatalf("ExitCode = %d, want -1", res.ExitCode)
+	}
+}
+
+func TestHookRunnerBlocksOnHookResolverFailure(t *testing.T) {
+	r := NewHookRunner([]ResolvedHook{{HookConfig: HookConfig{Command: "Write-Output hi"}, Event: HookEventPreToolUse}}, ".")
+	r.spawner = func(_ context.Context, _ HookSpawnInput) HookSpawnResult {
+		return HookSpawnResult{ExitCode: -1, SpawnErr: errors.New("PowerShell is required on Windows")}
+	}
+
+	report := r.Run(context.Background(), HookPayload{Event: HookEventPreToolUse, ToolName: "exec_shell"})
+	if !report.Blocked {
+		t.Fatal("expected resolver failure to block PreToolUse")
+	}
+	if len(report.Outcomes) != 1 || report.Outcomes[0].Decision != HookDecisionBlock {
+		t.Fatalf("unexpected outcomes: %+v", report.Outcomes)
+	}
+	if !strings.Contains(report.Outcomes[0].Stderr, "PowerShell is required") {
+		t.Fatalf("stderr = %q", report.Outcomes[0].Stderr)
+	}
+}
+
+func TestHookShellResolverProducesExpectedPlatformArgs(t *testing.T) {
+	tests := []struct {
+		name     string
+		resolver shell.Resolver
+		command  string
+		wantBin  string
+		wantArgs []string
+	}{
+		{
+			name:     "unix",
+			resolver: shell.Resolver{GOOS: "linux"},
+			command:  "echo hi",
+			wantBin:  "/bin/sh",
+			wantArgs: []string{"-lc", "echo hi"},
+		},
+		{
+			name: "windows",
+			resolver: shell.Resolver{
+				GOOS: "windows",
+				LookPath: func(file string) (string, error) {
+					if file == "pwsh" {
+						return `C:\Program Files\PowerShell\7\pwsh.exe`, nil
+					}
+					return "", errors.New("not found")
+				},
+			},
+			command: "Write-Output hi",
+			wantBin: `C:\Program Files\PowerShell\7\pwsh.exe`,
+			wantArgs: []string{
+				"-NoLogo",
+				"-NoProfile",
+				"-NonInteractive",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-Command",
+				"Write-Output hi",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			spec, err := tt.resolver.Resolve(tt.command)
+			if err != nil {
+				t.Fatalf("Resolve returned error: %v", err)
+			}
+			if spec.Bin != tt.wantBin {
+				t.Fatalf("Bin = %q, want %q", spec.Bin, tt.wantBin)
+			}
+			if !reflect.DeepEqual(spec.Args, tt.wantArgs) {
+				t.Fatalf("Args = %#v, want %#v", spec.Args, tt.wantArgs)
+			}
+		})
 	}
 }
 
