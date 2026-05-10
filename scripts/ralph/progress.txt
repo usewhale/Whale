@@ -5,6 +5,7 @@
 - Background `exec_shell` tasks should resolve the shell before creating `exec.Cmd`; resolver failures are recorded on the task as `failed` with stderr set to the resolver error and nil exit code.
 - Hooks should resolve the shell before creating `exec.Cmd`; resolver failures should return `SpawnErr` so blocking hook events preserve existing block semantics.
 - Runtime-facing prompt text should use injectable `goos` and shell display name helpers so Windows/Linux assertions do not depend on the host platform.
+- Runtime-facing tool descriptions should use injectable `goos` helpers and shared shell display names so Windows-only guidance does not leak into Unix descriptions.
 
 ## 2026-05-10 16:01 - US-001
 - 实现了共享 shell resolver：新增 `internal/shell.ShellSpec`、默认 `Resolve`、可注入 `Resolver`、当前平台 shell display name helper。
@@ -73,4 +74,17 @@
   - 发现的 patterns：模型可见的运行时文案也应通过共享 `internal/shell` display name 保持与实际 shell resolver 一致。
   - 遇到的陷阱：Linux prompt 测试要做 Windows-only 文案的排除断言，避免后续把 PowerShell 限制泄漏到 Unix。
   - 有用的上下文：workspace root 说明现在属于 runtime environment block，后续改工具描述时需要继续保留 `cwd`/默认工作目录语义。
+---
+## 2026-05-10 16:19 - US-006
+- 将 `exec_shell` tool description 改为通过 `execShellDescription(goos)` 渲染，并按 Windows/Unix 输出当前 shell 语义。
+- Windows 描述明确 PowerShell、Windows path/env var、禁止 Linux-only 假设，并推荐 `Get-ChildItem`、`Get-Content`、`Select-String`、`Test-Path`、`Measure-Object`；Unix 描述保留 `/bin/sh` 语义且不包含 Windows-only 文案。
+- 更改的文件
+  - `internal/tools/catalog_shell.go`
+  - `internal/tools/catalog_shell_test.go`
+  - `scripts/ralph/prd.json`
+  - `scripts/ralph/progress.txt`
+- **未来迭代的学习：**
+  - 发现的 patterns：工具描述和 system prompt 一样，应通过可注入 `goos` helper 渲染，测试同时覆盖 include 和 exclude 断言。
+  - 遇到的陷阱：后续 US-007 的 allowlist 不应混入本 helper；描述文案和审批 read-only prefix 是独立行为面。
+  - 有用的上下文：`shell.ShellDisplayNameForGOOS` 可复用来保持工具描述里的 Unix shell 名称与实际 resolver 一致。
 ---

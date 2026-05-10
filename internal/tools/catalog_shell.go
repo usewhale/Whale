@@ -1,16 +1,18 @@
 package tools
 
 import (
+	"runtime"
 	"strings"
 
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/shell"
 )
 
 func (b *Toolset) shellTools() []core.Tool {
 	return []core.Tool{
 		toolFn{
 			name:        "exec_shell",
-			description: "Run a shell command from the current Whale workspace. Commands default to the workspace root; do not assume synthetic paths like /workspace. Use relative paths, or set cwd to a subdirectory inside the workspace, instead of prefixing commands with cd.",
+			description: execShellDescription(runtime.GOOS),
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
@@ -41,6 +43,24 @@ func (b *Toolset) shellTools() []core.Tool {
 			fn:       b.execShellWait,
 		},
 	}
+}
+
+func execShellDescription(goos string) string {
+	var b strings.Builder
+	b.WriteString("Run a shell command from the current Whale workspace. ")
+	if goos == "windows" {
+		b.WriteString("Commands are executed with PowerShell on Windows. ")
+		b.WriteString("Use PowerShell syntax, Windows-compatible paths, and Windows environment variables. ")
+		b.WriteString("Do not assume /tmp, grep -r, bash syntax, or Linux-only shell behavior. ")
+		b.WriteString("Prefer native commands such as Get-ChildItem, Get-Content, Select-String, Test-Path, and Measure-Object. ")
+	} else {
+		b.WriteString("Commands are executed with ")
+		b.WriteString(shell.ShellDisplayNameForGOOS(goos))
+		b.WriteString(". ")
+	}
+	b.WriteString("Commands default to the workspace root; do not assume synthetic paths like /workspace. ")
+	b.WriteString("Use relative paths, or set cwd to a subdirectory inside the workspace, instead of prefixing commands with cd.")
+	return b.String()
 }
 
 var shellReadOnlyAllowPrefixes = []string{
