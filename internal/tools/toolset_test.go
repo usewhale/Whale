@@ -313,6 +313,36 @@ func TestExecShellReturnsShellUnavailableWhenResolverFails(t *testing.T) {
 	}
 }
 
+func TestRunShellBackgroundFailsWhenResolverFails(t *testing.T) {
+	oldResolveShell := resolveShell
+	resolveShell = func(command string) (shell.ShellSpec, error) {
+		return shell.ShellSpec{}, errors.New("PowerShell is required on Windows")
+	}
+	t.Cleanup(func() {
+		resolveShell = oldResolveShell
+	})
+
+	task := newShellTaskRegistry().create("Write-Output hi", ".")
+	runShellBackground(context.Background(), t.TempDir(), task.Command, task)
+
+	snap := task.snapshot()
+	if snap.Status != "failed" {
+		t.Fatalf("status = %q, want failed", snap.Status)
+	}
+	if snap.ExitCode != nil {
+		t.Fatalf("exit code = %d, want nil", *snap.ExitCode)
+	}
+	if !strings.Contains(snap.Stderr, "PowerShell is required") {
+		t.Fatalf("stderr = %q, want resolver error", snap.Stderr)
+	}
+	if snap.Stdout != "" {
+		t.Fatalf("stdout = %q, want empty", snap.Stdout)
+	}
+	if snap.FinishedAt == nil {
+		t.Fatal("finishedAt is nil")
+	}
+}
+
 func TestApplyPatchUpdateAddDelete(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello\nworld\n"), 0o644); err != nil {

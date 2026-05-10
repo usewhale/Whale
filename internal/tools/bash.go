@@ -15,14 +15,6 @@ import (
 
 var resolveShell = shell.Resolve
 
-func shellCommand(command string) (string, []string) {
-	spec, err := resolveShell(command)
-	if err != nil {
-		return "", nil
-	}
-	return spec.Bin, spec.Args
-}
-
 func (b *Toolset) execShell(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
 	var in struct {
 		Command    string `json:"command"`
