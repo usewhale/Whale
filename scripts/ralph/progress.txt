@@ -9,6 +9,7 @@
 - Shell read-only approval prefixes should be selected through a GOOS-testable helper so Windows PowerShell commands can be allowed without leaking into Unix behavior.
 - User-facing policy and CLI wording should use neutral "shell command" terminology; Bash-specific names should stay out of approval prefix surfaces.
 - Shell tool hook documentation should match `exec_shell`; Whale does not translate hook commands between Unix shell syntax and PowerShell syntax.
+- Release workflow builds run from an Ubuntu matrix; Windows assets should be cross-compiled with `GOOS=windows`, `GOARCH=amd64`, `CGO_ENABLED=0`, uploaded as both `.exe` and `.zip`, with the zip staging filename renamed to `whale.exe`.
 
 ## 2026-05-10 16:01 - US-001
 - 实现了共享 shell resolver：新增 `internal/shell.ShellSpec`、默认 `Resolve`、可注入 `Resolver`、当前平台 shell display name helper。
@@ -129,4 +130,16 @@
   - 发现的 patterns：配置文档中的 shell tool hook match 应使用真实工具名 `exec_shell`，跨平台示例需要按 Unix/Windows 分开写。
   - 遇到的陷阱：Windows hook 支持不是命令翻译层；已有 Unix hook 命令在 Windows 上需要用户改写成 PowerShell。
   - 有用的上下文：`docs/configuration.md` 是 Windows shell behavior 和 hook 示例的主文档入口，后续安装文档属于 README story。
+---
+## 2026-05-10 16:32 - US-010
+- 在 GitHub Release workflow 的 build matrix 中新增 `windows/amd64`，生成 `dist/whale-windows-amd64.exe`。
+- 为 Windows release 产物增加 zip 打包，zip 内部文件名为 `whale.exe`，并让 artifact/upload/checksum 路径覆盖 `.exe` 和 `.zip`，同时保留现有 darwin/linux tar.gz 产物。
+- 更改的文件
+  - `.github/workflows/release.yml`
+  - `scripts/ralph/prd.json`
+  - `scripts/ralph/progress.txt`
+- **未来迭代的学习：**
+  - 发现的 patterns：release workflow 在 Ubuntu runner 上通过 matrix 和环境变量交叉编译，Windows 分支只需要改变产物命名与打包方式，不需要 Windows runner。
+  - 遇到的陷阱：zip 内部文件名必须是 `whale.exe`，不能直接把 `whale-windows-amd64.exe` 放进 zip；需要 staging 目录复制后再 zip。
+  - 有用的上下文：`dist/**/whale-*` upload pattern 会匹配 artifact 下载后的 `.exe`、`.zip` 和既有 tar.gz，`checksums.txt` 的 find 命令会覆盖所有这些文件。
 ---
