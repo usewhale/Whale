@@ -57,3 +57,63 @@ func TestExecShellDescriptionLinux(t *testing.T) {
 		}
 	}
 }
+
+func TestShellReadOnlyCheckWindows(t *testing.T) {
+	for _, command := range []string{
+		"Select-String TODO -Path *.go",
+		"Get-Content README.md -Head 20",
+		"Get-ChildItem -Recurse",
+		"get-childitem -recurse",
+		"git status --short",
+		"go test ./...",
+		"python --version",
+		"node --version",
+		"npm --version",
+		"npx --version",
+	} {
+		if !shellReadOnlyCheckForGOOS("windows", map[string]any{"command": command}) {
+			t.Fatalf("expected Windows command to be read-only: %s", command)
+		}
+	}
+
+	for _, command := range []string{
+		"grep TODO README.md",
+		"cat README.md",
+		"cargo test",
+		"python3 --version",
+		"Set-Content README.md value",
+	} {
+		if shellReadOnlyCheckForGOOS("windows", map[string]any{"command": command}) {
+			t.Fatalf("expected Windows command not to be read-only: %s", command)
+		}
+	}
+}
+
+func TestShellReadOnlyCheckLinux(t *testing.T) {
+	for _, command := range []string{
+		"grep TODO README.md",
+		"cat README.md",
+		"cargo test",
+		"cargo check --all-targets",
+		"cargo clippy",
+		"rustc --version",
+		"python3 --version",
+		"git diff --stat",
+		"go vet ./...",
+	} {
+		if !shellReadOnlyCheckForGOOS("linux", map[string]any{"command": command}) {
+			t.Fatalf("expected Linux command to be read-only: %s", command)
+		}
+	}
+
+	for _, command := range []string{
+		"Select-String TODO -Path *.go",
+		"Get-Content README.md -Head 20",
+		"Get-ChildItem -Recurse",
+		"rm README.md",
+	} {
+		if shellReadOnlyCheckForGOOS("linux", map[string]any{"command": command}) {
+			t.Fatalf("expected Linux command not to be read-only: %s", command)
+		}
+	}
+}

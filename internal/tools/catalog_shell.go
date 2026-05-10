@@ -63,21 +63,46 @@ func execShellDescription(goos string) string {
 	return b.String()
 }
 
-var shellReadOnlyAllowPrefixes = []string{
+var shellUnixReadOnlyAllowPrefixes = []string{
 	"ls", "pwd", "echo", "cat", "head", "tail", "wc", "file", "tree", "find", "grep", "rg",
+	"cargo test", "cargo check", "cargo clippy", "rustc --version",
+	"python3 --version",
+}
+
+var shellWindowsReadOnlyAllowPrefixes = []string{
+	"Get-ChildItem", "Get-Location", "Write-Output", "Get-Content", "Select-String",
+	"Measure-Object", "Test-Path", "Resolve-Path", "Get-Item", "Get-Command",
+}
+
+var shellDevelopmentReadOnlyAllowPrefixes = []string{
 	"git status", "git diff", "git log", "git show", "git branch", "git remote", "git rev-parse", "git config --get",
 	"go test", "go vet", "go version",
-	"cargo test", "cargo check", "cargo clippy", "rustc --version",
-	"python --version", "python3 --version", "node --version", "npm --version", "npx --version",
+	"python --version", "node --version", "npm --version", "npx --version",
+}
+
+func shellReadOnlyAllowPrefixesForGOOS(goos string) []string {
+	prefixes := make([]string, 0, len(shellDevelopmentReadOnlyAllowPrefixes)+len(shellUnixReadOnlyAllowPrefixes)+len(shellWindowsReadOnlyAllowPrefixes))
+	switch goos {
+	case "windows":
+		prefixes = append(prefixes, shellWindowsReadOnlyAllowPrefixes...)
+	default:
+		prefixes = append(prefixes, shellUnixReadOnlyAllowPrefixes...)
+	}
+	prefixes = append(prefixes, shellDevelopmentReadOnlyAllowPrefixes...)
+	return prefixes
 }
 
 func shellReadOnlyCheck(args map[string]any) bool {
+	return shellReadOnlyCheckForGOOS(runtime.GOOS, args)
+}
+
+func shellReadOnlyCheckForGOOS(goos string, args map[string]any) bool {
 	cmd, _ := args["command"].(string)
 	cmd = strings.ToLower(strings.TrimSpace(cmd))
 	if cmd == "" {
 		return false
 	}
-	for _, prefix := range shellReadOnlyAllowPrefixes {
+	for _, prefix := range shellReadOnlyAllowPrefixesForGOOS(goos) {
 		p := strings.ToLower(strings.TrimSpace(prefix))
 		if cmd == p || strings.HasPrefix(cmd, p+" ") {
 			return true
