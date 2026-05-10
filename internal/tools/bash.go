@@ -6,24 +6,14 @@ import (
 	"errors"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/shell"
 )
 
-func shellCommand(command string) (string, []string) {
-	if runtime.GOOS == "windows" {
-		for _, name := range []string{"bash", "sh"} {
-			if p, err := exec.LookPath(name); err == nil {
-				return p, []string{"-lc", command}
-			}
-		}
-		return "cmd", []string{"/c", command}
-	}
-	return "/bin/sh", []string{"-lc", command}
-}
+var resolveShell = shell.Resolve
 
 func (b *Toolset) execShell(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
 	var in struct {
@@ -76,8 +66,11 @@ func (b *Toolset) execShell(ctx context.Context, call core.ToolCall) (core.ToolR
 	}
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	bin, args := shellCommand(in.Command)
-	cmd := exec.CommandContext(cctx, bin, args...)
+	spec, err := resolveShell(in.Command)
+	if err != nil {
+		return marshalToolError(call, "shell_unavailable", err.Error()), nil
+	}
+	cmd := exec.CommandContext(cctx, spec.Bin, spec.Args...)
 	configureShellCommand(cmd)
 	cmd.Dir = workdir
 	var stdoutBuf bytes.Buffer
