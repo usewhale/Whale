@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -155,25 +158,49 @@ func TestAgentDoesNotTriggerUserPromptOrStopHooks(t *testing.T) {
 	}
 }
 
-func TestDefaultHookSpawnerUsesResolvedUnixShell(t *testing.T) {
+func TestDefaultHookSpawnerUsesResolvedShellSpec(t *testing.T) {
 	oldResolveHookShell := resolveHookShell
-	resolveHookShell = shell.Resolver{GOOS: "linux"}.Resolve
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable failed: %v", err)
+	}
+	var gotCommand string
+	resolveHookShell = func(command string) (shell.ShellSpec, error) {
+		gotCommand = command
+		return shell.ShellSpec{
+			Name:        "test-helper",
+			DisplayName: "test helper",
+			Bin:         exe,
+			Args:        []string{"-test.run=^TestHookSpawnerHelperProcess$"},
+		}, nil
+	}
 	defer func() {
 		resolveHookShell = oldResolveHookShell
 	}()
 
 	dir := t.TempDir()
 	outPath := filepath.Join(dir, "stdout.txt")
+	t.Setenv("WHALE_HOOK_SPAWNER_HELPER", "1")
 	res := defaultHookSpawner(context.Background(), HookSpawnInput{
-		Command:   "printf %s \"$PWD\" > stdout.txt",
+		Command:   "ignored by helper",
 		CWD:       dir,
+		Stdin:     "payload on stdin",
 		TimeoutMS: 1000,
 	})
 	if res.SpawnErr != nil {
 		t.Fatalf("SpawnErr = %v", res.SpawnErr)
 	}
-	if res.ExitCode != 0 {
+	if res.ExitCode != 7 {
 		t.Fatalf("ExitCode = %d, stderr=%q", res.ExitCode, res.Stderr)
+	}
+	if res.Stdout != "payload on stdin" {
+		t.Fatalf("Stdout = %q, want stdin payload", res.Stdout)
+	}
+	if res.Stderr != "helper stderr" {
+		t.Fatalf("Stderr = %q, want helper stderr", res.Stderr)
+	}
+	if gotCommand != "ignored by helper" {
+		t.Fatalf("resolver command = %q", gotCommand)
 	}
 	raw, err := os.ReadFile(outPath)
 	if err != nil {
@@ -182,6 +209,29 @@ func TestDefaultHookSpawnerUsesResolvedUnixShell(t *testing.T) {
 	if got := strings.TrimSpace(string(raw)); got != dir {
 		t.Fatalf("PWD = %q, want %q", got, dir)
 	}
+}
+
+func TestHookSpawnerHelperProcess(t *testing.T) {
+	if os.Getenv("WHALE_HOOK_SPAWNER_HELPER") != "1" {
+		return
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		_, _ = fmt.Fprint(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := os.WriteFile("stdout.txt", []byte(cwd), 0o600); err != nil {
+		_, _ = fmt.Fprint(os.Stderr, err)
+		os.Exit(1)
+	}
+	stdin, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		_, _ = fmt.Fprint(os.Stderr, err)
+		os.Exit(1)
+	}
+	_, _ = os.Stdout.Write(stdin)
+	_, _ = fmt.Fprint(os.Stderr, "helper stderr")
+	os.Exit(7)
 }
 
 func TestDefaultHookSpawnerUsesResolvedWindowsPowerShellArgs(t *testing.T) {
@@ -321,7 +371,7 @@ func (p *noToolProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool
 }
 
 func TestHookRunnerRealShellPreToolBlock(t *testing.T) {
-	r := NewHookRunner([]ResolvedHook{{HookConfig: HookConfig{Command: "echo blocked >&2; exit 2"}, Event: HookEventPreToolUse}}, ".")
+	r := NewHookRunner([]ResolvedHook{{HookConfig: HookConfig{Command: hookExitCommand("blocked", 2)}, Event: HookEventPreToolUse}}, ".")
 	report := r.Run(context.Background(), HookPayload{Event: HookEventPreToolUse, ToolName: "bash"})
 	if !report.Blocked {
 		t.Fatal("expected blocked")
@@ -332,7 +382,7 @@ func TestHookRunnerRealShellPreToolBlock(t *testing.T) {
 }
 
 func TestHookRunnerRealShellPostToolWarn(t *testing.T) {
-	r := NewHookRunner([]ResolvedHook{{HookConfig: HookConfig{Command: "echo post-warn >&2; exit 5"}, Event: HookEventPostToolUse}}, ".")
+	r := NewHookRunner([]ResolvedHook{{HookConfig: HookConfig{Command: hookExitCommand("post-warn", 5)}, Event: HookEventPostToolUse}}, ".")
 	report := r.Run(context.Background(), HookPayload{Event: HookEventPostToolUse, ToolName: "echo"})
 	if report.Blocked {
 		t.Fatal("post tool should not block")
@@ -345,7 +395,7 @@ func TestHookRunnerRealShellPostToolWarn(t *testing.T) {
 func TestHookRunnerStopPayloadCarriesAssistantTextAndTurn(t *testing.T) {
 	tmp := t.TempDir()
 	capture := filepath.Join(tmp, "payload.json")
-	cmd := "cat > " + capture + "; exit 0"
+	cmd := hookCaptureStdinCommand(capture)
 	r := NewHookRunner([]ResolvedHook{{HookConfig: HookConfig{Command: cmd}, Event: HookEventStop}}, ".")
 	payload := NewStopPayload("s1", tmp, "final answer", 3)
 	report := r.Run(context.Background(), payload)
@@ -363,6 +413,28 @@ func TestHookRunnerStopPayloadCarriesAssistantTextAndTurn(t *testing.T) {
 	if got.Event != HookEventStop || got.LastAssistantText != "final answer" || got.Turn != 3 || got.SessionID != "s1" {
 		t.Fatalf("unexpected payload: %+v", got)
 	}
+}
+
+func hookExitCommand(stderr string, code int) string {
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf("[Console]::Error.WriteLine('%s'); exit %d", powerShellSingleQuote(stderr), code)
+	}
+	return fmt.Sprintf("printf '%%s\\n' '%s' >&2; exit %d", posixSingleQuote(stderr), code)
+}
+
+func hookCaptureStdinCommand(path string) string {
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf("[IO.File]::WriteAllText('%s', [Console]::In.ReadToEnd(), [Text.UTF8Encoding]::new($false)); exit 0", powerShellSingleQuote(path))
+	}
+	return fmt.Sprintf("cat > '%s'; exit 0", posixSingleQuote(path))
+}
+
+func posixSingleQuote(s string) string {
+	return strings.ReplaceAll(s, "'", `'\''`)
+}
+
+func powerShellSingleQuote(s string) string {
+	return strings.ReplaceAll(s, "'", "''")
 }
 
 type staticTool struct {
