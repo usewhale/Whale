@@ -8,6 +8,7 @@
 - Runtime-facing tool descriptions should use injectable `goos` helpers and shared shell display names so Windows-only guidance does not leak into Unix descriptions.
 - Shell read-only approval prefixes should be selected through a GOOS-testable helper so Windows PowerShell commands can be allowed without leaking into Unix behavior.
 - User-facing policy and CLI wording should use neutral "shell command" terminology; Bash-specific names should stay out of approval prefix surfaces.
+- Shell tool hook documentation should match `exec_shell`; Whale does not translate hook commands between Unix shell syntax and PowerShell syntax.
 
 ## 2026-05-10 16:01 - US-001
 - 实现了共享 shell resolver：新增 `internal/shell.ShellSpec`、默认 `Resolve`、可注入 `Resolver`、当前平台 shell display name helper。
@@ -115,4 +116,17 @@
   - 发现的 patterns：审批前缀是 shell 命令概念，不应在 helper 名称或 CLI help 中绑定到 Bash。
   - 遇到的陷阱：需求只要求命名和文案中性化，不要改动 `hasCommandPrefix` 的 trim、lowercase、prefix 匹配语义。
   - 有用的上下文：验收搜索只针对 `internal docs` 下的 `bash command prefixes|bashCommandFromInput`，README 和脚本 fenced code 的 `bash` 不属于本 story。
+---
+## 2026-05-10 16:28 - US-009
+- 在 `docs/configuration.md` 新增 shell behavior 小节，说明 Linux/macOS 使用 `/bin/sh -lc`，Windows 使用 PowerShell 并按 `pwsh`、`powershell.exe` 顺序解析。
+- 更新 hook 文档，明确 Windows 不默认使用 `cmd.exe`、Git Bash 或 MSYS Bash，且 Whale 不自动翻译 hook 命令。
+- 将 shell hook 示例从 `"match": "bash"` 改为 `"match": "exec_shell"`，并分别提供 Unix 与 Windows 阻断示例。
+- 更改的文件
+  - `docs/configuration.md`
+  - `scripts/ralph/prd.json`
+  - `scripts/ralph/progress.txt`
+- **未来迭代的学习：**
+  - 发现的 patterns：配置文档中的 shell tool hook match 应使用真实工具名 `exec_shell`，跨平台示例需要按 Unix/Windows 分开写。
+  - 遇到的陷阱：Windows hook 支持不是命令翻译层；已有 Unix hook 命令在 Windows 上需要用户改写成 PowerShell。
+  - 有用的上下文：`docs/configuration.md` 是 Windows shell behavior 和 hook 示例的主文档入口，后续安装文档属于 README story。
 ---

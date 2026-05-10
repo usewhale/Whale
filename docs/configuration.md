@@ -25,6 +25,16 @@ Whale stores local state under `~/.whale/`, including:
 
 Do not commit these files.
 
+## Shell behavior
+
+Whale runs shell commands and hooks through the platform shell:
+
+- Linux and macOS use `/bin/sh -lc`.
+- Windows uses PowerShell. Whale first tries `pwsh`, then `powershell.exe`.
+- Windows does not use `cmd.exe`, Git Bash, or MSYS Bash as the default shell.
+
+Whale does not translate hook commands between shells. Write Unix hooks with POSIX shell syntax and Windows hooks with PowerShell syntax.
+
 ## Hooks
 
 Whale supports external shell hooks via JSON config files:
@@ -41,15 +51,31 @@ Supported events:
 - `UserPromptSubmit`
 - `Stop`
 
-Example:
+Unix example:
 
 ```json
 {
   "hooks": {
     "PreToolUse": [
       {
-        "match": "bash",
+        "match": "exec_shell",
         "command": "echo 'blocked by policy' >&2; exit 2",
+        "timeout": 5000
+      }
+    ]
+  }
+}
+```
+
+Windows example:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "match": "exec_shell",
+        "command": "Write-Error 'blocked by policy'; exit 2",
         "timeout": 5000
       }
     ]
