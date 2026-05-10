@@ -143,3 +143,16 @@
   - 遇到的陷阱：zip 内部文件名必须是 `whale.exe`，不能直接把 `whale-windows-amd64.exe` 放进 zip；需要 staging 目录复制后再 zip。
   - 有用的上下文：`dist/**/whale-*` upload pattern 会匹配 artifact 下载后的 `.exe`、`.zip` 和既有 tar.gz，`checksums.txt` 的 find 命令会覆盖所有这些文件。
 ---
+## 2026-05-10 16:39 - US-011
+- 在中英文 README 的快速开始区域新增 Windows 安装说明，覆盖下载 `whale-windows-amd64.zip`、解压 `whale.exe`、放入 PATH 和 PowerShell 启动命令。
+- 记录 Windows shell 行为、PowerShell 7 (`pwsh`) 推荐、`powershell.exe` fallback、直接下载 `.exe` 时的重命名要求，以及 SmartScreen/checksum 注意事项。
+- 更改的文件
+  - `README.md`
+  - `README.en.md`
+  - `scripts/ralph/prd.json`
+  - `scripts/ralph/progress.txt`
+- **未来迭代的学习：**
+  - 发现的 patterns：README 快速开始应按平台分段，macOS/Linux 保留 `install.sh`，Windows 使用 Release zip 手动安装说明。
+  - 遇到的陷阱：Windows 文档不要推荐 `curl | sh`；直接 `.exe` 下载和 zip 下载的可执行文件名语义不同，需要分别说明。
+  - 有用的上下文：Windows 用户安装后应在 PowerShell 中验证 `whale --version`、运行 `whale setup`，然后启动 `whale`。
+---
