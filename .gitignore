@@ -15,10 +15,20 @@ tmp/
 
 # --- Local Settings, Secrets & Session State ---
 .whale/
+settings.json
 session.json
+session-*.json
+*.session.json
+usage.log
+*.usage.log
 .env
 .env.*
 !.env.example
+*.key
+*.pem
+*-key.json
+credentials.json
+secrets.json
 docs/local-roost-workflow.md
 scripts/local/
 
@@ -45,6 +55,9 @@ __debug_bin*
 
 # --- Promotional Materials (not part of the project) ---
 promo/
+
+# --- Test Artifacts ---
+**/C*payload.json
 
 # --- Logs ---
 *.log

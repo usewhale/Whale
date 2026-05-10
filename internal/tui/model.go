@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -214,10 +213,7 @@ func busyTickCmd() tea.Cmd {
 // then forces a full TUI redraw. Uses ANSI \033[3J to clear scrollback
 // in addition to \033[H\033[2J (visible area).
 func clearScreenCmd() tea.Cmd {
-	return func() tea.Msg {
-		fmt.Print("\033[H\033[2J\033[3J")
-		return nil
-	}
+	return tea.ClearScreen
 }
 
 func (m model) Init() tea.Cmd { return waitEventCmd(m.svc) }
