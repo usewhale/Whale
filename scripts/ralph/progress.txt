@@ -10,6 +10,7 @@
 - User-facing policy and CLI wording should use neutral "shell command" terminology; Bash-specific names should stay out of approval prefix surfaces.
 - Shell tool hook documentation should match `exec_shell`; Whale does not translate hook commands between Unix shell syntax and PowerShell syntax.
 - Release workflow builds run from an Ubuntu matrix; Windows assets should be cross-compiled with `GOOS=windows`, `GOARCH=amd64`, `CGO_ENABLED=0`, uploaded as both `.exe` and `.zip`, with the zip staging filename renamed to `whale.exe`.
+- End-to-end Windows adaptation verification should combine `make test`, Windows cross-compile, static shell-wording searches, and release workflow inspection; real Windows install smoke testing remains a separate manual or Windows-host step.
 
 ## 2026-05-10 16:01 - US-001
 - 实现了共享 shell resolver：新增 `internal/shell.ShellSpec`、默认 `Resolve`、可注入 `Resolver`、当前平台 shell display name helper。
@@ -155,4 +156,16 @@
   - 发现的 patterns：README 快速开始应按平台分段，macOS/Linux 保留 `install.sh`，Windows 使用 Release zip 手动安装说明。
   - 遇到的陷阱：Windows 文档不要推荐 `curl | sh`；直接 `.exe` 下载和 zip 下载的可执行文件名语义不同，需要分别说明。
   - 有用的上下文：Windows 用户安装后应在 PowerShell 中验证 `whale --version`、运行 `whale setup`，然后启动 `whale`。
+---
+## 2026-05-10 16:43 - US-012
+- 完成端到端验收验证：`make fmt-check`、`make vet`、`make test`、`GOOS=windows GOARCH=amd64 go build ./cmd/whale` 均通过。
+- 完成静态检查：旧 Bash prefix/helper/`cmd /c` 搜索无命中，`sh -lc` 仅出现在显式配置文档说明；release workflow 覆盖 Windows `.exe`、`.zip`、checksum 和 release upload pattern。
+- 在 `US-012` notes 中记录当前没有真实 Windows 环境，仍需要后续真实 Windows 下载 zip、解压和 PATH 安装 smoke testing。
+- 更改的文件
+  - `scripts/ralph/prd.json`
+  - `scripts/ralph/progress.txt`
+- **未来迭代的学习：**
+  - 发现的 patterns：Windows 适配最终验收应同时覆盖 Go 测试、Windows 交叉编译、静态 shell 文案搜索和 release workflow 产物路径。
+  - 遇到的陷阱：`GOOS=windows GOARCH=amd64 go build ./cmd/whale` 会生成仓库忽略的根目录 `whale.exe`，不要把它纳入提交。
+  - 有用的上下文：Linux host 上只能证明交叉编译和静态行为，真实 Windows zip 解压、PATH 安装和 `whale setup` 仍需要 Windows 环境 smoke test。
 ---
