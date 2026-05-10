@@ -61,6 +61,22 @@ Install a specific version:
 curl -fsSL https://raw.githubusercontent.com/usewhale/whale/main/scripts/install.sh | VERSION=v0.1.8 sh
 ```
 
+Windows:
+
+1. Download `whale-windows-amd64.zip` from [GitHub Releases](https://github.com/usewhale/whale/releases), then extract `whale.exe`.
+2. Put `whale.exe` in a directory on PATH, such as `$env:USERPROFILE\bin`.
+3. Run these commands in PowerShell:
+
+```powershell
+whale --version
+whale setup
+whale
+```
+
+On Windows, Whale uses PowerShell for shell commands. Installing PowerShell 7 (`pwsh`) is recommended; if `pwsh` is not available, Whale tries the built-in `powershell.exe`. If you download `whale-windows-amd64.exe` directly, rename it to `whale.exe` before placing it on PATH, or run it by the full file name.
+
+Unsigned exe files may trigger Windows SmartScreen. Confirm the file comes from Whale's GitHub Release and verify the download against the Release `checksums.txt`.
+
 Whale currently uses the DeepSeek API. Before running Whale, create an API key in the [DeepSeek Platform](https://platform.deepseek.com/). See the [DeepSeek API docs](https://api-docs.deepseek.com/) for API details.
 
 <p align="center">

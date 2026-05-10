@@ -28,7 +28,7 @@
 
 ## 快速开始
 
-使用脚本安装：
+macOS / Linux:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/usewhale/whale/main/scripts/install.sh | sh
@@ -39,7 +39,6 @@ curl -fsSL https://raw.githubusercontent.com/usewhale/whale/main/scripts/install
 ```bash
 brew install usewhale/tap/whale
 ```
-
 
 首次运行：
 
@@ -56,6 +55,21 @@ brew upgrade whale
 # 或重新运行安装脚本
 ```
 
+Windows:
+
+1. 从 [GitHub Releases](https://github.com/usewhale/whale/releases) 下载 `whale-windows-amd64.zip`，并解压出 `whale.exe`。
+2. 将 `whale.exe` 放到 PATH 中的目录，例如 `$env:USERPROFILE\bin`。
+3. 在 PowerShell 中运行：
+
+```powershell
+whale --version
+whale setup
+whale
+```
+
+Whale 在 Windows 上使用 PowerShell 执行 shell 命令。推荐安装 PowerShell 7（`pwsh`）；如果找不到 `pwsh`，Whale 会尝试使用系统自带的 `powershell.exe`。如果直接下载 `whale-windows-amd64.exe`，请先重命名为 `whale.exe` 再放入 PATH，或者使用完整文件名运行它。
+
+Windows 上的未签名 exe 可能触发 Windows SmartScreen。请确认文件来自 Whale 的 GitHub Release，并对照 Release 中的 `checksums.txt` 校验下载内容。
 Whale 当前使用 DeepSeek API。运行前请先在 [DeepSeek Platform](https://platform.deepseek.com/) 创建 API key。API 细节见 [DeepSeek API docs](https://api-docs.deepseek.com/)。
 
 <p align="center">
