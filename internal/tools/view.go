@@ -30,7 +30,7 @@ func (b *Toolset) readFile(_ context.Context, call core.ToolCall) (core.ToolResu
 		}
 		return marshalToolError(call, "read_failed", err.Error()), nil
 	}
-	text := string(data)
+	text := strings.ReplaceAll(string(data), "\r\n", "\n")
 	lines := strings.Split(text, "\n")
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]

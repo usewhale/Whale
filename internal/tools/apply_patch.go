@@ -322,6 +322,7 @@ func parseBeginPatch(patch string) ([]patchOp, error) {
 }
 
 func splitLinesKeepFlag(s string) ([]string, bool) {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
 	if s == "" {
 		return []string{}, false
 	}

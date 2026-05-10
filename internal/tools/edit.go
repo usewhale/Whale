@@ -32,11 +32,11 @@ func (b *Toolset) editFile(_ context.Context, call core.ToolCall) (core.ToolResu
 		}
 		return marshalToolError(call, "read_failed", err.Error()), nil
 	}
-	before := string(data)
+	before := strings.ReplaceAll(string(data), "\r\n", "\n")
 	if in.Search == "" {
 		return marshalToolError(call, "invalid_args", "search is required"), nil
 	}
-	if !strings.Contains(before, in.Search) {
+	if !strings.Contains(before, strings.ReplaceAll(in.Search, "\r\n", "\n")) {
 		return marshalToolError(call, "search_not_found", "search text not found"), nil
 	}
 	after := ""
@@ -78,11 +78,11 @@ func (b *Toolset) previewEditFile(_ context.Context, call core.ToolCall) (map[st
 	if err != nil {
 		return nil, err
 	}
-	before := string(data)
+	before := strings.ReplaceAll(string(data), "\r\n", "\n")
 	if in.Search == "" {
 		return nil, os.ErrInvalid
 	}
-	if !strings.Contains(before, in.Search) {
+	if !strings.Contains(before, strings.ReplaceAll(in.Search, "\r\n", "\n")) {
 		return nil, os.ErrNotExist
 	}
 	after := strings.Replace(before, in.Search, in.Replace, 1)
