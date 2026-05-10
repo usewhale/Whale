@@ -28,8 +28,8 @@ func Execute() error {
 func bindPersistentFlags(c *cobra.Command, opts *cliOptions) {
 	c.PersistentFlags().StringVar(&opts.cfg.DataDir, "data-dir", opts.cfg.DataDir, "Whale data directory")
 	c.PersistentFlags().StringVar(&opts.cfg.ApprovalMode, "approval-mode", opts.cfg.ApprovalMode, "Tool approval mode: on-request|never-ask")
-	c.PersistentFlags().StringVar(&opts.cfg.AllowPrefixes, "allow-prefixes", "", "Comma-separated bash command prefixes to auto-allow")
-	c.PersistentFlags().StringVar(&opts.cfg.DenyPrefixes, "deny-prefixes", "", "Comma-separated bash command prefixes to deny")
+	c.PersistentFlags().StringVar(&opts.cfg.AllowPrefixes, "allow-prefixes", "", "Comma-separated shell command prefixes to auto-allow")
+	c.PersistentFlags().StringVar(&opts.cfg.DenyPrefixes, "deny-prefixes", "", "Comma-separated shell command prefixes to deny")
 	c.PersistentFlags().BoolVar(&opts.cfg.AutoCompact, "auto-compact", opts.cfg.AutoCompact, "Enable auto compact before request send")
 	c.PersistentFlags().Float64Var(&opts.cfg.AutoCompactThreshold, "auto-compact-threshold", opts.cfg.AutoCompactThreshold, "Auto compact trigger threshold ratio")
 	c.PersistentFlags().IntVar(&opts.cfg.ContextWindow, "model-context-window", opts.cfg.ContextWindow, "Model context window used by local estimator")
