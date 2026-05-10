@@ -51,7 +51,7 @@ func (p DefaultToolPolicy) Decide(spec core.ToolSpec, call core.ToolCall) Policy
 		mode = ApprovalModeOnRequest
 	}
 	if spec.Name == "exec_shell" {
-		cmd := bashCommandFromInput(call.Input)
+		cmd := shellCommandFromInput(call.Input)
 		for _, deny := range p.DenyPrefixes {
 			if hasCommandPrefix(cmd, deny) {
 				return PolicyDecision{
@@ -104,7 +104,7 @@ func (p DefaultToolPolicy) Decide(spec core.ToolSpec, call core.ToolCall) Policy
 	}
 }
 
-func bashCommandFromInput(input string) string {
+func shellCommandFromInput(input string) string {
 	var body map[string]any
 	if err := json.Unmarshal([]byte(input), &body); err != nil {
 		return ""

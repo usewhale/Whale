@@ -7,6 +7,7 @@
 - Runtime-facing prompt text should use injectable `goos` and shell display name helpers so Windows/Linux assertions do not depend on the host platform.
 - Runtime-facing tool descriptions should use injectable `goos` helpers and shared shell display names so Windows-only guidance does not leak into Unix descriptions.
 - Shell read-only approval prefixes should be selected through a GOOS-testable helper so Windows PowerShell commands can be allowed without leaking into Unix behavior.
+- User-facing policy and CLI wording should use neutral "shell command" terminology; Bash-specific names should stay out of approval prefix surfaces.
 
 ## 2026-05-10 16:01 - US-001
 - 实现了共享 shell resolver：新增 `internal/shell.ShellSpec`、默认 `Resolve`、可注入 `Resolver`、当前平台 shell display name helper。
@@ -101,4 +102,17 @@
   - 发现的 patterns：审批只读 allowlist 和工具描述一样需要可注入 `goos` helper，以便测试 Windows/Unix 分支且不依赖宿主平台。
   - 遇到的陷阱：`python3 --version` 和 Cargo/Rust 命令是 Unix 既有语义，不能无差别塞进跨平台 development list，否则 Windows allowlist 会超出 PRD 范围。
   - 有用的上下文：`shellReadOnlyCheckForGOOS` 是后续测试 shell read-only 审批的直接入口，默认 `shellReadOnlyCheck` 仍使用 `runtime.GOOS`。
+---
+## 2026-05-10 16:25 - US-008
+- 将 policy 中提取 `exec_shell` command 的 helper 从 `bashCommandFromInput` 改为中性的 `shellCommandFromInput`，`Decide` 继续使用相同 allow/deny prefix 匹配逻辑。
+- 将 CLI `--allow-prefixes` / `--deny-prefixes` help 文案从 bash command prefixes 改为 shell command prefixes。
+- 更改的文件
+  - `internal/policy/policy.go`
+  - `internal/ui/cli/cmd/root.go`
+  - `scripts/ralph/prd.json`
+  - `scripts/ralph/progress.txt`
+- **未来迭代的学习：**
+  - 发现的 patterns：审批前缀是 shell 命令概念，不应在 helper 名称或 CLI help 中绑定到 Bash。
+  - 遇到的陷阱：需求只要求命名和文案中性化，不要改动 `hasCommandPrefix` 的 trim、lowercase、prefix 匹配语义。
+  - 有用的上下文：验收搜索只针对 `internal docs` 下的 `bash command prefixes|bashCommandFromInput`，README 和脚本 fenced code 的 `bash` 不属于本 story。
 ---
