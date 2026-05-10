@@ -1,0 +1,265 @@
+{
+  "project": "Windows PowerShell Adaptation",
+  "branchName": "ralph/windows-powershell-adaptation",
+  "description": "Adapt Whale shell execution, hooks, agent instructions, documentation, and release packaging so Windows users can run Whale with PowerShell while Linux/macOS behavior remains unchanged.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add a shared shell resolver",
+      "description": "As a developer, I need a shared shell resolver so exec_shell, background shell tasks, and hooks use consistent shell selection rules on Windows and Unix.",
+      "acceptanceCriteria": [
+        "Add an internal/shell package with a ShellSpec type and resolver logic",
+        "Windows resolver looks up pwsh first and then powershell.exe",
+        "Windows resolver uses arguments: -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command <command>",
+        "Windows resolver does not fall back to cmd.exe, Git Bash, MSYS Bash, bash, or sh",
+        "When Windows has no PowerShell, resolver returns a readable error containing PowerShell is required",
+        "Unix resolver returns /bin/sh with arguments []string{\"-lc\", command}",
+        "Resolver has test entry points with injectable GOOS and LookPath so tests do not depend on the real platform",
+        "Tests cover Windows pwsh, Windows powershell.exe fallback, Windows no PowerShell, Linux, and Darwin",
+        "Typecheck passes",
+        "Tests pass"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "",
+      "retryCount": 0,
+      "blocked": false
+    },
+    {
+      "id": "US-002",
+      "title": "Route shell execution through the resolver",
+      "description": "As a Windows user, I want Whale exec_shell to use PowerShell so pure Windows environments no longer depend on Bash, sh, or cmd.",
+      "acceptanceCriteria": [
+        "Foreground exec_shell in internal/tools/bash.go uses internal/shell.Resolve",
+        "When resolver fails, exec_shell returns a shell_unavailable tool error and does not start a process",
+        "exec.CommandContext uses spec.Bin and spec.Args without concatenating the command into a shell string",
+        "configureShellCommand(cmd), cmd.Dir, stdout and stderr capture, timeout, and exit code behavior keep existing semantics",
+        "cwd remains constrained by existing workspace safe path logic and cannot escape the workspace",
+        "Returned payload command field continues to preserve the user's original command",
+        "Remove the old shellCommand helper, or keep it only as a thin shell.Resolve wrapper with no Windows Bash, sh, or cmd fallback",
+        "Typecheck passes",
+        "Tests pass"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "",
+      "retryCount": 0,
+      "blocked": false
+    },
+    {
+      "id": "US-003",
+      "title": "Route background shell tasks through the resolver",
+      "description": "As a user, I want background shell tasks to use the same cross-platform shell rules as foreground exec_shell so Windows background commands use PowerShell reliably.",
+      "acceptanceCriteria": [
+        "runShellBackground uses the shared shell resolver",
+        "When resolver succeeds, the background task uses exec.CommandContext(ctx, spec.Bin, spec.Args...)",
+        "When resolver fails, the task status is set to failed",
+        "When resolver fails, task stderr contains the error message, exitCode is nil, and no process is started",
+        "configureShellCommand(cmd) is preserved",
+        "Foreground and background shell tasks have no forked Windows shell selection logic",
+        "Typecheck passes",
+        "Tests pass"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "",
+      "retryCount": 0,
+      "blocked": false
+    },
+    {
+      "id": "US-004",
+      "title": "Route hooks through the resolver",
+      "description": "As a hook configuration user, I want hooks to use PowerShell on Windows so Windows hooks no longer fail because sh -lc is hardcoded.",
+      "acceptanceCriteria": [
+        "defaultHookSpawner in internal/agent/hooks.go uses the shared shell resolver",
+        "Hooks no longer hardcode exec.CommandContext(ctx, \"sh\", \"-lc\", ...)",
+        "When resolver fails, hook returns SpawnErr and blocking hooks block according to existing rules",
+        "Hook timeout, working directory, stdin payload, stdout and stderr caps, and exit code 2 blocking rules are preserved",
+        "Unix hooks still use /bin/sh -lc",
+        "Windows hooks execute with the PowerShell argument array",
+        "Add or update hook tests covering Windows and Unix platform branches or resolver behavior for real hook commands",
+        "Typecheck passes",
+        "Tests pass"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "",
+      "retryCount": 0,
+      "blocked": false
+    },
+    {
+      "id": "US-005",
+      "title": "Add runtime environment information to the system prompt",
+      "description": "As an agent user, I want the model to know the current OS and shell so it generates PowerShell commands on Windows instead of Bash or Linux commands.",
+      "acceptanceCriteria": [
+        "internal/agent/system_prompt.go adds a runtime environment block to immutable system blocks",
+        "Runtime block includes current OS such as windows, linux, or darwin",
+        "Runtime block includes current exec_shell display name, with PowerShell on Windows and /bin/sh on Unix",
+        "Windows block explicitly requires PowerShell syntax, Windows-compatible paths, and Windows environment variables",
+        "Windows block explicitly forbids assuming /tmp, grep -r, bash syntax, POSIX variable assignment, and Linux-only shell behavior",
+        "Unix block does not contain PowerShell-only instructions",
+        "Add a render helper with injectable goos and shellName so tests do not depend on runtime.GOOS",
+        "System prompt tests cover Windows and Linux include/exclude assertions",
+        "Typecheck passes",
+        "Tests pass"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "",
+      "retryCount": 0,
+      "blocked": false
+    },
+    {
+      "id": "US-006",
+      "title": "Make exec_shell tool descriptions runtime-aware",
+      "description": "As an agent user, I want the exec_shell tool description to state the current shell so the model prioritizes native PowerShell commands on Windows.",
+      "acceptanceCriteria": [
+        "internal/tools/catalog_shell.go renders exec_shell description through a helper by GOOS",
+        "Windows description includes Commands are executed with PowerShell on Windows or equivalent wording",
+        "Windows description requires PowerShell syntax, Windows-compatible paths, and Windows environment variables",
+        "Windows description explicitly says not to assume /tmp, grep -r, bash syntax, or Linux-only shell behavior",
+        "Windows description recommends native commands including Get-ChildItem, Get-Content, Select-String, Test-Path, and Measure-Object",
+        "Unix description keeps existing shell semantics and does not include Windows-only constraints",
+        "Both descriptions preserve that the default working directory is the workspace root, subdirectories use cwd, and commands should not be prefixed with cd",
+        "Tool description tests cover Windows and Linux text",
+        "Typecheck passes",
+        "Tests pass"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "",
+      "retryCount": 0,
+      "blocked": false
+    },
+    {
+      "id": "US-007",
+      "title": "Add PowerShell-native read-only allowlist entries",
+      "description": "As a Windows user in ask or plan mode, I want common read-only PowerShell exploration commands to avoid extra approval so the agent can read files, search text, and inspect the environment smoothly.",
+      "acceptanceCriteria": [
+        "shellReadOnlyAllowPrefixes or equivalent implementation is extended in a GOOS-testable way",
+        "Windows allowlist includes Get-ChildItem, Get-Location, Write-Output, Get-Content, Select-String, Measure-Object, Test-Path, Resolve-Path, Get-Item, and Get-Command",
+        "Windows allowlist includes read-only development commands: git status, git diff, git log, git show, git branch, git remote, git rev-parse, git config --get, go test, go vet, go version, python --version, node --version, npm --version, and npx --version",
+        "Matching logic remains case-insensitive",
+        "Existing Unix allowlist entries are not removed",
+        "Unix still allows existing development tool commands including cargo test, cargo check, cargo clippy, rustc --version, and python3 --version",
+        "Windows tests cover Select-String TODO -Path *.go, Get-Content README.md -Head 20, and Get-ChildItem -Recurse",
+        "Linux tests cover grep TODO README.md and existing Rust/Python read-only commands",
+        "Typecheck passes",
+        "Tests pass"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "",
+      "retryCount": 0,
+      "blocked": false
+    },
+    {
+      "id": "US-008",
+      "title": "Rename Bash-specific policy and CLI wording",
+      "description": "As a CLI user, I want neutral shell wording so Windows support is not misleadingly labeled as bash.",
+      "acceptanceCriteria": [
+        "internal/policy/policy.go renames bashCommandFromInput to shellCommandFromInput or an equivalent neutral helper",
+        "Decide uses the renamed neutral helper",
+        "AllowPrefixes and DenyPrefixes matching semantics are unchanged",
+        "internal/ui/cli/cmd/root.go --allow-prefixes help says Comma-separated shell command prefixes to auto-allow",
+        "internal/ui/cli/cmd/root.go --deny-prefixes help says Comma-separated shell command prefixes to deny",
+        "rg -n \"bash command prefixes|bashCommandFromInput\" internal docs finds no remaining matches",
+        "Typecheck passes",
+        "Tests pass"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": "",
+      "retryCount": 0,
+      "blocked": false
+    },
+    {
+      "id": "US-009",
+      "title": "Document Windows shell behavior and hooks",
+      "description": "As a Whale configuration user, I want documentation for Windows PowerShell behavior and hook examples so I can write correct cross-platform configuration.",
+      "acceptanceCriteria": [
+        "docs/configuration.md adds or updates shell behavior documentation",
+        "Documentation states Linux and macOS shell commands and hooks use /bin/sh -lc",
+        "Documentation states Windows shell commands and hooks use PowerShell, preferring pwsh and then powershell.exe",
+        "Documentation states Windows does not use cmd.exe, Git Bash, or MSYS Bash by default",
+        "Hook examples distinguish Unix and Windows",
+        "Unix hook example uses echo 'blocked by policy' >&2; exit 2 or an equivalent Unix shell command",
+        "Windows hook example uses Write-Error 'blocked by policy'; exit 2 or an equivalent PowerShell command",
+        "Shell tool hook match examples use \"match\": \"exec_shell\" and no longer use \"match\": \"bash\"",
+        "Documentation states Whale does not automatically translate Bash hook commands into PowerShell",
+        "Typecheck passes"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": "",
+      "retryCount": 0,
+      "blocked": false
+    },
+    {
+      "id": "US-010",
+      "title": "Add Windows release assets",
+      "description": "As a Windows user, I want downloadable Windows executable and zip release assets from GitHub Releases so I do not need to build Whale from source.",
+      "acceptanceCriteria": [
+        ".github/workflows/release.yml build matrix includes windows/amd64",
+        "Workflow builds dist/whale-windows-amd64.exe",
+        "Windows build uses GOOS=windows, GOARCH=amd64, and CGO_ENABLED=0",
+        "Windows build continues injecting github.com/usewhale/whale/internal/build.Version=${VERSION}",
+        "Workflow generates whale-windows-amd64.zip",
+        "Zip internal filename is whale.exe",
+        "checksums.txt covers the Windows .exe and .zip assets",
+        "Release upload pattern covers .exe and .zip without breaking existing darwin/linux tar.gz assets",
+        "Local command GOOS=windows GOARCH=amd64 go build ./cmd/whale succeeds",
+        "Typecheck passes"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": "",
+      "retryCount": 0,
+      "blocked": false
+    },
+    {
+      "id": "US-011",
+      "title": "Add Windows installation documentation",
+      "description": "As a Windows user, I want README manual installation steps so I can download Whale, put it on PATH, and start it.",
+      "acceptanceCriteria": [
+        "README.md adds Windows installation instructions near quick start",
+        "README.en.md adds equivalent English Windows installation instructions",
+        "Documentation recommends downloading whale-windows-amd64.zip and extracting whale.exe",
+        "Documentation says whale.exe can be placed in a PATH directory such as $env:USERPROFILE\\bin",
+        "Documentation includes PowerShell command examples for whale --version, whale setup, and whale",
+        "Documentation states Whale uses PowerShell for shell commands on Windows",
+        "Documentation recommends installing PowerShell 7 (pwsh) and states powershell.exe is tried when pwsh is unavailable",
+        "Windows documentation does not ask users to use curl | sh",
+        "Documentation states direct whale-windows-amd64.exe downloads must be renamed to whale.exe before placing on PATH or run by the full file name",
+        "Documentation notes unsigned exe files may trigger Windows SmartScreen and recommends confirming GitHub Release source and checksum",
+        "Typecheck passes"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": "",
+      "retryCount": 0,
+      "blocked": false
+    },
+    {
+      "id": "US-012",
+      "title": "Verify end-to-end behavior and residual assumptions",
+      "description": "As a maintainer, I want tests and static checks to confirm the Windows PowerShell adaptation is complete before release.",
+      "acceptanceCriteria": [
+        "make test passes",
+        "GOOS=windows GOARCH=amd64 go build ./cmd/whale passes",
+        "rg -n \"bash command prefixes|bashCommandFromInput|cmd /c\" internal docs finds no inappropriate remaining matches",
+        "rg -n \"sh -lc\" internal docs only finds Unix resolver code, tests, or explicit documentation",
+        "Release workflow static check confirms Windows .exe, .zip, checksum, and upload pattern coverage",
+        "If no real Windows environment is available, task notes explicitly record that real Windows smoke testing is still needed",
+        "If a real Windows environment is available, verify downloaded zip extraction and PATH installation allow whale --version, whale setup, and whale to run",
+        "Typecheck passes",
+        "Tests pass"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": "",
+      "retryCount": 0,
+      "blocked": false
+    }
+  ]
+}

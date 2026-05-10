@@ -1,0 +1,17 @@
+## Codebase Patterns
+- Cross-platform shell behavior should live in `internal/shell` with injectable `GOOS` and `LookPath` dependencies so tests do not depend on the host platform.
+- Windows shell resolution should prefer `pwsh`, then `powershell.exe`, and should not fall back to `cmd.exe`, Git Bash, MSYS Bash, `bash`, or `sh`.
+
+## 2026-05-10 16:01 - US-001
+- 实现了共享 shell resolver：新增 `internal/shell.ShellSpec`、默认 `Resolve`、可注入 `Resolver`、当前平台 shell display name helper。
+- 覆盖 Windows `pwsh` 优先、`powershell.exe` fallback、无 PowerShell 错误、Linux 和 Darwin `/bin/sh -lc` 行为的测试。
+- 更改的文件
+  - `internal/shell/resolver.go`
+  - `internal/shell/resolver_test.go`
+  - `scripts/ralph/prd.json`
+  - `scripts/ralph/progress.txt`
+- **未来迭代的学习：**
+  - 发现的 patterns：跨平台分支优先做成可注入 resolver/helper，避免在测试里依赖真实 `runtime.GOOS` 或真实 PATH。
+  - 遇到的陷阱：错误文案中 `PowerShell` 本身包含 `sh` 字符序列，测试不要用简单 substring 断言来证明没有查找 `sh`。
+  - 有用的上下文：后续 `exec_shell`、后台任务和 hooks 可以直接使用 `shell.Resolve(command)` 返回的 `spec.Bin` 与 `spec.Args`。
+---
