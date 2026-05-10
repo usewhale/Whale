@@ -1,6 +1,7 @@
 ## Codebase Patterns
 - Cross-platform shell behavior should live in `internal/shell` with injectable `GOOS` and `LookPath` dependencies so tests do not depend on the host platform.
 - Windows shell resolution should prefer `pwsh`, then `powershell.exe`, and should not fall back to `cmd.exe`, Git Bash, MSYS Bash, `bash`, or `sh`.
+- Foreground `exec_shell` should resolve the shell before creating `exec.Cmd`; resolver failures are returned as `shell_unavailable` tool errors without starting a process.
 
 ## 2026-05-10 16:01 - US-001
 - 实现了共享 shell resolver：新增 `internal/shell.ShellSpec`、默认 `Resolve`、可注入 `Resolver`、当前平台 shell display name helper。
@@ -14,4 +15,17 @@
   - 发现的 patterns：跨平台分支优先做成可注入 resolver/helper，避免在测试里依赖真实 `runtime.GOOS` 或真实 PATH。
   - 遇到的陷阱：错误文案中 `PowerShell` 本身包含 `sh` 字符序列，测试不要用简单 substring 断言来证明没有查找 `sh`。
   - 有用的上下文：后续 `exec_shell`、后台任务和 hooks 可以直接使用 `shell.Resolve(command)` 返回的 `spec.Bin` 与 `spec.Args`。
+---
+## 2026-05-10 16:04 - US-002
+- 将前台 `exec_shell` 改为通过 `internal/shell.Resolve` 获取 `spec.Bin` 和 `spec.Args`，保留原有工作目录、安全路径、超时、stdout/stderr、退出码和 payload command 行为。
+- 在 resolver 失败时返回结构化 `shell_unavailable` tool error，并新增测试覆盖该路径。
+- 更改的文件
+  - `internal/tools/bash.go`
+  - `internal/tools/toolset_test.go`
+  - `scripts/ralph/prd.json`
+  - `scripts/ralph/progress.txt`
+- **未来迭代的学习：**
+  - 发现的 patterns：前台 shell 执行只负责用 resolver 产出的 bin/args 启动进程，用户原始 command 继续留在 payload 中。
+  - 遇到的陷阱：后台任务仍有自己的失败状态语义，后续 US-003 需要显式把 resolver 错误写入 task stderr，不能只依赖前台路径。
+  - 有用的上下文：`internal/tools` 测试可临时覆盖包内 `resolveShell` 变量来验证 resolver 失败，不需要依赖真实 Windows 环境。
 ---

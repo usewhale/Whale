@@ -3,12 +3,14 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/shell"
 )
 
 func tc(name string, in any) core.ToolCall {
@@ -282,6 +284,32 @@ func TestListDirAndExecShell(t *testing.T) {
 	}
 	if !strings.Contains(bashRes.Content, "hi") {
 		t.Fatalf("unexpected bash output: %s", bashRes.Content)
+	}
+}
+
+func TestExecShellReturnsShellUnavailableWhenResolverFails(t *testing.T) {
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	oldResolveShell := resolveShell
+	resolveShell = func(command string) (shell.ShellSpec, error) {
+		return shell.ShellSpec{}, errors.New("PowerShell is required on Windows")
+	}
+	t.Cleanup(func() {
+		resolveShell = oldResolveShell
+	})
+
+	res, err := ts.execShell(context.Background(), tc("exec_shell", map[string]any{
+		"command": "Write-Output hi",
+	}))
+	if err != nil {
+		t.Fatalf("exec_shell returned dispatch error: %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Content, `"code":"shell_unavailable"`) || !strings.Contains(res.Content, "PowerShell is required") {
+		t.Fatalf("expected shell_unavailable result, got: %+v", res)
 	}
 }
 
