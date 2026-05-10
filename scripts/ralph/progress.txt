@@ -4,6 +4,7 @@
 - Foreground `exec_shell` should resolve the shell before creating `exec.Cmd`; resolver failures are returned as `shell_unavailable` tool errors without starting a process.
 - Background `exec_shell` tasks should resolve the shell before creating `exec.Cmd`; resolver failures are recorded on the task as `failed` with stderr set to the resolver error and nil exit code.
 - Hooks should resolve the shell before creating `exec.Cmd`; resolver failures should return `SpawnErr` so blocking hook events preserve existing block semantics.
+- Runtime-facing prompt text should use injectable `goos` and shell display name helpers so Windows/Linux assertions do not depend on the host platform.
 
 ## 2026-05-10 16:01 - US-001
 - 实现了共享 shell resolver：新增 `internal/shell.ShellSpec`、默认 `Resolve`、可注入 `Resolver`、当前平台 shell display name helper。
@@ -58,4 +59,18 @@
   - 发现的 patterns：hook spawner 使用 `resolveHookShell` 包内注入点，测试 Windows/Unix shell 分支时不需要真实 Windows 环境。
   - 遇到的陷阱：`defaultHookSpawner` 里 resolver 的 `err` 和 `cmd.Run()` 的 `err` 在同一作用域，第二次赋值要用 `err =` 而不是 `:=`。
   - 有用的上下文：blocking hook 的 resolver 失败不需要新增决策分支，`decideHookOutcome` 已经会把 `SpawnErr` 转成 blocking event 的 `block`。
+---
+## 2026-05-10 16:16 - US-005
+- 在 immutable system prompt 中新增 runtime environment block，包含当前 OS、`exec_shell` shell display name 和 workspace/root cwd 提示。
+- Windows runtime block 明确要求 PowerShell syntax、Windows-compatible paths、Windows environment variables，并禁止假设 `/tmp`、`grep -r`、bash syntax、POSIX variable assignment 和 Linux-only shell behavior；Unix block 保持非 PowerShell 文案。
+- 新增可注入 `goos` 和 `shellName` 的渲染 helper 与 Windows/Linux system prompt 测试。
+- 更改的文件
+  - `internal/agent/system_prompt.go`
+  - `internal/agent/system_prompt_test.go`
+  - `scripts/ralph/prd.json`
+  - `scripts/ralph/progress.txt`
+- **未来迭代的学习：**
+  - 发现的 patterns：模型可见的运行时文案也应通过共享 `internal/shell` display name 保持与实际 shell resolver 一致。
+  - 遇到的陷阱：Linux prompt 测试要做 Windows-only 文案的排除断言，避免后续把 PowerShell 限制泄漏到 Unix。
+  - 有用的上下文：workspace root 说明现在属于 runtime environment block，后续改工具描述时需要继续保留 `cwd`/默认工作目录语义。
 ---

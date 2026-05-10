@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"runtime"
 	"sort"
 	"strings"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/memory"
 	"github.com/usewhale/whale/internal/session"
+	whaleshell "github.com/usewhale/whale/internal/shell"
 	"github.com/usewhale/whale/internal/skills"
 )
 
@@ -44,9 +46,7 @@ Ask mode is active.
 	`))
 	}
 	systemBlocks = append(systemBlocks, renderDelegationPolicyBlock())
-	if strings.TrimSpace(a.workspaceRoot) != "" {
-		systemBlocks = append(systemBlocks, "Current Whale workspace root: "+a.workspaceRoot+"\nShell commands run from this directory by default. Do not assume a synthetic path such as /workspace; use relative paths or the exec_shell cwd parameter for subdirectories.")
-	}
+	systemBlocks = append(systemBlocks, renderRuntimeEnvironmentBlock(runtime.GOOS, whaleshell.ShellDisplayName(), a.workspaceRoot))
 	systemBlocks = append(systemBlocks, renderToolSpecsBlock(a.tools.Specs()))
 	if strings.TrimSpace(a.workspaceRoot) != "" {
 		if rendered := skills.RenderAvailableSkills(skills.Discover(skills.DefaultRoots(a.workspaceRoot))); rendered != "" {
@@ -62,6 +62,36 @@ Ask mode is active.
 		}
 	}
 	return systemBlocks
+}
+
+func renderRuntimeEnvironmentBlock(goos, shellName, workspaceRoot string) string {
+	goos = strings.TrimSpace(goos)
+	if goos == "" {
+		goos = runtime.GOOS
+	}
+	shellName = strings.TrimSpace(shellName)
+	if shellName == "" {
+		shellName = whaleshell.ShellDisplayNameForGOOS(goos)
+	}
+
+	var b strings.Builder
+	b.WriteString("Runtime environment:\n")
+	b.WriteString("- Current OS: ")
+	b.WriteString(goos)
+	b.WriteString("\n- Current shell for exec_shell: ")
+	b.WriteString(shellName)
+	if root := strings.TrimSpace(workspaceRoot); root != "" {
+		b.WriteString("\n- Current Whale workspace root: ")
+		b.WriteString(root)
+		b.WriteString("\n- Shell commands run from this directory by default.")
+	} else {
+		b.WriteString("\n- Shell commands run from the current Whale workspace root by default.")
+	}
+	b.WriteString(" Do not assume a synthetic path such as /workspace; use relative paths or the exec_shell cwd parameter for subdirectories.")
+	if goos == "windows" {
+		b.WriteString("\n- On Windows, write exec_shell commands using PowerShell syntax, Windows-compatible paths, and Windows environment variables. Do not assume /tmp, grep -r, bash syntax, POSIX variable assignment, or other Linux-only shell behavior.")
+	}
+	return b.String()
 }
 
 func renderDelegationPolicyBlock() string {
