@@ -52,6 +52,9 @@ jobs:
           - goos: linux
             goarch: arm64
             asset_name: whale-linux-arm64
+          - goos: windows
+            goarch: amd64
+            asset_name: whale-windows-amd64
 
     steps:
       - name: Checkout
@@ -72,16 +75,22 @@ jobs:
           VERSION: ${{ github.event.release.tag_name }}
         run: |
           mkdir -p dist
-          go build -trimpath -ldflags "-s -w -X github.com/usewhale/whale/internal/build.Version=${VERSION}" -o "dist/${{ matrix.asset_name }}" ./cmd/whale
-          tar -czf "dist/${{ matrix.asset_name }}.tar.gz" -C dist "${{ matrix.asset_name }}"
+          output="dist/${{ matrix.asset_name }}"
+          if [ "${GOOS}" = "windows" ]; then
+            output="${output}.exe"
+          fi
+          go build -trimpath -ldflags "-s -w -X github.com/usewhale/whale/internal/build.Version=${VERSION}" -o "${output}" ./cmd/whale
+          if [ "${GOOS}" = "windows" ]; then
+            (cd dist && zip "${{ matrix.asset_name }}.zip" "${{ matrix.asset_name }}.exe")
+          else
+            tar -czf "dist/${{ matrix.asset_name }}.tar.gz" -C dist "${{ matrix.asset_name }}"
+          fi
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset_name }}
-          path: |
-            dist/${{ matrix.asset_name }}
-            dist/${{ matrix.asset_name }}.tar.gz
+          path: dist/${{ matrix.asset_name }}*
 
   release:
     needs: build

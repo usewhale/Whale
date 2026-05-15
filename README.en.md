@@ -40,6 +40,12 @@ Install with Homebrew:
 brew install usewhale/tap/whale
 ```
 
+Windows:
+
+1. Download `whale-windows-amd64.zip` from [GitHub Releases](https://github.com/usewhale/whale/releases).
+2. Unzip it and add the directory containing `whale.exe` to `PATH`.
+3. Run `whale setup` from PowerShell or `cmd.exe`.
+
 First run:
 
 ```bash
@@ -57,7 +63,7 @@ brew upgrade usewhale/tap/whale
 
 Whale currently uses the DeepSeek API. Before running Whale, create an API key in the [DeepSeek Platform](https://platform.deepseek.com/). See the [DeepSeek API docs](https://api-docs.deepseek.com/) for API details.
 
-> **Platform support:** Whale currently supports **macOS** and **Linux**. Windows support is a work in progress.
+> **Platform support:** Whale currently supports **macOS**, **Linux**, and **Windows**.
 
 <p align="center">
   <img src="docs/screenshot-01.png" alt="Whale TUI screenshot" width="860">

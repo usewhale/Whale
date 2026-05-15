@@ -42,6 +42,11 @@ curl -fsSL https://raw.githubusercontent.com/usewhale/whale/main/scripts/install
 brew install usewhale/tap/whale
 ```
 
+Windows:
+
+1. 从 [GitHub Releases](https://github.com/usewhale/whale/releases) 下载 `whale-windows-amd64.zip`。
+2. 解压后把 `whale.exe` 所在目录加入 `PATH`。
+3. 在 PowerShell 或 `cmd.exe` 中运行 `whale setup`。
 
 首次运行：
 
@@ -60,7 +65,7 @@ brew upgrade usewhale/tap/whale
 
 Whale 当前使用 DeepSeek API。运行前请先在 [DeepSeek Platform](https://platform.deepseek.com/) 创建 API key。API 细节见 [DeepSeek API docs](https://api-docs.deepseek.com/)。
 
-> **平台支持：** Whale 当前支持 **macOS** 和 **Linux**。Windows 支持正在开发中，敬请期待。
+> **平台支持：** Whale 当前支持 **macOS**、**Linux** 和 **Windows**。
 
 <p align="center">
   <img src="docs/screenshot-02.png" alt="Whale TUI 截图" width="860">

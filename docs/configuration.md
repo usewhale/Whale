@@ -97,3 +97,14 @@ If you started with Whale v0.1.9 or newer, you do not need this command.
   `https://api.deepseek.com`.
 - Skill enable/disable choices are stored in project config under
   `[skills].disabled`.
+
+## Shell behavior
+
+Whale exposes shell execution through the `shell_run` tool. Commands run from
+the current workspace root by default. Use relative paths, or pass the `cwd`
+parameter to run from a workspace subdirectory.
+
+On macOS and Linux, `shell_run` runs commands through `/bin/sh`. On Windows,
+Whale first tries `pwsh`; if it is not available, it falls back to `ComSpec`
+and then `cmd.exe`. Write hooks and allow/deny shell prefixes to match the
+shell syntax used on the target platform.
