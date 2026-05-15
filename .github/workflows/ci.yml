@@ -28,7 +28,7 @@ jobs:
       - name: Run tests
         run: make test
 
-  windows-shell:
+  windows:
     runs-on: windows-latest
 
     steps:
@@ -39,6 +39,9 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+
+      - name: Compile Windows test binaries
+        run: go test ./... -run '^$' -count=1
 
       - name: Run Windows shell resolver tests
         run: go test ./internal/shell -count=1

@@ -107,6 +107,26 @@ jobs:
           cd dist
           find . -type f -maxdepth 2 ! -name "checksums.txt" -exec sha256sum {} \; | sed 's#^\([0-9a-f]\+\)  \./#\1  #' > checksums.txt
 
+      - name: Verify release assets
+        run: |
+          set -euo pipefail
+          cd dist
+          required_assets="
+          whale-darwin-amd64/whale-darwin-amd64.tar.gz
+          whale-darwin-arm64/whale-darwin-arm64.tar.gz
+          whale-linux-amd64/whale-linux-amd64.tar.gz
+          whale-linux-arm64/whale-linux-arm64.tar.gz
+          whale-windows-amd64/whale-windows-amd64.zip
+          "
+          for asset in ${required_assets}; do
+            if ! awk -v asset="${asset}" '$2 == asset { found = 1 } END { exit found ? 0 : 1 }' checksums.txt; then
+              echo "missing release asset checksum: ${asset}" >&2
+              echo "checksums.txt:" >&2
+              cat checksums.txt >&2
+              exit 1
+            fi
+          done
+
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
