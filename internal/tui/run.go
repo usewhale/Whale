@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"runtime"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -27,9 +28,11 @@ func Run(cfg app.Config, start app.StartOptions) error {
 	if !svc.ThinkingEnabled() {
 		thinking = "off"
 	}
-	p := tea.NewProgram(
-		newModel(svc, modelName, effort, thinking),
-	)
+	m := newModel(svc, modelName, effort, thinking)
+	if runtime.GOOS == "windows" {
+		m.windowsPaste.enabled = true
+	}
+	p := tea.NewProgram(m)
 	_, err = p.Run()
 	if err == nil {
 		fmt.Printf("To resume this session, run: whale resume %s\n", svc.SessionID())

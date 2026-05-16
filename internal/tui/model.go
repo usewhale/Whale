@@ -2,6 +2,9 @@ package tui
 
 import (
 	"fmt"
+	"io"
+	"os"
+	"runtime"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -150,6 +153,7 @@ type model struct {
 	queuedPrompts                  []queuedPrompt
 	nativeScrollbackPrinted        int
 	pendingMouseCSIFragment        bool
+	windowsPaste                   windowsPasteFallbackState
 }
 
 type queuedPrompt struct {
@@ -305,12 +309,19 @@ func busyTickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg { return busyTickMsg{} })
 }
 
-// clearScreenCmd clears the visible terminal and scrollback buffer,
-// then forces a full TUI redraw. Uses ANSI \033[3J to clear scrollback
-// in addition to \033[H\033[2J (visible area).
+// clearScreenCmd clears the terminal and forces a full TUI redraw.
+// Unix terminals keep the existing scrollback-clearing sequence; Windows uses
+// Bubble Tea's renderer path so Whale does not bypass its console setup.
 func clearScreenCmd() tea.Cmd {
+	return clearScreenCmdForOS(runtime.GOOS, os.Stdout)
+}
+
+func clearScreenCmdForOS(goos string, out io.Writer) tea.Cmd {
+	if goos == "windows" {
+		return tea.ClearScreen
+	}
 	return func() tea.Msg {
-		fmt.Print("\033[H\033[2J\033[3J")
+		fmt.Fprint(out, "\033[H\033[2J\033[3J")
 		return nil
 	}
 }
@@ -343,6 +354,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.withMouseCaptureCmd(eventCmd)
 		}
 		return m, m.withMouseCaptureCmd(eventCmd, m.flushNativeScrollbackCmd(), waitEventCmd(m.svc))
+	case windowsDeferredEnterMsg:
+		return m, m.withMouseCaptureCmd(m.handleWindowsDeferredEnter(msg))
+	case windowsPendingEnterTailMsg:
+		return m, m.withMouseCaptureCmd(m.handleWindowsPendingEnterTail(msg))
+	case windowsPasteBurstFlushMsg:
+		return m, m.withMouseCaptureCmd(m.handleWindowsPasteBurstFlush(msg))
 	case quitTimeoutMsg:
 		if !m.quitArmedUntil.IsZero() && time.Now().After(m.quitArmedUntil) {
 			m.quitArmedUntil = time.Time{}
@@ -359,6 +376,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		prevMainWidth, _ := m.layoutDims()
 		prevBodyHeight := m.viewportBodyHeight(prevMainWidth)
+		if !msg.Paste && m.consumeMouseCSIFragment(msg) {
+			m.refreshViewportContent()
+			return m, m.withMouseCaptureCmd()
+		}
 		cmd, quit, handled := m.handleKeyMsg(msg)
 		if quit {
 			return m, m.withMouseCaptureCmd(tea.Quit)
@@ -366,10 +387,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if handled {
 			m.refreshViewportContentIfBodyHeightChanged(prevMainWidth, prevBodyHeight)
 			return m, m.withMouseCaptureCmd(cmd)
-		}
-		if m.consumeMouseCSIFragment(msg) {
-			m.refreshViewportContent()
-			return m, m.withMouseCaptureCmd()
 		}
 	case tea.MouseMsg:
 		if cmd, handled := m.handleMouseMsg(msg); handled {
@@ -380,8 +397,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	prevBodyHeight := m.viewportBodyHeight(prevMainWidth)
 	prevInput := m.input.Value()
 	cmd := m.input.Update(msg)
+	inputChanged := m.input.Value() != prevInput
+	if inputChanged {
+		m.resetWindowsPasteFallbackIfInputEmpty()
+	}
 	m.updateSlashMatches()
-	if m.inHistoryNav && m.input.Value() != prevInput {
+	if m.inHistoryNav && inputChanged {
 		m.resetHistoryNavigation()
 	}
 	m.refreshViewportContentIfBodyHeightChanged(prevMainWidth, prevBodyHeight)

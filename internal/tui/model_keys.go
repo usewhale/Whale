@@ -12,6 +12,45 @@ import (
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
+const (
+	windowsPasteEnterDelay         = 300 * time.Millisecond
+	windowsPasteQuietDelay         = time.Second
+	windowsPasteContinuationWindow = 30 * time.Millisecond
+)
+
+type windowsDeferredEnterMsg struct {
+	id          int
+	wasBusy     bool
+	wasStopping bool
+}
+
+type windowsPasteBurstFlushMsg struct {
+	id int
+}
+
+type windowsPendingEnterTailMsg struct {
+	id int
+}
+
+type windowsPasteFallbackState struct {
+	enabled             bool
+	pendingEnterID      int
+	pendingEnter        bool
+	pendingEnterBusy    bool
+	pendingEnterStop    bool
+	pendingEnterTailID  int
+	pendingEnterTail    string
+	burstID             int
+	burstFlushScheduled bool
+	buffer              string
+	activeUntil         time.Time
+	busyInput           bool
+	busyInputStop       bool
+	bracketedThisInput  bool
+	suppressNextCtrlJ   bool
+	classifier          windowsPasteBurstClassifier
+}
+
 func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 	if !m.quitArmedUntil.IsZero() && time.Now().After(m.quitArmedUntil) {
 		m.quitArmedUntil = time.Time{}
@@ -21,13 +60,20 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 	}
 	m.updateSlashMatches()
 	if m.mode == modeChat && msg.Paste {
+		m.cancelWindowsDeferredEnter()
 		m.input.HandlePaste(string(msg.Runes))
+		m.markWindowsPastedInput()
 		m.resetHistoryNavigation()
 		m.updateSlashMatches()
 		return nil, false, true
 	}
 	if msg.String() == "ctrl+c" && m.busy {
 		return m.interruptBusyTurn(), false, true
+	}
+	if m.mode == modeChat {
+		if cmd, handled := m.handleWindowsPasteFallbackKey(msg); handled {
+			return cmd, false, true
+		}
 	}
 	if m.mode == modeChat {
 		if cmd, handled := m.handleChatModeKey(msg); handled {
@@ -70,6 +116,8 @@ func (m *model) interruptBusyTurn() tea.Cmd {
 		}
 		m.status = "stopping"
 		m.stopping = true
+		m.markWindowsBusyInputStopped()
+		m.cancelWindowsDeferredEnter()
 		m.appendNotice(m.turnInterruptedNoticeText())
 	}
 	m.commitLiveTranscript(false)
@@ -146,10 +194,6 @@ func (m *model) handleChatModeKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		}
 		if m.insertSelectedSkill() {
 			return nil, true
-		}
-	case "ctrl+c":
-		if m.busy {
-			return m.interruptBusyTurn(), true
 		}
 	case "esc":
 		if m.busy {
@@ -370,6 +414,7 @@ func (m *model) handleGlobalKey(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 		if strings.TrimSpace(m.input.Value()) != "" {
 			m.input.Reset()
 			m.skillBinding = nil
+			m.resetWindowsPasteFallbackInputState()
 			m.resetHistoryNavigation()
 			m.updateSlashMatches()
 			m.skills.matches = nil
@@ -430,6 +475,398 @@ func (m *model) handleGlobalKey(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 	return nil, false, false
 }
 
+func (m *model) handleWindowsDeferredEnter(msg windowsDeferredEnterMsg) tea.Cmd {
+	if !m.windowsPasteFallbackEnabled() || !m.windowsPaste.pendingEnter || msg.id != m.windowsPaste.pendingEnterID {
+		return nil
+	}
+	tail := m.consumePendingEnterTail()
+	submitCmd := m.resolvePendingEnterAsSubmit()
+	if tail != "" {
+		m.input.HandlePaste(tail)
+		m.resetHistoryNavigation()
+		m.updateSlashMatches()
+		m.refreshViewportContent()
+	}
+	return submitCmd
+}
+
+func (m *model) resolvePendingEnterAsSubmit() tea.Cmd {
+	if !m.windowsPaste.pendingEnter {
+		return nil
+	}
+	wasBusy := m.windowsPaste.pendingEnterBusy
+	wasStopping := m.windowsPaste.pendingEnterStop
+	m.clearWindowsDeferredEnter()
+	value := strings.TrimSpace(m.input.Value())
+	if value == "" {
+		return nil
+	}
+	if m.busy {
+		return tea.Sequence(m.flushNativeScrollbackCmd(), m.submitPromptFromDeferredBusyEnter(value, wasStopping))
+	}
+	if wasBusy && wasStopping {
+		return nil
+	}
+	if m.localSubmitPending > 0 {
+		m.status = "wait for command to finish"
+		m.refreshViewportContent()
+		return m.flushNativeScrollbackCmd()
+	}
+	return tea.Sequence(m.flushNativeScrollbackCmd(), m.submitPrompt(value))
+}
+
+func (m *model) handleWindowsPasteFallbackKey(msg tea.KeyMsg) (tea.Cmd, bool) {
+	if !m.windowsPasteFallbackEnabled() {
+		return nil, false
+	}
+	now := time.Now()
+	if m.hasWindowsPasteBuffer() && !m.windowsPaste.activeUntil.IsZero() && now.After(m.windowsPaste.activeUntil) {
+		m.flushWindowsPasteBurstToComposer()
+	}
+	if msg.String() == "enter" {
+		switch {
+		case m.hasWindowsPasteBuffer():
+			if !m.windowsPasteBufferHasLineBreak() {
+				return m.deferWindowsSingleLinePasteSubmit(), true
+			}
+			return m.appendWindowsPasteBurst(now, "\n", true), true
+		case m.windowsPaste.pendingEnter:
+			suffix := "\n" + m.consumePendingEnterTail() + "\n"
+			return m.startWindowsPasteBurstFromComposer(now, suffix, true), true
+		case m.shouldDeferWindowsEnterSubmit():
+			return m.deferWindowsEnterSubmit(), true
+		}
+	}
+	if msg.String() == "ctrl+j" && (m.windowsPaste.pendingEnter || m.hasWindowsPasteBuffer()) {
+		if m.windowsPaste.suppressNextCtrlJ {
+			m.windowsPaste.suppressNextCtrlJ = false
+			if m.hasWindowsPasteBuffer() {
+				return m.scheduleWindowsPasteBurstFlush(now), true
+			}
+			return nil, true
+		}
+		if m.hasWindowsPasteBuffer() {
+			return m.appendWindowsPasteBurst(now, "\n", false), true
+		}
+		suffix := "\n"
+		if tail := m.consumePendingEnterTail(); tail != "" {
+			suffix = "\n" + tail + "\n"
+		}
+		return m.startWindowsPasteBurstFromComposer(now, suffix, false), true
+	}
+	if msg.String() == "tab" && !m.hasSlashSuggestions() && !m.hasSkillSuggestions() {
+		if m.windowsPaste.pendingEnter || m.hasWindowsPasteBuffer() {
+			return m.appendWindowsPasteFallbackText(now, "    "), true
+		}
+		m.insertWindowsPasteFallbackInactiveText("    ")
+		m.refreshViewportContent()
+		return nil, true
+	}
+	if len(msg.Runes) > 0 {
+		text := string(msg.Runes)
+		if m.hasWindowsPasteBuffer() {
+			return m.appendWindowsPasteBurst(now, text, false), true
+		}
+		if m.windowsPaste.pendingEnter {
+			tailHeld := m.windowsPaste.pendingEnterTail != ""
+			if tailHeld || m.windowsPaste.classifier.classifyChunk(text) == windowsPasteChunkBurst || isASCIIMultiRune(text) {
+				suffix := "\n" + m.consumePendingEnterTail() + text
+				return m.startWindowsPasteBurstFromComposer(now, suffix, false), true
+			}
+			return m.deferWindowsPendingEnterTail(text), true
+		}
+		if m.windowsPaste.classifier.classifyChunk(text) == windowsPasteChunkBurst {
+			return m.startWindowsPasteBurst(now, text, false), true
+		}
+		m.markWindowsBusyInput(m.busy, m.stopping)
+		return nil, false
+	}
+	if m.windowsPaste.pendingEnter && m.shouldCancelWindowsDeferredEnterForKey(msg) {
+		m.cancelWindowsDeferredEnter()
+	}
+	if m.hasWindowsPasteBuffer() {
+		m.flushWindowsPasteBurstToComposer()
+	}
+	return nil, false
+}
+
+func (m *model) shouldDeferWindowsEnterSubmit() bool {
+	if !m.windowsPasteFallbackEnabled() || m.mode != modeChat || m.windowsPaste.bracketedThisInput {
+		return false
+	}
+	if m.hasSlashSuggestions() || m.hasSkillSuggestions() {
+		return false
+	}
+	if m.localSubmitPending > 0 {
+		return false
+	}
+	if m.page == pageLogs && m.logFilterInput.Focused() {
+		return false
+	}
+	raw := m.input.Value()
+	if strings.HasSuffix(raw, "\\") {
+		return false
+	}
+	return strings.TrimSpace(raw) != ""
+}
+
+func (m *model) shouldCancelWindowsDeferredEnterForKey(msg tea.KeyMsg) bool {
+	switch msg.String() {
+	case "esc":
+		return !m.busy
+	case "enter", "ctrl+j", "tab":
+		return false
+	}
+	return true
+}
+
+func (m *model) deferWindowsEnterSubmit() tea.Cmd {
+	return m.deferWindowsEnterSubmitAfter(windowsPasteEnterDelay)
+}
+
+func (m *model) deferWindowsEnterSubmitAfter(delay time.Duration) tea.Cmd {
+	m.windowsPaste.pendingEnterID++
+	id := m.windowsPaste.pendingEnterID
+	m.windowsPaste.pendingEnter = true
+	m.windowsPaste.pendingEnterBusy = m.busy
+	m.windowsPaste.pendingEnterStop = m.stopping
+	m.windowsPaste.pendingEnterTail = ""
+	m.markWindowsBusyInput(m.busy, m.stopping)
+	return tea.Tick(delay, func(time.Time) tea.Msg {
+		return windowsDeferredEnterMsg{
+			id:          id,
+			wasBusy:     m.windowsPaste.pendingEnterBusy,
+			wasStopping: m.windowsPaste.pendingEnterStop,
+		}
+	})
+}
+
+func (m *model) appendWindowsPasteFallbackText(now time.Time, text string) tea.Cmd {
+	if m.windowsPaste.pendingEnter {
+		suffix := "\n" + m.consumePendingEnterTail() + text
+		return m.startWindowsPasteBurstFromComposer(now, suffix, false)
+	}
+	return m.appendWindowsPasteBurst(now, text, false)
+}
+
+func (m *model) insertWindowsPasteFallbackInactiveText(text string) {
+	m.input.HandlePaste(text)
+	m.resetHistoryNavigation()
+	m.updateSlashMatches()
+}
+
+func (m *model) cancelWindowsDeferredEnter() {
+	m.clearWindowsDeferredEnter()
+}
+
+func (m *model) clearWindowsDeferredEnter() {
+	m.windowsPaste.pendingEnter = false
+	m.windowsPaste.pendingEnterBusy = false
+	m.windowsPaste.pendingEnterStop = false
+	m.windowsPaste.pendingEnterTail = ""
+	m.windowsPaste.suppressNextCtrlJ = false
+}
+
+func (m *model) deferWindowsPendingEnterTail(text string) tea.Cmd {
+	m.windowsPaste.pendingEnterTailID++
+	id := m.windowsPaste.pendingEnterTailID
+	m.windowsPaste.pendingEnterTail = text
+	return tea.Tick(windowsPasteContinuationWindow, func(time.Time) tea.Msg {
+		return windowsPendingEnterTailMsg{id: id}
+	})
+}
+
+// consumePendingEnterTail returns and clears any rune parked in the 30 ms
+// tail window, invalidating its in-flight tick so it becomes a no-op.
+func (m *model) consumePendingEnterTail() string {
+	tail := m.windowsPaste.pendingEnterTail
+	if tail == "" {
+		return ""
+	}
+	m.windowsPaste.pendingEnterTail = ""
+	m.windowsPaste.pendingEnterTailID++
+	return tail
+}
+
+func (m *model) handleWindowsPendingEnterTail(msg windowsPendingEnterTailMsg) tea.Cmd {
+	if !m.windowsPasteFallbackEnabled() || !m.windowsPaste.pendingEnter || msg.id != m.windowsPaste.pendingEnterTailID || m.windowsPaste.pendingEnterTail == "" {
+		return nil
+	}
+	tail := m.consumePendingEnterTail()
+	submitCmd := m.resolvePendingEnterAsSubmit()
+	m.input.HandlePaste(tail)
+	m.resetHistoryNavigation()
+	m.updateSlashMatches()
+	m.refreshViewportContent()
+	return submitCmd
+}
+
+func (m model) hasWindowsPasteBuffer() bool {
+	return m.windowsPaste.buffer != ""
+}
+
+func (m model) windowsPasteBufferHasLineBreak() bool {
+	return strings.Contains(m.windowsPaste.buffer, "\n")
+}
+
+func (m *model) deferWindowsSingleLinePasteSubmit() tea.Cmd {
+	m.flushWindowsPasteBurstToComposer()
+	if m.localSubmitPending > 0 {
+		m.status = "wait for command to finish"
+		m.refreshViewportContent()
+		return m.flushNativeScrollbackCmd()
+	}
+	return m.deferWindowsEnterSubmit()
+}
+
+func (m *model) startWindowsPasteBurstFromComposer(now time.Time, suffix string, suppressNextCtrlJ bool) tea.Cmd {
+	prefix := m.input.Value()
+	m.input.SetValue("")
+	return m.startWindowsPasteBurst(now, prefix+suffix, suppressNextCtrlJ)
+}
+
+func (m *model) startWindowsPasteBurst(now time.Time, text string, suppressNextCtrlJ bool) tea.Cmd {
+	m.windowsPaste.buffer = text
+	return m.afterWindowsPasteBurstChanged(now, suppressNextCtrlJ)
+}
+
+func (m *model) appendWindowsPasteBurst(now time.Time, text string, suppressNextCtrlJ bool) tea.Cmd {
+	m.windowsPaste.buffer += text
+	return m.afterWindowsPasteBurstChanged(now, suppressNextCtrlJ)
+}
+
+func (m *model) afterWindowsPasteBurstChanged(now time.Time, suppressNextCtrlJ bool) tea.Cmd {
+	wasBusy := m.windowsPaste.pendingEnterBusy || m.windowsPaste.busyInput || m.busy
+	wasStopping := m.windowsPaste.pendingEnterStop || m.windowsPaste.busyInputStop || m.stopping
+	m.clearWindowsDeferredEnter()
+	m.windowsPaste.bracketedThisInput = false
+	m.windowsPaste.suppressNextCtrlJ = suppressNextCtrlJ
+	m.markWindowsBusyInput(wasBusy, wasStopping)
+	m.resetHistoryNavigation()
+	m.updateSlashMatches()
+	return m.scheduleWindowsPasteBurstFlush(now)
+}
+
+func (m *model) scheduleWindowsPasteBurstFlush(now time.Time) tea.Cmd {
+	return m.scheduleWindowsPasteBurstFlushAfter(now, windowsPasteQuietDelay)
+}
+
+func (m *model) scheduleWindowsPasteBurstFlushAfter(now time.Time, delay time.Duration) tea.Cmd {
+	m.windowsPaste.activeUntil = now.Add(delay)
+	if m.windowsPaste.burstFlushScheduled {
+		return nil
+	}
+	m.windowsPaste.burstID++
+	id := m.windowsPaste.burstID
+	m.windowsPaste.burstFlushScheduled = true
+	return tea.Tick(delay, func(time.Time) tea.Msg {
+		return windowsPasteBurstFlushMsg{id: id}
+	})
+}
+
+func (m *model) handleWindowsPasteBurstFlush(msg windowsPasteBurstFlushMsg) tea.Cmd {
+	if !m.windowsPasteFallbackEnabled() || msg.id != m.windowsPaste.burstID {
+		return nil
+	}
+	if !m.hasWindowsPasteBuffer() {
+		m.windowsPaste.burstFlushScheduled = false
+		return nil
+	}
+	if !m.windowsPaste.activeUntil.IsZero() {
+		if remaining := time.Until(m.windowsPaste.activeUntil); remaining > 0 {
+			return tea.Tick(remaining, func(time.Time) tea.Msg {
+				return windowsPasteBurstFlushMsg{id: msg.id}
+			})
+		}
+	}
+	m.flushWindowsPasteBurstToComposer()
+	return nil
+}
+
+func (m *model) flushWindowsPasteBurstToComposer() {
+	text := m.windowsPaste.buffer
+	if text == "" {
+		return
+	}
+	m.windowsPaste.buffer = ""
+	m.windowsPaste.activeUntil = time.Time{}
+	m.windowsPaste.burstFlushScheduled = false
+	m.windowsPaste.suppressNextCtrlJ = false
+	m.input.HandlePaste(text)
+	m.resetHistoryNavigation()
+	m.updateSlashMatches()
+	m.refreshViewportContent()
+}
+
+func (m model) hasPendingWindowsBusyInput() bool {
+	if !m.windowsPasteFallbackEnabled() {
+		return false
+	}
+	if strings.TrimSpace(m.input.Value()) == "" && strings.TrimSpace(m.windowsPaste.buffer) == "" {
+		return false
+	}
+	return (m.windowsPaste.pendingEnter && m.windowsPaste.pendingEnterBusy) || m.windowsPaste.busyInput || m.hasWindowsPasteBuffer()
+}
+
+func (m *model) markWindowsBusyInput(wasBusy, wasStopping bool) {
+	if !m.windowsPasteFallbackEnabled() {
+		return
+	}
+	if wasBusy {
+		m.windowsPaste.busyInput = true
+	}
+	if wasStopping {
+		m.windowsPaste.busyInputStop = true
+	}
+}
+
+func (m *model) markWindowsBusyInputStopped() {
+	if !m.windowsPasteFallbackEnabled() {
+		return
+	}
+	if m.windowsPaste.pendingEnter {
+		m.windowsPaste.pendingEnterBusy = m.windowsPaste.pendingEnterBusy || m.busy
+		m.windowsPaste.pendingEnterStop = true
+	}
+	if m.windowsPaste.busyInput || !m.windowsPaste.activeUntil.IsZero() {
+		m.windowsPaste.busyInput = true
+		m.windowsPaste.busyInputStop = true
+	}
+}
+
+func (m *model) markWindowsPastedInput() {
+	m.windowsPaste.buffer = ""
+	m.windowsPaste.bracketedThisInput = true
+	m.windowsPaste.activeUntil = time.Time{}
+	m.windowsPaste.burstFlushScheduled = false
+	m.windowsPaste.suppressNextCtrlJ = false
+	m.markWindowsBusyInput(m.busy, m.stopping)
+}
+
+func (m *model) resetWindowsPasteFallbackInputState() {
+	m.clearWindowsDeferredEnter()
+	m.windowsPaste.buffer = ""
+	m.windowsPaste.bracketedThisInput = false
+	m.windowsPaste.activeUntil = time.Time{}
+	m.windowsPaste.burstFlushScheduled = false
+	m.windowsPaste.busyInput = false
+	m.windowsPaste.busyInputStop = false
+	m.windowsPaste.suppressNextCtrlJ = false
+}
+
+func (m *model) resetWindowsPasteFallbackIfInputEmpty() {
+	if m.hasWindowsPasteBuffer() {
+		return
+	}
+	if strings.TrimSpace(m.input.Value()) == "" {
+		m.resetWindowsPasteFallbackInputState()
+	}
+}
+
+func (m model) windowsPasteFallbackEnabled() bool {
+	return m.windowsPaste.enabled
+}
+
 func (m *model) handleComposerKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	switch msg.String() {
 	case "shift+enter", "ctrl+j":
@@ -445,6 +882,11 @@ func (m *model) handleComposerKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		return nil, true
 	}
 	if m.input.HandleKey(msg) {
+		if msg.String() == "ctrl+u" {
+			m.skillBinding = nil
+			m.resetWindowsPasteFallbackInputState()
+		}
+		m.resetWindowsPasteFallbackIfInputEmpty()
 		m.resetHistoryNavigation()
 		m.updateSlashMatches()
 		return nil, true

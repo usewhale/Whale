@@ -19,6 +19,14 @@ func TestComposerCtrlJInsertsNewline(t *testing.T) {
 	}
 }
 
+func TestComposerPasteNormalizesTabsToSpaces(t *testing.T) {
+	c := New()
+	c.HandlePaste("foo\n\tbar")
+	if got := c.Value(); got != "foo\n    bar" {
+		t.Fatalf("expected pasted tab to normalize to spaces, got %q", got)
+	}
+}
+
 func TestComposerMultilinePromptOnlyMarksFirstLine(t *testing.T) {
 	c := New()
 	c.SetValue("hello\nworld")

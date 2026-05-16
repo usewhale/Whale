@@ -177,11 +177,20 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 			if m.status == "command pending" || m.status == "wait for command to finish" {
 				m.status = "ready"
 			}
+			pendingWindowsInput := m.snapshotWindowsBusyInput()
 			if next, ok := m.popQueuedPrompt(); ok {
 				m.deferredPlanPicker = false
 				eventCmd = m.submitPromptWithBinding(next.Text, next.SkillBinding)
-			} else if m.deferredPlanPicker && m.mode == modeChat {
-				m.openPlanImplementationPicker()
+				m.restoreWindowsBusyInput(pendingWindowsInput)
+			} else {
+				m.restoreWindowsBusyInput(pendingWindowsInput)
+				if m.deferredPlanPicker && m.mode == modeChat {
+					if m.hasPendingWindowsBusyInput() {
+						m.deferredPlanPicker = false
+					} else {
+						m.openPlanImplementationPicker()
+					}
+				}
 			}
 		}
 	case service.EventTurnDone:
@@ -293,9 +302,10 @@ func (m *model) handleTurnDone(ev service.Event) tea.Cmd {
 	queuedRestored := false
 	shouldOpenPlanPicker := wasBusy && !wasBlockingModal && m.chatMode == "plan" && m.sawPlanThisTurn && m.mode == modeChat
 	var eventCmd tea.Cmd
+	pendingWindowsInput := m.snapshotWindowsBusyInput()
 	if wasStopping {
 		m.deferredPlanPicker = false
-		queuedRestored = m.restoreQueuedPromptsToComposer()
+		queuedRestored = m.restoreQueuedPromptsToComposerWithWindowsInput(pendingWindowsInput)
 	} else if m.localSubmitPending > 0 {
 		if shouldOpenPlanPicker {
 			m.deferredPlanPicker = true
@@ -304,9 +314,10 @@ func (m *model) handleTurnDone(ev service.Event) tea.Cmd {
 	} else if next, ok := m.popQueuedPrompt(); ok {
 		m.deferredPlanPicker = false
 		eventCmd = m.submitPromptWithBinding(next.Text, next.SkillBinding)
+		m.restoreWindowsBusyInput(pendingWindowsInput)
 		queuedTurnStarted = true
 	}
-	if !queuedTurnStarted && !queuedRestored && m.localSubmitPending == 0 && shouldOpenPlanPicker {
+	if !queuedTurnStarted && !queuedRestored && m.localSubmitPending == 0 && !m.hasPendingWindowsBusyInput() && shouldOpenPlanPicker {
 		m.openPlanImplementationPicker()
 	}
 	m.resetTurnVisibility()
