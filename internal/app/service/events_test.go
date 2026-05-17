@@ -579,6 +579,36 @@ func TestLocalSubmitEmitsDone(t *testing.T) {
 	waitForServiceEvent(t, svc, EventLocalSubmitDone)
 }
 
+func TestProjectApprovalIntentWritesProjectConfig(t *testing.T) {
+	work := t.TempDir()
+	t.Chdir(work)
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+
+	svc.Dispatch(Intent{Kind: IntentSetProjectApproval, ApprovalMode: "never-ask"})
+
+	info := waitForServiceEvent(t, svc, EventInfo)
+	if !strings.Contains(info.Text, "project permissions saved") ||
+		!strings.Contains(info.Text, "auto-approve by default in this workspace") ||
+		!strings.Contains(info.Text, app.ProjectConfigPath(work)) {
+		t.Fatalf("unexpected project approval info: %q", info.Text)
+	}
+	waitForServiceEvent(t, svc, EventTurnDone)
+	projectCfg, loaded, err := app.LoadConfigFile(app.ProjectConfigPath(work))
+	if err != nil || !loaded {
+		t.Fatalf("load project config loaded=%v err=%v", loaded, err)
+	}
+	if projectCfg.Permissions.Mode != "never" {
+		t.Fatalf("project permissions.mode: want never, got %q", projectCfg.Permissions.Mode)
+	}
+}
+
 func TestLocalSubmitDispatchPreservesOrder(t *testing.T) {
 	cfg := app.DefaultConfig()
 	cfg.DataDir = t.TempDir()

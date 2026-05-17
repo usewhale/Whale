@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/usewhale/whale/internal/policy"
 )
 
 func TestConfigFileRoundTrip(t *testing.T) {
@@ -206,5 +208,91 @@ func TestSetModelAndThinkingPersistToConfig(t *testing.T) {
 	}
 	if _, err := os.Stat(preferencesPath(dir)); !os.IsNotExist(err) {
 		t.Fatalf("preferences.json should not be created, err=%v", err)
+	}
+}
+
+func TestSetProjectApprovalModeUpdatesProjectConfig(t *testing.T) {
+	dataDir := t.TempDir()
+	workspace := t.TempDir()
+	if err := SaveConfigFile(ProjectConfigPath(workspace), FileConfig{
+		Model: "deepseek-v4-pro",
+		Skills: FileSkillsConfig{
+			Disabled: []string{"project-skill"},
+		},
+	}); err != nil {
+		t.Fatalf("save project config: %v", err)
+	}
+	app := &App{
+		workspaceRoot: workspace,
+		cfg:           Config{DataDir: dataDir, ApprovalMode: string(policy.ApprovalModeOnRequest)},
+		approvalMode:  policy.ApprovalModeOnRequest,
+	}
+
+	path, err := app.SetProjectApprovalMode(policy.ApprovalModeNever)
+	if err != nil {
+		t.Fatalf("SetProjectApprovalMode: %v", err)
+	}
+	if path != ProjectConfigPath(workspace) {
+		t.Fatalf("project config path: want %s, got %s", ProjectConfigPath(workspace), path)
+	}
+	if app.ApprovalMode() != policy.ApprovalModeNever || app.cfg.ApprovalMode != string(policy.ApprovalModeNever) {
+		t.Fatalf("approval mode not updated in memory: app=%s cfg=%s", app.ApprovalMode(), app.cfg.ApprovalMode)
+	}
+	loaded, ok, err := LoadConfigFile(ProjectConfigPath(workspace))
+	if err != nil || !ok {
+		t.Fatalf("load project config loaded=%v err=%v", ok, err)
+	}
+	if loaded.Permissions.Mode != string(policy.ApprovalModeNever) {
+		t.Fatalf("project permissions.mode: want never, got %q", loaded.Permissions.Mode)
+	}
+	if loaded.Model != "deepseek-v4-pro" || !containsString(loaded.Skills.Disabled, "project-skill") {
+		t.Fatalf("expected unrelated project config to be preserved, got %+v", loaded)
+	}
+}
+
+func TestClearProjectApprovalModePreservesOtherProjectConfig(t *testing.T) {
+	dataDir := t.TempDir()
+	workspace := t.TempDir()
+	if err := SaveConfigFile(ProjectConfigPath(workspace), FileConfig{
+		Model: "deepseek-v4-pro",
+		Permissions: FilePermissionsConfig{
+			Mode:               string(policy.ApprovalModeNever),
+			AllowShellPrefixes: []string{"git status"},
+		},
+	}); err != nil {
+		t.Fatalf("save project config: %v", err)
+	}
+	app := &App{
+		workspaceRoot: workspace,
+		cfg:           Config{DataDir: dataDir, ApprovalMode: string(policy.ApprovalModeNever)},
+		approvalMode:  policy.ApprovalModeNever,
+	}
+
+	mode, path, err := app.ClearProjectApprovalMode()
+	if err != nil {
+		t.Fatalf("ClearProjectApprovalMode: %v", err)
+	}
+	if path != ProjectConfigPath(workspace) {
+		t.Fatalf("project config path: want %s, got %s", ProjectConfigPath(workspace), path)
+	}
+	if mode != policy.ApprovalModeOnRequest || app.ApprovalMode() != policy.ApprovalModeOnRequest {
+		t.Fatalf("approval mode after clear: returned=%s app=%s", mode, app.ApprovalMode())
+	}
+	loaded, ok, err := LoadConfigFile(ProjectConfigPath(workspace))
+	if err != nil || !ok {
+		t.Fatalf("load project config loaded=%v err=%v", ok, err)
+	}
+	if loaded.Permissions.Mode != "" {
+		t.Fatalf("project permissions.mode should be cleared, got %q", loaded.Permissions.Mode)
+	}
+	if loaded.Model != "deepseek-v4-pro" || !containsString(loaded.Permissions.AllowShellPrefixes, "git status") {
+		t.Fatalf("expected unrelated project config to be preserved, got %+v", loaded)
+	}
+	raw, err := os.ReadFile(ProjectConfigPath(workspace))
+	if err != nil {
+		t.Fatalf("read project config: %v", err)
+	}
+	if strings.Contains(string(raw), "mode =") {
+		t.Fatalf("project config should not contain permissions.mode after clear:\n%s", raw)
 	}
 }
