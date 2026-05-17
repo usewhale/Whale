@@ -2152,14 +2152,25 @@ func TestPickerEventsClearBusyState(t *testing.T) {
 
 func TestPermissionsPickerCopyClarifiesAutoApproveScope(t *testing.T) {
 	m := newModel(nil, "", "", "")
-	m.permissionsPicker.choices = []string{service.ApprovalChoiceAskFirst, service.ApprovalChoiceAutoApproveSession}
+	m.permissionsPicker.choices = []string{
+		service.ApprovalChoiceAskFirst,
+		service.ApprovalChoiceAutoApproveSession,
+		service.ApprovalChoiceTrustProject,
+		service.ApprovalChoiceClearProject,
+	}
 
 	view := m.renderPermissionsPicker()
 	for _, want := range []string{
+		"Session",
 		"Ask before tools run",
 		"Prompt before write, patch, shell, or MCP tools run.",
 		"Auto approve all tools for this session",
 		"No approval prompts until Whale exits.",
+		"Project default",
+		"Trust this project...",
+		"Auto-approve by default in this workspace.",
+		"Clear project default",
+		"Remove permissions.mode from ./.whale/config.toml.",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected permissions picker to contain %q:\n%s", want, view)
@@ -2167,6 +2178,60 @@ func TestPermissionsPickerCopyClarifiesAutoApproveScope(t *testing.T) {
 	}
 	if strings.Contains(view, "Never ask; auto-approve tool calls.") {
 		t.Fatalf("permissions picker should not use ambiguous auto-approve copy:\n%s", view)
+	}
+}
+
+func TestPermissionsProjectTrustConfirmCopy(t *testing.T) {
+	m := newModel(nil, "", "", "")
+
+	view := m.renderPermissionsProjectTrustConfirm()
+	for _, want := range []string{
+		"Trust this project?",
+		"Auto-approve write, patch, shell, and MCP tools by default in this workspace.",
+		"This affects future sessions in this workspace.",
+		"Config: ./.whale/config.toml",
+		"Trust this project",
+		"Cancel",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected trust confirmation to contain %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Whale will") {
+		t.Fatalf("trust confirmation should state facts without product-name narration:\n%s", view)
+	}
+}
+
+func TestPermissionsPickerTrustProjectDispatchesProjectApprovalIntent(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.mode = modePermissionsPicker
+	m.permissionsPicker.choices = []string{
+		service.ApprovalChoiceAskFirst,
+		service.ApprovalChoiceAutoApproveSession,
+		service.ApprovalChoiceTrustProject,
+		service.ApprovalChoiceClearProject,
+	}
+	m.permissionsPicker.index = 2
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if m.mode != modePermissionsProjectTrustConfirm {
+		t.Fatalf("expected trust confirmation mode, got %v", m.mode)
+	}
+	if len(*intents) != 0 {
+		t.Fatalf("expected no intent before confirmation, got %+v", *intents)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if len(*intents) != 1 {
+		t.Fatalf("expected one intent after confirmation, got %+v", *intents)
+	}
+	if got := (*intents)[0]; got.Kind != service.IntentSetProjectApproval || got.ApprovalMode != "never-ask" {
+		t.Fatalf("unexpected project approval intent: %+v", got)
+	}
+	if m.mode != modeChat {
+		t.Fatalf("expected mode chat after confirmation, got %v", m.mode)
 	}
 }
 

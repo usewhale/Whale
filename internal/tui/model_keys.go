@@ -109,6 +109,10 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 		return m.handleModelPickerKey(msg), false, true
 	case modePermissionsPicker:
 		return m.handlePermissionsPickerKey(msg), false, true
+	case modePermissionsProjectTrustConfirm:
+		return m.handlePermissionsProjectTrustConfirmKey(msg), false, true
+	case modePermissionsProjectClearConfirm:
+		return m.handlePermissionsProjectClearConfirmKey(msg), false, true
 	case modePlanImplementation:
 		return m.handlePlanImplementationKey(msg), false, true
 	case modeSkillsMenu:
@@ -383,11 +387,55 @@ func (m *model) handlePermissionsPickerKey(msg tea.KeyMsg) tea.Cmd {
 		}
 	case "enter":
 		choice := safeChoice(m.permissionsPicker.choices, m.permissionsPicker.index)
+		switch choice {
+		case service.ApprovalChoiceTrustProject:
+			m.permissionsProjectConfirm.index = 0
+			m.mode = modePermissionsProjectTrustConfirm
+			return nil
+		case service.ApprovalChoiceClearProject:
+			m.permissionsProjectConfirm.index = 0
+			m.mode = modePermissionsProjectClearConfirm
+			return nil
+		}
 		mode := approvalChoiceMode(choice)
 		if mode != "" {
 			m.dispatchIntent(service.Intent{Kind: service.IntentSetApprovalMode, ApprovalMode: mode})
 		}
 		m.mode = modeChat
+	}
+	return nil
+}
+
+func (m *model) handlePermissionsProjectTrustConfirmKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "esc":
+		m.mode = modePermissionsPicker
+	case "up", "k", "down", "j":
+		m.permissionsProjectConfirm.index = 1 - m.permissionsProjectConfirm.index
+	case "enter":
+		if m.permissionsProjectConfirm.index == 0 {
+			m.dispatchIntent(service.Intent{Kind: service.IntentSetProjectApproval, ApprovalMode: "never-ask"})
+			m.mode = modeChat
+		} else {
+			m.mode = modePermissionsPicker
+		}
+	}
+	return nil
+}
+
+func (m *model) handlePermissionsProjectClearConfirmKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "esc":
+		m.mode = modePermissionsPicker
+	case "up", "k", "down", "j":
+		m.permissionsProjectConfirm.index = 1 - m.permissionsProjectConfirm.index
+	case "enter":
+		if m.permissionsProjectConfirm.index == 0 {
+			m.dispatchIntent(service.Intent{Kind: service.IntentClearProjectApproval})
+			m.mode = modeChat
+		} else {
+			m.mode = modePermissionsPicker
+		}
 	}
 	return nil
 }

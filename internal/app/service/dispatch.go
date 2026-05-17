@@ -72,6 +72,27 @@ func (s *Service) Dispatch(in Intent) {
 		s.app.SetApprovalMode(mode)
 		s.emit(Event{Kind: EventInfo, Text: fmt.Sprintf("approval set: %s", approvalModeDisplay(s.app.ApprovalMode()))})
 		s.emit(Event{Kind: EventTurnDone})
+	case IntentSetProjectApproval:
+		mode, err := policy.ParseApprovalMode(in.ApprovalMode)
+		if err != nil {
+			s.emit(Event{Kind: EventError, Text: err.Error()})
+			return
+		}
+		path, err := s.app.SetProjectApprovalMode(mode)
+		if err != nil {
+			s.emit(Event{Kind: EventError, Text: err.Error()})
+			return
+		}
+		s.emit(Event{Kind: EventInfo, Text: fmt.Sprintf("project permissions saved: %s\nconfig: %s", projectApprovalModeDisplay(mode), path)})
+		s.emit(Event{Kind: EventTurnDone})
+	case IntentClearProjectApproval:
+		mode, path, err := s.app.ClearProjectApprovalMode()
+		if err != nil {
+			s.emit(Event{Kind: EventError, Text: err.Error()})
+			return
+		}
+		s.emit(Event{Kind: EventInfo, Text: fmt.Sprintf("project permissions default cleared\nconfig: %s\ncurrent session: %s", path, approvalModeDisplay(mode))})
+		s.emit(Event{Kind: EventTurnDone})
 	case IntentToggleMode:
 		msg, err := s.app.ToggleMode()
 		if err != nil {

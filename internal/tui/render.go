@@ -136,6 +136,12 @@ func (m model) bottomPartsBeforeInput(mainWidth int) []string {
 	if m.mode == modePermissionsPicker {
 		bottomParts = append(bottomParts, m.renderPermissionsPicker())
 	}
+	if m.mode == modePermissionsProjectTrustConfirm {
+		bottomParts = append(bottomParts, m.renderPermissionsProjectTrustConfirm())
+	}
+	if m.mode == modePermissionsProjectClearConfirm {
+		bottomParts = append(bottomParts, m.renderPermissionsProjectClearConfirm())
+	}
 	if queued := m.renderQueuedPrompts(mainWidth); queued != "" {
 		bottomParts = append(bottomParts, queued)
 	}
@@ -538,8 +544,18 @@ func (m model) renderPermissionsPicker() string {
 	descriptions := map[string]string{
 		service.ApprovalChoiceAskFirst:           "Prompt before write, patch, shell, or MCP tools run.",
 		service.ApprovalChoiceAutoApproveSession: "No approval prompts until Whale exits.",
+		service.ApprovalChoiceTrustProject:       "Auto-approve by default in this workspace.",
+		service.ApprovalChoiceClearProject:       "Remove permissions.mode from ./.whale/config.toml.",
 	}
+	projectSectionRendered := false
 	for i, item := range m.permissionsPicker.choices {
+		if !projectSectionRendered && isProjectPermissionChoice(item) {
+			rows = append(rows, "", "Project default")
+			projectSectionRendered = true
+		}
+		if i == 0 {
+			rows = append(rows, "Session")
+		}
 		prefix := "  "
 		if i == m.permissionsPicker.index {
 			prefix = "> "
@@ -551,6 +567,49 @@ func (m model) renderPermissionsPicker() string {
 		}
 	}
 	rows = append(rows, "", "(up/down choose, enter confirm, esc cancel)")
+	return lipgloss.NewStyle().Foreground(tuitheme.Default.Info).Render(strings.Join(rows, "\n"))
+}
+
+func isProjectPermissionChoice(item string) bool {
+	return item == service.ApprovalChoiceTrustProject || item == service.ApprovalChoiceClearProject
+}
+
+func (m model) renderPermissionsProjectTrustConfirm() string {
+	return m.renderPermissionsProjectConfirm(
+		"Trust this project?",
+		[]string{
+			"Auto-approve write, patch, shell, and MCP tools by default in this workspace.",
+			"This affects future sessions in this workspace.",
+			"Config: ./.whale/config.toml",
+		},
+		"Trust this project",
+	)
+}
+
+func (m model) renderPermissionsProjectClearConfirm() string {
+	return m.renderPermissionsProjectConfirm(
+		"Clear project default?",
+		[]string{
+			"Remove permissions.mode from ./.whale/config.toml.",
+			"Future sessions will use the global/default approval setting.",
+		},
+		"Clear project default",
+	)
+}
+
+func (m model) renderPermissionsProjectConfirm(title string, bodyLines []string, confirmLabel string) string {
+	rows := []string{title, ""}
+	rows = append(rows, bodyLines...)
+	rows = append(rows, "")
+	choices := []string{confirmLabel, "Cancel"}
+	for i, item := range choices {
+		prefix := "  "
+		if i == m.permissionsProjectConfirm.index {
+			prefix = "> "
+		}
+		rows = append(rows, prefix+item)
+	}
+	rows = append(rows, "", "(up/down choose, enter confirm, esc back)")
 	return lipgloss.NewStyle().Foreground(tuitheme.Default.Info).Render(strings.Join(rows, "\n"))
 }
 
