@@ -1,8 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="620" height="170" viewBox="0 0 620 170" role="img" aria-label="Whale — DeepSeek-native coding agent for the terminal">
+<svg xmlns="http://www.w3.org/2000/svg" width="620" height="130" viewBox="0 0 620 130" role="img" aria-label="Whale">
   <title>Whale</title>
   <defs>
-    <!-- DeepSeek brand blue gradient: light periwinkle → #4D6BFE → deep indigo.
-         Matches the DeepSeek identity while staying readable on dark + light. -->
     <linearGradient id="whale-grad" x1="0%" y1="0%" x2="100%" y2="0%">
       <stop offset="0%" stop-color="#8FABFF"/>
       <stop offset="20%" stop-color="#6D88FB"/>
@@ -10,116 +8,10 @@
       <stop offset="70%" stop-color="#3B50E0"/>
       <stop offset="100%" stop-color="#2A3DB8"/>
     </linearGradient>
-    <linearGradient id="whale-grad-mark" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#4D6BFE"/>
-      <stop offset="50%" stop-color="#3B50E0"/>
-      <stop offset="100%" stop-color="#2A3DB8"/>
-    </linearGradient>
-    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
-      <feGaussianBlur stdDeviation="3" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
-
-    <!-- Geometric whale silhouette — side view, swimming right.
-         Smooth curves, clean low-poly feel. Centroid near (0, -4)
-         so concentric scale transforms work from there. -->
-    <path id="whale-body" d="
-      M -46,2
-      C -46,-6 -40,-18 -30,-26
-      C -18,-33 -4,-34 8,-30
-      C 18,-26 26,-22 32,-16
-      C 36,-10 38,-4 39,0
-      L 52,-18
-      L 43,-1
-      L 52,16
-      L 39,4
-      C 35,10 28,14 20,15
-      C 10,15 0,12 -10,10
-      C -22,7 -34,4 -40,2
-      C -44,2 -46,2 -46,2 Z
-    "/>
-
-    <!-- Water spout — three streams from the blowhole -->
-    <g id="whale-spout">
-      <path d="M -22,-32 Q -16,-44 -2,-44"
-            fill="none" stroke="url(#whale-grad-mark)" stroke-width="2.2" stroke-linecap="round">
-        <animate attributeName="opacity" values="0.5;1;0.5" dur="2s" repeatCount="indefinite"/>
-      </path>
-      <path d="M -18,-32 Q -12,-46 -4,-48"
-            fill="none" stroke="url(#whale-grad-mark)" stroke-width="1.8" stroke-linecap="round">
-        <animate attributeName="opacity" values="0.6;1;0.6" dur="2s" begin="0.3s" repeatCount="indefinite"/>
-      </path>
-      <path d="M -14,-30 Q -6,-40 4,-42"
-            fill="none" stroke="url(#whale-grad-mark)" stroke-width="1.4" stroke-linecap="round">
-        <animate attributeName="opacity" values="0.4;0.9;0.4" dur="2s" begin="0.6s" repeatCount="indefinite"/>
-      </path>
-    </g>
   </defs>
 
-  <!-- 🐋 brand mark: three concentric whale silhouettes + water spout.
-       Outer stroke pulses, inner fill breathes.
-       Subtle vertical drift mimics floating in water.
-       Whale swims right → toward the wordmark. -->
-  <g transform="translate(90, 85)" filter="url(#glow)">
-    <g>
-      <animateTransform attributeName="transform" type="translate"
-                        values="0,0; 0,-3; 0,0"
-                        dur="4.5s" repeatCount="indefinite"/>
-
-      <!-- Outer whale — hollow, pulsing stroke, largest -->
-      <g transform="translate(0, -4) scale(1) translate(0, 4)">
-        <use href="#whale-body"
-             fill="none"
-             stroke="url(#whale-grad-mark)"
-             stroke-width="3.5"
-             stroke-linejoin="round">
-          <animate attributeName="stroke-width"
-                   values="3.5;5.5;3.5"
-                   dur="2.8s"
-                   repeatCount="indefinite"/>
-        </use>
-      </g>
-
-      <!-- Middle whale — hollow, breathing opacity -->
-      <g transform="translate(0, -4) scale(0.6) translate(0, 4)">
-        <use href="#whale-body"
-             fill="none"
-             stroke="url(#whale-grad-mark)"
-             stroke-width="2"
-             stroke-linejoin="round"
-             opacity="0.7">
-          <animate attributeName="opacity"
-                   values="0.35;0.8;0.35"
-                   dur="2.8s"
-                   begin="0.9s"
-                   repeatCount="indefinite"/>
-        </use>
-      </g>
-
-      <!-- Inner whale — solid fill, breathing, smallest -->
-      <g transform="translate(0, -4) scale(0.25) translate(0, 4)">
-        <use href="#whale-body"
-             fill="url(#whale-grad-mark)">
-          <animate attributeName="opacity"
-                   values="0.65;1;0.65"
-                   dur="2.8s"
-                   repeatCount="indefinite"/>
-        </use>
-      </g>
-
-      <!-- Eye — tiny dot that gives the whale personality -->
-      <circle cx="-32" cy="-14" r="2.2" fill="#64748b" opacity="0.7"/>
-
-      <!-- Water spout -->
-      <use href="#whale-spout"/>
-    </g>
-  </g>
-
-  <!-- WHALE wordmark with ocean gradient -->
-  <text x="170" y="102"
+  <text x="310" y="83"
+        text-anchor="middle"
         font-family="ui-monospace, SFMono-Regular, 'Cascadia Code', Menlo, Consolas, 'DejaVu Sans Mono', monospace"
         font-size="68"
         font-weight="800"
@@ -130,11 +22,4 @@
              dur="3.2s"
              repeatCount="indefinite"/>
   </text>
-
-  <!-- Tagline -->
-  <text x="44" y="136"
-        font-family="ui-monospace, SFMono-Regular, 'Cascadia Code', Menlo, Consolas, 'DejaVu Sans Mono', monospace"
-        font-size="15"
-        fill="#64748b"
-        letter-spacing="0.5">DeepSeek-native coding agent for the terminal</text>
 </svg>
