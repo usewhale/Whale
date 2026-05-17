@@ -36,6 +36,46 @@ func TestAgentLoopWithToolRoundTrip(t *testing.T) {
 	}
 }
 
+// deltasNoTerminalProvider emits content deltas then closes the channel
+// without an EventComplete/EventError. This models the SSE-EOF-before-[DONE]
+// case noted in issue #22 review.
+type deltasNoTerminalProvider struct{}
+
+func (p *deltasNoTerminalProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	out := make(chan ProviderEvent, 4)
+	out <- ProviderEvent{Type: EventContentDelta, Content: "partial-"}
+	out <- ProviderEvent{Type: EventContentDelta, Content: "answer"}
+	close(out)
+	return out
+}
+
+func TestStreamFallthroughPersistsPartialAssistant(t *testing.T) {
+	store := NewInMemoryStore()
+	a := NewAgent(&deltasNoTerminalProvider{}, store, nil)
+
+	events, err := a.RunStream(context.Background(), "s-partial", "go")
+	if err != nil {
+		t.Fatalf("run stream failed: %v", err)
+	}
+	for range events {
+	}
+
+	all, err := store.List(context.Background(), "s-partial")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(all) < 2 {
+		t.Fatalf("expected user+assistant, got %d", len(all))
+	}
+	asst := all[len(all)-1]
+	if asst.Role != RoleAssistant {
+		t.Fatalf("expected last to be assistant, got %s", asst.Role)
+	}
+	if asst.Text != "partial-answer" {
+		t.Fatalf("expected persisted partial text %q, got %q", "partial-answer", asst.Text)
+	}
+}
+
 func TestRunStreamWithInjectedInputStoresVisibleAndHiddenMessages(t *testing.T) {
 	store := NewInMemoryStore()
 	a := NewAgent(&mockProviderWithDeltas{}, store, nil)

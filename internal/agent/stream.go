@@ -25,6 +25,7 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 	planStarted := false
 	planCompleted := false
 	assistantDeltaSeen := false
+	streamPersisted := false
 
 	ch := a.provider.StreamResponse(ctx, a.buildTurnProviderHistory(sessionID, rt), a.tools.Tools())
 	for ev := range ch {
@@ -33,16 +34,15 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			assistant.Text += ev.Content
 			assistantDeltaSeen = true
 			a.emitAssistantContentDelta(ev.Content, &planParser, &planText, &planStarted, &planCompleted, events)
-			if err := a.store.Update(ctx, assistant); err != nil {
-				return core.Message{}, nil, llm.Usage{}, "", false, err
-			}
+			// Intentionally do not persist on every delta: rewriting the full
+			// session JSONL per token produced O(n·m) disk I/O and caused TUI
+			// stutter in long-context sessions (issue #22). The accumulated
+			// state is flushed by the EventToolUseStart / EventComplete /
+			// bestEffortUpdateAssistant paths below.
 		case llm.EventReasoningDelta:
 			assistant.Reasoning += ev.ReasoningDelta
 			rt.Scratch.Reasoning += ev.ReasoningDelta
 			events <- AgentEvent{Type: AgentEventTypeReasoningDelta, ReasoningDelta: ev.ReasoningDelta}
-			if err := a.store.Update(ctx, assistant); err != nil {
-				return core.Message{}, nil, llm.Usage{}, "", false, err
-			}
 		case llm.EventToolArgsDelta:
 			if ev.ToolArgsDelta != nil {
 				rt.Scratch.UpdateToolArgs(ev.ToolArgsDelta.ToolCallIndex, ev.ToolArgsDelta.ToolName, ev.ToolArgsDelta.ArgsChars, ev.ToolArgsDelta.ReadyCount)
@@ -97,6 +97,7 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 				if err := a.store.Update(ctx, assistant); err != nil {
 					return core.Message{}, nil, llm.Usage{}, "", false, err
 				}
+				streamPersisted = true
 			}
 		case llm.EventError:
 			if ev.Err != nil {
@@ -105,6 +106,13 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 				return core.Message{}, nil, llm.Usage{}, "", false, ev.Err
 			}
 		}
+	}
+	// Provider channel can close without a terminal EventComplete/EventError
+	// (e.g. SSE EOF before [DONE], or EventComplete with nil Response). Since
+	// deltas no longer persist, flush any accumulated assistant state so
+	// resume/history doesn't see an empty assistant message.
+	if !streamPersisted && (assistant.Text != "" || assistant.Reasoning != "" || len(assistant.ToolCalls) > 0) {
+		a.bestEffortUpdateAssistant(assistant)
 	}
 	if a.mode == session.ModePlan && !planCompleted {
 		for _, seg := range planParser.Finish() {

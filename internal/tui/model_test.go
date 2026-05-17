@@ -17,6 +17,13 @@ import (
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
+type fakeClock struct{ t time.Time }
+
+func newFakeClock() *fakeClock { return &fakeClock{t: time.Unix(1700000000, 0)} }
+
+func (c *fakeClock) now() time.Time          { return c.t }
+func (c *fakeClock) advance(d time.Duration) { c.t = c.t.Add(d) }
+
 func newModelWithDispatchSpy() (model, *[]service.Intent) {
 	m := newModel(nil, "", "", "")
 	intents := []service.Intent{}
@@ -382,11 +389,116 @@ func TestWindowsPasteFallbackDeferredSubmitPreservesTailRune(t *testing.T) {
 	}
 }
 
+// Issue #61(1) review: non-rune editing keys (Enter, Tab, arrows, …)
+// must segment paste-cadence detection. Otherwise "ab" + Enter + "c"
+// arriving within 60ms of each other would treat "c" as the third paste
+// chunk and buffer "ab\nc" instead of submitting "ab" and starting a
+// fresh prompt with "c".
+func TestWindowsPasteFallbackEnterSegmentsPasteCadence(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.windowsPaste.enabled = true
+	clock := newFakeClock()
+	m.windowsPaste.nowFunc = clock.now
+
+	clock.advance(50 * time.Millisecond)
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	clock.advance(50 * time.Millisecond)
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
+
+	// Enter — defers submit on windows fallback. classifier must reset.
+	clock.advance(30 * time.Millisecond)
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.windowsPaste.pendingEnter {
+		t.Fatal("expected enter to enter deferred-submit state")
+	}
+
+	// Quick keystroke after Enter MUST stay typed, not escalate.
+	clock.advance(30 * time.Millisecond)
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	if m.hasWindowsPasteBuffer() {
+		t.Fatalf("post-Enter keystroke escalated into burst buffer: %q", m.windowsPaste.buffer)
+	}
+
+	// Resolve the deferred Enter as a real submit; "ab" should ship as
+	// the prompt, "c" stays in the composer for the next turn.
+	submitID := m.windowsPaste.pendingEnterID
+	m, _ = updateTestModel(t, m, windowsDeferredEnterMsg{id: submitID})
+	if len(*intents) != 1 || (*intents)[0].Input != "ab" {
+		t.Fatalf("expected single submit of %q, got %+v", "ab", *intents)
+	}
+	if got := m.input.Value(); got != "c" {
+		t.Fatalf("post-submit composer should hold %q, got %q", "c", got)
+	}
+}
+
+// Issue #61(1): a paste delivered as many "typed-looking" single-rune
+// chunks (no whitespace, no newlines, each < 16 runes) must be caught by
+// the cadence escalator and routed through the paste burst path instead
+// of being inserted into the textarea one rune at a time.
+func TestWindowsPasteFallbackEscalatesFastSingleRuneStream(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.windowsPaste.enabled = true
+	clock := newFakeClock()
+	m.windowsPaste.nowFunc = clock.now
+
+	const streamed = "abcdefghijklmnop"
+	for _, r := range streamed {
+		clock.advance(2 * time.Millisecond) // sub-typing cadence
+		m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	if !m.hasWindowsPasteBuffer() {
+		t.Fatalf("expected fast single-rune stream to populate paste buffer; composer=%q buffer=%q",
+			m.input.Value(), m.windowsPaste.buffer)
+	}
+	combined := m.input.Value() + m.windowsPaste.buffer
+	if combined != streamed {
+		t.Fatalf("expected combined composer+buffer to equal stream, got %q", combined)
+	}
+	m = flushWindowsPasteBurstForTest(t, m)
+	if got := m.input.Value(); got != streamed {
+		t.Fatalf("after flush composer should hold full stream, got %q", got)
+	}
+}
+
+// Issue #61(1) review: when cadence-escalation triggers mid-composer
+// (cursor not at end), the early typed chunks have already landed at the
+// cursor; the rest must flow through HandlePaste at that same cursor
+// position so character order is preserved. Pasting "XYZ" into "a|c"
+// must yield "aXYZc", not "aXYcZ".
+func TestWindowsPasteFallbackEscalatedPastePreservesCursorPosition(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.windowsPaste.enabled = true
+	clock := newFakeClock()
+	m.windowsPaste.nowFunc = clock.now
+
+	// Set up "a|c" — composer "ac" with cursor between the two runes.
+	m.input.SetValue("ac")
+	m.input.SetCursorEnd()
+	// Move cursor one step left so it sits between 'a' and 'c'.
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyLeft})
+
+	// Now simulate a fast paste of "XYZ" arriving as 3 single-rune chunks.
+	for _, r := range "XYZ" {
+		clock.advance(2 * time.Millisecond)
+		m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	if m.hasWindowsPasteBuffer() {
+		m = flushWindowsPasteBurstForTest(t, m)
+	}
+	if got := m.input.Value(); got != "aXYZc" {
+		t.Fatalf("mid-cursor escalated paste corrupted order: got %q, want %q", got, "aXYZc")
+	}
+}
+
 func TestWindowsPasteFallbackFastEnterSubmitsShortBurst(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.windowsPaste.enabled = true
+	clock := newFakeClock()
+	m.windowsPaste.nowFunc = clock.now
 
+	clock.advance(100 * time.Millisecond)
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	clock.advance(100 * time.Millisecond)
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
 	if got := m.input.Value(); got != "hi" {
 		t.Fatalf("expected short typed burst to render immediately, got %q", got)
@@ -419,9 +531,12 @@ func TestWindowsPasteFallbackFastEnterSubmitsShortBurst(t *testing.T) {
 func TestWindowsPasteFallbackFastEnterSubmitsLongTypedPrompt(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.windowsPaste.enabled = true
+	clock := newFakeClock()
+	m.windowsPaste.nowFunc = clock.now
 	line := "Reply later"
 
 	for _, r := range line {
+		clock.advance(100 * time.Millisecond)
 		m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 	}
 	if got := m.input.Value(); got != line {

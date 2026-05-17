@@ -112,7 +112,10 @@ func (c *turnDeltaCoalescers) flushReliable() {
 		}
 	}
 	if c.droppedFlushes > 0 {
-		c.svc.emitBestEffort(Event{
+		// The notice itself must be reliable: emitting it best-effort means
+		// that under sustained UI backpressure the user never learns chunks
+		// were dropped, defeating the point of the notice.
+		c.svc.emitReliable(Event{
 			Kind: EventInfo,
 			Text: fmt.Sprintf("[stream] coalesced output under UI backpressure; omitted %d intermediate chunks", c.droppedFlushes),
 		})

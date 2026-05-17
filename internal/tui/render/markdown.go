@@ -27,6 +27,10 @@ func Markdown(input string, width int, quiet bool) string {
 	if width < 20 {
 		return strings.TrimRight(input, "\n")
 	}
+	key := markdownCacheKey{input: input, width: width, quiet: quiet}
+	if cached, ok := markdownCacheGet(key); ok {
+		return cached
+	}
 	style := markdownStyle()
 	if quiet {
 		style = quietMarkdownStyle()
@@ -35,7 +39,9 @@ func Markdown(input string, width int, quiet bool) string {
 	if err != nil {
 		return strings.TrimRight(input, "\n")
 	}
-	return strings.TrimRight(rendered, "\n")
+	out := strings.TrimRight(rendered, "\n")
+	markdownCachePut(key, out)
+	return out
 }
 
 func renderMarkdown(input string, width int, style ansi.StyleConfig) (string, error) {

@@ -13,8 +13,16 @@ import (
 )
 
 const (
-	windowsPasteEnterDelay         = 300 * time.Millisecond
-	windowsPasteQuietDelay         = time.Second
+	windowsPasteEnterDelay = 300 * time.Millisecond
+	// Time-until-flush after the last paste chunk arrives. Has to be
+	// long enough to bridge intra-paste gaps in slow conhost delivery
+	// but short enough that the user does not perceive the buffered
+	// portion as a separate, late-arriving second insert. Sits one tier
+	// above the 60ms cadence window so a single paste cannot be split,
+	// and close to the ~100ms human "instant" perception threshold.
+	// Codex / DeepSeek-TUI ship 60ms on Windows; this is the safer
+	// neighbor that still feels snappy.
+	windowsPasteQuietDelay         = 80 * time.Millisecond
 	windowsPasteContinuationWindow = 30 * time.Millisecond
 )
 
@@ -49,6 +57,16 @@ type windowsPasteFallbackState struct {
 	bracketedThisInput  bool
 	suppressNextCtrlJ   bool
 	classifier          windowsPasteBurstClassifier
+	// nowFunc lets tests inject a deterministic clock so cadence-based
+	// classification can be exercised without real time delays.
+	nowFunc func() time.Time
+}
+
+func (s *windowsPasteFallbackState) now() time.Time {
+	if s.nowFunc != nil {
+		return s.nowFunc()
+	}
+	return time.Now()
 }
 
 func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
@@ -519,7 +537,14 @@ func (m *model) handleWindowsPasteFallbackKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	if !m.windowsPasteFallbackEnabled() {
 		return nil, false
 	}
-	now := time.Now()
+	now := m.windowsPaste.now()
+	// Editing keys (Enter, Tab, arrows, backspace, …) arrive with no
+	// rune payload. They must segment paste-cadence detection so a slow
+	// typist who hits Enter mid-edit doesn't have their next keystroke
+	// folded into a phantom burst.
+	if len(msg.Runes) == 0 {
+		m.windowsPaste.classifier.reset()
+	}
 	if m.hasWindowsPasteBuffer() && !m.windowsPaste.activeUntil.IsZero() && now.After(m.windowsPaste.activeUntil) {
 		m.flushWindowsPasteBurstToComposer()
 	}
@@ -564,18 +589,30 @@ func (m *model) handleWindowsPasteFallbackKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	}
 	if len(msg.Runes) > 0 {
 		text := string(msg.Runes)
+		// classify() is stateful: it records arrival time so the next chunk
+		// can detect terminal-streamed paste cadence even when both chunks
+		// look like ordinary typing in isolation.
+		decision := m.windowsPaste.classifier.classify(now, text)
 		if m.hasWindowsPasteBuffer() {
 			return m.appendWindowsPasteBurst(now, text, false), true
 		}
 		if m.windowsPaste.pendingEnter {
 			tailHeld := m.windowsPaste.pendingEnterTail != ""
-			if tailHeld || m.windowsPaste.classifier.classifyChunk(text) == windowsPasteChunkBurst || isASCIIMultiRune(text) {
+			if tailHeld || decision == windowsPasteChunkBurst || isASCIIMultiRune(text) {
 				suffix := "\n" + m.consumePendingEnterTail() + text
 				return m.startWindowsPasteBurstFromComposer(now, suffix, false), true
 			}
 			return m.deferWindowsPendingEnterTail(text), true
 		}
-		if m.windowsPaste.classifier.classifyChunk(text) == windowsPasteChunkBurst {
+		if decision == windowsPasteChunkBurst {
+			// When time-escalation triggers, the first chunks of the paste
+			// have already been inserted into the textarea at the cursor.
+			// We deliberately do NOT pull them back out of the composer:
+			// the subsequent flush ends with HandlePaste, which inserts at
+			// the current cursor — immediately after the already-typed
+			// chunks — preserving original character order even when the
+			// cursor sits mid-line (e.g. pasting XYZ into "a|c" yields
+			// "aXYZc", not "aXYcZ").
 			return m.startWindowsPasteBurst(now, text, false), true
 		}
 		m.markWindowsBusyInput(m.busy, m.stopping)

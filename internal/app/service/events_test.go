@@ -63,6 +63,51 @@ func TestCriticalEventsDeliverAfterDeltaBackpressure(t *testing.T) {
 	}
 }
 
+func TestTurnDeltaCoalescerDropNoticeIsReliable(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// cap=1 channel pre-filled so the coalescer's best-effort flushes hit
+	// the default branch and increment droppedFlushes.
+	s := &Service{ctx: ctx, events: make(chan Event, 1)}
+	s.events <- Event{Kind: EventInfo, Text: "fill buffer"}
+
+	deltas := newTurnDeltaCoalescers(s)
+	for i := 0; i < 200; i++ {
+		deltas.add(EventAssistantDelta, strings.Repeat("x", 64))
+	}
+	if deltas.droppedFlushes == 0 {
+		t.Fatalf("expected drops under backpressure, got 0")
+	}
+	dropped := deltas.droppedFlushes
+
+	done := make(chan struct{})
+	go func() {
+		deltas.flushReliable()
+		close(done)
+	}()
+
+	// Drain events; the reliable drop-notice must arrive even though the
+	// channel was full when flushReliable started.
+	sawNotice := false
+	deadline := time.After(2 * time.Second)
+	for !sawNotice {
+		select {
+		case ev := <-s.Events():
+			if ev.Kind == EventInfo && strings.Contains(ev.Text, "omitted") &&
+				strings.Contains(ev.Text, fmt.Sprintf("%d", dropped)) {
+				sawNotice = true
+			}
+		case <-deadline:
+			t.Fatalf("drop notice was not delivered reliably under backpressure")
+		}
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("flushReliable did not return after notice was consumed")
+	}
+}
+
 func TestTurnDeltaCoalescerPreservesCrossKindOrder(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
