@@ -1,0 +1,22 @@
+name: Sync fork
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 19 * * *" # Beijing time 03:00
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-fork
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync fork
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh repo sync ${{ github.repository }} --branch main
