@@ -8,13 +8,14 @@ import (
 
 func (s *Service) awaitApproval(req policy.ApprovalRequest) policy.ApprovalDecision {
 	toolCallID := req.ToolCall.ID
+	keys := policy.ApprovalRequestKeys(req)
 	s.interactionMu.Lock()
 	if s.shutdownRequested {
 		s.interactionMu.Unlock()
 		return policy.ApprovalCancel
 	}
 	s.approveMu.Lock()
-	if s.sessionGrantLocked(req.SessionID, req.Key) {
+	if s.sessionGrantAllLocked(req.SessionID, keys) {
 		s.approveMu.Unlock()
 		s.interactionMu.Unlock()
 		return policy.ApprovalAllowForSession
@@ -23,12 +24,13 @@ func (s *Service) awaitApproval(req policy.ApprovalRequest) policy.ApprovalDecis
 	s.approvals[toolCallID] = ch
 	s.approveMu.Unlock()
 	s.interactionMu.Unlock()
-	s.emit(Event{Kind: EventApprovalRequired, ToolCallID: toolCallID, ToolName: req.ToolCall.Name, Text: policy.ApprovalSummary(req.ToolCall), Metadata: req.Metadata})
+	metadata := policy.ApprovalMetadata(req.ToolCall, keys, req.Metadata)
+	s.emit(Event{Kind: EventApprovalRequired, ToolCallID: toolCallID, ToolName: req.ToolCall.Name, Text: policy.ApprovalSummary(req.ToolCall), Metadata: metadata})
 	decision := <-ch
 	s.approveMu.Lock()
 	delete(s.approvals, toolCallID)
-	if decision == policy.ApprovalAllowForSession {
-		s.grantSessionLocked(req.SessionID, req.Key)
+	if decision == policy.ApprovalAllowForSession && !policy.ApprovalKeysFileScoped(keys) {
+		s.grantSessionAllLocked(req.SessionID, keys)
 	}
 	s.approveMu.Unlock()
 	return decision
@@ -55,20 +57,49 @@ func (s *Service) resolveApproval(toolCallID string, decision policy.ApprovalDec
 }
 
 func (s *Service) sessionGrantLocked(sessionID, key string) bool {
+	return s.sessionGrantAllLocked(sessionID, []string{key})
+}
+
+func (s *Service) sessionGrantAllLocked(sessionID string, keys []string) bool {
+	if len(keys) == 0 {
+		return false
+	}
 	bySession, ok := s.sessionGrants[sessionID]
 	if !ok {
 		return false
 	}
-	return bySession[key]
+	for _, key := range keys {
+		if key == "" || !bySession[key] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) grantSessionLocked(sessionID, key string) {
+	s.grantSessionAllLocked(sessionID, []string{key})
+}
+
+func (s *Service) grantSessionAllLocked(sessionID string, keys []string) {
 	bySession, ok := s.sessionGrants[sessionID]
 	if !ok {
 		bySession = map[string]bool{}
 		s.sessionGrants[sessionID] = bySession
 	}
-	bySession[key] = true
+	for _, key := range keys {
+		if key != "" {
+			bySession[key] = true
+		}
+	}
+}
+
+func (s *Service) syncApprovalGrant(grant *agent.ToolApprovalGranted) {
+	if grant == nil {
+		return
+	}
+	s.approveMu.Lock()
+	s.grantSessionAllLocked(grant.SessionID, grant.Keys)
+	s.approveMu.Unlock()
 }
 
 func (s *Service) awaitUserInput(req agent.UserInputRequest) (core.UserInputResponse, bool) {

@@ -55,7 +55,12 @@ func promptUserInputCLI(req agent.UserInputRequest) (core.UserInputResponse, boo
 }
 
 func promptApprovalCLI(req policy.ApprovalRequest) policy.ApprovalDecision {
-	fmt.Printf("\n[approval] allow %s (%s)? [y/s/N]: ", req.ToolCall.Name, req.Reason)
+	scope := strings.TrimSpace(policy.ApprovalSessionScope(req.ToolCall))
+	fmt.Printf("\n[approval] %s\n", policy.ApprovalSummary(req.ToolCall))
+	if scope != "" {
+		fmt.Printf("[approval] Allow for session = %s\n", scope)
+	}
+	fmt.Printf("[approval] allow %s (%s)? [y/s/N]: ", req.ToolCall.Name, req.Reason)
 	reader := bufio.NewReader(os.Stdin)
 	raw, _ := reader.ReadString('\n')
 	v := strings.ToLower(strings.TrimSpace(raw))

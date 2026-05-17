@@ -29,6 +29,7 @@ const (
 	AgentEventTypeToolCallBlocked       AgentEventType = "tool_call_blocked"
 	AgentEventTypeToolModeBlocked       AgentEventType = "tool_mode_blocked"
 	AgentEventTypeToolApprovalRequired  AgentEventType = "tool_approval_required"
+	AgentEventTypeToolApprovalGranted   AgentEventType = "tool_approval_granted"
 	AgentEventTypeToolCallScavenged     AgentEventType = "tool_call_scavenged"
 	AgentEventTypeToolPolicyDecision    AgentEventType = "tool_policy_decision"
 	AgentEventTypeToolCall              AgentEventType = "tool_call"
@@ -89,9 +90,18 @@ type ToolApprovalRequired struct {
 	Reason     string
 	Code       string
 	Key        string
+	Keys       []string
 	Summary    string
 	Scope      string
 	Metadata   map[string]any
+}
+
+type ToolApprovalGranted struct {
+	SessionID  string
+	ToolCallID string
+	ToolName   string
+	Key        string
+	Keys       []string
 }
 
 type ToolCallScavenged struct {
@@ -117,6 +127,7 @@ type AgentEvent struct {
 	ToolArgsRepair *ToolArgsRepair
 	ToolBlocked    *ToolCallBlocked
 	Approval       *ToolApprovalRequired
+	ApprovalGrant  *ToolApprovalGranted
 	Scavenged      *ToolCallScavenged
 	Policy         *ToolPolicyDecision
 	Recovery       *ToolRecoveryInfo

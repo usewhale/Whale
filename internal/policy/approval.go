@@ -3,6 +3,8 @@ package policy
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
@@ -16,6 +18,7 @@ type ApprovalRequest struct {
 	Reason    string
 	Code      string
 	Key       string
+	Keys      []string
 	Metadata  map[string]any
 }
 
@@ -56,16 +59,32 @@ func NewSessionApprovalCache() *SessionApprovalCache {
 }
 
 func (c *SessionApprovalCache) Has(sessionID, key string) bool {
+	return c.HasAll(sessionID, []string{key})
+}
+
+func (c *SessionApprovalCache) HasAll(sessionID string, keys []string) bool {
+	if len(keys) == 0 {
+		return false
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	bySession, ok := c.data[sessionID]
 	if !ok {
 		return false
 	}
-	return bySession[key]
+	for _, key := range keys {
+		if strings.TrimSpace(key) == "" || !bySession[key] {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *SessionApprovalCache) Grant(sessionID, key string) {
+	c.GrantAll(sessionID, []string{key})
+}
+
+func (c *SessionApprovalCache) GrantAll(sessionID string, keys []string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	bySession, ok := c.data[sessionID]
@@ -73,7 +92,11 @@ func (c *SessionApprovalCache) Grant(sessionID, key string) {
 		bySession = make(map[string]bool)
 		c.data[sessionID] = bySession
 	}
-	bySession[key] = true
+	for _, key := range keys {
+		if strings.TrimSpace(key) != "" {
+			bySession[key] = true
+		}
+	}
 }
 
 func (c *SessionApprovalCache) SetLoaded(sessionID string) {
@@ -104,22 +127,120 @@ func (c *SessionApprovalCache) Merge(sessionID string, keys map[string]bool) {
 }
 
 func ApprovalKey(call core.ToolCall) string {
+	keys := ApprovalKeys(call)
+	if len(keys) > 0 {
+		return keys[0]
+	}
+	return call.Name + "|" + strings.TrimSpace(call.Input)
+}
+
+func ApprovalKeys(call core.ToolCall) []string {
 	base := call.Name
 	var body map[string]any
 	if err := json.Unmarshal([]byte(call.Input), &body); err != nil {
-		return base + "|" + strings.TrimSpace(call.Input)
+		return []string{base + "|" + strings.TrimSpace(call.Input)}
 	}
 	switch call.Name {
-	case "edit", "write", "read_file":
+	case "edit", "write":
 		if v, _ := body["file_path"].(string); strings.TrimSpace(v) != "" {
-			return base + "|file:" + strings.TrimSpace(v)
+			return []string{approvalFileKey(v)}
+		}
+	case "apply_patch":
+		if files := approvalPatchFiles(body); len(files) > 0 {
+			keys := make([]string, 0, len(files))
+			for _, file := range files {
+				keys = append(keys, approvalFileKey(file))
+			}
+			return keys
 		}
 	case "shell_run":
 		if v, _ := body["command"].(string); strings.TrimSpace(v) != "" {
-			return base + "|cmd:" + strings.TrimSpace(v)
+			return []string{base + "|cmd:" + strings.TrimSpace(v)}
 		}
 	}
-	return base + "|" + strings.TrimSpace(call.Input)
+	return []string{base + "|" + strings.TrimSpace(call.Input)}
+}
+
+func ApprovalRequestKeys(req ApprovalRequest) []string {
+	if len(req.Keys) > 0 {
+		return compactApprovalKeys(req.Keys)
+	}
+	if strings.TrimSpace(req.Key) != "" {
+		return []string{req.Key}
+	}
+	return ApprovalKeys(req.ToolCall)
+}
+
+func ApprovalKeysFileScoped(keys []string) bool {
+	keys = compactApprovalKeys(keys)
+	if len(keys) == 0 {
+		return false
+	}
+	for _, key := range keys {
+		if !strings.HasPrefix(key, "file:") {
+			return false
+		}
+	}
+	return true
+}
+
+func ApprovalFiles(call core.ToolCall) []string {
+	var body map[string]any
+	if err := json.Unmarshal([]byte(call.Input), &body); err != nil {
+		return nil
+	}
+	switch call.Name {
+	case "edit", "write":
+		if v, _ := body["file_path"].(string); strings.TrimSpace(v) != "" {
+			return []string{approvalCleanPath(v)}
+		}
+	case "apply_patch":
+		return approvalPatchFiles(body)
+	}
+	return nil
+}
+
+func ApprovalKind(call core.ToolCall) string {
+	switch call.Name {
+	case "edit", "write", "apply_patch":
+		return "file_diff_review"
+	case "shell_run":
+		return "shell"
+	default:
+		return "tool"
+	}
+}
+
+func ApprovalSessionScope(call core.ToolCall) string {
+	files := ApprovalFiles(call)
+	switch len(files) {
+	case 0:
+		if call.Name == "shell_run" {
+			return "this shell command"
+		}
+		return "this tool request"
+	case 1:
+		return "this file: " + files[0]
+	default:
+		return "these files: " + formatApprovalFiles(files)
+	}
+}
+
+func ApprovalMetadata(call core.ToolCall, keys []string, metadata map[string]any) map[string]any {
+	out := make(map[string]any, len(metadata)+5)
+	for k, v := range metadata {
+		out[k] = v
+	}
+	out["approval_kind"] = ApprovalKind(call)
+	out["approval_scope"] = ApprovalScope(call)
+	out["approval_session_scope"] = ApprovalSessionScope(call)
+	if compact := compactApprovalKeys(keys); len(compact) > 0 {
+		out["approval_keys"] = compact
+	}
+	if files := ApprovalFiles(call); len(files) > 0 {
+		out["approval_files"] = files
+	}
+	return out
 }
 
 func ApprovalSummary(call core.ToolCall) string {
@@ -141,6 +262,9 @@ func ApprovalSummary(call core.ToolCall) string {
 			return fmt.Sprintf("edit: %s", strings.TrimSpace(v))
 		}
 	case "apply_patch":
+		if files := approvalPatchFiles(body); len(files) > 0 {
+			return fmt.Sprintf("apply_patch: %s", formatApprovalFiles(files))
+		}
 		return "apply_patch: patch payload"
 	}
 	return call.Name
@@ -152,16 +276,85 @@ func ApprovalScope(call core.ToolCall) string {
 		return "workspace"
 	}
 	if v, _ := body["file_path"].(string); strings.TrimSpace(v) != "" {
-		return "file:" + strings.TrimSpace(v)
+		return "file:" + approvalCleanPath(v)
 	}
 	if v, _ := body["path"].(string); strings.TrimSpace(v) != "" {
 		return "path:" + strings.TrimSpace(v)
 	}
+	if call.Name == "apply_patch" {
+		files := approvalPatchFiles(body)
+		if len(files) == 1 {
+			return "file:" + files[0]
+		}
+		if len(files) > 1 {
+			return "files:" + strings.Join(files, ",")
+		}
+		return "patch"
+	}
 	if call.Name == "shell_run" {
 		return "shell"
 	}
-	if call.Name == "apply_patch" {
-		return "patch"
-	}
 	return "workspace"
+}
+
+func approvalFileKey(path string) string {
+	return "file:" + approvalCleanPath(path)
+}
+
+func approvalCleanPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Clean(path))
+}
+
+func approvalPatchFiles(body map[string]any) []string {
+	patch, _ := body["patch"].(string)
+	if strings.TrimSpace(patch) == "" {
+		return nil
+	}
+	lines := strings.Split(strings.ReplaceAll(strings.ReplaceAll(patch, "\r\n", "\n"), "\r", "\n"), "\n")
+	seen := map[string]bool{}
+	for _, line := range lines {
+		for _, prefix := range []string{"*** Update File: ", "*** Add File: ", "*** Delete File: "} {
+			if !strings.HasPrefix(line, prefix) {
+				continue
+			}
+			path := approvalCleanPath(strings.TrimPrefix(line, prefix))
+			if path != "" {
+				seen[path] = true
+			}
+		}
+	}
+	files := make([]string, 0, len(seen))
+	for file := range seen {
+		files = append(files, file)
+	}
+	sort.Strings(files)
+	return files
+}
+
+func compactApprovalKeys(keys []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		key = strings.TrimSpace(key)
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, key)
+	}
+	return out
+}
+
+func formatApprovalFiles(files []string) string {
+	files = append([]string(nil), files...)
+	sort.Strings(files)
+	const maxVisible = 3
+	if len(files) <= maxVisible {
+		return strings.Join(files, ", ")
+	}
+	return fmt.Sprintf("%s, +%d more", strings.Join(files[:maxVisible], ", "), len(files)-maxVisible)
 }

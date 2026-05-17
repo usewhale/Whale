@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -374,4 +376,248 @@ func TestApprovalAllowForSessionCachesBySessionKey(t *testing.T) {
 	if asked != 1 {
 		t.Fatalf("expected asked once due to approval cache, got %d", asked)
 	}
+}
+
+type namedNoopTool string
+
+func (n namedNoopTool) Name() string { return string(n) }
+func (n namedNoopTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok"}, nil
+}
+
+type failingNamedTool string
+
+func (f failingNamedTool) Name() string { return string(f) }
+func (f failingNamedTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"success":false,"error":"bad hunk","code":"patch_apply_failed"}`, IsError: true}, nil
+}
+
+type notFoundEditTool struct{}
+
+func (n notFoundEditTool) Name() string { return "edit" }
+func (n notFoundEditTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"success":false,"error":"file not found","code":"not_found"}`, IsError: true}, nil
+}
+
+type fileScopedApprovalProvider struct {
+	calls int
+}
+
+func (p *fileScopedApprovalProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	p.calls++
+	switch p.calls {
+	case 1:
+		return eventStream(toolUseEvent(toolCall("tc-edit", "edit", `{"file_path":"a.txt","search":"old","replace":"new"}`)))
+	case 3:
+		return eventStream(toolUseEvent(toolCall("tc-write", "write", `{"file_path":"a.txt","content":"newer"}`)))
+	default:
+		return eventStream(endTurnEvent("done"))
+	}
+}
+
+func TestApprovalAllowForSessionCachesEditAndWriteByFile(t *testing.T) {
+	store := NewInMemoryStore()
+	prov := &fileScopedApprovalProvider{}
+	asked := 0
+	a := NewAgentWithRegistry(
+		prov,
+		store,
+		NewToolRegistry([]Tool{namedNoopTool("edit"), namedNoopTool("write")}),
+		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
+			asked++
+			if got, want := req.Keys, []string{"file:a.txt"}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("approval keys = %v, want %v", got, want)
+			}
+			return ApprovalAllowForSession
+		}),
+	)
+
+	if _, err := a.Run(context.Background(), "s-file-approval", "edit"); err != nil {
+		t.Fatalf("run1 failed: %v", err)
+	}
+	if _, err := a.Run(context.Background(), "s-file-approval", "write"); err != nil {
+		t.Fatalf("run2 failed: %v", err)
+	}
+	if asked != 1 {
+		t.Fatalf("expected edit approval to cover later write to same file, got %d approvals", asked)
+	}
+}
+
+type failedFileApprovalProvider struct {
+	calls int
+}
+
+func (p *failedFileApprovalProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	p.calls++
+	switch p.calls {
+	case 1:
+		return eventStream(toolUseEvent(toolCall("tc-bad-patch", "apply_patch", patchApprovalInput("*** Begin Patch\n*** Update File: a.txt\n@@\n-missing\n+new\n*** End Patch"))))
+	case 2:
+		return eventStream(toolUseEvent(toolCall("tc-write-after-fail", "write", `{"file_path":"a.txt","content":"new"}`)))
+	default:
+		return eventStream(endTurnEvent("done"))
+	}
+}
+
+func TestApprovalAllowForSessionDoesNotCacheFailedFileMutation(t *testing.T) {
+	store := NewInMemoryStore()
+	prov := &failedFileApprovalProvider{}
+	asked := 0
+	a := NewAgentWithRegistry(
+		prov,
+		store,
+		NewToolRegistry([]Tool{failingNamedTool("apply_patch"), namedNoopTool("write")}),
+		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
+			asked++
+			return ApprovalAllowForSession
+		}),
+	)
+
+	if _, err := a.Run(context.Background(), "s-failed-file-approval", "patch then write"); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if asked != 2 {
+		t.Fatalf("expected failed file mutation not to cache approval for later write, got %d approvals", asked)
+	}
+}
+
+type unclassifiedFailedFileApprovalProvider struct {
+	calls int
+}
+
+func (p *unclassifiedFailedFileApprovalProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	p.calls++
+	switch p.calls {
+	case 1:
+		return eventStream(toolUseEvent(toolCall("tc-missing-edit", "edit", `{"file_path":"a.txt","search":"old","replace":"new"}`)))
+	case 2:
+		return eventStream(toolUseEvent(toolCall("tc-write-after-missing", "write", `{"file_path":"a.txt","content":"new"}`)))
+	default:
+		return eventStream(endTurnEvent("done"))
+	}
+}
+
+func TestApprovalAllowForSessionDoesNotCacheUnclassifiedFailedFileMutation(t *testing.T) {
+	store := NewInMemoryStore()
+	prov := &unclassifiedFailedFileApprovalProvider{}
+	asked := 0
+	a := NewAgentWithRegistry(
+		prov,
+		store,
+		NewToolRegistry([]Tool{notFoundEditTool{}, namedNoopTool("write")}),
+		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
+			asked++
+			return ApprovalAllowForSession
+		}),
+	)
+
+	if _, err := a.Run(context.Background(), "s-unclassified-failed-file-approval", "edit then write"); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if asked != 2 {
+		t.Fatalf("expected unclassified failed file mutation not to cache approval for later write, got %d approvals", asked)
+	}
+}
+
+type fallbackWriteApprovalProvider struct {
+	calls int
+}
+
+func (p *fallbackWriteApprovalProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	p.calls++
+	if p.calls == 1 || p.calls == 2 {
+		return eventStream(toolUseEvent(toolCall("tc-fallback-write", "write", `{"file_path":"a.txt","content":"x"}`)))
+	}
+	return eventStream(endTurnEvent("done"))
+}
+
+func TestApprovalAllowForSessionDoesNotCacheRecoveredReadonlyFallback(t *testing.T) {
+	store := NewInMemoryStore()
+	prov := &fallbackWriteApprovalProvider{}
+	asked := 0
+	a := NewAgentWithRegistry(
+		prov,
+		store,
+		NewToolRegistry([]Tool{failWriteTool{}, readOnlyViewTool{}}),
+		WithRecoveryPolicy(RecoveryPolicy{
+			Enabled: true,
+			Rules: map[FailureClass]RecoveryRule{
+				FailureClassExecFailed: {Action: RecoveryActionFallbackReadOnly, MaxAttempts: 0},
+			},
+		}),
+		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
+			asked++
+			return ApprovalAllowForSession
+		}),
+	)
+
+	if _, err := a.Run(context.Background(), "s-fallback-file-approval", "fallback then write"); err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if asked != 2 {
+		t.Fatalf("expected readonly fallback not to cache file approval for later write, got %d approvals", asked)
+	}
+}
+
+type patchScopedApprovalProvider struct {
+	calls int
+}
+
+func (p *patchScopedApprovalProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	p.calls++
+	switch p.calls {
+	case 1:
+		return eventStream(toolUseEvent(toolCall("tc-patch-ab", "apply_patch", patchApprovalInput("*** Begin Patch\n*** Update File: a.txt\n@@\n-old\n+new\n*** Add File: b.txt\n+created\n*** End Patch"))))
+	case 3:
+		return eventStream(toolUseEvent(toolCall("tc-patch-a", "apply_patch", patchApprovalInput("*** Begin Patch\n*** Update File: a.txt\n@@\n-new\n+newer\n*** End Patch"))))
+	case 5:
+		return eventStream(toolUseEvent(toolCall("tc-patch-ac", "apply_patch", patchApprovalInput("*** Begin Patch\n*** Update File: a.txt\n@@\n-newer\n+final\n*** Add File: c.txt\n+created\n*** End Patch"))))
+	default:
+		return eventStream(endTurnEvent("done"))
+	}
+}
+
+func TestApprovalAllowForSessionCachesApplyPatchByIndividualFiles(t *testing.T) {
+	store := NewInMemoryStore()
+	prov := &patchScopedApprovalProvider{}
+	asked := 0
+	a := NewAgentWithRegistry(
+		prov,
+		store,
+		NewToolRegistry([]Tool{namedNoopTool("apply_patch")}),
+		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
+			asked++
+			switch req.ToolCall.ID {
+			case "tc-patch-ab":
+				if got, want := req.Keys, []string{"file:a.txt", "file:b.txt"}; !reflect.DeepEqual(got, want) {
+					t.Fatalf("first patch approval keys = %v, want %v", got, want)
+				}
+			case "tc-patch-ac":
+				if got, want := req.Keys, []string{"file:a.txt", "file:c.txt"}; !reflect.DeepEqual(got, want) {
+					t.Fatalf("third patch approval keys = %v, want %v", got, want)
+				}
+			default:
+				t.Fatalf("unexpected approval for %s", req.ToolCall.ID)
+			}
+			return ApprovalAllowForSession
+		}),
+	)
+
+	if _, err := a.Run(context.Background(), "s-patch-approval", "patch ab"); err != nil {
+		t.Fatalf("run1 failed: %v", err)
+	}
+	if _, err := a.Run(context.Background(), "s-patch-approval", "patch a"); err != nil {
+		t.Fatalf("run2 failed: %v", err)
+	}
+	if _, err := a.Run(context.Background(), "s-patch-approval", "patch ac"); err != nil {
+		t.Fatalf("run3 failed: %v", err)
+	}
+	if asked != 2 {
+		t.Fatalf("expected approvals for first file set and later new file only, got %d", asked)
+	}
+}
+
+func patchApprovalInput(patch string) string {
+	raw, _ := json.Marshal(map[string]string{"patch": patch})
+	return string(raw)
 }

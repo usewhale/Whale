@@ -487,6 +487,79 @@ func TestShutdownRejectsLateInteractions(t *testing.T) {
 	}
 }
 
+func TestAwaitApprovalEmitsFileReviewMetadataAndDefersFileCache(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	svc := &Service{
+		ctx:           ctx,
+		events:        make(chan Event, 8),
+		approvals:     map[string]chan policy.ApprovalDecision{},
+		sessionGrants: map[string]map[string]bool{},
+		inputs:        map[string]chan userInputDecision{},
+	}
+	call := core.ToolCall{
+		ID:    "approval-files",
+		Name:  "apply_patch",
+		Input: `{"patch":"*** Begin Patch\n*** Update File: a.txt\n@@\n-old\n+new\n*** Add File: b.txt\n+created\n*** End Patch"}`,
+	}
+	keys := []string{"file:a.txt", "file:b.txt"}
+	approvalDone := make(chan policy.ApprovalDecision, 1)
+	go func() {
+		approvalDone <- svc.awaitApproval(policy.ApprovalRequest{
+			SessionID: "session-1",
+			ToolCall:  call,
+			Key:       keys[0],
+			Keys:      keys,
+		})
+	}()
+
+	ev := waitForServiceEvent(t, svc, EventApprovalRequired)
+	if got := ev.Metadata["approval_kind"]; got != "file_diff_review" {
+		t.Fatalf("approval kind = %v, want file_diff_review", got)
+	}
+	if got := ev.Metadata["approval_session_scope"]; got != "these files: a.txt, b.txt" {
+		t.Fatalf("session scope = %v", got)
+	}
+	svc.resolveApproval("approval-files", policy.ApprovalAllowForSession)
+	select {
+	case got := <-approvalDone:
+		if got != policy.ApprovalAllowForSession {
+			t.Fatalf("decision = %v, want allow for session", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("approval did not resolve")
+	}
+
+	svc.approveMu.Lock()
+	if svc.sessionGrantAllLocked("session-1", []string{"file:a.txt"}) {
+		t.Fatal("file-scoped approval should not cache before tool success")
+	}
+	svc.approveMu.Unlock()
+
+	svc.syncApprovalGrant(&agent.ToolApprovalGranted{
+		SessionID:  "session-1",
+		ToolCallID: "approval-files",
+		ToolName:   "apply_patch",
+		Key:        keys[0],
+		Keys:       keys,
+	})
+
+	got := svc.awaitApproval(policy.ApprovalRequest{
+		SessionID: "session-1",
+		ToolCall:  core.ToolCall{ID: "approval-a", Name: "write", Input: `{"file_path":"a.txt","content":"x"}`},
+		Key:       "file:a.txt",
+		Keys:      []string{"file:a.txt"},
+	})
+	if got != policy.ApprovalAllowForSession {
+		t.Fatalf("cached decision = %v, want allow for session", got)
+	}
+	select {
+	case ev := <-svc.events:
+		t.Fatalf("cached approval emitted event: %+v", ev)
+	default:
+	}
+}
+
 func TestLocalSubmitEmitsDone(t *testing.T) {
 	cfg := app.DefaultConfig()
 	cfg.DataDir = t.TempDir()

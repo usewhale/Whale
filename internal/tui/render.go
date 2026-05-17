@@ -9,6 +9,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/usewhale/whale/internal/app/service"
 	"github.com/usewhale/whale/internal/build"
 	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
@@ -147,10 +148,29 @@ func (m model) renderApprovalPrompt() string {
 	body := lipgloss.NewStyle()
 	hint := lipgloss.NewStyle().Foreground(tuitheme.Default.Muted)
 
-	approvalBody := body.Render(indentApprovalBody(approvalDisplayBody(m.approval.toolName, m.approval.reason)))
+	review := isFileDiffApproval(m.approval.toolName, m.approval.metadata)
+	titleText := "Approval required"
+	if review {
+		titleText = "Approval required: file diff review"
+	}
+	bodyParts := []string{}
+	if review {
+		bodyParts = append(bodyParts, "Review file changes before Whale applies them.")
+	}
+	if detail := approvalDisplayBody(m.approval.toolName, m.approval.reason); detail != "" {
+		bodyParts = append(bodyParts, detail)
+	}
+	if scope := approvalSessionScope(m.approval.metadata); scope != "" {
+		bodyParts = append(bodyParts, "Allow for session = "+scope)
+	}
+	approvalBody := body.Render(indentApprovalBody(strings.Join(bodyParts, "\n")))
 	if diff := renderApprovalDiffMetadata(m.approval.metadata, 80); diff != "" {
 		if isReadableApprovalDiff(diff) {
-			approvalBody = diff
+			if approvalBody != "" {
+				approvalBody += "\n\n" + diff
+			} else {
+				approvalBody = diff
+			}
 		} else if approvalBody != "" {
 			approvalBody += "\n\n" + diff
 		} else {
@@ -166,7 +186,7 @@ func (m model) renderApprovalPrompt() string {
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
-		title.Render("Approval required")+"  "+tool.Render(approvalToolDisplayName(m.approval.toolName)),
+		title.Render(titleText)+"  "+tool.Render(approvalToolDisplayName(m.approval.toolName)),
 		"",
 		approvalBody,
 		"",
@@ -174,6 +194,22 @@ func (m model) renderApprovalPrompt() string {
 		"",
 		hint.Render("Enter confirm · Esc deny · ←/→/tab switch"),
 	)
+}
+
+func isFileDiffApproval(toolName string, metadata map[string]any) bool {
+	if strings.TrimSpace(asString(metadata["approval_kind"])) == "file_diff_review" {
+		return true
+	}
+	switch toolName {
+	case "edit", "write", "apply_patch":
+		return true
+	default:
+		return false
+	}
+}
+
+func approvalSessionScope(metadata map[string]any) string {
+	return strings.TrimSpace(asString(metadata["approval_session_scope"]))
 }
 
 func approvalToolDisplayName(toolName string) string {
@@ -500,8 +536,8 @@ func (m model) renderModelPicker() string {
 func (m model) renderPermissionsPicker() string {
 	rows := []string{"Permissions", ""}
 	descriptions := map[string]string{
-		"Ask first":    "Ask before write, patch, or shell tools run.",
-		"Auto approve": "Never ask; auto-approve tool calls.",
+		service.ApprovalChoiceAskFirst:           "Prompt before write, patch, shell, or MCP tools run.",
+		service.ApprovalChoiceAutoApproveSession: "No approval prompts until Whale exits.",
 	}
 	for i, item := range m.permissionsPicker.choices {
 		prefix := "  "

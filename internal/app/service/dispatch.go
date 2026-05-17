@@ -157,7 +157,7 @@ func (s *Service) handleLocalSubmit(line string) {
 	if line == "/permissions" {
 		s.emit(Event{
 			Kind:            EventPermissionsPicker,
-			ApprovalChoices: []string{"Ask first", "Auto approve"},
+			ApprovalChoices: approvalModeChoices(),
 			CurrentApproval: approvalModeDisplay(s.app.ApprovalMode()),
 		})
 		return
@@ -237,7 +237,7 @@ func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.
 	if line == "/permissions" {
 		s.emit(Event{
 			Kind:            EventPermissionsPicker,
-			ApprovalChoices: []string{"Ask first", "Auto approve"},
+			ApprovalChoices: approvalModeChoices(),
 			CurrentApproval: approvalModeDisplay(s.app.ApprovalMode()),
 		})
 		return

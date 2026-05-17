@@ -284,11 +284,16 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			events <- AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}
 			continue
 		}
+		var grantOnSuccess bool
+		var grantKey string
+		var grantKeys []string
 		if decision.RequiresApproval {
+			keys := policy.ApprovalKeys(call)
 			key := policy.ApprovalKey(call)
-			approved := a.approvalCache.Has(sessionID, key)
+			approved := a.approvalCache.HasAll(sessionID, keys)
 			if !approved {
 				metadata := a.previewTool(ctx, call)
+				metadata = policy.ApprovalMetadata(call, keys, metadata)
 				events <- AgentEvent{
 					Type: AgentEventTypeToolApprovalRequired,
 					Approval: &ToolApprovalRequired{
@@ -297,6 +302,7 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 						Reason:     decision.Reason,
 						Code:       decision.Code,
 						Key:        key,
+						Keys:       keys,
 						Summary:    policy.ApprovalSummary(call),
 						Scope:      policy.ApprovalScope(call),
 						Metadata:   metadata,
@@ -311,6 +317,7 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 						Reason:    decision.Reason,
 						Code:      decision.Code,
 						Key:       key,
+						Keys:      keys,
 						Metadata:  metadata,
 					})
 				}
@@ -319,8 +326,13 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 					return core.Message{}, nil, llm.Usage{}, "", false, context.Canceled
 				}
 				if approvalDecision.ForSession() {
-					a.approvalCache.Grant(sessionID, key)
-					a.persistApproval(ctx, sessionID, key)
+					if policy.ApprovalKeysFileScoped(keys) {
+						grantOnSuccess = true
+						grantKey = key
+						grantKeys = keys
+					} else {
+						a.grantApprovals(ctx, sessionID, call, key, keys, events)
+					}
 				}
 			}
 			if !approved {
@@ -369,11 +381,14 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			continue
 		}
 
-		finalRes, ok := a.dispatchWithRecovery(ctx, sessionID, assistant.ID, lastModel, call, events)
+		finalRes, ok, primarySucceeded := a.dispatchWithRecovery(ctx, sessionID, assistant.ID, lastModel, call, events)
 		if err := ctx.Err(); err != nil {
 			return core.Message{}, nil, llm.Usage{}, "", false, err
 		}
 		if ok {
+			if grantOnSuccess && primarySucceeded {
+				a.grantApprovals(ctx, sessionID, call, grantKey, grantKeys, events)
+			}
 			if !a.hooks.Empty() {
 				var toolArgs any
 				_ = json.Unmarshal([]byte(call.Input), &toolArgs)

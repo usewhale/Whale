@@ -87,6 +87,8 @@ func (s *Service) runTurnWith(start func(context.Context) (<-chan agent.AgentEve
 				deltas.flushReliable()
 				s.emit(Event{Kind: EventToolResult, ToolCallID: ev.Result.ToolCallID, ToolName: ev.Result.Name, Text: ev.Result.Content, Metadata: ev.Result.Metadata})
 			}
+		case agent.AgentEventTypeToolApprovalGranted:
+			s.syncApprovalGrant(ev.ApprovalGrant)
 		case agent.AgentEventTypeParallelReasonStarted, agent.AgentEventTypeSubagentStarted:
 			if ev.Task != nil {
 				deltas.flushReliable()
