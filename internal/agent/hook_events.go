@@ -7,20 +7,17 @@ func (a *Agent) emitHookReport(events chan<- AgentEvent, report HookReport) {
 		events <- AgentEvent{
 			Type: AgentEventTypeHookStarted,
 			Hook: &HookEventInfo{
-				Name:  oc.Hook.Command,
+				Name:  hookOutcomeName(oc),
 				Event: report.Event,
 			},
 		}
-		msg := strings.TrimSpace(oc.Stderr)
-		if msg == "" {
-			msg = strings.TrimSpace(oc.Stdout)
-		}
+		msg := hookOutcomeMessage(oc)
 		switch oc.Decision {
-		case HookDecisionBlock:
+		case HookDecisionBlock, HookDecisionHalt:
 			events <- AgentEvent{
 				Type: AgentEventTypeHookBlocked,
 				Hook: &HookEventInfo{
-					Name:       oc.Hook.Command,
+					Name:       hookOutcomeName(oc),
 					Event:      report.Event,
 					Decision:   oc.Decision,
 					ExitCode:   oc.ExitCode,
@@ -33,7 +30,7 @@ func (a *Agent) emitHookReport(events chan<- AgentEvent, report HookReport) {
 			events <- AgentEvent{
 				Type: AgentEventTypeHookFailed,
 				Hook: &HookEventInfo{
-					Name:       oc.Hook.Command,
+					Name:       hookOutcomeName(oc),
 					Event:      report.Event,
 					Decision:   oc.Decision,
 					ExitCode:   oc.ExitCode,
@@ -46,7 +43,7 @@ func (a *Agent) emitHookReport(events chan<- AgentEvent, report HookReport) {
 			events <- AgentEvent{
 				Type: AgentEventTypeHookWarned,
 				Hook: &HookEventInfo{
-					Name:       oc.Hook.Command,
+					Name:       hookOutcomeName(oc),
 					Event:      report.Event,
 					Decision:   oc.Decision,
 					ExitCode:   oc.ExitCode,
@@ -59,7 +56,7 @@ func (a *Agent) emitHookReport(events chan<- AgentEvent, report HookReport) {
 		events <- AgentEvent{
 			Type: AgentEventTypeHookCompleted,
 			Hook: &HookEventInfo{
-				Name:       oc.Hook.Command,
+				Name:       hookOutcomeName(oc),
 				Event:      report.Event,
 				Decision:   oc.Decision,
 				ExitCode:   oc.ExitCode,
@@ -69,4 +66,20 @@ func (a *Agent) emitHookReport(events chan<- AgentEvent, report HookReport) {
 			},
 		}
 	}
+}
+
+func hookOutcomeName(oc HookOutcome) string {
+	if strings.TrimSpace(oc.Name) != "" {
+		return strings.TrimSpace(oc.Name)
+	}
+	return strings.TrimSpace(oc.Hook.Command)
+}
+
+func hookOutcomeMessage(oc HookOutcome) string {
+	for _, value := range []string{oc.Message, oc.Stderr, oc.Stdout, oc.AdditionalContext} {
+		if msg := strings.TrimSpace(value); msg != "" {
+			return msg
+		}
+	}
+	return ""
 }

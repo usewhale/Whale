@@ -44,9 +44,15 @@ whale exec --effort=max "summarize this repo"
 whale resume <session-id> --thinking=true --effort=high
 ```
 
-`--thinking` and `--effort` are runtime-only overrides. Whale applies them
-after merging default, global, and project config for the current process, and
-it does not write them back to `config.toml`.
+`--thinking`, `--effort`, and `--dangerously-skip-permissions` are runtime-only
+overrides. Whale applies them after merging default, global, and project config
+for the current process, and it does not write them back to `config.toml`.
+
+`--dangerously-skip-permissions` sets the current process to `permissions.mode =
+"never"`. It skips tool approval prompts for writes, patches, shell commands,
+and MCP tools. Use it only in a trusted workspace or an external sandbox; Whale
+does not add command sandboxing for this mode. Shell commands matching
+`deny_shell_prefixes` are still blocked.
 
 Example:
 
@@ -63,6 +69,10 @@ deny_shell_prefixes = ["rm -rf"]
 [api]
 base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
+[retry]
+max_attempts = 4
+max_delay = "60s"
+
 [budget]
 session_limit_usd = 1.0
 
@@ -75,6 +85,9 @@ compact_threshold = 0.85
 
 [skills]
 disabled = ["legacy-review"]
+
+[plugins]
+disabled = []
 
 [project_doc]
 enabled = true
@@ -104,12 +117,22 @@ If you started with Whale v0.1.9 or newer, you do not need this command.
 
 - `whale exec` and the interactive TUI use the same underlying tool loop.
 - Normal approval behavior still applies in headless mode.
+- `whale exec --dangerously-skip-permissions "prompt"` skips approval prompts
+  for that one headless run.
 - `reasoning_effort` and `thinking_enabled` in `config.toml` remain the
   long-term defaults when `--effort` or `--thinking` are not passed.
 - `DEEPSEEK_BASE_URL` overrides `[api].base_url`; if neither is set, Whale uses
   `https://api.deepseek.com`.
+- `[retry]` controls transient API retries before streaming starts. Whale
+  retries 429, 500, 502, 503, 504, and network errors with an internal 1s
+  exponential backoff, 10% jitter, and `Retry-After` support. `max_attempts`
+  counts the initial request.
 - Skill enable/disable choices are stored in project config under
   `[skills].disabled`.
+- Official plugin enable/disable choices are stored under `[plugins].disabled`.
+  Built-in plugin IDs are `"memory"`, `"skills-improver"`, and
+  `"local-indexer"`. Use `/plugins status <id>` or `/plugins doctor` to inspect
+  their capabilities and diagnostics.
 
 ## Shell behavior
 
@@ -121,3 +144,8 @@ On macOS and Linux, `shell_run` runs commands through `/bin/sh`. On Windows,
 Whale first tries `pwsh`; if it is not available, it falls back to `ComSpec`
 and then `cmd.exe`. Write hooks and allow/deny shell prefixes to match the
 shell syntax used on the target platform.
+
+Configured shell hooks and official plugin hooks run through the same hook
+pipeline. Shell hooks can keep using exit codes, or return JSON on stdout with
+fields such as `decision`, `reason`, `additional_context`, `updated_input`, and
+`metadata`.

@@ -3,6 +3,7 @@ package llm
 import "context"
 
 import "github.com/usewhale/whale/internal/core"
+import llmretry "github.com/usewhale/whale/internal/llm/retry"
 
 type EventType string
 
@@ -12,6 +13,7 @@ const (
 	EventToolArgsDelta  EventType = "tool_args_delta"
 	EventToolUseStart   EventType = "tool_use_start"
 	EventToolUseStop    EventType = "tool_use_stop"
+	EventRetryScheduled EventType = "retry_scheduled"
 	EventComplete       EventType = "complete"
 	EventError          EventType = "error"
 )
@@ -39,6 +41,7 @@ type ProviderEvent struct {
 	ReasoningDelta string
 	ToolArgsDelta  *ToolArgsDelta
 	ToolCall       *core.ToolCall
+	Retry          *llmretry.Info
 	Response       *ProviderResponse
 	Err            error
 }

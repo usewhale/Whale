@@ -28,6 +28,8 @@ const (
 	modeUserInput
 	modeModelPicker
 	modePermissionsPicker
+	modePermissionsProjectTrustConfirm
+	modePermissionsProjectClearConfirm
 	modePlanImplementation
 	modeSkillsMenu
 	modeSkillsManager
@@ -66,6 +68,8 @@ type model struct {
 	status               string
 	busy                 bool
 	busySince            time.Time
+	providerRetryStatus  string
+	providerRetryUntil   time.Time
 	localSubmitPending   int
 	deferredPlanPicker   bool
 	mouseCapture         bool
@@ -134,6 +138,9 @@ type model struct {
 	permissionsPicker struct {
 		choices []string
 		index   int
+	}
+	permissionsProjectConfirm struct {
+		index int
 	}
 	planImplementation struct {
 		index int

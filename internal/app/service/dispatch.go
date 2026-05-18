@@ -72,6 +72,27 @@ func (s *Service) Dispatch(in Intent) {
 		s.app.SetApprovalMode(mode)
 		s.emit(Event{Kind: EventInfo, Text: fmt.Sprintf("approval set: %s", approvalModeDisplay(s.app.ApprovalMode()))})
 		s.emit(Event{Kind: EventTurnDone})
+	case IntentSetProjectApproval:
+		mode, err := policy.ParseApprovalMode(in.ApprovalMode)
+		if err != nil {
+			s.emit(Event{Kind: EventError, Text: err.Error()})
+			return
+		}
+		path, err := s.app.SetProjectApprovalMode(mode)
+		if err != nil {
+			s.emit(Event{Kind: EventError, Text: err.Error()})
+			return
+		}
+		s.emit(Event{Kind: EventInfo, Text: fmt.Sprintf("project permissions saved: %s\nconfig: %s", projectApprovalModeDisplay(mode), path)})
+		s.emit(Event{Kind: EventTurnDone})
+	case IntentClearProjectApproval:
+		mode, path, err := s.app.ClearProjectApprovalMode()
+		if err != nil {
+			s.emit(Event{Kind: EventError, Text: err.Error()})
+			return
+		}
+		s.emit(Event{Kind: EventInfo, Text: fmt.Sprintf("project permissions default cleared\nconfig: %s\ncurrent session: %s", path, approvalModeDisplay(mode))})
+		s.emit(Event{Kind: EventTurnDone})
 	case IntentToggleMode:
 		msg, err := s.app.ToggleMode()
 		if err != nil {
@@ -157,7 +178,7 @@ func (s *Service) handleLocalSubmit(line string) {
 	if line == "/permissions" {
 		s.emit(Event{
 			Kind:            EventPermissionsPicker,
-			ApprovalChoices: []string{"Ask first", "Auto approve"},
+			ApprovalChoices: approvalModeChoices(),
 			CurrentApproval: approvalModeDisplay(s.app.ApprovalMode()),
 		})
 		return
@@ -237,7 +258,7 @@ func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.
 	if line == "/permissions" {
 		s.emit(Event{
 			Kind:            EventPermissionsPicker,
-			ApprovalChoices: []string{"Ask first", "Auto approve"},
+			ApprovalChoices: approvalModeChoices(),
 			CurrentApproval: approvalModeDisplay(s.app.ApprovalMode()),
 		})
 		return
@@ -324,18 +345,23 @@ func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.
 		s.emit(Event{Kind: EventTurnDone})
 		return
 	}
+	blocked, out, updated := s.app.RunUserPromptSubmitHook(line)
+	line = updated
+	if out != "" {
+		s.emit(Event{Kind: EventInfo, Text: out})
+	}
+	if blocked {
+		if out == "" {
+			out = "blocked by UserPromptSubmit hook"
+		}
+		s.emit(Event{Kind: EventTurnDone, LastResponse: out})
+		return
+	}
 	skillMention, skillOut, skillSynthetic, err := s.app.BuildSkillMentionSyntheticPromptWithBinding(line, skillBinding)
 	if err != nil {
 		s.emit(Event{Kind: EventError, Text: err.Error()})
 		s.emit(Event{Kind: EventTurnDone})
 		return
-	}
-	if blocked, out := s.app.RunUserPromptSubmitHook(line); out != "" {
-		s.emit(Event{Kind: EventInfo, Text: out})
-		if blocked {
-			s.emit(Event{Kind: EventTurnDone, LastResponse: out})
-			return
-		}
 	}
 	if skillMention {
 		if skillOut != "" {

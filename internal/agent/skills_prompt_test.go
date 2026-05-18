@@ -8,6 +8,7 @@ import (
 
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/shell"
+	"github.com/usewhale/whale/internal/skills"
 )
 
 func TestImmutableSystemPromptIncludesSkillIndexOnly(t *testing.T) {
@@ -34,6 +35,25 @@ func TestImmutableSystemPromptIncludesSkillIndexOnly(t *testing.T) {
 	}
 	if strings.Contains(joined, "Do not inline this body") {
 		t.Fatalf("system prompt should not inline skill instructions:\n%s", joined)
+	}
+}
+
+func TestImmutableSystemPromptFiltersDisabledPluginSkills(t *testing.T) {
+	workspace := t.TempDir()
+	a := &Agent{
+		tools:                core.NewToolRegistry(nil),
+		workspaceRoot:        workspace,
+		projectMemoryEnabled: false,
+		disabledSkills:       []string{"plugin-skill"},
+		extraSkills: []*skills.Skill{{
+			Name:          "plugin-skill",
+			Description:   "Plugin skill.",
+			SkillFilePath: "plugin://test/SKILL.md",
+		}},
+	}
+	joined := strings.Join(a.buildImmutableSystemBlocks(), "\n\n")
+	if strings.Contains(joined, "plugin-skill") {
+		t.Fatalf("disabled plugin skill leaked into system prompt:\n%s", joined)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/usewhale/whale/internal/agent"
 	"github.com/usewhale/whale/internal/core"
+	llmretry "github.com/usewhale/whale/internal/llm/retry"
 )
 
 func (s *Service) runTurn(line string, hiddenInput bool) {
@@ -72,6 +73,11 @@ func (s *Service) runTurnWith(start func(context.Context) (<-chan agent.AgentEve
 		case agent.AgentEventTypePlanCompleted:
 			deltas.flushReliable()
 			s.emit(Event{Kind: EventPlanCompleted, Text: ev.Content})
+		case agent.AgentEventTypeProviderRetryScheduled:
+			if ev.ProviderRetry != nil {
+				deltas.flushReliable()
+				s.emit(providerRetryEvent(ev.ProviderRetry))
+			}
 		case agent.AgentEventTypeToolCall:
 			if ev.ToolCall != nil {
 				deltas.flushReliable()
@@ -87,6 +93,8 @@ func (s *Service) runTurnWith(start func(context.Context) (<-chan agent.AgentEve
 				deltas.flushReliable()
 				s.emit(Event{Kind: EventToolResult, ToolCallID: ev.Result.ToolCallID, ToolName: ev.Result.Name, Text: ev.Result.Content, Metadata: ev.Result.Metadata})
 			}
+		case agent.AgentEventTypeToolApprovalGranted:
+			s.syncApprovalGrant(ev.ApprovalGrant)
 		case agent.AgentEventTypeParallelReasonStarted, agent.AgentEventTypeSubagentStarted:
 			if ev.Task != nil {
 				deltas.flushReliable()
@@ -130,6 +138,24 @@ func (s *Service) runTurnWith(start func(context.Context) (<-chan agent.AgentEve
 		LastResponse: last,
 		Metadata:     map[string]any{EventMetadataAgentTurn: true},
 	})
+}
+
+func providerRetryEvent(info *llmretry.Info) Event {
+	if info == nil {
+		return Event{Kind: EventProviderRetry}
+	}
+	meta := map[string]any{
+		"attempt":      info.Attempt,
+		"max_attempts": info.MaxAttempts,
+		"delay_ms":     info.Delay.Milliseconds(),
+	}
+	if info.StatusCode > 0 {
+		meta["status_code"] = info.StatusCode
+	}
+	if info.Reason != "" {
+		meta["reason"] = info.Reason
+	}
+	return Event{Kind: EventProviderRetry, Text: llmretry.FormatInfo(*info), Metadata: meta}
 }
 
 func shouldSuppressCancelledTurnError(ctx context.Context, err error) bool {

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/shell"
 )
 
@@ -157,6 +158,114 @@ func TestWindowsShellRunKeepsLaunchedChildOnSuccess(t *testing.T) {
 	}
 }
 
+func TestWindowsShellRunDecodesGBKStdout(t *testing.T) {
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command": windowsGBKOutputHelperCommand(t, "stdout", 0),
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("shell_run failed: err=%v res=%+v", err, res)
+	}
+	stdout := shellPayloadString(t, res.Content, "stdout")
+	if stdout != "拒绝访问 - \\" {
+		t.Fatalf("stdout = %q, want decoded GBK text", stdout)
+	}
+	if strings.Contains(stdout, "\uFFFD") {
+		t.Fatalf("stdout contains replacement rune: %q", stdout)
+	}
+}
+
+func TestWindowsShellRunPreservesAmbiguousValidUTF8Stdout(t *testing.T) {
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command": windowsGBKOutputHelperCommandForSample(t, "stdout", 0, "ambiguous"),
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("shell_run failed: err=%v res=%+v", err, res)
+	}
+	stdout := shellPayloadString(t, res.Content, "stdout")
+	if stdout != "һ" {
+		t.Fatalf("stdout = %q, want ambiguous valid UTF-8 bytes preserved", stdout)
+	}
+}
+
+func TestWindowsDecodeShellOutputKeepsUTF8Chinese(t *testing.T) {
+	for _, input := range []string{
+		"一",
+		"拒绝访问 - \\",
+		"error: 文件不存在",
+		"Привет",
+		"Ω",
+		"مرحبا",
+		"һ",
+	} {
+		if got := decodeShellOutput([]byte(input)); got != input {
+			t.Fatalf("decodeShellOutput(%q) = %q, want UTF-8 unchanged", input, got)
+		}
+	}
+}
+
+func TestWindowsShellRunDecodesGBKStderrOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command": windowsGBKOutputHelperCommand(t, "stderr", 1),
+	}))
+	if err != nil {
+		t.Fatalf("shell_run dispatch error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected failing command result, got: %s", res.Content)
+	}
+	stderr := shellPayloadString(t, res.Content, "stderr")
+	if stderr != "拒绝访问 - \\" {
+		t.Fatalf("stderr = %q, want decoded GBK text; full result: %s", stderr, res.Content)
+	}
+	if strings.Contains(stderr, "\uFFFD") {
+		t.Fatalf("stderr contains replacement rune: %q", stderr)
+	}
+}
+
+func TestWindowsShellWaitDecodesGBKOutput(t *testing.T) {
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	start, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    windowsGBKOutputHelperCommand(t, "stdout", 0),
+		"background": true,
+	}))
+	if err != nil || start.IsError {
+		t.Fatalf("shell_run background failed: err=%v res=%+v", err, start)
+	}
+
+	taskID := shellTaskID(t, start.Content)
+	wait := shellWaitUntilDone(t, ts, taskID)
+	stdout := shellPayloadString(t, wait.Content, "stdout")
+	if stdout != "拒绝访问 - \\" {
+		t.Fatalf("background stdout = %q, want decoded GBK text", stdout)
+	}
+	if strings.Contains(stdout, "\uFFFD") {
+		t.Fatalf("background stdout contains replacement rune: %q", stdout)
+	}
+}
+
 func TestWindowsShellRunProcessTreeHelper(t *testing.T) {
 	switch os.Getenv("WHALE_SHELL_TOOL_PROCESS_TREE_HELPER") {
 	case "parent":
@@ -202,6 +311,31 @@ func TestWindowsShellRunProcessTreeHelper(t *testing.T) {
 	}
 }
 
+func TestWindowsShellRunGBKOutputHelper(t *testing.T) {
+	if os.Getenv("WHALE_GBK_OUTPUT_HELPER") != "1" {
+		return
+	}
+	output := os.Getenv("WHALE_GBK_OUTPUT_STREAM")
+	if output == "" {
+		output = "stdout"
+	}
+	code := 0
+	if os.Getenv("WHALE_GBK_OUTPUT_EXIT") == "1" {
+		code = 1
+	}
+	gbk := []byte{0xbe, 0xdc, 0xbe, 0xf8, 0xb7, 0xc3, 0xce, 0xca, 0x20, 0x2d, 0x20, 0x5c}
+	if os.Getenv("WHALE_GBK_OUTPUT_SAMPLE") == "ambiguous" {
+		// "一" encoded as GBK/CP936; these bytes are also syntactically valid UTF-8.
+		gbk = []byte{0xd2, 0xbb}
+	}
+	if output == "stderr" {
+		_, _ = os.Stderr.Write(gbk)
+	} else {
+		_, _ = os.Stdout.Write(gbk)
+	}
+	os.Exit(code)
+}
+
 func currentTestBinaryCommand(t *testing.T) string {
 	t.Helper()
 	spec, err := shell.Resolve("")
@@ -221,6 +355,120 @@ func currentTestBinaryCommand(t *testing.T) string {
 		t.Fatalf("unexpected Windows shell kind: %q", spec.Kind)
 		return ""
 	}
+}
+
+func windowsGBKOutputHelperCommandForSample(t *testing.T, stream string, exitCode int, sample string) string {
+	t.Helper()
+	return windowsGBKOutputHelperCommandWithEnv(t, stream, exitCode, map[string]string{
+		"WHALE_GBK_OUTPUT_SAMPLE": sample,
+	})
+}
+
+func windowsGBKOutputHelperCommand(t *testing.T, stream string, exitCode int) string {
+	t.Helper()
+	return windowsGBKOutputHelperCommandWithEnv(t, stream, exitCode, nil)
+}
+
+func windowsGBKOutputHelperCommandWithEnv(t *testing.T, stream string, exitCode int, extraEnv map[string]string) string {
+	t.Helper()
+	spec, err := shell.Resolve("")
+	if err != nil {
+		t.Fatalf("resolve shell: %v", err)
+	}
+	testBinary := os.Args[0]
+	exitValue := "0"
+	if exitCode != 0 {
+		exitValue = "1"
+	}
+	switch spec.Kind {
+	case shell.KindPowerShell:
+		escapedBin := strings.ReplaceAll(testBinary, "'", "''")
+		var env strings.Builder
+		env.WriteString(fmt.Sprintf("$env:WHALE_GBK_OUTPUT_HELPER='1'; $env:WHALE_GBK_OUTPUT_STREAM='%s'; $env:WHALE_GBK_OUTPUT_EXIT='%s'; ", stream, exitValue))
+		for key, value := range extraEnv {
+			env.WriteString(fmt.Sprintf("$env:%s='%s'; ", key, strings.ReplaceAll(value, "'", "''")))
+		}
+		return fmt.Sprintf("%s& '%s' '-test.run=TestWindowsShellRunGBKOutputHelper'", env.String(), escapedBin)
+	case shell.KindCmd:
+		if strings.ContainsAny(testBinary, " \t") {
+			t.Fatalf("cmd.exe helper path cannot contain spaces: %q", testBinary)
+		}
+		var env strings.Builder
+		env.WriteString(fmt.Sprintf("set WHALE_GBK_OUTPUT_HELPER=1&& set WHALE_GBK_OUTPUT_STREAM=%s&& set WHALE_GBK_OUTPUT_EXIT=%s&& ", stream, exitValue))
+		for key, value := range extraEnv {
+			env.WriteString(fmt.Sprintf("set %s=%s&& ", key, value))
+		}
+		return fmt.Sprintf("%s%s -test.run TestWindowsShellRunGBKOutputHelper", env.String(), testBinary)
+	default:
+		t.Fatalf("unexpected Windows shell kind: %q", spec.Kind)
+		return ""
+	}
+}
+
+func shellTaskID(t *testing.T, content string) string {
+	t.Helper()
+	var env struct {
+		Data struct {
+			Payload struct {
+				TaskID string `json:"task_id"`
+			} `json:"payload"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(content), &env); err != nil {
+		t.Fatalf("unmarshal shell result: %v\n%s", err, content)
+	}
+	if env.Data.Payload.TaskID == "" {
+		t.Fatalf("missing task id in shell result: %s", content)
+	}
+	return env.Data.Payload.TaskID
+}
+
+func shellWaitUntilDone(t *testing.T, ts *Toolset, taskID string) core.ToolResult {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		wait, err := ts.shellWait(context.Background(), tc("shell_wait", map[string]any{
+			"task_id":    taskID,
+			"timeout_ms": 5000,
+		}))
+		if err != nil || wait.IsError {
+			t.Fatalf("shell_wait failed: err=%v res=%+v", err, wait)
+		}
+		if shellPayloadBool(t, wait.Content, "done") {
+			return wait
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for shell task %s", taskID)
+	return core.ToolResult{}
+}
+
+func shellPayloadString(t *testing.T, content, key string) string {
+	t.Helper()
+	var env struct {
+		Data struct {
+			Payload map[string]any `json:"payload"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(content), &env); err != nil {
+		t.Fatalf("unmarshal shell result: %v\n%s", err, content)
+	}
+	value, _ := env.Data.Payload[key].(string)
+	return value
+}
+
+func shellPayloadBool(t *testing.T, content, key string) bool {
+	t.Helper()
+	var env struct {
+		Data struct {
+			Payload map[string]any `json:"payload"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(content), &env); err != nil {
+		t.Fatalf("unmarshal shell result: %v\n%s", err, content)
+	}
+	value, _ := env.Data.Payload[key].(bool)
+	return value
 }
 
 func waitForWindowsFile(path string, timeout time.Duration) <-chan bool {

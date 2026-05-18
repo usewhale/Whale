@@ -2128,8 +2128,8 @@ func TestPickerEventsClearBusyState(t *testing.T) {
 			name: "permissions picker",
 			ev: service.Event{
 				Kind:            service.EventPermissionsPicker,
-				ApprovalChoices: []string{"Ask first", "Auto approve"},
-				CurrentApproval: "Ask first",
+				ApprovalChoices: []string{service.ApprovalChoiceAskFirst, service.ApprovalChoiceAutoApproveSession},
+				CurrentApproval: service.ApprovalChoiceAskFirst,
 			},
 			mode: modePermissionsPicker,
 		},
@@ -2147,6 +2147,111 @@ func TestPickerEventsClearBusyState(t *testing.T) {
 				t.Fatalf("expected mode %v, got %v", tt.mode, m.mode)
 			}
 		})
+	}
+}
+
+func TestPermissionsPickerCopyClarifiesAutoApproveScope(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.permissionsPicker.choices = []string{
+		service.ApprovalChoiceAskFirst,
+		service.ApprovalChoiceAutoApproveSession,
+		service.ApprovalChoiceTrustProject,
+		service.ApprovalChoiceClearProject,
+	}
+
+	view := m.renderPermissionsPicker()
+	for _, want := range []string{
+		"Session",
+		"Ask before tools run",
+		"Prompt before write, patch, shell, or MCP tools run.",
+		"Auto approve all tools for this session",
+		"No approval prompts until Whale exits.",
+		"Project default",
+		"Trust this project...",
+		"Auto-approve by default in this workspace.",
+		"Clear project default",
+		"Remove permissions.mode from ./.whale/config.toml.",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected permissions picker to contain %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Never ask; auto-approve tool calls.") {
+		t.Fatalf("permissions picker should not use ambiguous auto-approve copy:\n%s", view)
+	}
+}
+
+func TestPermissionsProjectTrustConfirmCopy(t *testing.T) {
+	m := newModel(nil, "", "", "")
+
+	view := m.renderPermissionsProjectTrustConfirm()
+	for _, want := range []string{
+		"Trust this project?",
+		"Auto-approve write, patch, shell, and MCP tools by default in this workspace.",
+		"This affects future sessions in this workspace.",
+		"Config: ./.whale/config.toml",
+		"Trust this project",
+		"Cancel",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected trust confirmation to contain %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "Whale will") {
+		t.Fatalf("trust confirmation should state facts without product-name narration:\n%s", view)
+	}
+}
+
+func TestPermissionsPickerTrustProjectDispatchesProjectApprovalIntent(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.mode = modePermissionsPicker
+	m.permissionsPicker.choices = []string{
+		service.ApprovalChoiceAskFirst,
+		service.ApprovalChoiceAutoApproveSession,
+		service.ApprovalChoiceTrustProject,
+		service.ApprovalChoiceClearProject,
+	}
+	m.permissionsPicker.index = 2
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if m.mode != modePermissionsProjectTrustConfirm {
+		t.Fatalf("expected trust confirmation mode, got %v", m.mode)
+	}
+	if len(*intents) != 0 {
+		t.Fatalf("expected no intent before confirmation, got %+v", *intents)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if len(*intents) != 1 {
+		t.Fatalf("expected one intent after confirmation, got %+v", *intents)
+	}
+	if got := (*intents)[0]; got.Kind != service.IntentSetProjectApproval || got.ApprovalMode != "never-ask" {
+		t.Fatalf("unexpected project approval intent: %+v", got)
+	}
+	if m.mode != modeChat {
+		t.Fatalf("expected mode chat after confirmation, got %v", m.mode)
+	}
+}
+
+func TestPermissionsPickerAutoApproveDispatchesNeverAsk(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.mode = modePermissionsPicker
+	m.permissionsPicker.choices = []string{service.ApprovalChoiceAskFirst, service.ApprovalChoiceAutoApproveSession}
+	m.permissionsPicker.index = 1
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+
+	if len(*intents) != 1 {
+		t.Fatalf("expected one intent, got %+v", *intents)
+	}
+	if got := (*intents)[0]; got.Kind != service.IntentSetApprovalMode || got.ApprovalMode != "never-ask" {
+		t.Fatalf("unexpected approval intent: %+v", got)
+	}
+	if m.mode != modeChat {
+		t.Fatalf("expected permissions picker to close, got mode %v", m.mode)
 	}
 }
 
@@ -2730,6 +2835,35 @@ func TestSkillSuggestionsHiddenAfterInsertedMentionWithSpace(t *testing.T) {
 	m.updateSlashMatches()
 	if len(m.skills.matches) != 0 {
 		t.Fatalf("expected skill suggestions hidden after mention insert, got %+v", m.skills.matches)
+	}
+}
+
+func TestProviderRetryEventUpdatesStatusWithoutTranscript(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	beforeTranscript := len(m.transcript)
+	m.handleServiceEvent(service.Event{Kind: service.EventProviderRetry, Text: "API rate limited, retrying in 2s (1/3)", Metadata: map[string]any{"delay_ms": int64(2000)}})
+
+	if m.status != "ready" {
+		t.Fatalf("status should not be overwritten by retry, got %s", m.status)
+	}
+	if m.providerRetryStatus != "API rate limited, retrying in 2s (1/3)" {
+		t.Fatalf("providerRetryStatus: %s", m.providerRetryStatus)
+	}
+	if len(m.transcript) != beforeTranscript {
+		t.Fatalf("retry event should not append transcript, before=%d after=%d", beforeTranscript, len(m.transcript))
+	}
+	if len(m.logs) == 0 || m.logs[len(m.logs)-1].Kind != "api_retry" {
+		t.Fatalf("missing api_retry log: %+v", m.logs)
+	}
+}
+
+func TestProviderRetryStatusClearsOnAssistantDelta(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.handleServiceEvent(service.Event{Kind: service.EventProviderRetry, Text: "API rate limited, retrying in 2s (1/3)", Metadata: map[string]any{"delay_ms": int64(2000)}})
+	m.handleServiceEvent(service.Event{Kind: service.EventAssistantDelta, Text: "ok"})
+
+	if m.providerRetryStatus != "" || !m.providerRetryUntil.IsZero() {
+		t.Fatalf("provider retry status not cleared: %q until=%v", m.providerRetryStatus, m.providerRetryUntil)
 	}
 }
 
@@ -5348,6 +5482,18 @@ func TestComposerHeightGrowthAtTailUpdatesLayoutWithoutRerender(t *testing.T) {
 	}
 }
 
+func TestShiftEnterKeyInsertsNewline(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.input.SetValue("seed")
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("shift+enter")})
+	m = next.(model)
+
+	if got := m.input.Value(); got != "seed\n" {
+		t.Fatalf("expected shift+enter to add newline, got %q", got)
+	}
+}
+
 func TestComposerHeightShrinkOffTailClampsLayoutWithoutRerender(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 80
@@ -5478,6 +5624,39 @@ func TestChatBusyViewShowsWorkingAboveComposer(t *testing.T) {
 	}
 }
 
+func TestChatBusyViewShowsProviderRetryStatus(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 100
+	m.height = 24
+	m.startBusy()
+	m.busySince = time.Now().Add(-12 * time.Second)
+	m.providerRetryStatus = "API rate limited, retrying in 1s (1/3)"
+	m.providerRetryUntil = time.Now().Add(time.Second)
+
+	view := m.View()
+	if !strings.Contains(view, "API rate limited, retrying in 1s (1/3) (12s) · Esc/Ctrl+C to interrupt") {
+		t.Fatalf("expected retry status in busy line:\n%s", view)
+	}
+}
+
+func TestChatBusyViewIgnoresExpiredProviderRetryStatus(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 100
+	m.height = 24
+	m.startBusy()
+	m.busySince = time.Now().Add(-12 * time.Second)
+	m.providerRetryStatus = "API rate limited, retrying in 1s (1/3)"
+	m.providerRetryUntil = time.Now().Add(-time.Second)
+
+	view := m.View()
+	if strings.Contains(view, "API rate limited") {
+		t.Fatalf("expired retry status should not render:\n%s", view)
+	}
+	if !strings.Contains(view, "Working (12s) · Esc/Ctrl+C to interrupt") {
+		t.Fatalf("expected working status after retry expiry:\n%s", view)
+	}
+}
+
 func TestApprovalBusyViewShowsCtrlCOnlyInterruptHint(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 80
@@ -5577,6 +5756,98 @@ func TestApprovalViewShowsDiffMetadata(t *testing.T) {
 	for _, unwanted := range []string{"--- a/a.txt", "+++ b/a.txt", "@@ -1 +1 @@"} {
 		if strings.Contains(view, unwanted) {
 			t.Fatalf("approval diff should hide raw diff header %q:\n%s", unwanted, view)
+		}
+	}
+}
+
+func TestApprovalViewShowsFileReviewSessionScope(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 100
+	m.height = 30
+	m.mode = modeApproval
+	m.approval.toolName = "apply_patch"
+	m.approval.reason = "apply_patch: a.txt, b.txt"
+	m.approval.metadata = testFileDiffMetadata()
+	m.approval.metadata["approval_kind"] = "file_diff_review"
+	m.approval.metadata["approval_session_scope"] = "these files: a.txt, b.txt"
+
+	view := m.View()
+	for _, want := range []string{
+		"Approval required: file diff review",
+		"Review file changes before Whale applies them.",
+		"Allow for session = these files: a.txt, b.txt",
+		"a.txt (+1 -1)",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected approval view to contain %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestApprovalViewShowsMemoryWriteMetadata(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 100
+	m.height = 30
+	m.mode = modeApproval
+	m.approval.toolName = "remember"
+	m.approval.reason = "remember: Writes long-term Whale memory."
+	m.approval.metadata = map[string]any{
+		"approval_kind":          "memory_write",
+		"approval_session_scope": "global memory: response-style",
+		"memory_scope":           "global",
+		"memory_type":            "user",
+		"memory_name":            "response-style",
+		"memory_description":     "prefers concise Chinese answers",
+		"memory_content_preview": "Answer in concise Chinese with repo evidence.",
+		"memory_write_status":    "created",
+	}
+
+	view := m.View()
+	for _, want := range []string{
+		"Approval required: memory write",
+		"Review memory before Whale saves it.",
+		"Created memory: global/user",
+		"Name: response-style",
+		"Description: prefers concise Chinese answers",
+		"Content:",
+		"Answer in concise Chinese with repo evidence.",
+		"Allow for session = global memory: response-style",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected approval view to contain %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestApprovalViewShowsMemoryDeleteMetadata(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 100
+	m.height = 30
+	m.mode = modeApproval
+	m.approval.toolName = "forget"
+	m.approval.reason = "forget: Deletes long-term Whale memory."
+	m.approval.metadata = map[string]any{
+		"approval_kind":          "memory_delete",
+		"approval_session_scope": "project memory: roadmap",
+		"memory_scope":           "project",
+		"memory_type":            "project",
+		"memory_name":            "roadmap",
+		"memory_description":     "plugin-first memory",
+		"memory_content_preview": "Memory is the first official plugin.",
+	}
+
+	view := m.View()
+	for _, want := range []string{
+		"Approval required: memory delete",
+		"Review memory before Whale deletes it.",
+		"Delete memory: project/project",
+		"Name: roadmap",
+		"Description: plugin-first memory",
+		"Memory is the first official plugin.",
+		"Allow for session = project memory: roadmap",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected approval view to contain %q:\n%s", want, view)
 		}
 	}
 }

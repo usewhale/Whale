@@ -29,7 +29,7 @@ func (s *Service) emitBestEffort(ev Event) {
 
 func isCriticalEvent(kind EventKind) bool {
 	switch kind {
-	case EventError, EventPlanCompleted, EventToolCall, EventToolResult, EventTaskStarted, EventTaskCompleted, EventMCPComplete, EventApprovalRequired, EventUserInputRequired, EventUserInputDone, EventSessionsListed, EventLocalSubmitResult, EventLocalSubmitDone, EventTurnDone, EventModelPicker, EventPermissionsPicker, EventSkillLoaded, EventExitRequested, EventClearScreen, EventSessionHydrated:
+	case EventError, EventPlanCompleted, EventProviderRetry, EventToolCall, EventToolResult, EventTaskStarted, EventTaskCompleted, EventMCPComplete, EventApprovalRequired, EventUserInputRequired, EventUserInputDone, EventSessionsListed, EventLocalSubmitResult, EventLocalSubmitDone, EventTurnDone, EventModelPicker, EventPermissionsPicker, EventSkillLoaded, EventExitRequested, EventClearScreen, EventSessionHydrated:
 		return true
 	default:
 		return false

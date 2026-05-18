@@ -61,7 +61,7 @@ func TestResolveWindowsPrefersPwsh(t *testing.T) {
 	if spec.Bin != `C:\Program Files\PowerShell\7\pwsh.exe` {
 		t.Fatalf("Bin = %q", spec.Bin)
 	}
-	wantArgs := []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "Get-ChildItem"}
+	wantArgs := []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-Command", powerShellUTF8OutputPrefix + "& {\nGet-ChildItem\n}"}
 	if !reflect.DeepEqual(spec.Args, wantArgs) {
 		t.Fatalf("Args = %#v, want %#v", spec.Args, wantArgs)
 	}
@@ -92,7 +92,7 @@ func TestResolveWindowsFallsBackToComSpec(t *testing.T) {
 		Kind:        KindCmd,
 		DisplayName: "cmd.exe",
 		Bin:         `C:\Windows\System32\cmd.exe`,
-		Args:        []string{"/d", "/s", "/c", "dir"},
+		Args:        []string{"/d", "/s", "/c", "chcp 65001 >nul & dir"},
 	}
 	if !reflect.DeepEqual(spec, want) {
 		t.Fatalf("spec = %#v, want %#v", spec, want)
@@ -138,9 +138,72 @@ func TestResolveWindowsLastResortCmdExe(t *testing.T) {
 		Kind:        KindCmd,
 		DisplayName: "cmd.exe",
 		Bin:         "cmd.exe",
-		Args:        []string{"/d", "/s", "/c", "dir"},
+		Args:        []string{"/d", "/s", "/c", "chcp 65001 >nul & dir"},
 	}
 	if !reflect.DeepEqual(spec, want) {
 		t.Fatalf("spec = %#v, want %#v", spec, want)
+	}
+}
+
+func TestResolveWindowsDoesNotDuplicateUTF8Setup(t *testing.T) {
+	t.Run("powershell", func(t *testing.T) {
+		command := powerShellUTF8OutputPrefix + "Get-ChildItem"
+		spec, err := Resolver{
+			GOOS: "windows",
+			LookPath: func(file string) (string, error) {
+				if file == "pwsh" {
+					return `C:\Program Files\PowerShell\7\pwsh.exe`, nil
+				}
+				return "", errors.New("not found")
+			},
+		}.Resolve(command)
+		if err != nil {
+			t.Fatalf("Resolve returned error: %v", err)
+		}
+		if got := strings.Count(spec.Args[len(spec.Args)-1], powerShellUTF8OutputPrefix); got != 1 {
+			t.Fatalf("PowerShell UTF-8 prefix count = %d in %#v", got, spec.Args)
+		}
+	})
+
+	t.Run("cmd", func(t *testing.T) {
+		command := "chcp 65001 >nul & dir"
+		spec, err := Resolver{
+			GOOS: "windows",
+			LookPath: func(file string) (string, error) {
+				return "", errors.New("not found")
+			},
+			Env: []string{"ComSpec=C:\\Windows\\System32\\cmd.exe"},
+		}.Resolve(command)
+		if err != nil {
+			t.Fatalf("Resolve returned error: %v", err)
+		}
+		if got := strings.Count(strings.ToLower(spec.Args[len(spec.Args)-1]), "chcp 65001"); got != 1 {
+			t.Fatalf("cmd UTF-8 codepage setup count = %d in %#v", got, spec.Args)
+		}
+	})
+}
+
+func TestResolveWindowsPowerShellPreservesFirstStatementCommands(t *testing.T) {
+	for _, command := range []string{
+		"using namespace System.IO; [Path]::GetFileName('C:\\tmp\\marker.txt')",
+		"param([string]$Name) $Name",
+	} {
+		t.Run(command, func(t *testing.T) {
+			spec, err := Resolver{
+				GOOS: "windows",
+				LookPath: func(file string) (string, error) {
+					if file == "pwsh" {
+						return `C:\Program Files\PowerShell\7\pwsh.exe`, nil
+					}
+					return "", errors.New("not found")
+				},
+			}.Resolve(command)
+			if err != nil {
+				t.Fatalf("Resolve returned error: %v", err)
+			}
+			if got := spec.Args[len(spec.Args)-1]; got != command {
+				t.Fatalf("PowerShell command = %q, want first-statement command unchanged", got)
+			}
+		})
 	}
 }

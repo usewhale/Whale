@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"runtime"
 
-	tea "github.com/charmbracelet/bubbletea"
-
 	"github.com/usewhale/whale/internal/app"
 	"github.com/usewhale/whale/internal/app/service"
 )
@@ -32,8 +30,13 @@ func Run(cfg app.Config, start app.StartOptions) error {
 	if runtime.GOOS == "windows" {
 		m.windowsPaste.enabled = true
 	}
-	p := tea.NewProgram(m)
+	p, cleanup, err := newTerminalProgram(m)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 	_, err = p.Run()
+	cleanup()
 	if err == nil {
 		fmt.Printf("To resume this session, run: whale resume %s\n", svc.SessionID())
 	}

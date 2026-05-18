@@ -35,9 +35,12 @@ func TestRunUserPromptSubmitHookBlockedOutput(t *testing.T) {
 		}}, "."),
 	}
 
-	blocked, out := a.RunUserPromptSubmitHook("deploy")
+	blocked, out, updated := a.RunUserPromptSubmitHook("deploy")
 	if !blocked {
 		t.Fatal("expected prompt hook to block")
+	}
+	if updated != "deploy" {
+		t.Fatalf("blocked hook should preserve input, got %q", updated)
 	}
 	if !strings.Contains(out, "decision:block") || !strings.Contains(out, "assistant> blocked by UserPromptSubmit hook") {
 		t.Fatalf("unexpected blocked hook output: %q", out)
@@ -55,12 +58,32 @@ func TestRunUserPromptSubmitHookWarnOutput(t *testing.T) {
 		}}, "."),
 	}
 
-	blocked, out := a.RunUserPromptSubmitHook("deploy")
+	blocked, out, _ := a.RunUserPromptSubmitHook("deploy")
 	if blocked {
 		t.Fatal("expected prompt hook warning not to block")
 	}
 	if !strings.Contains(out, "decision:warn") || !strings.Contains(out, "warn prompt") {
 		t.Fatalf("unexpected warn hook output: %q", out)
+	}
+}
+
+func TestRunUserPromptSubmitHookReturnsUpdatedInput(t *testing.T) {
+	a := &App{
+		ctx:           context.Background(),
+		sessionID:     "s1",
+		workspaceRoot: ".",
+		hookRunner: agent.NewHookRunner([]agent.ResolvedHook{{
+			HookConfig: agent.HookConfig{Command: `printf '{"updated_input":"rewritten prompt"}'`},
+			Event:      agent.HookEventUserPromptSubmit,
+		}}, "."),
+	}
+
+	blocked, _, updated := a.RunUserPromptSubmitHook("original prompt")
+	if blocked {
+		t.Fatal("expected prompt rewrite hook not to block")
+	}
+	if updated != "rewritten prompt" {
+		t.Fatalf("updated input = %q", updated)
 	}
 }
 
@@ -85,5 +108,21 @@ func TestRunStopHookIncludesAssistantTextAndTurn(t *testing.T) {
 	}
 	if !strings.Contains(string(b), `"last_assistant_text":"final answer"`) || !strings.Contains(string(b), `"turn":7`) {
 		t.Fatalf("unexpected stop payload: %s", string(b))
+	}
+}
+
+func TestOfficialPluginNoopStopHooksDoNotRenderOutput(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	app, err := New(t.Context(), cfg, StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer app.Close()
+
+	out := app.RunStopHook("final answer", 1)
+	if out != "" {
+		t.Fatalf("expected plugin pass hooks to render no output, got %q", out)
 	}
 }

@@ -9,9 +9,11 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/llm"
+	llmretry "github.com/usewhale/whale/internal/llm/retry"
 	whaletools "github.com/usewhale/whale/internal/tools"
 )
 
@@ -147,6 +149,138 @@ func TestStreamResponseParsesReasoningDelta(t *testing.T) {
 	}
 	if !sawDone {
 		t.Fatal("expected complete response with reasoning")
+	}
+}
+
+func TestStreamResponseRetriesRateLimitBeforeSSE(t *testing.T) {
+	var requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			w.Header().Set("Retry-After", "2")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = fmt.Fprint(w, `{"error":"rate limited"}`)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	var delays []time.Duration
+	policy := llmretry.DefaultPolicy()
+	policy.MaxAttempts = 2
+	policy.Jitter = 0
+	c, err := New(
+		WithAPIKey("test-key"),
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+		WithRetryPolicy(policy),
+		withRetrySleeper(func(_ context.Context, d time.Duration) error {
+			delays = append(delays, d)
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	events := c.StreamResponse(context.Background(), []core.Message{{Role: core.RoleUser, Text: "hi"}}, nil)
+	var sawRetry bool
+	var sawComplete bool
+	for ev := range events {
+		switch ev.Type {
+		case llm.EventError:
+			t.Fatalf("provider error: %v", ev.Err)
+		case llm.EventRetryScheduled:
+			sawRetry = true
+			if ev.Retry == nil || ev.Retry.Attempt != 1 || ev.Retry.StatusCode != http.StatusTooManyRequests {
+				t.Fatalf("retry info: %+v", ev.Retry)
+			}
+		case llm.EventComplete:
+			sawComplete = true
+		}
+	}
+	if requests != 2 {
+		t.Fatalf("requests: want 2, got %d", requests)
+	}
+	if !sawRetry {
+		t.Fatal("missing retry event")
+	}
+	if !sawComplete {
+		t.Fatal("missing complete event after retry")
+	}
+	if len(delays) != 1 || delays[0] != 2*time.Second {
+		t.Fatalf("delays: %+v", delays)
+	}
+}
+
+func TestStreamResponseDoesNotRetryMalformedSSEFrame(t *testing.T) {
+	var requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {not-json}\n\n")
+	}))
+	defer srv.Close()
+
+	policy := llmretry.DefaultPolicy()
+	policy.MaxAttempts = 3
+	c, err := New(
+		WithAPIKey("test-key"),
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+		WithRetryPolicy(policy),
+		withRetrySleeper(func(_ context.Context, _ time.Duration) error {
+			t.Fatal("unexpected retry sleep")
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	for ev := range c.StreamResponse(context.Background(), []core.Message{{Role: core.RoleUser, Text: "hi"}}, nil) {
+		if ev.Type == llm.EventRetryScheduled {
+			t.Fatalf("unexpected retry event: %+v", ev.Retry)
+		}
+	}
+	if requests != 1 {
+		t.Fatalf("requests: want 1, got %d", requests)
+	}
+}
+
+func TestStreamResponseDoesNotRetryInvalidRequestURL(t *testing.T) {
+	policy := llmretry.DefaultPolicy()
+	policy.MaxAttempts = 3
+	c, err := New(
+		WithAPIKey("test-key"),
+		WithBaseURL("://bad-url"),
+		WithRetryPolicy(policy),
+		withRetrySleeper(func(_ context.Context, _ time.Duration) error {
+			t.Fatal("unexpected retry sleep")
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	var gotErr error
+	for ev := range c.StreamResponse(context.Background(), []core.Message{{Role: core.RoleUser, Text: "hi"}}, nil) {
+		switch ev.Type {
+		case llm.EventRetryScheduled:
+			t.Fatalf("unexpected retry event: %+v", ev.Retry)
+		case llm.EventError:
+			gotErr = ev.Err
+		}
+	}
+	if gotErr == nil {
+		t.Fatal("expected invalid request URL error")
+	}
+	if !strings.Contains(gotErr.Error(), "new request") {
+		t.Fatalf("error should identify request construction failure, got %v", gotErr)
 	}
 }
 

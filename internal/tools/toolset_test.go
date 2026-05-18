@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/skills"
 )
 
 func tc(name string, in any) core.ToolCall {
@@ -959,6 +960,40 @@ func TestLoadSkillUnknownListsAvailableAndRegistryReadOnly(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("load_skill not registered")
+	}
+}
+
+func TestLoadSkillFiltersDisabledPluginSkills(t *testing.T) {
+	workspace := t.TempDir()
+	ts, err := NewToolset(workspace)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	ts.SetExtraSkills([]*skills.Skill{{
+		Name:          "plugin-skill",
+		Description:   "Plugin skill.",
+		Instructions:  "secret plugin instructions",
+		SkillFilePath: "plugin://test/SKILL.md",
+	}})
+	ts.SetSkillDisabled([]string{"plugin-skill"})
+	res, err := ts.loadSkill(context.Background(), tc("load_skill", map[string]any{
+		"name": "plugin-skill",
+	}))
+	if err != nil {
+		t.Fatalf("load_skill err: %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Content, "skill disabled") {
+		t.Fatalf("expected disabled plugin skill to be rejected, got: %+v", res)
+	}
+
+	missing, err := ts.loadSkill(context.Background(), tc("load_skill", map[string]any{
+		"name": "missing-skill",
+	}))
+	if err != nil {
+		t.Fatalf("missing load_skill err: %v", err)
+	}
+	if strings.Contains(missing.Content, "plugin-skill") {
+		t.Fatalf("disabled plugin skill leaked into available list: %s", missing.Content)
 	}
 }
 

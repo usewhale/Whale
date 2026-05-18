@@ -13,7 +13,9 @@ import (
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/defaults"
 	"github.com/usewhale/whale/internal/llm"
+	llmretry "github.com/usewhale/whale/internal/llm/retry"
 	whalemcp "github.com/usewhale/whale/internal/mcp"
+	"github.com/usewhale/whale/internal/plugins"
 	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/store"
@@ -21,7 +23,7 @@ import (
 	"github.com/usewhale/whale/internal/tools"
 )
 
-const CommandsHelp = "/model, /permissions, /agent, /ask [prompt], /plan [prompt], /skills, /new [id], /resume, /clear, /status, /stats, /mcp, /compact, /init, /exit"
+const CommandsHelp = "/model, /permissions, /agent, /ask [prompt], /plan [prompt], /skills, /plugins, /memory, /skills-improver, /local-indexer, /new [id], /resume, /clear, /status, /stats, /mcp, /compact, /init, /exit"
 
 type Config struct {
 	DataDir              string
@@ -39,9 +41,12 @@ type Config struct {
 	ModelExplicit        bool
 	ReasoningEffort      string
 	ThinkingEnabled      bool
+	RetryMaxAttempts     int
+	RetryMaxDelay        time.Duration
 	MCPConfigPath        string
 	APIBaseURL           string
 	SkillsDisabled       []string
+	PluginsDisabled      []string
 }
 
 type StartOptions struct {
@@ -84,6 +89,8 @@ type App struct {
 	thinkingEnabled  bool
 	contextWindow    int
 	mcpManager       *whalemcp.Manager
+	pluginManager    *plugins.Manager
+	pluginTools      []core.Tool
 	mcpInitMu        sync.Mutex
 	mcpInitStarted   bool
 
@@ -106,6 +113,8 @@ func DefaultConfig() Config {
 		Model:                defaults.DefaultModel,
 		ReasoningEffort:      defaults.DefaultReasoningEffort,
 		ThinkingEnabled:      defaults.DefaultThinkingEnabled,
+		RetryMaxAttempts:     llmretry.DefaultPolicy().MaxAttempts,
+		RetryMaxDelay:        llmretry.DefaultPolicy().MaxDelay,
 	}
 }
 
@@ -161,6 +170,9 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 	}
 	mcpManager := whalemcp.NewManager(mcpConfig)
 	mcpManager.SetWorkspaceRoot(workspaceRoot)
+	pluginManager := plugins.NewManager(plugins.Context{DataDir: cfg.DataDir, WorkspaceRoot: workspaceRoot}, cfg.PluginsDisabled)
+	pluginTools := pluginManager.Tools()
+	toolset.SetExtraSkills(pluginManager.Skills())
 	baseTools := append([]core.Tool{}, toolset.Tools()...)
 	baseToolRegistry, err := core.NewToolRegistryChecked(baseTools)
 	if err != nil {
@@ -170,6 +182,8 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 	if hookLoadErr != nil {
 		return nil, fmt.Errorf("load hooks failed: %w", hookLoadErr)
 	}
+	hookRunner := agent.NewHookRunner(hooks, workspaceRoot)
+	hookRunner.AddHandlers(pluginManager.Hooks()...)
 	modeState, err := session.LoadModeState(sessionsDir, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("load session mode failed: %w", err)
@@ -210,6 +224,7 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 			ReasoningEffort: effort,
 			ThinkingEnabled: thinking,
 			MaxTokens:       maxTokens,
+			RetryPolicy:     retryPolicyFromConfig(cfg),
 		})
 	}
 	var appRef *App
@@ -236,6 +251,7 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 	})
 	taskTools := tasks.NewTools(taskRunner)
 	registeredTools := append([]core.Tool{}, baseTools...)
+	registeredTools = append(registeredTools, pluginTools...)
 	registeredTools = append(registeredTools, taskTools...)
 	toolRegistry, err := core.NewToolRegistryChecked(registeredTools)
 	if err != nil {
@@ -254,7 +270,7 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 		baseTools:        append([]core.Tool{}, baseTools...),
 		taskTools:        append([]core.Tool{}, taskTools...),
 		hooks:            hooks,
-		hookRunner:       agent.NewHookRunner(hooks, workspaceRoot),
+		hookRunner:       hookRunner,
 		hookSources:      hookSources,
 		currentMode:      modeState.Mode,
 		sessionID:        sessionID,
@@ -268,6 +284,8 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 		thinkingEnabled:  thinking,
 		contextWindow:    contextWindow,
 		mcpManager:       mcpManager,
+		pluginManager:    pluginManager,
+		pluginTools:      append([]core.Tool{}, pluginTools...),
 		apiKey:           apiKey,
 		approvalFn:       defaultApprovalFunc(start.ApprovalFunc),
 		userInput:        defaultUserInputFunc(start.UserInputFunc),

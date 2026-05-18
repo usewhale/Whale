@@ -6,15 +6,18 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/usewhale/whale/internal/app"
 	"github.com/usewhale/whale/internal/build"
 	"github.com/usewhale/whale/internal/defaults"
+	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/tui"
 )
 
 type cliOptions struct {
-	cfg app.Config
+	cfg                        app.Config
+	dangerouslySkipPermissions bool
 }
 
 func Execute() error {
@@ -27,6 +30,7 @@ func bindPersistentFlags(c *cobra.Command, opts *cliOptions) {
 	c.PersistentFlags().StringVarP(&opts.cfg.Model, "model", "m", opts.cfg.Model, "Model to use ("+strings.Join(defaults.SupportedModels(), "|")+")")
 	c.PersistentFlags().BoolVar(&opts.cfg.ThinkingEnabled, "thinking", opts.cfg.ThinkingEnabled, "Override thinking for this run only")
 	c.PersistentFlags().StringVar(&opts.cfg.ReasoningEffort, "effort", opts.cfg.ReasoningEffort, "Override reasoning effort for this run only (high|max)")
+	c.PersistentFlags().BoolVar(&opts.dangerouslySkipPermissions, "dangerously-skip-permissions", false, "Skip tool approval prompts for this run; extremely dangerous")
 	c.Flags().BoolP("version", "V", false, "Print version")
 }
 
@@ -58,13 +62,25 @@ func prepareCLIConfig(cmd *cobra.Command, opts *cliOptions) error {
 		}
 		cfg.ReasoningEffort = effort
 	}
+	if flagChanged(cmd, "dangerously-skip-permissions") && opts.dangerouslySkipPermissions {
+		cfg.ApprovalMode = string(policy.ApprovalModeNever)
+	}
 	opts.cfg = cfg
 	return validateModel(opts.cfg.Model)
 }
 
 func flagChanged(cmd *cobra.Command, name string) bool {
-	f := cmd.Flag(name)
-	return f != nil && f.Changed
+	for _, flags := range []*pflag.FlagSet{
+		cmd.Flags(),
+		cmd.PersistentFlags(),
+		cmd.InheritedFlags(),
+		cmd.Root().PersistentFlags(),
+	} {
+		if f := flags.Lookup(name); f != nil && f.Changed {
+			return true
+		}
+	}
+	return false
 }
 
 func validateModel(v string) error {

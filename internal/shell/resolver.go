@@ -75,7 +75,7 @@ func powerShellSpec(bin, command string) Spec {
 			"-NoProfile",
 			"-NonInteractive",
 			"-Command",
-			command,
+			withPowerShellUTF8Output(command),
 		},
 	}
 }
@@ -85,8 +85,37 @@ func cmdSpec(bin, command string) Spec {
 		Kind:        KindCmd,
 		DisplayName: "cmd.exe",
 		Bin:         bin,
-		Args:        []string{"/d", "/s", "/c", command},
+		Args:        []string{"/d", "/s", "/c", withCmdUTF8Codepage(command)},
 	}
+}
+
+const powerShellUTF8OutputPrefix = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$OutputEncoding=[System.Text.Encoding]::UTF8;"
+
+func withPowerShellUTF8Output(command string) string {
+	trimmed := strings.TrimSpace(command)
+	if strings.HasPrefix(trimmed, powerShellUTF8OutputPrefix) {
+		return command
+	}
+	if powerShellRequiresFirstStatement(trimmed) {
+		return command
+	}
+	return powerShellUTF8OutputPrefix + "& {\n" + command + "\n}"
+}
+
+func powerShellRequiresFirstStatement(command string) bool {
+	lower := strings.ToLower(command)
+	return strings.HasPrefix(lower, "using ") ||
+		strings.HasPrefix(lower, "using\t") ||
+		strings.HasPrefix(lower, "param(") ||
+		strings.HasPrefix(lower, "param ")
+}
+
+func withCmdUTF8Codepage(command string) string {
+	trimmed := strings.TrimSpace(command)
+	if strings.HasPrefix(strings.ToLower(trimmed), "chcp 65001") {
+		return command
+	}
+	return "chcp 65001 >nul & " + command
 }
 
 func (r Resolver) goos() string {

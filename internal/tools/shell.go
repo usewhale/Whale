@@ -79,8 +79,8 @@ func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolRe
 	err = shell.RunCommand(cctx, cmd)
 	durationMS := time.Since(start).Milliseconds()
 
-	stdoutRaw := stdoutBuf.String()
-	stderrRaw := stderrBuf.String()
+	stdoutRaw := decodeShellOutput(stdoutBuf.Bytes())
+	stderrRaw := decodeShellOutput(stderrBuf.Bytes())
 	stdout, stdoutTr := truncateTextSmart(stdoutRaw, maxToolTextChars)
 	stderr, stderrTr := truncateTextSmart(stderrRaw, maxToolTextChars)
 

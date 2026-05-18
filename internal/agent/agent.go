@@ -9,9 +9,11 @@ import (
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/defaults"
 	"github.com/usewhale/whale/internal/llm"
+	llmretry "github.com/usewhale/whale/internal/llm/retry"
 	"github.com/usewhale/whale/internal/memory"
 	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/session"
+	"github.com/usewhale/whale/internal/skills"
 	"github.com/usewhale/whale/internal/store"
 	"github.com/usewhale/whale/internal/telemetry"
 )
@@ -22,47 +24,49 @@ var ErrBudgetExceeded = errors.New("session budget exhausted")
 type AgentEventType string
 
 const (
-	AgentEventTypeAssistantDelta        AgentEventType = "assistant_delta"
-	AgentEventTypeReasoningDelta        AgentEventType = "reasoning_delta"
-	AgentEventTypeToolArgsDelta         AgentEventType = "tool_args_delta"
-	AgentEventTypeToolArgsRepaired      AgentEventType = "tool_args_repaired"
-	AgentEventTypeToolCallBlocked       AgentEventType = "tool_call_blocked"
-	AgentEventTypeToolModeBlocked       AgentEventType = "tool_mode_blocked"
-	AgentEventTypeToolApprovalRequired  AgentEventType = "tool_approval_required"
-	AgentEventTypeToolCallScavenged     AgentEventType = "tool_call_scavenged"
-	AgentEventTypeToolPolicyDecision    AgentEventType = "tool_policy_decision"
-	AgentEventTypeToolCall              AgentEventType = "tool_call"
-	AgentEventTypeToolResult            AgentEventType = "tool_result"
-	AgentEventTypeUserInputRequired     AgentEventType = "user_input_required"
-	AgentEventTypeUserInputSubmitted    AgentEventType = "user_input_submitted"
-	AgentEventTypeUserInputCancelled    AgentEventType = "user_input_cancelled"
-	AgentEventTypePlanDelta             AgentEventType = "plan_delta"
-	AgentEventTypePlanCompleted         AgentEventType = "plan_completed"
-	AgentEventTypePlanStepBlocked       AgentEventType = "plan_step_blocked"
-	AgentEventTypeToolRecoveryScheduled AgentEventType = "tool_recovery_scheduled"
-	AgentEventTypeToolRecoveryAttempt   AgentEventType = "tool_recovery_attempt"
-	AgentEventTypeToolRecoveryExhausted AgentEventType = "tool_recovery_exhausted"
-	AgentEventTypeReplanRequiredSet     AgentEventType = "replan_required_set"
-	AgentEventTypeContextCompacted      AgentEventType = "context_compacted"
-	AgentEventTypePrefixDrift           AgentEventType = "prefix_drift"
-	AgentEventTypePrefixCacheMetrics    AgentEventType = "prefix_cache_metrics"
-	AgentEventTypeBudgetWarning         AgentEventType = "budget_warning"
-	AgentEventTypeTurnCancelled         AgentEventType = "turn_cancelled"
-	AgentEventTypeForcedSummaryStarted  AgentEventType = "forced_summary_started"
-	AgentEventTypeForcedSummaryDone     AgentEventType = "forced_summary_done"
-	AgentEventTypeForcedSummaryFailed   AgentEventType = "forced_summary_failed"
-	AgentEventTypeHookStarted           AgentEventType = "hook_started"
-	AgentEventTypeHookBlocked           AgentEventType = "hook_blocked"
-	AgentEventTypeHookWarned            AgentEventType = "hook_warned"
-	AgentEventTypeHookFailed            AgentEventType = "hook_failed"
-	AgentEventTypeHookCompleted         AgentEventType = "hook_completed"
-	AgentEventTypeParallelReasonStarted AgentEventType = "parallel_reason_started"
-	AgentEventTypeParallelReasonDone    AgentEventType = "parallel_reason_completed"
-	AgentEventTypeSubagentStarted       AgentEventType = "subagent_started"
-	AgentEventTypeTaskProgress          AgentEventType = "task_progress"
-	AgentEventTypeSubagentDone          AgentEventType = "subagent_completed"
-	AgentEventTypeDone                  AgentEventType = "done"
-	AgentEventTypeError                 AgentEventType = "error"
+	AgentEventTypeAssistantDelta         AgentEventType = "assistant_delta"
+	AgentEventTypeReasoningDelta         AgentEventType = "reasoning_delta"
+	AgentEventTypeToolArgsDelta          AgentEventType = "tool_args_delta"
+	AgentEventTypeToolArgsRepaired       AgentEventType = "tool_args_repaired"
+	AgentEventTypeToolCallBlocked        AgentEventType = "tool_call_blocked"
+	AgentEventTypeToolModeBlocked        AgentEventType = "tool_mode_blocked"
+	AgentEventTypeToolApprovalRequired   AgentEventType = "tool_approval_required"
+	AgentEventTypeToolApprovalGranted    AgentEventType = "tool_approval_granted"
+	AgentEventTypeToolCallScavenged      AgentEventType = "tool_call_scavenged"
+	AgentEventTypeToolPolicyDecision     AgentEventType = "tool_policy_decision"
+	AgentEventTypeToolCall               AgentEventType = "tool_call"
+	AgentEventTypeToolResult             AgentEventType = "tool_result"
+	AgentEventTypeUserInputRequired      AgentEventType = "user_input_required"
+	AgentEventTypeUserInputSubmitted     AgentEventType = "user_input_submitted"
+	AgentEventTypeUserInputCancelled     AgentEventType = "user_input_cancelled"
+	AgentEventTypePlanDelta              AgentEventType = "plan_delta"
+	AgentEventTypePlanCompleted          AgentEventType = "plan_completed"
+	AgentEventTypePlanStepBlocked        AgentEventType = "plan_step_blocked"
+	AgentEventTypeProviderRetryScheduled AgentEventType = "provider_retry_scheduled"
+	AgentEventTypeToolRecoveryScheduled  AgentEventType = "tool_recovery_scheduled"
+	AgentEventTypeToolRecoveryAttempt    AgentEventType = "tool_recovery_attempt"
+	AgentEventTypeToolRecoveryExhausted  AgentEventType = "tool_recovery_exhausted"
+	AgentEventTypeReplanRequiredSet      AgentEventType = "replan_required_set"
+	AgentEventTypeContextCompacted       AgentEventType = "context_compacted"
+	AgentEventTypePrefixDrift            AgentEventType = "prefix_drift"
+	AgentEventTypePrefixCacheMetrics     AgentEventType = "prefix_cache_metrics"
+	AgentEventTypeBudgetWarning          AgentEventType = "budget_warning"
+	AgentEventTypeTurnCancelled          AgentEventType = "turn_cancelled"
+	AgentEventTypeForcedSummaryStarted   AgentEventType = "forced_summary_started"
+	AgentEventTypeForcedSummaryDone      AgentEventType = "forced_summary_done"
+	AgentEventTypeForcedSummaryFailed    AgentEventType = "forced_summary_failed"
+	AgentEventTypeHookStarted            AgentEventType = "hook_started"
+	AgentEventTypeHookBlocked            AgentEventType = "hook_blocked"
+	AgentEventTypeHookWarned             AgentEventType = "hook_warned"
+	AgentEventTypeHookFailed             AgentEventType = "hook_failed"
+	AgentEventTypeHookCompleted          AgentEventType = "hook_completed"
+	AgentEventTypeParallelReasonStarted  AgentEventType = "parallel_reason_started"
+	AgentEventTypeParallelReasonDone     AgentEventType = "parallel_reason_completed"
+	AgentEventTypeSubagentStarted        AgentEventType = "subagent_started"
+	AgentEventTypeTaskProgress           AgentEventType = "task_progress"
+	AgentEventTypeSubagentDone           AgentEventType = "subagent_completed"
+	AgentEventTypeDone                   AgentEventType = "done"
+	AgentEventTypeError                  AgentEventType = "error"
 )
 
 type ToolArgsProgress struct {
@@ -89,9 +93,18 @@ type ToolApprovalRequired struct {
 	Reason     string
 	Code       string
 	Key        string
+	Keys       []string
 	Summary    string
 	Scope      string
 	Metadata   map[string]any
+}
+
+type ToolApprovalGranted struct {
+	SessionID  string
+	ToolCallID string
+	ToolName   string
+	Key        string
+	Keys       []string
 }
 
 type ToolCallScavenged struct {
@@ -117,9 +130,11 @@ type AgentEvent struct {
 	ToolArgsRepair *ToolArgsRepair
 	ToolBlocked    *ToolCallBlocked
 	Approval       *ToolApprovalRequired
+	ApprovalGrant  *ToolApprovalGranted
 	Scavenged      *ToolCallScavenged
 	Policy         *ToolPolicyDecision
 	Recovery       *ToolRecoveryInfo
+	ProviderRetry  *llmretry.Info
 	Compact        *CompactInfo
 	PrefixDrift    *PrefixDriftInfo
 	CacheMetrics   *PrefixCacheMetricsInfo
@@ -226,6 +241,7 @@ type Agent struct {
 	projectMemoryFileOrder []string
 	workspaceRoot          string
 	disabledSkills         []string
+	extraSkills            []*skills.Skill
 	extraSystemBlocks      []string
 	sessionRuntime         *memory.SessionRuntime
 	sessionsDir            string
@@ -366,6 +382,23 @@ func WithHooks(hooks []ResolvedHook, workspaceRoot string) AgentOption {
 	}
 }
 
+func WithHookRunner(runner *HookRunner) AgentOption {
+	return func(a *Agent) {
+		if runner != nil {
+			a.hooks = runner
+		}
+	}
+}
+
+func WithHookHandlers(handlers ...HookHandler) AgentOption {
+	return func(a *Agent) {
+		if a.hooks == nil {
+			a.hooks = NewHookRunner(nil, "")
+		}
+		a.hooks.AddHandlers(handlers...)
+	}
+}
+
 func WithProjectMemory(enabled bool, maxChars int, fileOrder []string, workspaceRoot string) AgentOption {
 	return func(a *Agent) {
 		a.projectMemoryEnabled = enabled
@@ -382,6 +415,12 @@ func WithProjectMemory(enabled bool, maxChars int, fileOrder []string, workspace
 func WithDisabledSkills(names []string) AgentOption {
 	return func(a *Agent) {
 		a.disabledSkills = append([]string(nil), names...)
+	}
+}
+
+func WithExtraSkills(extra []*skills.Skill) AgentOption {
+	return func(a *Agent) {
+		a.extraSkills = append([]*skills.Skill(nil), extra...)
 	}
 }
 

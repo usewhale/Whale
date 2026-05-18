@@ -12,9 +12,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/usewhale/whale/internal/app"
-
 	"github.com/spf13/cobra"
+
+	"github.com/usewhale/whale/internal/app"
+	"github.com/usewhale/whale/internal/policy"
 )
 
 func TestRunSetupSavesCredentials(t *testing.T) {
@@ -293,6 +294,77 @@ func TestPrepareCLIConfigExplicitEffortOverridesConfig(t *testing.T) {
 	}
 }
 
+func TestPrepareCLIConfigDangerouslySkipPermissionsOverridesConfig(t *testing.T) {
+	dataDir := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, ".whale"), 0o755); err != nil {
+		t.Fatalf("mkdir .whale: %v", err)
+	}
+	if err := app.SaveConfigFile(filepath.Join(workspace, ".whale", app.ConfigFileName), app.FileConfig{
+		Permissions: app.FilePermissionsConfig{Mode: string(policy.ApprovalModeOnRequest)},
+	}); err != nil {
+		t.Fatalf("save project config: %v", err)
+	}
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	opts := &cliOptions{cfg: app.DefaultConfig()}
+	opts.cfg.DataDir = dataDir
+	root := newRootCmd(opts)
+	if err := root.PersistentFlags().Set("dangerously-skip-permissions", "true"); err != nil {
+		t.Fatalf("set dangerously-skip-permissions: %v", err)
+	}
+	if err := prepareCLIConfig(root, opts); err != nil {
+		t.Fatalf("prepareCLIConfig: %v", err)
+	}
+	if opts.cfg.ApprovalMode != string(policy.ApprovalModeNever) {
+		t.Fatalf("approval mode: want never, got %s", opts.cfg.ApprovalMode)
+	}
+
+	loaded, _, err := app.LoadConfigFile(filepath.Join(workspace, ".whale", app.ConfigFileName))
+	if err != nil {
+		t.Fatalf("LoadConfigFile: %v", err)
+	}
+	if loaded.Permissions.Mode != string(policy.ApprovalModeOnRequest) {
+		t.Fatalf("project config should remain on-request, got %q", loaded.Permissions.Mode)
+	}
+}
+
+func TestPrepareCLIConfigDangerouslySkipPermissionsAppliesToSubcommands(t *testing.T) {
+	workspace := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	opts := &cliOptions{cfg: app.DefaultConfig()}
+	root := newRootCmd(opts)
+	if err := root.PersistentFlags().Set("dangerously-skip-permissions", "true"); err != nil {
+		t.Fatalf("set dangerously-skip-permissions: %v", err)
+	}
+	execCmd, _, err := root.Find([]string{"exec"})
+	if err != nil {
+		t.Fatalf("find exec: %v", err)
+	}
+	if err := prepareCLIConfig(execCmd, opts); err != nil {
+		t.Fatalf("prepareCLIConfig: %v", err)
+	}
+	if opts.cfg.ApprovalMode != string(policy.ApprovalModeNever) {
+		t.Fatalf("approval mode: want never, got %s", opts.cfg.ApprovalMode)
+	}
+}
+
 func TestPrepareCLIConfigRejectsUnsupportedEffortAlias(t *testing.T) {
 	workspace := t.TempDir()
 	oldwd, err := os.Getwd()
@@ -557,7 +629,7 @@ func TestRootHelpOnlyShowsPublicRootFlags(t *testing.T) {
 			t.Fatalf("removed flag should not appear in help: %s\n%s", removed, help)
 		}
 	}
-	for _, expected := range []string{"--model", "--thinking", "--effort", "--version"} {
+	for _, expected := range []string{"--model", "--thinking", "--effort", "--dangerously-skip-permissions", "--version"} {
 		if !helpHasFlag(help, expected) {
 			t.Fatalf("expected public flag %s in help, got:\n%s", expected, help)
 		}

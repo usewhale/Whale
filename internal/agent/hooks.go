@@ -114,6 +114,7 @@ type HookDecision string
 const (
 	HookDecisionPass    HookDecision = "pass"
 	HookDecisionBlock   HookDecision = "block"
+	HookDecisionHalt    HookDecision = "halt"
 	HookDecisionWarn    HookDecision = "warn"
 	HookDecisionTimeout HookDecision = "timeout"
 	HookDecisionError   HookDecision = "error"
@@ -121,18 +122,50 @@ const (
 
 type HookOutcome struct {
 	Hook       ResolvedHook
+	Name       string
+	Source     string
 	Decision   HookDecision
 	ExitCode   int
 	Stdout     string
 	Stderr     string
+	Message    string
 	DurationMS int64
 	Truncated  bool
+
+	AdditionalContext string
+	UpdatedInput      string
+	Metadata          map[string]any
 }
 
 type HookReport struct {
-	Event    HookEvent
-	Outcomes []HookOutcome
-	Blocked  bool
+	Event             HookEvent
+	Outcomes          []HookOutcome
+	Blocked           bool
+	Halted            bool
+	AdditionalContext string
+	UpdatedInput      string
+	Metadata          map[string]any
+}
+
+type HookResult struct {
+	Decision HookDecision
+	Message  string
+	Stdout   string
+	Stderr   string
+
+	AdditionalContext string
+	UpdatedInput      string
+	Metadata          map[string]any
+}
+
+type HookHandler struct {
+	Event       HookEvent
+	Match       string
+	Name        string
+	Source      string
+	Description string
+	TimeoutMS   int
+	Run         func(context.Context, HookPayload) HookResult
 }
 
 type HookSpawnInput struct {
@@ -155,6 +188,7 @@ type HookSpawner func(ctx context.Context, in HookSpawnInput) HookSpawnResult
 
 type HookRunner struct {
 	hooks     []ResolvedHook
+	handlers  []HookHandler
 	spawner   HookSpawner
 	workspace string
 	outputCap int
@@ -165,16 +199,33 @@ func NewHookRunner(hooks []ResolvedHook, workspace string) *HookRunner {
 	return &HookRunner{hooks: cp, workspace: workspace, spawner: defaultHookSpawner, outputCap: DefaultHookOutputCapBytes}
 }
 
+func (r *HookRunner) AddHandlers(handlers ...HookHandler) {
+	if r == nil {
+		return
+	}
+	for _, h := range handlers {
+		h.Event = HookEvent(strings.TrimSpace(string(h.Event)))
+		h.Name = strings.TrimSpace(h.Name)
+		h.Source = strings.TrimSpace(h.Source)
+		if h.Name == "" || h.Run == nil || h.Event == "" {
+			continue
+		}
+		if h.Source == "" {
+			h.Source = "plugin"
+		}
+		r.handlers = append(r.handlers, h)
+	}
+}
+
 func (r *HookRunner) Empty() bool {
-	return r == nil || len(r.hooks) == 0
+	return r == nil || (len(r.hooks) == 0 && len(r.handlers) == 0)
 }
 
 func (r *HookRunner) Run(ctx context.Context, payload HookPayload) HookReport {
-	out := HookReport{Event: payload.Event}
+	out := HookReport{Event: payload.Event, Metadata: map[string]any{}}
 	if r.Empty() {
 		return out
 	}
-	stdin := payloadToJSONLine(payload)
 	for _, h := range r.hooks {
 		if h.Event != payload.Event {
 			continue
@@ -185,16 +236,24 @@ func (r *HookRunner) Run(ctx context.Context, payload HookPayload) HookReport {
 		start := time.Now()
 		timeout := resolveTimeoutMS(h, payload.Event)
 		cwd := resolveCWD(r.workspace, h.CWD)
+		stdin := payloadToJSONLine(payload)
 		res := r.spawner(ctx, HookSpawnInput{Command: h.Command, CWD: cwd, Stdin: stdin, TimeoutMS: timeout})
-		decision := decideHookOutcome(payload.Event, res)
+		parsed := shellHookResult(payload.Event, res)
 		oc := HookOutcome{
 			Hook:       h,
-			Decision:   decision,
+			Name:       firstNonEmptyString(strings.TrimSpace(h.Description), strings.TrimSpace(h.Command)),
+			Source:     firstNonEmptyString(strings.TrimSpace(h.Source), "config"),
+			Decision:   parsed.Decision,
 			ExitCode:   res.ExitCode,
 			Stdout:     strings.TrimSpace(res.Stdout),
 			Stderr:     strings.TrimSpace(res.Stderr),
+			Message:    strings.TrimSpace(parsed.Message),
 			DurationMS: time.Since(start).Milliseconds(),
 			Truncated:  res.Truncated,
+
+			AdditionalContext: strings.TrimSpace(parsed.AdditionalContext),
+			UpdatedInput:      strings.TrimSpace(parsed.UpdatedInput),
+			Metadata:          parsed.Metadata,
 		}
 		if oc.Stderr == "" && res.SpawnErr != nil {
 			oc.Stderr = res.SpawnErr.Error()
@@ -202,13 +261,114 @@ func (r *HookRunner) Run(ctx context.Context, payload HookPayload) HookReport {
 		if oc.Stderr == "" && res.TimedOut {
 			oc.Stderr = fmt.Sprintf("hook timed out after %dms", timeout)
 		}
-		out.Outcomes = append(out.Outcomes, oc)
-		if decision == HookDecisionBlock {
-			out.Blocked = true
+		appendHookOutcome(&out, oc)
+		applyHookUpdatedInput(&payload, oc.UpdatedInput)
+		if out.Blocked || out.Halted {
 			break
 		}
 	}
+	if !out.Blocked && !out.Halted {
+		for _, h := range r.handlers {
+			if h.Event != payload.Event {
+				continue
+			}
+			if !matchesHookPattern(h.Event, h.Match, payload.ToolName) {
+				continue
+			}
+			start := time.Now()
+			timeout := h.TimeoutMS
+			if timeout <= 0 {
+				timeout = int(defaultHookTimeouts[payload.Event] / time.Millisecond)
+			}
+			runCtx := ctx
+			cancel := func() {}
+			if timeout > 0 {
+				runCtx, cancel = context.WithTimeout(ctx, time.Duration(timeout)*time.Millisecond)
+			}
+			res := runHookHandlerWithTimeout(runCtx, h, payload, timeout)
+			cancel()
+			oc := HookOutcome{
+				Name:              h.Name,
+				Source:            h.Source,
+				Decision:          normalizeHookDecision(payload.Event, res.Decision),
+				Stdout:            strings.TrimSpace(res.Stdout),
+				Stderr:            strings.TrimSpace(res.Stderr),
+				Message:           strings.TrimSpace(res.Message),
+				DurationMS:        time.Since(start).Milliseconds(),
+				AdditionalContext: strings.TrimSpace(res.AdditionalContext),
+				UpdatedInput:      strings.TrimSpace(res.UpdatedInput),
+				Metadata:          res.Metadata,
+			}
+			appendHookOutcome(&out, oc)
+			applyHookUpdatedInput(&payload, oc.UpdatedInput)
+			if out.Blocked || out.Halted {
+				break
+			}
+		}
+	}
 	return out
+}
+
+func appendHookOutcome(report *HookReport, oc HookOutcome) {
+	oc.Decision = normalizeHookDecision(report.Event, oc.Decision)
+	report.Outcomes = append(report.Outcomes, oc)
+	if strings.TrimSpace(oc.AdditionalContext) != "" {
+		report.AdditionalContext = joinNonEmpty(report.AdditionalContext, oc.AdditionalContext)
+	}
+	if strings.TrimSpace(oc.UpdatedInput) != "" {
+		report.UpdatedInput = strings.TrimSpace(oc.UpdatedInput)
+	}
+	if len(oc.Metadata) > 0 {
+		if report.Metadata == nil {
+			report.Metadata = map[string]any{}
+		}
+		for k, v := range oc.Metadata {
+			report.Metadata[k] = v
+		}
+	}
+	if oc.Decision == HookDecisionHalt {
+		report.Halted = true
+		report.Blocked = true
+	}
+	if oc.Decision == HookDecisionBlock || (isBlockingEvent(report.Event) && (oc.Decision == HookDecisionTimeout || oc.Decision == HookDecisionError)) {
+		report.Blocked = true
+	}
+}
+
+func runHookHandlerWithTimeout(ctx context.Context, h HookHandler, payload HookPayload, timeoutMS int) HookResult {
+	ch := make(chan HookResult, 1)
+	go func() {
+		ch <- h.Run(ctx, payload)
+	}()
+	select {
+	case res := <-ch:
+		return res
+	case <-ctx.Done():
+		if ctx.Err() == context.DeadlineExceeded {
+			return HookResult{Decision: HookDecisionTimeout, Message: fmt.Sprintf("hook timed out after %dms", timeoutMS)}
+		}
+		return HookResult{Decision: HookDecisionError, Message: ctx.Err().Error()}
+	}
+}
+
+func applyHookUpdatedInput(payload *HookPayload, updatedInput string) {
+	updatedInput = strings.TrimSpace(updatedInput)
+	if payload == nil || updatedInput == "" {
+		return
+	}
+	if payload.Event == HookEventUserPromptSubmit {
+		payload.Prompt = updatedInput
+		return
+	}
+	var toolArgs any
+	if err := json.Unmarshal([]byte(updatedInput), &toolArgs); err == nil {
+		payload.ToolArgs = toolArgs
+	}
+	if payload.ToolCall != nil {
+		cp := *payload.ToolCall
+		cp.Input = updatedInput
+		payload.ToolCall = &cp
+	}
 }
 
 func LoadProjectHooks(workspaceRoot string) ([]ResolvedHook, error) {
@@ -285,10 +445,14 @@ func ResolveHooks(st HookSettings, source string) []ResolvedHook {
 }
 
 func matchesHook(h ResolvedHook, toolName string) bool {
-	if h.Event != HookEventPreToolUse && h.Event != HookEventPostToolUse {
+	return matchesHookPattern(h.Event, h.Match, toolName)
+}
+
+func matchesHookPattern(event HookEvent, match, toolName string) bool {
+	if event != HookEventPreToolUse && event != HookEventPostToolUse {
 		return true
 	}
-	m := strings.TrimSpace(h.Match)
+	m := strings.TrimSpace(match)
 	if m == "" || m == "*" {
 		return true
 	}
@@ -297,6 +461,137 @@ func matchesHook(h ResolvedHook, toolName string) bool {
 		return false
 	}
 	return re.MatchString(toolName)
+}
+
+func shellHookResult(event HookEvent, res HookSpawnResult) HookResult {
+	result := HookResult{
+		Decision: decideHookOutcome(event, res),
+		Stdout:   strings.TrimSpace(res.Stdout),
+		Stderr:   strings.TrimSpace(res.Stderr),
+	}
+	if parsed, ok := parseHookJSONOutput(event, res.Stdout); ok {
+		if parsed.Decision != "" && res.SpawnErr == nil && !res.TimedOut {
+			result.Decision = parsed.Decision
+		}
+		result.Message = parsed.Message
+		result.AdditionalContext = parsed.AdditionalContext
+		result.UpdatedInput = parsed.UpdatedInput
+		result.Metadata = parsed.Metadata
+	}
+	result.Decision = normalizeHookDecision(event, result.Decision)
+	return result
+}
+
+func parseHookJSONOutput(event HookEvent, stdout string) (HookResult, bool) {
+	raw := strings.TrimSpace(stdout)
+	if raw == "" || !strings.HasPrefix(raw, "{") {
+		return HookResult{}, false
+	}
+	var body map[string]any
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		return HookResult{}, false
+	}
+	out := HookResult{
+		Message:           firstNonEmptyString(stringField(body, "reason"), stringField(body, "message"), stringField(body, "systemMessage")),
+		AdditionalContext: firstNonEmptyString(stringField(body, "additional_context"), stringField(body, "additionalContext"), stringField(body, "context")),
+		Metadata:          mapField(body, "metadata"),
+	}
+	if decision, ok := hookDecisionField(event, body, "decision"); ok {
+		out.Decision = decision
+	}
+	if v, ok := body["updated_input"]; ok {
+		out.UpdatedInput = jsonValueString(v)
+	} else if v, ok := body["updatedInput"]; ok {
+		out.UpdatedInput = jsonValueString(v)
+	}
+	return out, true
+}
+
+func hookDecisionField(event HookEvent, body map[string]any, key string) (HookDecision, bool) {
+	raw, ok := body[key]
+	if !ok {
+		return "", false
+	}
+	value, ok := raw.(string)
+	if !ok {
+		return "", false
+	}
+	decision := parseHookDecision(event, value)
+	if decision == "" && strings.TrimSpace(value) != "" {
+		return "", false
+	}
+	return decision, true
+}
+
+func parseHookDecision(event HookEvent, raw string) HookDecision {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "pass", "none", "continue", "":
+		return HookDecisionPass
+	case "warn", "warning":
+		return HookDecisionWarn
+	case "block", "deny", "denied":
+		return HookDecisionBlock
+	case "halt", "stop":
+		return HookDecisionHalt
+	case "allow", "approve", "approved":
+		if isBlockingEvent(event) {
+			return HookDecisionPass
+		}
+		return HookDecisionPass
+	case "error":
+		return HookDecisionError
+	default:
+		return ""
+	}
+}
+
+func normalizeHookDecision(event HookEvent, decision HookDecision) HookDecision {
+	switch decision {
+	case HookDecisionPass, HookDecisionWarn, HookDecisionError, HookDecisionTimeout, HookDecisionHalt:
+		return decision
+	case HookDecisionBlock:
+		if isBlockingEvent(event) {
+			return HookDecisionBlock
+		}
+		return HookDecisionWarn
+	default:
+		return HookDecisionPass
+	}
+}
+
+func stringField(body map[string]any, key string) string {
+	v, _ := body[key].(string)
+	return strings.TrimSpace(v)
+}
+
+func mapField(body map[string]any, key string) map[string]any {
+	v, _ := body[key].(map[string]any)
+	return v
+}
+
+func jsonValueString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return strings.TrimSpace(t)
+	default:
+		b, err := json.Marshal(t)
+		if err != nil {
+			return ""
+		}
+		return string(b)
+	}
+}
+
+func joinNonEmpty(a, b string) string {
+	a = strings.TrimSpace(a)
+	b = strings.TrimSpace(b)
+	if a == "" {
+		return b
+	}
+	if b == "" {
+		return a
+	}
+	return a + "\n" + b
 }
 
 func resolveTimeoutMS(h ResolvedHook, event HookEvent) int {

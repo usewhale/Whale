@@ -9,6 +9,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/usewhale/whale/internal/app/service"
 	"github.com/usewhale/whale/internal/build"
 	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
@@ -135,6 +136,12 @@ func (m model) bottomPartsBeforeInput(mainWidth int) []string {
 	if m.mode == modePermissionsPicker {
 		bottomParts = append(bottomParts, m.renderPermissionsPicker())
 	}
+	if m.mode == modePermissionsProjectTrustConfirm {
+		bottomParts = append(bottomParts, m.renderPermissionsProjectTrustConfirm())
+	}
+	if m.mode == modePermissionsProjectClearConfirm {
+		bottomParts = append(bottomParts, m.renderPermissionsProjectClearConfirm())
+	}
 	if queued := m.renderQueuedPrompts(mainWidth); queued != "" {
 		bottomParts = append(bottomParts, queued)
 	}
@@ -147,10 +154,41 @@ func (m model) renderApprovalPrompt() string {
 	body := lipgloss.NewStyle()
 	hint := lipgloss.NewStyle().Foreground(tuitheme.Default.Muted)
 
-	approvalBody := body.Render(indentApprovalBody(approvalDisplayBody(m.approval.toolName, m.approval.reason)))
+	review := isFileDiffApproval(m.approval.toolName, m.approval.metadata)
+	memory := memoryApprovalKind(m.approval.metadata)
+	titleText := "Approval required"
+	if review {
+		titleText = "Approval required: file diff review"
+	} else if memory != "" {
+		titleText = "Approval required: " + memory
+	}
+	bodyParts := []string{}
+	if review {
+		bodyParts = append(bodyParts, "Review file changes before Whale applies them.")
+	} else if memory == "memory write" {
+		bodyParts = append(bodyParts, "Review memory before Whale saves it.")
+	} else if memory == "memory delete" {
+		bodyParts = append(bodyParts, "Review memory before Whale deletes it.")
+	}
+	if memory != "" {
+		if memoryPreview := renderApprovalMemoryMetadata(m.approval.metadata); memoryPreview != "" {
+			bodyParts = append(bodyParts, memoryPreview)
+		}
+	}
+	if detail := approvalDisplayBody(m.approval.toolName, m.approval.reason); detail != "" {
+		bodyParts = append(bodyParts, detail)
+	}
+	if scope := approvalSessionScope(m.approval.metadata); scope != "" {
+		bodyParts = append(bodyParts, "Allow for session = "+scope)
+	}
+	approvalBody := body.Render(indentApprovalBody(strings.Join(bodyParts, "\n")))
 	if diff := renderApprovalDiffMetadata(m.approval.metadata, 80); diff != "" {
 		if isReadableApprovalDiff(diff) {
-			approvalBody = diff
+			if approvalBody != "" {
+				approvalBody += "\n\n" + diff
+			} else {
+				approvalBody = diff
+			}
 		} else if approvalBody != "" {
 			approvalBody += "\n\n" + diff
 		} else {
@@ -166,7 +204,7 @@ func (m model) renderApprovalPrompt() string {
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
-		title.Render("Approval required")+"  "+tool.Render(approvalToolDisplayName(m.approval.toolName)),
+		title.Render(titleText)+"  "+tool.Render(approvalToolDisplayName(m.approval.toolName)),
 		"",
 		approvalBody,
 		"",
@@ -174,6 +212,33 @@ func (m model) renderApprovalPrompt() string {
 		"",
 		hint.Render("Enter confirm · Esc deny · ←/→/tab switch"),
 	)
+}
+
+func isFileDiffApproval(toolName string, metadata map[string]any) bool {
+	if strings.TrimSpace(asString(metadata["approval_kind"])) == "file_diff_review" {
+		return true
+	}
+	switch toolName {
+	case "edit", "write", "apply_patch":
+		return true
+	default:
+		return false
+	}
+}
+
+func memoryApprovalKind(metadata map[string]any) string {
+	switch strings.TrimSpace(asString(metadata["approval_kind"])) {
+	case "memory_write":
+		return "memory write"
+	case "memory_delete":
+		return "memory delete"
+	default:
+		return ""
+	}
+}
+
+func approvalSessionScope(metadata map[string]any) string {
+	return strings.TrimSpace(asString(metadata["approval_session_scope"]))
 }
 
 func approvalToolDisplayName(toolName string) string {
@@ -193,6 +258,55 @@ func approvalDisplayBody(toolName, summary string) string {
 		}
 	}
 	return strings.TrimSpace(summary)
+}
+
+func renderApprovalMemoryMetadata(metadata map[string]any) string {
+	kind := strings.TrimSpace(asString(metadata["approval_kind"]))
+	scope := strings.TrimSpace(asString(metadata["memory_scope"]))
+	typ := strings.TrimSpace(asString(metadata["memory_type"]))
+	name := strings.TrimSpace(asString(metadata["memory_name"]))
+	description := strings.TrimSpace(asString(metadata["memory_description"]))
+	content := strings.TrimSpace(asString(metadata["memory_content_preview"]))
+	status := strings.TrimSpace(asString(metadata["memory_write_status"]))
+
+	var lines []string
+	switch kind {
+	case "memory_write":
+		label := "Save memory"
+		if status == "created" {
+			label = "Created memory"
+		} else if status == "updated" {
+			label = "Updated memory"
+		}
+		lines = append(lines, label+memoryScopeTypeSuffix(scope, typ))
+	case "memory_delete":
+		lines = append(lines, "Delete memory"+memoryScopeTypeSuffix(scope, typ))
+	default:
+		return ""
+	}
+	if name != "" {
+		lines = append(lines, "Name: "+name)
+	}
+	if description != "" {
+		lines = append(lines, "Description: "+description)
+	}
+	if content != "" {
+		lines = append(lines, "", "Content:", content)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func memoryScopeTypeSuffix(scope, typ string) string {
+	if scope == "" && typ == "" {
+		return ""
+	}
+	if scope == "" {
+		return ": " + typ
+	}
+	if typ == "" {
+		return ": " + scope
+	}
+	return ": " + scope + "/" + typ
 }
 
 func indentApprovalBody(body string) string {
@@ -320,6 +434,8 @@ func (m model) renderBusyStatusLine(width int) string {
 	label := "Working"
 	if m.stopping {
 		label = "Stopping"
+	} else if status := strings.TrimSpace(m.providerRetryStatus); status != "" && time.Now().Before(m.providerRetryUntil) {
+		label = status
 	}
 	line := fmt.Sprintf("%s (%s)", label, formatElapsedCompact(m.busyElapsed()))
 	if !m.stopping {
@@ -500,10 +616,20 @@ func (m model) renderModelPicker() string {
 func (m model) renderPermissionsPicker() string {
 	rows := []string{"Permissions", ""}
 	descriptions := map[string]string{
-		"Ask first":    "Ask before write, patch, or shell tools run.",
-		"Auto approve": "Never ask; auto-approve tool calls.",
+		service.ApprovalChoiceAskFirst:           "Prompt before write, patch, shell, or MCP tools run.",
+		service.ApprovalChoiceAutoApproveSession: "No approval prompts until Whale exits.",
+		service.ApprovalChoiceTrustProject:       "Auto-approve by default in this workspace.",
+		service.ApprovalChoiceClearProject:       "Remove permissions.mode from ./.whale/config.toml.",
 	}
+	projectSectionRendered := false
 	for i, item := range m.permissionsPicker.choices {
+		if !projectSectionRendered && isProjectPermissionChoice(item) {
+			rows = append(rows, "", "Project default")
+			projectSectionRendered = true
+		}
+		if i == 0 {
+			rows = append(rows, "Session")
+		}
 		prefix := "  "
 		if i == m.permissionsPicker.index {
 			prefix = "> "
@@ -515,6 +641,49 @@ func (m model) renderPermissionsPicker() string {
 		}
 	}
 	rows = append(rows, "", "(up/down choose, enter confirm, esc cancel)")
+	return lipgloss.NewStyle().Foreground(tuitheme.Default.Info).Render(strings.Join(rows, "\n"))
+}
+
+func isProjectPermissionChoice(item string) bool {
+	return item == service.ApprovalChoiceTrustProject || item == service.ApprovalChoiceClearProject
+}
+
+func (m model) renderPermissionsProjectTrustConfirm() string {
+	return m.renderPermissionsProjectConfirm(
+		"Trust this project?",
+		[]string{
+			"Auto-approve write, patch, shell, and MCP tools by default in this workspace.",
+			"This affects future sessions in this workspace.",
+			"Config: ./.whale/config.toml",
+		},
+		"Trust this project",
+	)
+}
+
+func (m model) renderPermissionsProjectClearConfirm() string {
+	return m.renderPermissionsProjectConfirm(
+		"Clear project default?",
+		[]string{
+			"Remove permissions.mode from ./.whale/config.toml.",
+			"Future sessions will use the global/default approval setting.",
+		},
+		"Clear project default",
+	)
+}
+
+func (m model) renderPermissionsProjectConfirm(title string, bodyLines []string, confirmLabel string) string {
+	rows := []string{title, ""}
+	rows = append(rows, bodyLines...)
+	rows = append(rows, "")
+	choices := []string{confirmLabel, "Cancel"}
+	for i, item := range choices {
+		prefix := "  "
+		if i == m.permissionsProjectConfirm.index {
+			prefix = "> "
+		}
+		rows = append(rows, prefix+item)
+	}
+	rows = append(rows, "", "(up/down choose, enter confirm, esc back)")
 	return lipgloss.NewStyle().Foreground(tuitheme.Default.Info).Render(strings.Join(rows, "\n"))
 }
 

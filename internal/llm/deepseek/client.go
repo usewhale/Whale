@@ -16,6 +16,7 @@ import (
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/defaults"
 	"github.com/usewhale/whale/internal/llm"
+	llmretry "github.com/usewhale/whale/internal/llm/retry"
 )
 
 const defaultBaseURL = "https://api.deepseek.com"
@@ -28,6 +29,8 @@ type Client struct {
 	reasoningEffort string
 	thinkingEnabled bool
 	maxTokens       int
+	retryPolicy     llmretry.Policy
+	retrySleeper    llmretry.Sleeper
 }
 
 type Option func(*Client)
@@ -60,6 +63,18 @@ func WithMaxTokens(v int) Option {
 	return func(c *Client) { c.maxTokens = v }
 }
 
+func WithRetryPolicy(policy llmretry.Policy) Option {
+	return func(c *Client) { c.retryPolicy = llmretry.NormalizePolicy(policy) }
+}
+
+func withRetrySleeper(s llmretry.Sleeper) Option {
+	return func(c *Client) {
+		if s != nil {
+			c.retrySleeper = s
+		}
+	}
+}
+
 func New(opts ...Option) (*Client, error) {
 	c := &Client{
 		baseURL: strings.TrimRight(envOr("DEEPSEEK_BASE_URL", defaultBaseURL), "/"),
@@ -69,6 +84,8 @@ func New(opts ...Option) (*Client, error) {
 		model:           defaults.DefaultModel,
 		reasoningEffort: defaults.DefaultReasoningEffort,
 		thinkingEnabled: defaults.DefaultThinkingEnabled,
+		retryPolicy:     llmretry.DefaultPolicy(),
+		retrySleeper:    llmretry.Sleep,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -81,6 +98,10 @@ func New(opts ...Option) (*Client, error) {
 	}
 	if c.baseURL == "" {
 		c.baseURL = defaultBaseURL
+	}
+	c.retryPolicy = llmretry.NormalizePolicy(c.retryPolicy)
+	if c.retrySleeper == nil {
+		c.retrySleeper = llmretry.Sleep
 	}
 	return c, nil
 }
@@ -131,9 +152,51 @@ func (c *Client) stream(ctx context.Context, history []core.Message, tools []cor
 		return fmt.Errorf("marshal payload: %w", err)
 	}
 
+	resp, err := c.doStreamRequest(ctx, body, out)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	return parseSSE(resp.Body, c.model, estimateReasoningReplayTokens(msgs), out)
+}
+
+func (c *Client) doStreamRequest(ctx context.Context, body []byte, out chan<- llm.ProviderEvent) (*http.Response, error) {
+	policy := llmretry.NormalizePolicy(c.retryPolicy)
+	for attempt := 1; attempt <= policy.MaxAttempts; attempt++ {
+		resp, err := c.sendStreamRequest(ctx, body)
+		if err == nil {
+			return resp, nil
+		}
+		var buildErr *requestBuildError
+		if errors.As(err, &buildErr) {
+			return nil, err
+		}
+		if !llmretry.ShouldRetry(policy, err) || attempt >= policy.MaxAttempts {
+			return nil, deepSeekRequestError(err)
+		}
+		delay := llmretry.Backoff(policy, attempt, err)
+		out <- llm.ProviderEvent{
+			Type: llm.EventRetryScheduled,
+			Retry: &llmretry.Info{
+				Attempt:     attempt,
+				MaxAttempts: policy.MaxAttempts,
+				Delay:       delay,
+				StatusCode:  retryStatusCode(err),
+				Reason:      llmretry.Reason(err),
+			},
+		}
+		if sleepErr := c.retrySleeper(ctx, delay); sleepErr != nil {
+			return nil, sleepErr
+		}
+	}
+	return nil, errors.New("request failed")
+}
+
+func (c *Client) sendStreamRequest(ctx context.Context, body []byte) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("new request: %w", err)
+		return nil, &requestBuildError{err: fmt.Errorf("new request: %w", err)}
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
 	req.Header.Set("Content-Type", "application/json")
@@ -141,16 +204,46 @@ func (c *Client) stream(ctx context.Context, history []core.Message, tools []cor
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
+		return nil, fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
-
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-		return fmt.Errorf("deepseek %d: %s", resp.StatusCode, string(b))
+		_ = resp.Body.Close()
+		return nil, &llmretry.HTTPError{
+			StatusCode: resp.StatusCode,
+			Header:     resp.Header.Clone(),
+			Body:       string(b),
+		}
 	}
+	return resp, nil
+}
 
-	return parseSSE(resp.Body, c.model, estimateReasoningReplayTokens(msgs), out)
+type requestBuildError struct {
+	err error
+}
+
+func (e *requestBuildError) Error() string {
+	return e.err.Error()
+}
+
+func (e *requestBuildError) Unwrap() error {
+	return e.err
+}
+
+func deepSeekRequestError(err error) error {
+	var httpErr *llmretry.HTTPError
+	if errors.As(err, &httpErr) {
+		return fmt.Errorf("deepseek %d: %s", httpErr.StatusCode, strings.TrimSpace(httpErr.Body))
+	}
+	return err
+}
+
+func retryStatusCode(err error) int {
+	var httpErr *llmretry.HTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.StatusCode
+	}
+	return 0
 }
 
 func parseSSE(r io.Reader, model string, replayTokens int, out chan<- llm.ProviderEvent) error {

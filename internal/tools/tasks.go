@@ -194,8 +194,8 @@ func runShellBackground(ctx context.Context, dir, command string, task *shellTas
 	defer task.mu.Unlock()
 	now := time.Now()
 	task.finishedAt = &now
-	task.stdout = stdoutBuf.String()
-	task.stderr = stderrBuf.String()
+	task.stdout = decodeShellOutput(stdoutBuf.Bytes())
+	task.stderr = decodeShellOutput(stderrBuf.Bytes())
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			task.status = "timeout"

@@ -9,12 +9,15 @@ require (
 	github.com/charmbracelet/glamour v0.9.1
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/ansi v0.11.6
+	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f
 	github.com/mattn/go-runewidth v0.0.19
 	github.com/modelcontextprotocol/go-sdk v1.5.0
 	github.com/muesli/termenv v0.16.0
 	github.com/rivo/uniseg v0.4.7
 	github.com/spf13/cobra v1.10.1
 	github.com/yuin/goldmark v1.7.8
+	golang.org/x/sys v0.41.0
+	golang.org/x/text v0.23.0
 )
 
 require (
@@ -29,7 +32,6 @@ require (
 	github.com/clipperhouse/stringish v0.1.1 // indirect
 	github.com/clipperhouse/uax29/v2 v2.5.0 // indirect
 	github.com/dlclark/regexp2 v1.11.0 // indirect
-	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
@@ -48,6 +50,4 @@ require (
 	github.com/yuin/goldmark-emoji v1.0.5 // indirect
 	golang.org/x/net v0.33.0 // indirect
 	golang.org/x/oauth2 v0.35.0 // indirect
-	golang.org/x/sys v0.41.0 // indirect
-	golang.org/x/text v0.23.0 // indirect
 )
