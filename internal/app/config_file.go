@@ -29,6 +29,7 @@ type FileConfig struct {
 	Context     FileContextConfig             `toml:"context,omitempty"`
 	ProjectDoc  FileProjectDocConfig          `toml:"project_doc,omitempty"`
 	Skills      FileSkillsConfig              `toml:"skills,omitempty"`
+	Plugins     FilePluginsConfig             `toml:"plugins,omitempty"`
 	Hooks       map[string][]agent.HookConfig `toml:"hooks,omitempty"`
 }
 
@@ -67,6 +68,10 @@ type FileProjectDocConfig struct {
 }
 
 type FileSkillsConfig struct {
+	Disabled []string `toml:"disabled,omitempty"`
+}
+
+type FilePluginsConfig struct {
 	Disabled []string `toml:"disabled,omitempty"`
 }
 
@@ -212,6 +217,9 @@ func ApplyFileConfig(cfg *Config, file FileConfig) error {
 	if len(file.Skills.Disabled) > 0 {
 		cfg.SkillsDisabled = trimList(file.Skills.Disabled)
 	}
+	if len(file.Plugins.Disabled) > 0 {
+		cfg.PluginsDisabled = trimList(file.Plugins.Disabled)
+	}
 	return nil
 }
 
@@ -285,6 +293,9 @@ func overlayExplicitConfig(dst *Config, src Config) {
 	}
 	if len(src.SkillsDisabled) > 0 {
 		dst.SkillsDisabled = trimList(src.SkillsDisabled)
+	}
+	if len(src.PluginsDisabled) > 0 {
+		dst.PluginsDisabled = trimList(src.PluginsDisabled)
 	}
 }
 

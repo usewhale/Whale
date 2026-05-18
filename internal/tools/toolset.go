@@ -21,6 +21,7 @@ type Toolset struct {
 	bingSearchURL string
 	tasks         *shellTaskRegistry
 	skillDisabled []string
+	extraSkills   []*skills.Skill
 }
 
 func NewToolset(root string) (*Toolset, error) {
@@ -42,6 +43,10 @@ func NewToolset(root string) (*Toolset, error) {
 
 func (b *Toolset) SetSkillDisabled(names []string) {
 	b.skillDisabled = append([]string(nil), names...)
+}
+
+func (b *Toolset) SetExtraSkills(extra []*skills.Skill) {
+	b.extraSkills = append([]*skills.Skill(nil), extra...)
 }
 
 func marshalToolResult(call core.ToolCall, data any) (core.ToolResult, error) {

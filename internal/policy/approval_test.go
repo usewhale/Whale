@@ -2,6 +2,7 @@ package policy
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/usewhale/whale/internal/core"
@@ -44,5 +45,26 @@ func TestApprovalKeysKeepShellCommandScope(t *testing.T) {
 	}
 	if got := ApprovalSessionScope(call); got != "this shell command" {
 		t.Fatalf("session scope = %q", got)
+	}
+}
+
+func TestApprovalKeysUseMemoryPayloadForWrites(t *testing.T) {
+	remember := core.ToolCall{ID: "memory-1", Name: "remember", Input: `{"scope":"global","type":"user","name":"style","description":"old","content":"old"}`}
+	rememberUpdate := core.ToolCall{ID: "memory-2", Name: "remember", Input: `{"scope":"global","type":"user","name":"style","description":"new","content":"new"}`}
+	forget := core.ToolCall{ID: "memory-3", Name: "forget", Input: `{"scope":"global","name":"style"}`}
+
+	rememberKeys := ApprovalKeys(remember)
+	rememberUpdateKeys := ApprovalKeys(rememberUpdate)
+	if len(rememberKeys) != 1 || !strings.HasPrefix(rememberKeys[0], "memory:remember:global:style:payload:") {
+		t.Fatalf("remember keys = %v", rememberKeys)
+	}
+	if len(rememberUpdateKeys) != 1 || !strings.HasPrefix(rememberUpdateKeys[0], "memory:remember:global:style:payload:") {
+		t.Fatalf("remember update keys = %v", rememberUpdateKeys)
+	}
+	if reflect.DeepEqual(rememberKeys, rememberUpdateKeys) {
+		t.Fatalf("changed memory payload should not reuse approval key: %v", rememberKeys)
+	}
+	if got, want := ApprovalKeys(forget), []string{"memory:forget:global:style"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("forget keys = %v, want %v", got, want)
 	}
 }

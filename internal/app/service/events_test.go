@@ -14,6 +14,7 @@ import (
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/session"
+	"github.com/usewhale/whale/internal/skills"
 )
 
 func TestCriticalEventsDeliverAfterDeltaBackpressure(t *testing.T) {
@@ -301,30 +302,40 @@ func TestSkillsCommandOpensMenuAndToggleUpdatesSuggestions(t *testing.T) {
 	}
 	svc.Dispatch(Intent{Kind: IntentRequestSkillsManage})
 	ev := waitForServiceEvent(t, svc, EventSkillsManager)
-	if len(ev.Skills) != 1 || ev.Skills[0].Name != "test-skill" {
+	if !hasServiceSkill(ev.Skills, "test-skill", "ready") {
 		t.Fatalf("unexpected skills manager event: %+v", ev.Skills)
 	}
-	if len(svc.SkillSuggestions()) != 1 {
+	if !hasServiceSkill(svc.SkillSuggestions(), "test-skill", "ready") {
 		t.Fatalf("expected skill suggestion before disabling, got %+v", svc.SkillSuggestions())
 	}
 
 	svc.Dispatch(Intent{Kind: IntentSetSkillEnabled, SkillName: "test-skill", SkillEnabled: false})
 	ev = waitForServiceEvent(t, svc, EventSkillsManager)
-	if len(ev.Skills) != 1 || ev.Skills[0].Name != "test-skill" || ev.Skills[0].Status != "disabled" {
+	if !hasServiceSkill(ev.Skills, "test-skill", "disabled") {
 		t.Fatalf("expected disabled skill manager event, got %+v", ev.Skills)
 	}
-	if got := svc.SkillSuggestions(); len(got) != 0 {
+	if got := svc.SkillSuggestions(); hasServiceSkill(got, "test-skill", "") {
 		t.Fatalf("expected disabled skill to disappear from suggestions, got %+v", got)
 	}
 
 	svc.Dispatch(Intent{Kind: IntentSetSkillEnabled, SkillName: "test-skill", SkillEnabled: true})
 	ev = waitForServiceEvent(t, svc, EventSkillsManager)
-	if len(ev.Skills) != 1 || ev.Skills[0].Name != "test-skill" || ev.Skills[0].Status != "ready" {
+	if !hasServiceSkill(ev.Skills, "test-skill", "ready") {
 		t.Fatalf("expected ready skill manager event, got %+v", ev.Skills)
 	}
-	if got := svc.SkillSuggestions(); len(got) != 1 || got[0].Name != "test-skill" {
+	if got := svc.SkillSuggestions(); !hasServiceSkill(got, "test-skill", "ready") {
 		t.Fatalf("expected enabled skill suggestion, got %+v", got)
 	}
+}
+
+func hasServiceSkill(all []skills.SkillView, name, status string) bool {
+	for _, skill := range all {
+		if skill.Name != name {
+			continue
+		}
+		return status == "" || string(skill.Status) == status
+	}
+	return false
 }
 
 func TestLocalSubmitDoesNotEmitTurnDone(t *testing.T) {
@@ -663,6 +674,48 @@ func TestSkillMentionEmitsLoadedEventNotInfo(t *testing.T) {
 			}
 		case <-deadline:
 			t.Fatal("timed out waiting for skill loaded event")
+		}
+	}
+}
+
+func TestSilentPromptRewriteAppliesBeforeSkillDetection(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("DEEPSEEK_API_KEY", "")
+	work := t.TempDir()
+	t.Chdir(work)
+	writeServiceSkill(t, filepath.Join(work, ".whale", "skills", "test-skill"), "test-skill", "Workspace skill.")
+	if err := os.WriteFile(filepath.Join(work, ".whale", "config.toml"), []byte(`[[hooks.UserPromptSubmit]]
+command = "printf '{\"updated_input\":\"$test-skill review this\"}'"
+`), 0o600); err != nil {
+		t.Fatalf("write hook config: %v", err)
+	}
+
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+
+	svc.Dispatch(Intent{Kind: IntentSubmit, Input: "plain prompt"})
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case ev := <-svc.Events():
+			if ev.Kind == EventInfo && strings.Contains(ev.Text, "updated_input") {
+				t.Fatalf("silent prompt rewrite hook should not emit info: %+v", ev)
+			}
+			if ev.Kind == EventSkillLoaded {
+				if ev.Text != "loaded skill: test-skill" {
+					t.Fatalf("unexpected skill loaded text: %q", ev.Text)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for skill loaded event from rewritten prompt")
 		}
 	}
 }

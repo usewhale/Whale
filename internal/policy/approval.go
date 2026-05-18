@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -157,8 +158,36 @@ func ApprovalKeys(call core.ToolCall) []string {
 		if v, _ := body["command"].(string); strings.TrimSpace(v) != "" {
 			return []string{base + "|cmd:" + strings.TrimSpace(v)}
 		}
+	case "remember":
+		scope, _ := body["scope"].(string)
+		name, _ := body["name"].(string)
+		scope = strings.ToLower(strings.TrimSpace(scope))
+		name = strings.TrimSpace(name)
+		if scope != "" && name != "" {
+			return []string{fmt.Sprintf("memory:%s:%s:%s:%s", base, scope, name, memoryWritePayloadHash(body))}
+		}
+	case "forget":
+		scope, _ := body["scope"].(string)
+		name, _ := body["name"].(string)
+		scope = strings.ToLower(strings.TrimSpace(scope))
+		name = strings.TrimSpace(name)
+		if scope != "" && name != "" {
+			return []string{fmt.Sprintf("memory:%s:%s:%s", base, scope, name)}
+		}
 	}
 	return []string{base + "|" + strings.TrimSpace(call.Input)}
+}
+
+func memoryWritePayloadHash(body map[string]any) string {
+	payload := map[string]string{}
+	for _, key := range []string{"type", "description", "content"} {
+		if v, ok := body[key].(string); ok {
+			payload[key] = strings.TrimSpace(v)
+		}
+	}
+	b, _ := json.Marshal(payload)
+	sum := sha256.Sum256(b)
+	return fmt.Sprintf("payload:%x", sum[:8])
 }
 
 func ApprovalRequestKeys(req ApprovalRequest) []string {
@@ -231,9 +260,15 @@ func ApprovalMetadata(call core.ToolCall, keys []string, metadata map[string]any
 	for k, v := range metadata {
 		out[k] = v
 	}
-	out["approval_kind"] = ApprovalKind(call)
-	out["approval_scope"] = ApprovalScope(call)
-	out["approval_session_scope"] = ApprovalSessionScope(call)
+	if strings.TrimSpace(stringValue(out["approval_kind"])) == "" {
+		out["approval_kind"] = ApprovalKind(call)
+	}
+	if strings.TrimSpace(stringValue(out["approval_scope"])) == "" {
+		out["approval_scope"] = ApprovalScope(call)
+	}
+	if strings.TrimSpace(stringValue(out["approval_session_scope"])) == "" {
+		out["approval_session_scope"] = ApprovalSessionScope(call)
+	}
 	if compact := compactApprovalKeys(keys); len(compact) > 0 {
 		out["approval_keys"] = compact
 	}
@@ -241,6 +276,11 @@ func ApprovalMetadata(call core.ToolCall, keys []string, metadata map[string]any
 		out["approval_files"] = files
 	}
 	return out
+}
+
+func stringValue(v any) string {
+	s, _ := v.(string)
+	return s
 }
 
 func ApprovalSummary(call core.ToolCall) string {

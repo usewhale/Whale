@@ -58,8 +58,36 @@ func ClassifySubmit(line, help string, localCommands ...string) SubmitClassifica
 
 func classifySlashFields(head string, fields []string, line string) SubmitClass {
 	switch head {
-	case "/status", "/mcp":
+	case "/status", "/mcp", "/memory", "/plugins", "/skills-improver", "/local-indexer":
 		if len(fields) == 1 {
+			return SubmitLocalReadOnly
+		}
+		if head == "/memory" {
+			if len(fields) == 2 && (fields[1] == "list" || fields[1] == "path") {
+				return SubmitLocalReadOnly
+			}
+			if len(fields) == 3 && fields[1] == "show" {
+				return SubmitLocalReadOnly
+			}
+			if len(fields) == 3 && fields[1] == "forget" {
+				return SubmitLocalMutating
+			}
+		}
+		if head == "/plugins" {
+			if len(fields) == 2 && (fields[1] == "status" || fields[1] == "doctor" || fields[1] == "reload") {
+				if fields[1] == "reload" {
+					return SubmitLocalMutating
+				}
+				return SubmitLocalReadOnly
+			}
+			if len(fields) == 3 && fields[1] == "status" {
+				return SubmitLocalReadOnly
+			}
+		}
+		if head == "/skills-improver" && len(fields) == 2 && (fields[1] == "status" || fields[1] == "proposals") {
+			return SubmitLocalReadOnly
+		}
+		if head == "/local-indexer" && len(fields) == 2 && (fields[1] == "status" || fields[1] == "rebuild") {
 			return SubmitLocalReadOnly
 		}
 		return SubmitUsageError

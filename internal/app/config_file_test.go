@@ -62,6 +62,33 @@ func TestConfigFileRoundTrip(t *testing.T) {
 	}
 }
 
+func TestConfigFileSupportsPlugins(t *testing.T) {
+	dir := t.TempDir()
+	path := GlobalConfigPath(dir)
+	cfg := FileConfig{
+		Plugins: FilePluginsConfig{Disabled: []string{"memory"}},
+	}
+	if err := SaveConfigFile(path, cfg); err != nil {
+		t.Fatalf("SaveConfigFile: %v", err)
+	}
+	loaded, ok, err := LoadConfigFile(path)
+	if err != nil {
+		t.Fatalf("LoadConfigFile: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected config file")
+	}
+	if len(loaded.Plugins.Disabled) != 1 || loaded.Plugins.Disabled[0] != "memory" {
+		t.Fatalf("plugins config not loaded: %+v", loaded.Plugins)
+	}
+
+	appCfg := DefaultConfig()
+	ApplyFileConfig(&appCfg, loaded)
+	if len(appCfg.PluginsDisabled) != 1 || appCfg.PluginsDisabled[0] != "memory" {
+		t.Fatalf("plugins config not applied: %+v", appCfg.PluginsDisabled)
+	}
+}
+
 func TestConfigNewAppLoadsGlobalConfig(t *testing.T) {
 	dir := t.TempDir()
 	enabled := false

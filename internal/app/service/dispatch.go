@@ -345,18 +345,23 @@ func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.
 		s.emit(Event{Kind: EventTurnDone})
 		return
 	}
+	blocked, out, updated := s.app.RunUserPromptSubmitHook(line)
+	line = updated
+	if out != "" {
+		s.emit(Event{Kind: EventInfo, Text: out})
+	}
+	if blocked {
+		if out == "" {
+			out = "blocked by UserPromptSubmit hook"
+		}
+		s.emit(Event{Kind: EventTurnDone, LastResponse: out})
+		return
+	}
 	skillMention, skillOut, skillSynthetic, err := s.app.BuildSkillMentionSyntheticPromptWithBinding(line, skillBinding)
 	if err != nil {
 		s.emit(Event{Kind: EventError, Text: err.Error()})
 		s.emit(Event{Kind: EventTurnDone})
 		return
-	}
-	if blocked, out := s.app.RunUserPromptSubmitHook(line); out != "" {
-		s.emit(Event{Kind: EventInfo, Text: out})
-		if blocked {
-			s.emit(Event{Kind: EventTurnDone, LastResponse: out})
-			return
-		}
 	}
 	if skillMention {
 		if skillOut != "" {

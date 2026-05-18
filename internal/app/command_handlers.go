@@ -94,8 +94,26 @@ func (a *App) HandleLocalCommand(line string) (handled bool, output string, err 
 	if trimmed == "/mcp" {
 		return true, a.buildMCPStatus(), nil
 	}
+	if trimmed == "/plugins" || strings.HasPrefix(trimmed, "/plugins ") {
+		out, err := a.handlePluginsCommand(trimmed)
+		return true, out, err
+	}
 	if trimmed == "/stats" {
 		return true, a.buildStats(), nil
+	}
+	if a.pluginManager != nil {
+		res, handled, err := a.pluginManager.HandleCommand(a.ctx, trimmed)
+		if handled || err != nil {
+			if res.Mutated {
+				a.a = nil
+			}
+			return handled, res.Text, err
+		}
+		if pluginID := pluginCommandID(trimmed); pluginID != "" {
+			if st, ok := a.pluginManager.Status(pluginID); ok && !st.Enabled {
+				return true, pluginID + " plugin is disabled", nil
+			}
+		}
 	}
 	if strings.HasPrefix(trimmed, "/stats ") {
 		fields := strings.Fields(trimmed)
@@ -127,4 +145,21 @@ func (a *App) HandleLocalCommand(line string) (handled bool, output string, err 
 		return true, fmt.Sprintf("compacted conversation: %d -> %d messages; ~%d -> ~%d tokens", info.MessagesBefore, info.MessagesAfter, info.BeforeEstimate, info.AfterEstimate), nil
 	}
 	return false, "", nil
+}
+
+func pluginCommandID(line string) string {
+	fields := strings.Fields(strings.TrimSpace(line))
+	if len(fields) == 0 {
+		return ""
+	}
+	switch fields[0] {
+	case "/memory":
+		return "memory"
+	case "/skills-improver":
+		return "skills-improver"
+	case "/local-indexer":
+		return "local-indexer"
+	default:
+		return ""
+	}
 }

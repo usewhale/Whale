@@ -112,11 +112,13 @@ func Run(cfg app.Config, start app.StartOptions) error {
 			fmt.Fprintf(os.Stderr, "error: unknown command\n")
 			continue
 		}
-		if hookOutBlocked, hookOut := coreApp.RunUserPromptSubmitHook(line); hookOut != "" {
+		hookOutBlocked, hookOut, updated := coreApp.RunUserPromptSubmitHook(line)
+		line = updated
+		if hookOut != "" {
 			fmt.Println(hookOut)
-			if hookOutBlocked {
-				continue
-			}
+		}
+		if hookOutBlocked {
+			continue
 		}
 
 		turnCtx, cancelTurn := context.WithCancel(ctx)

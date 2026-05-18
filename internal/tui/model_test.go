@@ -5784,6 +5784,74 @@ func TestApprovalViewShowsFileReviewSessionScope(t *testing.T) {
 	}
 }
 
+func TestApprovalViewShowsMemoryWriteMetadata(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 100
+	m.height = 30
+	m.mode = modeApproval
+	m.approval.toolName = "remember"
+	m.approval.reason = "remember: Writes long-term Whale memory."
+	m.approval.metadata = map[string]any{
+		"approval_kind":          "memory_write",
+		"approval_session_scope": "global memory: response-style",
+		"memory_scope":           "global",
+		"memory_type":            "user",
+		"memory_name":            "response-style",
+		"memory_description":     "prefers concise Chinese answers",
+		"memory_content_preview": "Answer in concise Chinese with repo evidence.",
+		"memory_write_status":    "created",
+	}
+
+	view := m.View()
+	for _, want := range []string{
+		"Approval required: memory write",
+		"Review memory before Whale saves it.",
+		"Created memory: global/user",
+		"Name: response-style",
+		"Description: prefers concise Chinese answers",
+		"Content:",
+		"Answer in concise Chinese with repo evidence.",
+		"Allow for session = global memory: response-style",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected approval view to contain %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestApprovalViewShowsMemoryDeleteMetadata(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 100
+	m.height = 30
+	m.mode = modeApproval
+	m.approval.toolName = "forget"
+	m.approval.reason = "forget: Deletes long-term Whale memory."
+	m.approval.metadata = map[string]any{
+		"approval_kind":          "memory_delete",
+		"approval_session_scope": "project memory: roadmap",
+		"memory_scope":           "project",
+		"memory_type":            "project",
+		"memory_name":            "roadmap",
+		"memory_description":     "plugin-first memory",
+		"memory_content_preview": "Memory is the first official plugin.",
+	}
+
+	view := m.View()
+	for _, want := range []string{
+		"Approval required: memory delete",
+		"Review memory before Whale deletes it.",
+		"Delete memory: project/project",
+		"Name: roadmap",
+		"Description: plugin-first memory",
+		"Memory is the first official plugin.",
+		"Allow for session = project memory: roadmap",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected approval view to contain %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestApprovalDiffMetadataRendersMultipleFiles(t *testing.T) {
 	metadata := map[string]any{
 		"kind": "file_diff",

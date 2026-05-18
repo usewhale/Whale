@@ -86,6 +86,9 @@ compact_threshold = 0.85
 [skills]
 disabled = ["legacy-review"]
 
+[plugins]
+disabled = []
+
 [project_doc]
 enabled = true
 max_bytes = 8000
@@ -126,6 +129,10 @@ If you started with Whale v0.1.9 or newer, you do not need this command.
   counts the initial request.
 - Skill enable/disable choices are stored in project config under
   `[skills].disabled`.
+- Official plugin enable/disable choices are stored under `[plugins].disabled`.
+  Built-in plugin IDs are `"memory"`, `"skills-improver"`, and
+  `"local-indexer"`. Use `/plugins status <id>` or `/plugins doctor` to inspect
+  their capabilities and diagnostics.
 
 ## Shell behavior
 
@@ -137,3 +144,8 @@ On macOS and Linux, `shell_run` runs commands through `/bin/sh`. On Windows,
 Whale first tries `pwsh`; if it is not available, it falls back to `ComSpec`
 and then `cmd.exe`. Write hooks and allow/deny shell prefixes to match the
 shell syntax used on the target platform.
+
+Configured shell hooks and official plugin hooks run through the same hook
+pipeline. Shell hooks can keep using exit codes, or return JSON on stdout with
+fields such as `decision`, `reason`, `additional_context`, `updated_input`, and
+`metadata`.

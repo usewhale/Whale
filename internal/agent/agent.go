@@ -13,6 +13,7 @@ import (
 	"github.com/usewhale/whale/internal/memory"
 	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/session"
+	"github.com/usewhale/whale/internal/skills"
 	"github.com/usewhale/whale/internal/store"
 	"github.com/usewhale/whale/internal/telemetry"
 )
@@ -240,6 +241,7 @@ type Agent struct {
 	projectMemoryFileOrder []string
 	workspaceRoot          string
 	disabledSkills         []string
+	extraSkills            []*skills.Skill
 	extraSystemBlocks      []string
 	sessionRuntime         *memory.SessionRuntime
 	sessionsDir            string
@@ -380,6 +382,23 @@ func WithHooks(hooks []ResolvedHook, workspaceRoot string) AgentOption {
 	}
 }
 
+func WithHookRunner(runner *HookRunner) AgentOption {
+	return func(a *Agent) {
+		if runner != nil {
+			a.hooks = runner
+		}
+	}
+}
+
+func WithHookHandlers(handlers ...HookHandler) AgentOption {
+	return func(a *Agent) {
+		if a.hooks == nil {
+			a.hooks = NewHookRunner(nil, "")
+		}
+		a.hooks.AddHandlers(handlers...)
+	}
+}
+
 func WithProjectMemory(enabled bool, maxChars int, fileOrder []string, workspaceRoot string) AgentOption {
 	return func(a *Agent) {
 		a.projectMemoryEnabled = enabled
@@ -396,6 +415,12 @@ func WithProjectMemory(enabled bool, maxChars int, fileOrder []string, workspace
 func WithDisabledSkills(names []string) AgentOption {
 	return func(a *Agent) {
 		a.disabledSkills = append([]string(nil), names...)
+	}
+}
+
+func WithExtraSkills(extra []*skills.Skill) AgentOption {
+	return func(a *Agent) {
+		a.extraSkills = append([]*skills.Skill(nil), extra...)
 	}
 }
 

@@ -201,6 +201,7 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 				}
 			}
 		}
+		var preHookContext string
 		if !a.hooks.Empty() {
 			var toolArgs any
 			_ = json.Unmarshal([]byte(call.Input), &toolArgs)
@@ -208,24 +209,31 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			a.emitHookReport(events, report)
 			if report.Blocked {
 				msg := "blocked by PreToolUse hook"
+				code := "hook_blocked"
+				if report.Halted {
+					code = "hook_halted"
+					msg = "halted by PreToolUse hook"
+				}
 				if len(report.Outcomes) > 0 {
 					last := report.Outcomes[len(report.Outcomes)-1]
-					if strings.TrimSpace(last.Stderr) != "" {
-						msg = strings.TrimSpace(last.Stderr)
-					} else if strings.TrimSpace(last.Stdout) != "" {
-						msg = strings.TrimSpace(last.Stdout)
+					if strings.TrimSpace(hookOutcomeMessage(last)) != "" {
+						msg = strings.TrimSpace(hookOutcomeMessage(last))
 					}
 				}
 				tr := core.ToolResult{
 					ToolCallID: call.ID,
 					Name:       call.Name,
-					Content:    fmt.Sprintf(`{"success":false,"error":%q,"code":"hook_blocked"}`, msg),
+					Content:    fmt.Sprintf(`{"success":false,"error":%q,"code":%q}`, msg, code),
 					IsError:    true,
 				}
 				results = append(results, tr)
 				events <- AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}
 				continue
 			}
+			if strings.TrimSpace(report.UpdatedInput) != "" {
+				call.Input = strings.TrimSpace(report.UpdatedInput)
+			}
+			preHookContext = strings.TrimSpace(report.AdditionalContext)
 		}
 		a.ensureApprovalCacheLoaded(ctx, sessionID)
 		spec, ok := a.tools.Spec(call.Name)
@@ -394,11 +402,17 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			if grantOnSuccess && primarySucceeded {
 				a.grantApprovals(ctx, sessionID, call, grantKey, grantKeys, events)
 			}
+			if preHookContext != "" {
+				finalRes.Content = addHookContextToToolContent(finalRes.Content, preHookContext)
+			}
 			if !a.hooks.Empty() {
 				var toolArgs any
 				_ = json.Unmarshal([]byte(call.Input), &toolArgs)
 				report := a.hooks.Run(ctx, NewPostToolUsePayload(sessionID, call, toolArgs, finalRes.Content))
 				a.emitHookReport(events, report)
+				if strings.TrimSpace(report.AdditionalContext) != "" {
+					finalRes.Content = addHookContextToToolContent(finalRes.Content, report.AdditionalContext)
+				}
 			}
 			results = append(results, finalRes)
 			r := finalRes
@@ -421,6 +435,41 @@ func (a *Agent) bestEffortUpdateAssistant(msg core.Message) {
 	// was canceled. This is diagnostic persistence; failure must not mask the
 	// original provider error.
 	_ = a.store.Update(context.Background(), msg)
+}
+
+func addHookContextToToolContent(content, hookContext string) string {
+	hookContext = strings.TrimSpace(hookContext)
+	if hookContext == "" {
+		return content
+	}
+	if env, ok := core.ParseToolEnvelope(content); ok {
+		if env.Metadata == nil {
+			env.Metadata = map[string]any{}
+		}
+		env.Metadata["hook_context"] = appendHookContextValue(env.Metadata["hook_context"], hookContext)
+		if encoded, err := core.MarshalToolEnvelope(env); err == nil {
+			return encoded
+		}
+	}
+	return strings.TrimSpace(content + "\n" + hookContext)
+}
+
+func appendHookContextValue(existing any, hookContext string) any {
+	switch v := existing.(type) {
+	case nil:
+		return []string{hookContext}
+	case string:
+		if strings.TrimSpace(v) == "" {
+			return []string{hookContext}
+		}
+		return []string{v, hookContext}
+	case []string:
+		return append(v, hookContext)
+	case []any:
+		return append(v, hookContext)
+	default:
+		return []any{v, hookContext}
+	}
 }
 
 func modeBlockedDetails(mode session.Mode) (code, message, summary string, data map[string]any) {

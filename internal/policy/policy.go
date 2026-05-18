@@ -81,6 +81,15 @@ func (p DefaultToolPolicy) Decide(spec core.ToolSpec, call core.ToolCall) Policy
 	if core.IsReadOnlyToolCall(spec, call) {
 		return PolicyDecision{Allow: true, Code: "read_only", Phase: "allowed"}
 	}
+	if hasCapability(spec, "mutates_state") {
+		return PolicyDecision{
+			Allow:            true,
+			RequiresApproval: true,
+			Reason:           "tool mutates persistent state",
+			Code:             "approval_required",
+			Phase:            "needs_approval",
+		}
+	}
 	switch spec.Name {
 	case "edit", "write", "apply_patch", "shell_run":
 	default:
@@ -102,6 +111,19 @@ func (p DefaultToolPolicy) Decide(spec core.ToolSpec, call core.ToolCall) Policy
 		Code:             "approval_required",
 		Phase:            "needs_approval",
 	}
+}
+
+func hasCapability(spec core.ToolSpec, capability string) bool {
+	want := strings.TrimSpace(strings.ToLower(capability))
+	if want == "" {
+		return false
+	}
+	for _, got := range spec.Capabilities {
+		if strings.TrimSpace(strings.ToLower(got)) == want {
+			return true
+		}
+	}
+	return false
 }
 
 func shellCommandFromInput(input string) string {
