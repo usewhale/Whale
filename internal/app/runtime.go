@@ -10,16 +10,20 @@ import (
 	"github.com/usewhale/whale/internal/session"
 )
 
-func (a *App) RunUserPromptSubmitHook(input string) (blocked bool, output string) {
+func (a *App) RunUserPromptSubmitHook(input string) (blocked bool, output string, updatedInput string) {
 	if a.hookRunner.Empty() {
-		return false, ""
+		return false, "", input
 	}
 	report := a.hookRunner.Run(a.ctx, agent.NewUserPromptSubmitPayload(a.sessionID, a.workspaceRoot, input))
 	lines := renderHookReport(report)
 	if report.Blocked {
 		lines = append(lines, "assistant> blocked by UserPromptSubmit hook")
 	}
-	return report.Blocked, strings.Join(lines, "\n")
+	updatedInput = input
+	if strings.TrimSpace(report.UpdatedInput) != "" {
+		updatedInput = strings.TrimSpace(report.UpdatedInput)
+	}
+	return report.Blocked, strings.Join(lines, "\n"), updatedInput
 }
 
 func (a *App) RunStopHook(lastAssistantText string, turn int) string {
@@ -32,6 +36,10 @@ func (a *App) RunStopHook(lastAssistantText string, turn int) string {
 
 func (a *App) ensureAgent() (*agent.Agent, error) {
 	if a.a == nil {
+		var pluginBlocks []string
+		if a.pluginManager != nil {
+			pluginBlocks = a.pluginManager.StartupBlocks(a.ctx)
+		}
 		provider, err := newDeepSeekProvider(providerOptions{
 			APIKey:          a.apiKey,
 			BaseURL:         a.cfg.APIBaseURL,
@@ -50,9 +58,11 @@ func (a *App) ensureAgent() (*agent.Agent, error) {
 			agent.WithUsageLogPath(filepath.Join(a.cfg.DataDir, "usage.jsonl")),
 			agent.WithAutoCompact(a.cfg.AutoCompact, a.cfg.AutoCompactThreshold, a.contextWindow),
 			agent.WithToolPolicy(policy.DefaultToolPolicy{Mode: a.approvalMode, AllowPrefixes: a.allowPrefixes, DenyPrefixes: a.denyPrefixes}),
-			agent.WithHooks(a.hooks, a.workspaceRoot),
+			agent.WithHookRunner(a.hookRunner),
+			agent.WithExtraSystemBlocks(pluginBlocks...),
 			agent.WithProjectMemory(a.cfg.MemoryEnabled, a.cfg.MemoryMaxChars, parseCSVList(a.cfg.MemoryFileOrder), a.workspaceRoot),
 			agent.WithDisabledSkills(a.cfg.SkillsDisabled),
+			agent.WithExtraSkills(a.pluginManager.Skills()),
 			agent.WithApprovalFunc(func(req policy.ApprovalRequest) policy.ApprovalDecision {
 				a.approvalMu.Lock()
 				defer a.approvalMu.Unlock()

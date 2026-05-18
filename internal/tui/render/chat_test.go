@@ -228,6 +228,17 @@ func TestMarkdown_InlineCodeKeepsLinksLiteral(t *testing.T) {
 	}
 }
 
+func TestMarkdown_InlineCodeKeepsWindowsPathLiteral(t *testing.T) {
+	input := "`C:\\Users\\goranka\\.whale\\plugins\\memory`"
+	got := Markdown(input, 100, false)
+	if !strings.Contains(got, `C:\Users\goranka\.whale\plugins\memory`) {
+		t.Fatalf("expected inline code Windows path preserved, got: %q", got)
+	}
+	if strings.Contains(got, `C:\Users\goranka.whale`) {
+		t.Fatalf("Windows path lost backslash before dot: %q", got)
+	}
+}
+
 func TestChatLines_ChineseParagraphAndList_NoCollapsedList(t *testing.T) {
 	entries := []UIMessage{
 		{

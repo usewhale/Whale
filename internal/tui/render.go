@@ -155,13 +155,25 @@ func (m model) renderApprovalPrompt() string {
 	hint := lipgloss.NewStyle().Foreground(tuitheme.Default.Muted)
 
 	review := isFileDiffApproval(m.approval.toolName, m.approval.metadata)
+	memory := memoryApprovalKind(m.approval.metadata)
 	titleText := "Approval required"
 	if review {
 		titleText = "Approval required: file diff review"
+	} else if memory != "" {
+		titleText = "Approval required: " + memory
 	}
 	bodyParts := []string{}
 	if review {
 		bodyParts = append(bodyParts, "Review file changes before Whale applies them.")
+	} else if memory == "memory write" {
+		bodyParts = append(bodyParts, "Review memory before Whale saves it.")
+	} else if memory == "memory delete" {
+		bodyParts = append(bodyParts, "Review memory before Whale deletes it.")
+	}
+	if memory != "" {
+		if memoryPreview := renderApprovalMemoryMetadata(m.approval.metadata); memoryPreview != "" {
+			bodyParts = append(bodyParts, memoryPreview)
+		}
 	}
 	if detail := approvalDisplayBody(m.approval.toolName, m.approval.reason); detail != "" {
 		bodyParts = append(bodyParts, detail)
@@ -214,6 +226,17 @@ func isFileDiffApproval(toolName string, metadata map[string]any) bool {
 	}
 }
 
+func memoryApprovalKind(metadata map[string]any) string {
+	switch strings.TrimSpace(asString(metadata["approval_kind"])) {
+	case "memory_write":
+		return "memory write"
+	case "memory_delete":
+		return "memory delete"
+	default:
+		return ""
+	}
+}
+
 func approvalSessionScope(metadata map[string]any) string {
 	return strings.TrimSpace(asString(metadata["approval_session_scope"]))
 }
@@ -235,6 +258,55 @@ func approvalDisplayBody(toolName, summary string) string {
 		}
 	}
 	return strings.TrimSpace(summary)
+}
+
+func renderApprovalMemoryMetadata(metadata map[string]any) string {
+	kind := strings.TrimSpace(asString(metadata["approval_kind"]))
+	scope := strings.TrimSpace(asString(metadata["memory_scope"]))
+	typ := strings.TrimSpace(asString(metadata["memory_type"]))
+	name := strings.TrimSpace(asString(metadata["memory_name"]))
+	description := strings.TrimSpace(asString(metadata["memory_description"]))
+	content := strings.TrimSpace(asString(metadata["memory_content_preview"]))
+	status := strings.TrimSpace(asString(metadata["memory_write_status"]))
+
+	var lines []string
+	switch kind {
+	case "memory_write":
+		label := "Save memory"
+		if status == "created" {
+			label = "Created memory"
+		} else if status == "updated" {
+			label = "Updated memory"
+		}
+		lines = append(lines, label+memoryScopeTypeSuffix(scope, typ))
+	case "memory_delete":
+		lines = append(lines, "Delete memory"+memoryScopeTypeSuffix(scope, typ))
+	default:
+		return ""
+	}
+	if name != "" {
+		lines = append(lines, "Name: "+name)
+	}
+	if description != "" {
+		lines = append(lines, "Description: "+description)
+	}
+	if content != "" {
+		lines = append(lines, "", "Content:", content)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func memoryScopeTypeSuffix(scope, typ string) string {
+	if scope == "" && typ == "" {
+		return ""
+	}
+	if scope == "" {
+		return ": " + typ
+	}
+	if typ == "" {
+		return ": " + scope
+	}
+	return ": " + scope + "/" + typ
 }
 
 func indentApprovalBody(body string) string {

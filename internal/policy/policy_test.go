@@ -86,3 +86,47 @@ func TestShellCommandFromInput(t *testing.T) {
 		t.Fatalf("shellCommandFromInput malformed = %q, want empty", got)
 	}
 }
+
+func TestDefaultToolPolicyRequiresApprovalForMutatingCapability(t *testing.T) {
+	decision := DefaultToolPolicy{Mode: ApprovalModeOnRequest}.Decide(
+		core.ToolSpec{Name: "remember", Capabilities: []string{"mutates_state"}},
+		core.ToolCall{Name: "remember", Input: `{}`},
+	)
+	if !decision.Allow || !decision.RequiresApproval || decision.Code != "approval_required" {
+		t.Fatalf("decision: %+v", decision)
+	}
+}
+
+func TestDefaultToolPolicyNeverAllowsMutatingCapability(t *testing.T) {
+	decision := DefaultToolPolicy{Mode: ApprovalModeNever}.Decide(
+		core.ToolSpec{Name: "remember", Capabilities: []string{"mutates_state"}},
+		core.ToolCall{Name: "remember", Input: `{}`},
+	)
+	if !decision.Allow || decision.RequiresApproval || decision.Code != "auto_allow" {
+		t.Fatalf("decision: %+v", decision)
+	}
+}
+
+func TestApprovalMetadataPreservesToolPreviewValues(t *testing.T) {
+	got := ApprovalMetadata(
+		core.ToolCall{Name: "remember", Input: `{"scope":"global","name":"style"}`},
+		[]string{"remember|x"},
+		map[string]any{
+			"approval_kind":          "memory_write",
+			"approval_session_scope": "global memory: style",
+			"memory_name":            "style",
+		},
+	)
+	if got["approval_kind"] != "memory_write" {
+		t.Fatalf("approval_kind overwritten: %+v", got)
+	}
+	if got["approval_session_scope"] != "global memory: style" {
+		t.Fatalf("approval_session_scope overwritten: %+v", got)
+	}
+	if got["approval_scope"] != "workspace" {
+		t.Fatalf("approval_scope default not set: %+v", got)
+	}
+	if got["memory_name"] != "style" {
+		t.Fatalf("preview metadata lost: %+v", got)
+	}
+}
