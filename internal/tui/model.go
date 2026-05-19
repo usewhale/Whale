@@ -418,15 +418,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) withMouseCaptureCmd(cmds ...tea.Cmd) tea.Cmd {
-	out := make([]tea.Cmd, 0, len(cmds)+1)
-	want := m.busy && m.mode == modeChat && m.page == pageChat
-	if want && !m.mouseCapture {
-		m.mouseCapture = true
-		out = append(out, tea.EnableMouseCellMotion)
-	} else if !want && m.mouseCapture {
-		m.mouseCapture = false
-		out = append(out, tea.DisableMouse)
-	}
+	out := make([]tea.Cmd, 0, len(cmds))
+	m.mouseCapture = false
 	for _, cmd := range cmds {
 		if cmd != nil {
 			out = append(out, cmd)

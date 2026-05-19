@@ -4700,9 +4700,6 @@ func TestBusyMouseWheelFreezesLiveOutputAndScrollsChat(t *testing.T) {
 	if m.followTail {
 		t.Fatal("expected wheel up to disable tail following")
 	}
-	if !m.mouseCapture {
-		t.Fatal("expected busy chat mode to enable mouse capture for wheel scrolling")
-	}
 	view := m.View()
 	if !strings.Contains(view, "live-11") {
 		t.Fatalf("expected small wheel scroll to keep current live output nearby:\n%s", view)
