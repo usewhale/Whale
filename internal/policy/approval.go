@@ -156,7 +156,7 @@ func ApprovalKeys(call core.ToolCall) []string {
 		}
 	case "shell_run":
 		if v, _ := body["command"].(string); strings.TrimSpace(v) != "" {
-			return []string{base + "|cmd:" + strings.TrimSpace(v)}
+			return []string{base + "|cmd:" + NormalizeShellApprovalCommand(v)}
 		}
 	case "remember":
 		scope, _ := body["scope"].(string)
@@ -253,6 +253,10 @@ func ApprovalSessionScope(call core.ToolCall) string {
 	default:
 		return "these files: " + formatApprovalFiles(files)
 	}
+}
+
+func NormalizeShellApprovalCommand(command string) string {
+	return strings.TrimSpace(command)
 }
 
 func ApprovalMetadata(call core.ToolCall, keys []string, metadata map[string]any) map[string]any {

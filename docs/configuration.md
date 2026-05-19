@@ -79,6 +79,9 @@ session_limit_usd = 1.0
 [mcp]
 config_path = "~/.whale/mcp.json"
 
+[ui]
+view_mode = "default" # "default" or "focus"
+
 [context]
 auto_compact = true
 compact_threshold = 0.85
@@ -127,18 +130,29 @@ If you started with Whale v0.1.9 or newer, you do not need this command.
   retries 429, 500, 502, 503, 504, and network errors with an internal 1s
   exponential backoff, 10% jitter, and `Retry-After` support. `max_attempts`
   counts the initial request.
+- `[ui].view_mode = "focus"` starts the TUI in focus view. `/focus` toggles this
+  global preference and hides thinking/tool detail while keeping prompts, tool
+  summaries, and final responses visible.
 - Skill enable/disable choices are stored in project config under
   `[skills].disabled`.
 - Official plugin enable/disable choices are stored under `[plugins].disabled`.
-  Built-in plugin IDs are `"memory"`, `"skills-improver"`, and
-  `"local-indexer"`. Use `/plugins status <id>` or `/plugins doctor` to inspect
-  their capabilities and diagnostics.
+  The current built-in plugin ID is `"memory"`. Use `/plugins` in the TUI to
+  inspect installed plugins and press Space to enable or disable them.
 
 ## Shell behavior
 
 Whale exposes shell execution through the `shell_run` tool. Commands run from
 the current workspace root by default. Use relative paths, or pass the `cwd`
 parameter to run from a workspace subdirectory.
+
+In the default `on-request` mode, Whale auto-runs common inspection commands
+such as `git status` and `rg`, plus common project verification commands such
+as `go test`, `go vet`, `make test`, `make test-tui`, and `make build`.
+Verification/build auto-allow is separate from strict read-only mode: Ask mode,
+Plan mode, and read-only subagents still block commands that can write caches or
+artifacts. Other shell commands ask for approval unless they match
+`[permissions].allow_shell_prefixes`. Prefix matching is token-boundary aware:
+`git status --short` matches `git status`, but `git statusfoo` does not.
 
 On macOS and Linux, `shell_run` runs commands through `/bin/sh`. On Windows,
 Whale first tries `pwsh`; if it is not available, it falls back to `ComSpec`

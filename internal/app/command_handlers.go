@@ -6,54 +6,78 @@ import (
 	"strings"
 	"time"
 
+	"github.com/usewhale/whale/internal/plugins"
 	"github.com/usewhale/whale/internal/session"
 )
 
+type CommandExecution struct {
+	Handled     bool
+	Text        string
+	Turn        *plugins.CommandTurn
+	ShouldExit  bool
+	ClearScreen bool
+	Mutated     bool
+}
+
 func (a *App) HandleSlash(line string) (handled bool, output string, synthetic string, shouldExit bool, clearScreen bool, err error) {
+	res, err := a.ExecuteSlash(line)
+	if res.Turn != nil {
+		synthetic = res.Turn.Input
+	}
+	return res.Handled, res.Text, synthetic, res.ShouldExit, res.ClearScreen, err
+}
+
+func (a *App) ExecuteSlash(line string) (CommandExecution, error) {
 	cmdResult, cmdErr := handleCommand(line, a.sessionID, time.Now())
 	if cmdErr != nil {
-		return true, "", "", false, false, cmdErr
+		return CommandExecution{Handled: true}, cmdErr
 	}
 	if !cmdResult.Handled {
-		return false, "", "", false, false, nil
+		return CommandExecution{}, nil
 	}
 	if cmdResult.ClearScreen {
-		return true, "▸ terminal cleared — context is intact — use /new to start fresh", "", false, true, nil
+		return CommandExecution{Handled: true, ClearScreen: true}, nil
 	}
 	if cmdResult.ShowStatus {
-		return true, a.buildStatus(), "", false, false, nil
+		return CommandExecution{Handled: true, Text: a.buildStatus()}, nil
 	}
 	if cmdResult.InitMemory {
 		line, err := a.initMemory()
 		if err != nil || line != "" {
-			return true, line, "", false, false, err
+			return CommandExecution{Handled: true, Text: line}, err
 		}
-		return true, "Initializing AGENTS.md from repository context...", buildInitSyntheticPrompt(), false, false, nil
+		return CommandExecution{Handled: true, Text: "Initializing AGENTS.md from repository context...", Turn: &plugins.CommandTurn{
+			Input:               buildInitSyntheticPrompt(),
+			Hidden:              true,
+			SkipUserPromptHooks: true,
+			SkipSkillInjection:  true,
+		}}, nil
 	}
 	if cmdResult.ShowSkills {
-		return true, a.buildSkillsList(), "", false, false, nil
+		return CommandExecution{Handled: true, Text: a.buildSkillsList()}, nil
 	}
+	out := CommandExecution{Handled: true, ShouldExit: cmdResult.ShouldExit}
 	if cmdResult.Mode != "" {
 		mode, err := session.ParseMode(cmdResult.Mode)
 		if err != nil {
-			return true, "", "", false, false, err
+			return out, err
 		}
 		msg, err := a.SetMode(mode)
 		if err != nil {
-			return true, "", "", false, false, err
+			return out, err
 		}
 		if cmdResult.Output == "" {
 			cmdResult.Output = msg
 		}
 	}
 	if cmdResult.Output != "" {
-		output = cmdResult.Output
+		out.Text = cmdResult.Output
 	}
 	if cmdResult.AskPrompt != "" {
-		synthetic = cmdResult.AskPrompt
+		out.Turn = &plugins.CommandTurn{Input: cmdResult.AskPrompt}
 	}
 	if cmdResult.PlanPrompt != "" {
-		synthetic = cmdResult.PlanPrompt
+		out.Turn = &plugins.CommandTurn{Input: cmdResult.PlanPrompt}
 	}
 	// For /new: capture old session info before switching.
 	oldID := a.sessionID
@@ -70,36 +94,50 @@ func (a *App) HandleSlash(line string) (handled bool, output string, synthetic s
 	if isNewCommand {
 		modeState, err := session.LoadModeState(a.sessionsDir, a.sessionID)
 		if err != nil {
-			return true, "", "", false, false, err
+			return out, err
 		}
 		a.currentMode = modeState.Mode
 		a.a = nil
-		output = fmt.Sprintf("new session: %s", cmdResult.SessionID)
+		out.Text = fmt.Sprintf("New session\n\nsession:  %s", cmdResult.SessionID)
 		if oldMsgCount > 0 {
-			output += fmt.Sprintf("\n▸ dropped %d message(s) from session %s", oldMsgCount, oldID)
+			out.Text += fmt.Sprintf("\ndropped:  %d message(s) from %s", oldMsgCount, oldID)
 		} else {
-			output += fmt.Sprintf("\n▸ previous session: %s", oldID)
+			out.Text += fmt.Sprintf("\nprevious: %s", oldID)
 		}
-		output += fmt.Sprintf("\n▸ to resume the previous session, run: whale resume %s", oldID)
-		output += fmt.Sprintf("\nmode: %s", a.currentMode)
+		out.Text += fmt.Sprintf("\nresume:   whale resume %s", oldID)
+		out.Text += fmt.Sprintf("\nmode:     %s", a.currentMode)
 		if _, err := session.PatchSessionMeta(a.sessionsDir, a.sessionID, session.SessionMeta{Workspace: a.workspaceRoot, Branch: a.branch}); err != nil {
-			return true, "", "", false, false, err
+			return out, err
 		}
 	}
-	return true, output, synthetic, cmdResult.ShouldExit, false, nil
+	return out, nil
 }
 
-func (a *App) HandleLocalCommand(line string) (handled bool, output string, err error) {
+func (a *App) HandleLocalCommand(line string) (handled bool, output string, synthetic string, err error) {
+	res, err := a.ExecuteLocalCommand(line)
+	if res.Turn != nil {
+		synthetic = res.Turn.Input
+	}
+	return res.Handled, res.Text, synthetic, err
+}
+
+func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "/mcp" {
-		return true, a.buildMCPStatus(), nil
+		return CommandExecution{Handled: true, Text: a.buildMCPStatus()}, nil
 	}
-	if trimmed == "/plugins" || strings.HasPrefix(trimmed, "/plugins ") {
-		out, err := a.handlePluginsCommand(trimmed)
-		return true, out, err
+	if trimmed == "/focus" {
+		mode, err := a.ToggleViewMode()
+		if err != nil {
+			return CommandExecution{Handled: true}, err
+		}
+		return CommandExecution{Handled: true, Text: ViewModeToggleMessage(mode)}, nil
+	}
+	if strings.HasPrefix(trimmed, "/plugins ") {
+		return CommandExecution{Handled: true}, errors.New("usage: /plugins")
 	}
 	if trimmed == "/stats" {
-		return true, a.buildStats(), nil
+		return CommandExecution{Handled: true, Text: a.buildStats()}, nil
 	}
 	if a.pluginManager != nil {
 		res, handled, err := a.pluginManager.HandleCommand(a.ctx, trimmed)
@@ -107,11 +145,11 @@ func (a *App) HandleLocalCommand(line string) (handled bool, output string, err 
 			if res.Mutated {
 				a.a = nil
 			}
-			return handled, res.Text, err
+			return CommandExecution{Handled: handled, Text: res.Text, Turn: res.Turn, Mutated: res.Mutated}, err
 		}
 		if pluginID := pluginCommandID(trimmed); pluginID != "" {
 			if st, ok := a.pluginManager.Status(pluginID); ok && !st.Enabled {
-				return true, pluginID + " plugin is disabled", nil
+				return CommandExecution{Handled: true, Text: pluginID + " plugin is disabled"}, nil
 			}
 		}
 	}
@@ -120,31 +158,31 @@ func (a *App) HandleLocalCommand(line string) (handled bool, output string, err 
 		if len(fields) == 2 {
 			switch fields[1] {
 			case "usage", "tools", "repair", "recent", "all":
-				return true, a.buildStatsView(fields[1]), nil
+				return CommandExecution{Handled: true, Text: a.buildStatsView(fields[1])}, nil
 			}
 		}
-		return true, "", errors.New("usage: /stats [usage|tools|repair|recent|all]")
+		return CommandExecution{Handled: true}, errors.New("usage: /stats [usage|tools|repair|recent|all]")
 	}
 	if strings.HasPrefix(line, "/compact") {
 		fields := strings.Fields(line)
 		if len(fields) != 1 || fields[0] != "/compact" {
-			return true, "", errors.New("usage: /compact")
+			return CommandExecution{Handled: true}, errors.New("usage: /compact")
 		}
 		ag, err := a.ensureAgent()
 		if err != nil {
-			return true, "", err
+			return CommandExecution{Handled: true}, err
 		}
 		info, err := ag.CompactSession(a.ctx, a.sessionID)
 		if err != nil {
-			return true, "", err
+			return CommandExecution{Handled: true}, err
 		}
 		a.a = nil
 		if !info.Compacted {
-			return true, "nothing to compact", nil
+			return CommandExecution{Handled: true, Text: "nothing to compact"}, nil
 		}
-		return true, fmt.Sprintf("compacted conversation: %d -> %d messages; ~%d -> ~%d tokens", info.MessagesBefore, info.MessagesAfter, info.BeforeEstimate, info.AfterEstimate), nil
+		return CommandExecution{Handled: true, Text: fmt.Sprintf("compacted conversation: %d -> %d messages; ~%d -> ~%d tokens", info.MessagesBefore, info.MessagesAfter, info.BeforeEstimate, info.AfterEstimate)}, nil
 	}
-	return false, "", nil
+	return CommandExecution{}, nil
 }
 
 func pluginCommandID(line string) string {
@@ -155,10 +193,6 @@ func pluginCommandID(line string) string {
 	switch fields[0] {
 	case "/memory":
 		return "memory"
-	case "/skills-improver":
-		return "skills-improver"
-	case "/local-indexer":
-		return "local-indexer"
 	default:
 		return ""
 	}

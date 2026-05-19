@@ -12,6 +12,7 @@ import (
 	"github.com/usewhale/whale/internal/agent"
 	"github.com/usewhale/whale/internal/app"
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/plugins"
 	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/skills"
@@ -334,6 +335,57 @@ func hasServiceSkill(all []skills.SkillView, name, status string) bool {
 			continue
 		}
 		return status == "" || string(skill.Status) == status
+	}
+	return false
+}
+
+func TestPluginsCommandOpensManagerAndToggleUpdatesRuntime(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
+	work := t.TempDir()
+	t.Chdir(work)
+
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+
+	svc.Dispatch(Intent{Kind: IntentSubmit, Input: "/plugins"})
+	ev := waitForServiceEvent(t, svc, EventPluginsManager)
+	if !hasServicePlugin(ev.Plugins, "memory", true) {
+		t.Fatalf("expected memory plugin enabled, got %+v", ev.Plugins)
+	}
+
+	svc.Dispatch(Intent{Kind: IntentSetPluginEnabled, PluginID: "memory", PluginEnabled: false})
+	ev = waitForServiceEvent(t, svc, EventPluginsManager)
+	if !hasServicePlugin(ev.Plugins, "memory", false) {
+		t.Fatalf("expected memory plugin disabled, got %+v", ev.Plugins)
+	}
+	cfgFile, loaded, err := app.LoadConfigFile(app.ProjectConfigPath(work))
+	if err != nil || !loaded {
+		t.Fatalf("load project config loaded=%v err=%v", loaded, err)
+	}
+	if len(cfgFile.Plugins.Disabled) != 1 || cfgFile.Plugins.Disabled[0] != "memory" {
+		t.Fatalf("expected memory disabled in config, got %+v", cfgFile.Plugins.Disabled)
+	}
+
+	svc.Dispatch(Intent{Kind: IntentSetPluginEnabled, PluginID: "memory", PluginEnabled: true})
+	ev = waitForServiceEvent(t, svc, EventPluginsManager)
+	if !hasServicePlugin(ev.Plugins, "memory", true) {
+		t.Fatalf("expected memory plugin enabled again, got %+v", ev.Plugins)
+	}
+}
+
+func hasServicePlugin(all []plugins.PluginStatus, id string, enabled bool) bool {
+	for _, plugin := range all {
+		if plugin.Manifest.ID == id {
+			return plugin.Enabled == enabled
+		}
 	}
 	return false
 }

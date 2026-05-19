@@ -20,6 +20,7 @@ func TestConfigFileRoundTrip(t *testing.T) {
 		Model:           "deepseek-v4-pro",
 		ReasoningEffort: "max",
 		ThinkingEnabled: &enabled,
+		UI:              FileUIConfig{ViewMode: ViewModeFocus},
 		API:             FileAPIConfig{BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1/"},
 		Permissions: FilePermissionsConfig{
 			Mode:               "never",
@@ -57,8 +58,24 @@ func TestConfigFileRoundTrip(t *testing.T) {
 	if loaded.API.BaseURL != "https://dashscope.aliyuncs.com/compatible-mode/v1/" {
 		t.Fatalf("api base_url: %+v", loaded.API)
 	}
+	if loaded.UI.ViewMode != ViewModeFocus {
+		t.Fatalf("ui.view_mode: want focus, got %+v", loaded.UI)
+	}
 	if loaded.Permissions.Mode != "never" || len(loaded.Permissions.AllowShellPrefixes) != 2 {
 		t.Fatalf("permissions config: %+v", loaded.Permissions)
+	}
+}
+
+func TestApplyFileConfigSupportsViewMode(t *testing.T) {
+	cfg := DefaultConfig()
+	if err := ApplyFileConfig(&cfg, FileConfig{UI: FileUIConfig{ViewMode: ViewModeFocus}}); err != nil {
+		t.Fatalf("ApplyFileConfig: %v", err)
+	}
+	if cfg.ViewMode != ViewModeFocus {
+		t.Fatalf("view mode: want focus, got %q", cfg.ViewMode)
+	}
+	if err := ApplyFileConfig(&cfg, FileConfig{UI: FileUIConfig{ViewMode: "verbose"}}); err == nil {
+		t.Fatal("expected invalid view mode error")
 	}
 }
 

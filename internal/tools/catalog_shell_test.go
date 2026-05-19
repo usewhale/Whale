@@ -144,11 +144,60 @@ func TestShellReadOnlyCheckRejectsUnsafeReadCommandArgs(t *testing.T) {
 	}
 }
 
+func TestShellReadOnlyCheckRejectsTestAndBuildCommands(t *testing.T) {
+	spec := shellRunReadOnlySpecFor(shell.KindPOSIX)
+	for _, command := range []string{
+		"make test",
+		"make test-tui",
+		"make test-evals",
+		"make fmt-check",
+		"make vet",
+		"make build",
+		"go test ./...",
+		"go vet ./...",
+		"npm run test -- --runInBand",
+		"npm run typecheck",
+		"python -m pytest tests",
+		"cargo check --workspace",
+	} {
+		call := core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`}
+		if core.IsReadOnlyToolCall(spec, call) {
+			t.Fatalf("expected test/build command %q not to be strict read-only", command)
+		}
+	}
+}
+
+func TestShellReadOnlyCheckRejectsMutatingNearMisses(t *testing.T) {
+	spec := shellRunReadOnlySpecFor(shell.KindPOSIX)
+	for _, command := range []string{
+		"make clean",
+		"npm install lodash",
+		"npm run lint -- --fix",
+		"npx jest --updateSnapshot",
+		"npx jest -u",
+		"npx vitest run --update",
+		"go testfoo ./...",
+		"make test clean",
+		"make test build",
+		"make build clean",
+		"make test GOCACHE_DIR=.gocache",
+		"make test && rm -rf bin",
+		"make test > out.txt",
+	} {
+		call := core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`}
+		if core.IsReadOnlyToolCall(spec, call) {
+			t.Fatalf("expected mutating or unsafe command %q to require approval", command)
+		}
+	}
+}
+
 func TestShellReadOnlyCheckAllowsQuotedSearchPatterns(t *testing.T) {
 	spec := shellRunReadOnlySpecFor(shell.KindPOSIX)
 	for _, command := range []string{
 		`grep "Runtime|ToolGuidance" internal/tools/catalog_shell.go`,
 		`grep 'Runtime;ToolGuidance' internal/tools/catalog_shell.go`,
+		"git status -u",
+		"ls -u",
 	} {
 		call := core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`}
 		if !core.IsReadOnlyToolCall(spec, call) {

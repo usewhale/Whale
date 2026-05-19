@@ -16,5 +16,6 @@ Final plan:
 - Put the opening and closing tags on their own lines.
 - Use concise Markdown inside the block.
 - Include a clear title, summary, key implementation changes, test plan, and assumptions.
+- Do not write the final plan outside the <proposed_plan> block; the UI can only review and implement tagged plans.
 - Do not ask "should I proceed?" after the block; the UI will let the user choose whether to implement.`)
 }

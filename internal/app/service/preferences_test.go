@@ -48,3 +48,37 @@ func TestConfigServiceDispatchPersists(t *testing.T) {
 		t.Fatal("persisted thinking_enabled: want false")
 	}
 }
+
+func TestViewModeDispatchPersistsAndEmitsEvent(t *testing.T) {
+	dir := t.TempDir()
+	cfg := app.DefaultConfig()
+	cfg.DataDir = dir
+
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	svc.Dispatch(Intent{Kind: IntentSetViewMode, ViewMode: app.ViewModeFocus})
+
+	loaded, ok, err := app.LoadConfigFile(app.GlobalConfigPath(dir))
+	if err != nil {
+		t.Fatalf("LoadConfigFile: %v", err)
+	}
+	if !ok || loaded.UI.ViewMode != app.ViewModeFocus {
+		t.Fatalf("persisted view mode: ok=%v cfg=%+v", ok, loaded.UI)
+	}
+	for {
+		select {
+		case ev := <-svc.Events():
+			if ev.Kind == EventViewModeChanged {
+				if ev.ViewMode != app.ViewModeFocus {
+					t.Fatalf("event view mode: want focus, got %q", ev.ViewMode)
+				}
+				return
+			}
+		default:
+			t.Fatal("missing view mode changed event")
+		}
+	}
+}

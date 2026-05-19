@@ -22,6 +22,28 @@ func (m *model) appendNotice(text string) {
 	m.refreshLiveViewportContent()
 }
 
+func (m *model) setEphemeralInfo(text string) {
+	t := strings.TrimSpace(strings.TrimRight(text, "\n"))
+	if t == "" {
+		m.ephemeralMessages = nil
+		return
+	}
+	m.ephemeralMessages = []tuirender.UIMessage{{
+		Role: "info",
+		Kind: tuirender.KindText,
+		Text: t,
+	}}
+	m.refreshViewportContentFollow(true)
+}
+
+func (m *model) clearEphemeralMessages() {
+	if len(m.ephemeralMessages) == 0 {
+		return
+	}
+	m.ephemeralMessages = nil
+	m.refreshViewportContent()
+}
+
 func (m *model) appendLiveToolResult(text, role string) {
 	if m.assembler == nil {
 		m.assembler = tuirender.NewAssembler()
@@ -133,6 +155,20 @@ func (m *model) markNoFinalAnswerIfNeeded() bool {
 		Source:  "assistant",
 		Summary: "reasoning-only turn completed without final answer",
 		Raw:     "The model produced reasoning content but no assistant content.",
+	})
+	return true
+}
+
+func (m *model) markMissingProposedPlanIfNeeded(wasBusy bool) bool {
+	if !wasBusy || m.chatMode != "plan" || m.sawPlanThisTurn || !m.sawAssistantThisTurn {
+		return false
+	}
+	m.appendNotice("No proposed plan was produced. Continue planning, or ask the model to output the final plan inside <proposed_plan>...</proposed_plan>.")
+	m.addLog(logEntry{
+		Kind:    "missing_proposed_plan",
+		Source:  "assistant",
+		Summary: "plan-mode turn completed without a proposed_plan block",
+		Raw:     "The model produced assistant content in Plan mode but did not emit a <proposed_plan> block.",
 	})
 	return true
 }

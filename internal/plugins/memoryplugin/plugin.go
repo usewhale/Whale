@@ -98,7 +98,7 @@ func HandleCommand(store *Store, line string) (string, bool, error) {
 		}
 		return fmt.Sprintf("no such memory: %s/%s", scope, name), true, nil
 	}
-	return "", true, fmt.Errorf("usage: /memory [list|path|show <scope>/<name>|forget <scope>/<name>]")
+	return "", true, fmt.Errorf("usage: /memory [list|path|show <global|project>/<name>|forget <global|project>/<name>]")
 }
 
 type memoryToolBase struct {
@@ -344,7 +344,22 @@ func previewText(raw string, max int) string {
 
 func FormatList(store *Store) string {
 	var lines []string
-	lines = append(lines, "Memory", "")
+	lines = append(lines,
+		"Memory",
+		"Manage durable memories.",
+		"",
+		"Scopes",
+		"- global: available across sessions and workspaces",
+		"- project: available for this workspace",
+		"",
+		"Memory indexes load automatically at startup. Relevant names or descriptions can lead the agent to recall details when needed.",
+		"",
+		"Common actions",
+		"- /memory list",
+		"- /memory show <global|project>/<name>",
+		"- /memory forget <global|project>/<name>",
+		"",
+	)
 	for _, scope := range []string{globalScope, projectScope} {
 		path, index, err := store.Index(scope)
 		count := countIndexEntries(index)

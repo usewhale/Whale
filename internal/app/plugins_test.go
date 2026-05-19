@@ -44,7 +44,7 @@ func TestMemoryPluginCanBeDisabledByConfig(t *testing.T) {
 	if app.toolRegistry.Get("remember") != nil {
 		t.Fatal("remember should not be registered when memory plugin is disabled")
 	}
-	handled, out, err := app.HandleLocalCommand("/memory")
+	handled, out, _, err := app.HandleLocalCommand("/memory")
 	if err != nil || !handled {
 		t.Fatalf("/memory disabled handled=%v err=%v", handled, err)
 	}
@@ -78,7 +78,7 @@ func TestMemoryLocalCommandMatchesOnlyMemoryToken(t *testing.T) {
 	}
 	defer app.Close()
 
-	handled, out, err := app.HandleLocalCommand("/memorybank")
+	handled, out, _, err := app.HandleLocalCommand("/memorybank")
 	if err != nil {
 		t.Fatalf("/memorybank err: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestMCPRefreshPreservesMemoryTools(t *testing.T) {
 	}
 }
 
-func TestPluginsCommandListsOfficialPlugins(t *testing.T) {
+func TestPluginStatusesListOfficialPlugins(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
 	cfg := DefaultConfig()
 	cfg.DataDir = t.TempDir()
@@ -115,18 +115,23 @@ func TestPluginsCommandListsOfficialPlugins(t *testing.T) {
 	}
 	defer app.Close()
 
-	handled, out, err := app.HandleLocalCommand("/plugins")
-	if err != nil || !handled {
-		t.Fatalf("/plugins handled=%v err=%v", handled, err)
+	statuses := app.PluginStatuses()
+	var got []string
+	for _, st := range statuses {
+		got = append(got, st.Manifest.ID)
 	}
-	for _, want := range []string{"memory", "skills-improver", "local-indexer"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("/plugins output missing %s:\n%s", want, out)
+	out := strings.Join(got, "\n")
+	if !strings.Contains(out, "memory") {
+		t.Fatalf("plugin statuses missing memory:\n%s", out)
+	}
+	for _, hidden := range []string{"skills-improver", "local-indexer"} {
+		if strings.Contains(out, hidden) {
+			t.Fatalf("plugin statuses should not list %s before it is ready:\n%s", hidden, out)
 		}
 	}
 }
 
-func TestPluginsReloadRefreshesDisabledConfigFromDisk(t *testing.T) {
+func TestSetPluginEnabledUpdatesProjectConfigAndRuntime(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
 	cfg := DefaultConfig()
 	cfg.DataDir = t.TempDir()
@@ -148,29 +153,53 @@ func TestPluginsReloadRefreshesDisabledConfigFromDisk(t *testing.T) {
 	if app.toolRegistry.Get("remember") == nil {
 		t.Fatal("memory plugin should start enabled")
 	}
-	if err := SaveConfigFile(ProjectConfigPath(app.workspaceRoot), FileConfig{
-		Plugins: FilePluginsConfig{Disabled: []string{"memory"}},
-	}); err != nil {
-		t.Fatalf("SaveConfigFile: %v", err)
-	}
 
-	handled, out, err := app.HandleLocalCommand("/plugins reload")
-	if err != nil || !handled {
-		t.Fatalf("/plugins reload handled=%v err=%v out=%q", handled, err, out)
+	out, err := app.SetPluginEnabled("memory", false)
+	if err != nil {
+		t.Fatalf("SetPluginEnabled(false): %v", err)
+	}
+	if !strings.Contains(out, "disabled plugin: memory") {
+		t.Fatalf("unexpected disable output: %q", out)
 	}
 	if app.toolRegistry.Get("remember") != nil {
-		t.Fatal("memory tool should be removed after reloading disabled plugin config")
+		t.Fatal("memory tool should be removed after disabling plugin")
 	}
-	handled, out, err = app.HandleLocalCommand("/memory")
+	handled, out, _, err := app.HandleLocalCommand("/memory")
 	if err != nil || !handled {
 		t.Fatalf("/memory handled=%v err=%v", handled, err)
 	}
 	if !strings.Contains(out, "disabled") {
-		t.Fatalf("expected memory disabled after reload, got:\n%s", out)
+		t.Fatalf("expected memory disabled after toggle, got:\n%s", out)
+	}
+
+	cfgFile, loaded, err := LoadConfigFile(ProjectConfigPath(app.workspaceRoot))
+	if err != nil || !loaded {
+		t.Fatalf("load project config loaded=%v err=%v", loaded, err)
+	}
+	if len(cfgFile.Plugins.Disabled) != 1 || cfgFile.Plugins.Disabled[0] != "memory" {
+		t.Fatalf("expected memory in disabled plugins config, got %+v", cfgFile.Plugins.Disabled)
+	}
+
+	out, err = app.SetPluginEnabled("memory", true)
+	if err != nil {
+		t.Fatalf("SetPluginEnabled(true): %v", err)
+	}
+	if !strings.Contains(out, "enabled plugin: memory") {
+		t.Fatalf("unexpected enable output: %q", out)
+	}
+	if app.toolRegistry.Get("remember") == nil {
+		t.Fatal("memory tool should be registered after enabling plugin")
+	}
+	cfgFile, _, err = LoadConfigFile(ProjectConfigPath(app.workspaceRoot))
+	if err != nil {
+		t.Fatalf("load project config: %v", err)
+	}
+	if len(cfgFile.Plugins.Disabled) != 0 {
+		t.Fatalf("expected disabled plugin config cleared, got %+v", cfgFile.Plugins.Disabled)
 	}
 }
 
-func TestOfficialPluginScaffoldCommands(t *testing.T) {
+func TestOfficialPluginCommands(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
 	cfg := DefaultConfig()
 	cfg.DataDir = t.TempDir()
@@ -180,23 +209,20 @@ func TestOfficialPluginScaffoldCommands(t *testing.T) {
 	}
 	defer app.Close()
 
-	handled, out, err := app.HandleLocalCommand("/skills-improver proposals")
-	if err != nil || !handled {
-		t.Fatalf("/skills-improver proposals handled=%v err=%v", handled, err)
+	handled, out, _, err := app.HandleLocalCommand("/skills-improver proposals")
+	if err != nil || handled || strings.TrimSpace(out) != "" {
+		t.Fatalf("/skills-improver should not be exposed as a slash command: handled=%v out=%q err=%v", handled, out, err)
 	}
-	if !strings.Contains(out, "none") {
-		t.Fatalf("expected empty proposals output, got:\n%s", out)
+	handled, out, _, err = app.HandleLocalCommand("/local-indexer rebuild")
+	if err != nil {
+		t.Fatalf("/local-indexer rebuild err=%v", err)
 	}
-	handled, out, err = app.HandleLocalCommand("/local-indexer rebuild")
-	if err != nil || !handled {
-		t.Fatalf("/local-indexer rebuild handled=%v err=%v", handled, err)
-	}
-	if !strings.Contains(out, "not implemented") {
-		t.Fatalf("expected scaffold rebuild output, got:\n%s", out)
+	if handled || strings.TrimSpace(out) != "" {
+		t.Fatalf("/local-indexer should not be exposed before it is ready: handled=%v out=%q", handled, out)
 	}
 }
 
-func TestPluginStatusShowsHookContributions(t *testing.T) {
+func TestSkillsImproverIsHiddenFromSkillReportAndTools(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
 	cfg := DefaultConfig()
 	cfg.DataDir = t.TempDir()
@@ -206,66 +232,24 @@ func TestPluginStatusShowsHookContributions(t *testing.T) {
 	}
 	defer app.Close()
 
-	handled, out, err := app.HandleLocalCommand("/plugins status skills-improver")
-	if err != nil || !handled {
-		t.Fatalf("/plugins status skills-improver handled=%v err=%v", handled, err)
+	if reportHasSkill(app.SkillReport(), "skills-improver") {
+		t.Fatalf("skills-improver should not be visible in skill report: %+v", app.SkillReport().All())
 	}
-	if !strings.Contains(out, "hooks: skills-improver.collect-evidence") {
-		t.Fatalf("expected hook contribution in plugin status, got:\n%s", out)
+	if app.toolRegistry.Get("save_skill_proposal") != nil {
+		t.Fatal("save_skill_proposal should not be registered while skills-improver is hidden")
 	}
-	if strings.Contains(out, filepath.Join(cfg.DataDir, "plugins", "skills-improver")) && !strings.Contains(out, "`"+filepath.Join(cfg.DataDir, "plugins", "skills-improver")+"`") {
-		t.Fatalf("expected plugin paths to be markdown inline code, got:\n%s", out)
+	blocked, output, updated := app.RunUserPromptSubmitHook("下次 $demo skill 要更具体")
+	if blocked || output != "" || updated != "下次 $demo skill 要更具体" {
+		t.Fatalf("skills-improver hooks should not run while hidden: blocked=%v output=%q updated=%q", blocked, output, updated)
 	}
-}
-
-func TestPluginSkillIsAvailableToSkillReportAndLoadTool(t *testing.T) {
-	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
-	cfg := DefaultConfig()
-	cfg.DataDir = t.TempDir()
-	app, err := New(t.Context(), cfg, StartOptions{NewSession: true})
-	if err != nil {
-		t.Fatalf("New: %v", err)
+	if out := app.RunStopHook("final answer", 1); out != "" {
+		t.Fatalf("skills-improver stop hook should not run while hidden: %q", out)
 	}
-	defer app.Close()
-
-	if !reportHasSkill(app.SkillReport(), "skills-improver") {
-		t.Fatalf("expected plugin skill in report: %+v", app.SkillReport().All())
+	if _, err := os.Stat(filepath.Join(cfg.DataDir, "plugins", "skills-improver", "data", "evidence.jsonl")); !os.IsNotExist(err) {
+		t.Fatalf("skills-improver should not write evidence while hidden, stat err=%v", err)
 	}
 	if app.toolRegistry.Get("load_skill") == nil {
 		t.Fatal("load_skill not registered")
-	}
-}
-
-func TestDisabledPluginSkillIsNotSelectable(t *testing.T) {
-	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
-	cfg := DefaultConfig()
-	cfg.DataDir = t.TempDir()
-	cfg.SkillsDisabled = []string{"skills-improver"}
-	app, err := New(t.Context(), cfg, StartOptions{NewSession: true})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	defer app.Close()
-
-	report := app.SkillReport()
-	for _, view := range report.Ready {
-		if view.Name == "skills-improver" {
-			t.Fatalf("disabled plugin skill should not be ready: %+v", report)
-		}
-	}
-	for _, view := range report.Selectable() {
-		if view.Name == "skills-improver" {
-			t.Fatalf("disabled plugin skill should not be selectable: %+v", report.Selectable())
-		}
-	}
-	foundDisabled := false
-	for _, view := range report.Disabled {
-		if view.Name == "skills-improver" && view.Source == "plugin" {
-			foundDisabled = true
-		}
-	}
-	if !foundDisabled {
-		t.Fatalf("expected disabled plugin skill in disabled group: %+v", report.Disabled)
 	}
 }
 
@@ -293,7 +277,7 @@ func TestMemoryLocalCommandListsAndShowsMemory(t *testing.T) {
 		t.Fatalf("Write: %v", err)
 	}
 
-	handled, out, err := app.HandleLocalCommand("/memory")
+	handled, out, _, err := app.HandleLocalCommand("/memory")
 	if err != nil || !handled {
 		t.Fatalf("/memory handled=%v err=%v", handled, err)
 	}
@@ -301,7 +285,7 @@ func TestMemoryLocalCommandListsAndShowsMemory(t *testing.T) {
 		t.Fatalf("/memory output missing index:\n%s", out)
 	}
 
-	handled, out, err = app.HandleLocalCommand("/memory show global/style")
+	handled, out, _, err = app.HandleLocalCommand("/memory show global/style")
 	if err != nil || !handled {
 		t.Fatalf("/memory show handled=%v err=%v", handled, err)
 	}
@@ -340,7 +324,7 @@ func TestMemoryForgetInvalidatesActiveAgent(t *testing.T) {
 		t.Fatal("expected active agent")
 	}
 
-	handled, out, err := app.HandleLocalCommand("/memory forget project/roadmap")
+	handled, out, _, err := app.HandleLocalCommand("/memory forget project/roadmap")
 	if err != nil || !handled {
 		t.Fatalf("/memory forget handled=%v err=%v", handled, err)
 	}

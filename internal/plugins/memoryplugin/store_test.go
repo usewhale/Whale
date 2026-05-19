@@ -293,13 +293,20 @@ func TestFormatListShowsCountsAndHighCountWarning(t *testing.T) {
 		}
 	}
 	out := FormatList(store)
-	if !strings.Contains(out, "Global (50 memories)") {
-		t.Fatalf("missing global memory count:\n%s", out)
-	}
-	if !strings.Contains(out, "Project (0 memories)") {
-		t.Fatalf("missing project memory count:\n%s", out)
-	}
-	if !strings.Contains(out, "Memory count is high") {
-		t.Fatalf("missing high-count warning:\n%s", out)
+	for _, want := range []string{
+		"Manage durable memories.",
+		"Scopes",
+		"- global: available across sessions and workspaces",
+		"- project: available for this workspace",
+		"Memory indexes load automatically at startup.",
+		"Common actions",
+		"- /memory show <global|project>/<name>",
+		"Global (50 memories)",
+		"Project (0 memories)",
+		"Memory count is high",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected memory list to contain %q:\n%s", want, out)
+		}
 	}
 }

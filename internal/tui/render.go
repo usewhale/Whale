@@ -2,15 +2,12 @@ package tui
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/usewhale/whale/internal/app/service"
-	"github.com/usewhale/whale/internal/build"
 	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
 
@@ -18,8 +15,8 @@ func (m model) renderBody(mainWidth, bodyHeight int) string {
 	if bodyHeight <= 0 {
 		return ""
 	}
-	m.ensureViewportContentForSize(mainWidth, bodyHeight)
 	if m.page != pageChat {
+		m.ensureViewportContentForSize(mainWidth, bodyHeight)
 		return lipgloss.NewStyle().
 			Width(mainWidth).
 			Height(bodyHeight).
@@ -27,7 +24,17 @@ func (m model) renderBody(mainWidth, bodyHeight int) string {
 			BorderForeground(tuitheme.Default.Border).
 			Render(m.viewport.View())
 	}
-	return lipgloss.NewStyle().Width(mainWidth).Render(m.chat.View())
+	header, headerHeight := m.chatHeaderForLayout(mainWidth, bodyHeight)
+	chatHeight := max(0, bodyHeight-headerHeight)
+	m.ensureViewportContentForSize(mainWidth, chatHeight)
+	if chatHeight <= 0 {
+		return lipgloss.NewStyle().Width(mainWidth).Render(header)
+	}
+	chat := lipgloss.NewStyle().Width(mainWidth).Render(m.chat.View())
+	if header == "" {
+		return chat
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, header, chat)
 }
 
 func (m model) View() string {
@@ -53,18 +60,42 @@ func (m model) viewportBodyHeight(mainWidth int) int {
 	return max(0, m.height-countVisibleLines(m.renderBottom(mainWidth)))
 }
 
+func (m model) chatHeaderForLayout(mainWidth, bodyHeight int) (string, int) {
+	if bodyHeight <= 0 {
+		return "", 0
+	}
+	header := buildHeaderBanner(m.model, m.effort, m.thinking, m.cwd, m.version, max(20, mainWidth), bodyHeight)
+	return header, countVisibleLines(header)
+}
+
+func (m model) chatViewportBodyHeight(mainWidth, bodyHeight int) int {
+	if m.page != pageChat {
+		return bodyHeight
+	}
+	_, headerHeight := m.chatHeaderForLayout(mainWidth, bodyHeight)
+	return max(0, bodyHeight-headerHeight)
+}
+
 func (m model) renderBottom(mainWidth int) string {
 	footerText := "model: " + m.model + "  effort: " + m.effort + "  thinking: " + m.thinking
 	if m.chatMode == "ask" || m.chatMode == "plan" {
 		footerText += "  mode: " + m.chatMode + " (Shift+Tab to switch)"
 	}
+	viewIndicator := ""
+	if m.focusEnabled() {
+		viewIndicator = "focus"
+	}
 	dirReserve := 0
 	if m.cwd != "" {
 		dirReserve = footerDirReserve(m.cwd)
 	}
-	footerText = appendFooterHint(footerText, mainWidth, dirReserve)
+	viewReserve := footerViewIndicatorReserve(viewIndicator)
+	footerText = appendFooterHint(footerText, mainWidth, dirReserve+viewReserve)
 	if m.cwd != "" {
-		footerText = appendFooterDir(footerText, m.cwd, mainWidth)
+		footerText = appendFooterDir(footerText, m.cwd, mainWidth, viewReserve)
+	}
+	if viewIndicator != "" {
+		footerText = appendFooterViewIndicator(footerText, viewIndicator, mainWidth)
 	}
 	footer := lipgloss.NewStyle().Width(mainWidth).MaxWidth(mainWidth).Render(lipgloss.JoinHorizontal(lipgloss.Left, footerText))
 	bottomParts := m.bottomPartsBeforeInput(mainWidth)
@@ -97,6 +128,9 @@ func (m model) bottomPartsBeforeInput(mainWidth int) []string {
 	}
 	if m.mode == modeSkillsManager {
 		bottomParts = append(bottomParts, m.renderSkillsManager())
+	}
+	if m.mode == modePluginsManager {
+		bottomParts = append(bottomParts, m.renderPluginsManager())
 	}
 	if m.mode == modeSessionPicker {
 		rows := []string{"sessions (↑/↓ select, enter confirm, esc cancel):"}
@@ -371,13 +405,25 @@ func padVisibleLines(s string, targetLines, width int) string {
 	return strings.Join(lines, "\n")
 }
 
-func appendFooterDir(base, cwd string, width int) string {
+func appendFooterDir(base, cwd string, width, reserve int) string {
 	segment := "  "
-	available := width - lipgloss.Width(base) - lipgloss.Width(segment)
+	available := width - lipgloss.Width(base) - lipgloss.Width(segment) - reserve
 	if available <= 0 {
 		return base
 	}
 	return base + segment + fitTail(cwd, available)
+}
+
+func appendFooterViewIndicator(base, indicator string, width int) string {
+	indicator = strings.TrimSpace(indicator)
+	if indicator == "" {
+		return base
+	}
+	segment := "  " + indicator
+	if lipgloss.Width(base)+lipgloss.Width(segment) > width {
+		return base
+	}
+	return base + segment
 }
 
 func appendFooterHint(base string, width, reserve int) string {
@@ -391,18 +437,26 @@ func appendFooterHint(base string, width, reserve int) string {
 }
 
 func footerDirReserve(cwd string) int {
-	trimmed := strings.TrimRight(cwd, "/")
+	trimmed := strings.TrimRight(cwd, `/\`)
 	if trimmed == "" {
 		trimmed = cwd
 	}
 	tail := trimmed
-	if idx := strings.LastIndex(trimmed, "/"); idx >= 0 && idx < len(trimmed)-1 {
+	if idx := strings.LastIndexAny(trimmed, `/\`); idx >= 0 && idx < len(trimmed)-1 {
 		tail = trimmed[idx+1:]
 	}
 	if tail == "" {
 		return 0
 	}
 	return lipgloss.Width("  ") + lipgloss.Width(tail)
+}
+
+func footerViewIndicatorReserve(indicator string) int {
+	indicator = strings.TrimSpace(indicator)
+	if indicator == "" {
+		return 0
+	}
+	return lipgloss.Width("  ") + lipgloss.Width(indicator)
 }
 
 func fitTail(s string, width int) string {
@@ -527,32 +581,6 @@ func formatElapsedCompact(elapsed time.Duration) string {
 	minutes := (seconds % 3600) / 60
 	remSeconds := seconds % 60
 	return fmt.Sprintf("%dh %02dm %02ds", hours, minutes, remSeconds)
-}
-
-func resolveVersion() string {
-	return build.CurrentVersion()
-}
-
-func buildHeaderBanner(modelName, effort, thinking, cwd, version string) string {
-	return fmt.Sprintf("▸ Whale %s   model: %s   effort: %s   thinking: %s   dir: %s",
-		version, modelName, effort, thinking, cwd)
-}
-
-func resolveWorkingDirectory() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		return "."
-	}
-	home, hErr := os.UserHomeDir()
-	if hErr == nil {
-		if rel, rErr := filepath.Rel(home, wd); rErr == nil && rel != "" && rel != "." && !strings.HasPrefix(rel, "..") {
-			return "~/" + rel
-		}
-		if filepath.Clean(wd) == filepath.Clean(home) {
-			return "~"
-		}
-	}
-	return wd
 }
 
 func (m model) pageLabel() string {

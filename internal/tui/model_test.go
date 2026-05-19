@@ -13,6 +13,7 @@ import (
 	"github.com/usewhale/whale/internal/app"
 	"github.com/usewhale/whale/internal/app/service"
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/plugins"
 	"github.com/usewhale/whale/internal/skills"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
@@ -51,6 +52,70 @@ func flushWindowsPasteBurstForTest(t *testing.T, m model) model {
 	m.windowsPaste.activeUntil = time.Now().Add(-time.Millisecond)
 	next, _ := updateTestModel(t, m, windowsPasteBurstFlushMsg{id: m.windowsPaste.burstID})
 	return next
+}
+
+func TestHistoryNavigationContinuesAcrossSlashCommandEntry(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.promptHistory = []string{"a", "b", "c", "/status"}
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyUp})
+	if got := m.input.Value(); got != "/status" {
+		t.Fatalf("expected first Up to recall slash command, got %q", got)
+	}
+	if m.hasSlashSuggestions() {
+		t.Fatal("expected recalled slash command not to show suggestions during history navigation")
+	}
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyUp})
+	if got := m.input.Value(); got != "c" {
+		t.Fatalf("expected second Up to continue history navigation, got %q", got)
+	}
+	if m.hasSlashSuggestions() {
+		t.Fatal("expected non-slash history entry to clear slash suggestions")
+	}
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyDown})
+	if got := m.input.Value(); got != "/status" {
+		t.Fatalf("expected Down to return to slash history entry, got %q", got)
+	}
+	if m.hasSlashSuggestions() {
+		t.Fatal("expected slash suggestions to stay hidden after returning to slash history entry")
+	}
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyDown})
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected Down from newest history entry to restore draft, got %q", got)
+	}
+	if m.hasSlashSuggestions() {
+		t.Fatal("expected empty draft to clear slash suggestions")
+	}
+}
+
+func TestHistoryNavigationSuppressesSkillSuggestions(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.skills.all = []skillSuggestion{{Name: "code-review"}}
+	m.promptHistory = []string{"a", "$code-review"}
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyUp})
+	if got := m.input.Value(); got != "$code-review" {
+		t.Fatalf("expected first Up to recall skill trigger, got %q", got)
+	}
+	if m.hasSkillSuggestions() {
+		t.Fatal("expected recalled skill trigger not to show suggestions during history navigation")
+	}
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyUp})
+	if got := m.input.Value(); got != "a" {
+		t.Fatalf("expected second Up to continue history navigation, got %q", got)
+	}
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyDown})
+	if got := m.input.Value(); got != "$code-review" {
+		t.Fatalf("expected Down to return to skill history entry, got %q", got)
+	}
+	if m.hasSkillSuggestions() {
+		t.Fatal("expected skill suggestions to stay hidden after returning to skill history entry")
+	}
 }
 
 func typeRunesForTest(t *testing.T, m model, value string) model {
@@ -1875,12 +1940,12 @@ func TestDefaultEnterSubmitRemainsImmediate(t *testing.T) {
 	}
 }
 
-func TestClearScreenCmdUsesBubbleTeaOnWindows(t *testing.T) {
+func TestClearScreenCmdClearsWindowsScrollbackAndRenderer(t *testing.T) {
 	var out bytes.Buffer
 	cmd := clearScreenCmdForOS("windows", &out)
 	msg := cmd()
-	if out.Len() != 0 {
-		t.Fatalf("windows clear should not write raw ANSI directly, got %q", out.String())
+	if got, want := out.String(), "\033[H\033[2J\033[3J"; got != want {
+		t.Fatalf("windows clear sequence = %q, want %q", got, want)
 	}
 	if msg == nil {
 		t.Fatal("windows clear should return a Bubble Tea clear-screen message")
@@ -1891,8 +1956,8 @@ func TestClearScreenCmdPreservesUnixScrollbackClear(t *testing.T) {
 	var out bytes.Buffer
 	cmd := clearScreenCmdForOS("linux", &out)
 	msg := cmd()
-	if msg != nil {
-		t.Fatalf("unix clear should write directly and return nil msg, got %T", msg)
+	if msg == nil {
+		t.Fatal("unix clear should also return a Bubble Tea clear-screen message")
 	}
 	if got, want := out.String(), "\033[H\033[2J\033[3J"; got != want {
 		t.Fatalf("unix clear sequence = %q, want %q", got, want)
@@ -2029,6 +2094,42 @@ func TestHydrateSessionMessages_SuppressesHiddenUserText(t *testing.T) {
 	m.hydrateSessionMessages(msgs)
 	if got := len(m.assembler.Snapshot()); got != 0 {
 		t.Fatalf("expected no chat entries for hidden user text, got %d", got)
+	}
+}
+
+func TestHydrateSessionMessages_RestoresUpdatePlanAsPlanUpdate(t *testing.T) {
+	m := &model{assembler: tuirender.NewAssembler()}
+	msgs := []core.Message{
+		{
+			Role: core.RoleAssistant,
+			ToolCalls: []core.ToolCall{{
+				ID:    "plan-1",
+				Name:  "update_plan",
+				Input: `{"plan":[{"step":"Inspect","status":"completed"},{"step":"Patch","status":"in_progress"},{"step":"Test","status":"pending"}]}`,
+			}},
+		},
+		{
+			Role: core.RoleTool,
+			ToolResults: []core.ToolResult{{
+				ToolCallID: "plan-1",
+				Name:       "update_plan",
+				Content:    `{"success":true,"data":{"explanation":"resume checklist","plan":[{"step":"Inspect","status":"completed"},{"step":"Patch","status":"in_progress"},{"step":"Test","status":"pending"}]}}`,
+			}},
+		},
+	}
+	m.hydrateSessionMessages(msgs)
+	snap := m.assembler.Snapshot()
+	if len(snap) != 1 || snap[0].Kind != tuirender.KindPlanUpdate {
+		t.Fatalf("expected hydrated plan update only, got %+v", snap)
+	}
+	if strings.Contains(snap[0].Text, "Updated plan") || strings.Contains(snap[0].Text, "update_plan") {
+		t.Fatalf("expected checklist content, not generic tool row: %+v", snap[0])
+	}
+	rendered := strings.Join(tuirender.ChatLines(snap, 80), "\n")
+	for _, want := range []string{"Updated Plan", "resume checklist", "✔ Inspect", "□ Patch", "□ Test"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected %q in hydrated plan update:\n%s", want, rendered)
+		}
 	}
 }
 
@@ -2326,6 +2427,38 @@ func TestTurnDoneReasoningOnlyCommitsFallback(t *testing.T) {
 	}
 }
 
+func TestPlanTurnDoneWithAssistantButNoProposedPlanShowsNotice(t *testing.T) {
+	m := model{
+		assembler: tuirender.NewAssembler(),
+		mode:      modeChat,
+		chatMode:  "plan",
+		width:     80,
+		height:    24,
+		busy:      true,
+	}
+	next, _ := m.Update(svcMsg(service.Event{
+		Kind: service.EventAssistantDelta,
+		Text: "Here is the test execution plan:\n\n- Run TUI tests\n- Run full tests",
+	}))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+	m = next.(model)
+
+	if m.mode == modePlanImplementation {
+		t.Fatal("did not expect implementation picker without a proposed_plan block")
+	}
+	got := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
+	if !strings.Contains(got, "Here is the test execution plan") {
+		t.Fatalf("expected assistant text to remain visible:\n%s", got)
+	}
+	if !strings.Contains(got, "No proposed plan was produced") || !strings.Contains(got, "<proposed_plan>") {
+		t.Fatalf("expected missing proposed plan notice in transcript:\n%s", got)
+	}
+	if m.sawAssistantThisTurn || m.sawPlanThisTurn {
+		t.Fatal("expected turn tracking flags to reset")
+	}
+}
+
 func TestTurnDoneReconcilesDroppedAssistantDeltaFromLastResponse(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 80, height: 8, busy: true}
 	next, _ := m.Update(svcMsg(service.Event{
@@ -2464,6 +2597,45 @@ func TestMarkNoFinalAnswerIfNeededSkippedWithAssistant(t *testing.T) {
 	}
 	if m.markNoFinalAnswerIfNeeded() {
 		t.Fatal("did not expect no-final-answer status with assistant answer")
+	}
+	if got := len(m.assembler.Snapshot()); got != 0 {
+		t.Fatalf("expected no chat entries, got %d", got)
+	}
+}
+
+func TestMarkMissingProposedPlanIfNeeded(t *testing.T) {
+	m := model{
+		assembler:            tuirender.NewAssembler(),
+		chatMode:             "plan",
+		sawAssistantThisTurn: true,
+	}
+	if !m.markMissingProposedPlanIfNeeded(true) {
+		t.Fatal("expected missing proposed plan to be marked")
+	}
+	snap := m.assembler.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected one notice entry, got %+v", snap)
+	}
+	if snap[0].Kind != tuirender.KindNotice || snap[0].Role != "notice" {
+		t.Fatalf("expected notice entry, got %+v", snap[0])
+	}
+	if !strings.Contains(snap[0].Text, "No proposed plan was produced") {
+		t.Fatalf("expected missing proposed plan notice, got %q", snap[0].Text)
+	}
+	if len(m.logs) != 1 || m.logs[0].Kind != "missing_proposed_plan" {
+		t.Fatalf("expected diagnostic log entry, got %+v", m.logs)
+	}
+}
+
+func TestMarkMissingProposedPlanIfNeededSkippedWithPlan(t *testing.T) {
+	m := model{
+		assembler:            tuirender.NewAssembler(),
+		chatMode:             "plan",
+		sawAssistantThisTurn: true,
+		sawPlanThisTurn:      true,
+	}
+	if m.markMissingProposedPlanIfNeeded(true) {
+		t.Fatal("did not expect missing proposed plan notice after plan completion")
 	}
 	if got := len(m.assembler.Snapshot()); got != 0 {
 		t.Fatalf("expected no chat entries, got %d", got)
@@ -2953,6 +3125,54 @@ func TestSkillsMenuListActionOpensDollarPicker(t *testing.T) {
 	}
 	if len(m.skills.matches) != 1 || m.skills.matches[0].Name != "code-review" {
 		t.Fatalf("expected skill picker matches, got %+v", m.skills.matches)
+	}
+}
+
+func TestPluginsManagerRendersAndToggles(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.handleServiceEvent(service.Event{
+		Kind: service.EventPluginsManager,
+		Plugins: []plugins.PluginStatus{
+			{
+				Manifest: plugins.Manifest{ID: "memory", Name: "Memory", Description: "Durable memory"},
+				Enabled:  true,
+				Tools:    []string{"forget", "recall_memory", "remember"},
+				Commands: []plugins.SlashCommand{{Name: "/memory"}},
+			},
+		},
+	})
+	if m.mode != modePluginsManager {
+		t.Fatalf("expected plugins manager mode, got %v", m.mode)
+	}
+	rendered := m.renderPluginsManager()
+	for _, want := range []string{"Plugins", "Installed plugins", "[x] memory", "Run /memory", "Agent tools: forget", "Space enable/disable"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected plugins manager render to contain %q, got:\n%s", want, rendered)
+		}
+	}
+	for _, unwanted := range []string{"Type to search plugins", "skills-improver"} {
+		if strings.Contains(rendered, unwanted) {
+			t.Fatalf("plugins manager should not render search UI %q:\n%s", unwanted, rendered)
+		}
+	}
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = next.(model)
+	if len(*intents) != 1 {
+		t.Fatalf("expected one toggle intent, got %+v", *intents)
+	}
+	if got := (*intents)[0]; got.Kind != service.IntentSetPluginEnabled || got.PluginID != "memory" || got.PluginEnabled {
+		t.Fatalf("unexpected toggle intent: %+v", got)
+	}
+	idx := m.pluginsManager.matches[m.pluginsManager.selected]
+	if m.pluginsManager.all[idx].Enabled {
+		t.Fatalf("expected selected plugin to be optimistically disabled: %+v", m.pluginsManager.all[idx])
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(model)
+	if m.mode != modeChat {
+		t.Fatalf("expected esc to close plugins manager, got mode %v", m.mode)
 	}
 }
 
@@ -3964,6 +4184,9 @@ func TestPlanCompletedReplacesPartialPlanAndTurnDoneShowsPicker(t *testing.T) {
 	if len(m.transcript) != 1 || m.transcript[0].Kind != tuirender.KindPlan {
 		t.Fatalf("expected completed plan in transcript, got %+v", m.transcript)
 	}
+	if m.lastProposedPlan != "complete final plan" {
+		t.Fatalf("expected last proposed plan to be captured, got %q", m.lastProposedPlan)
+	}
 	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventTurnDone, LastResponse: "done"}))
 	m = next.(model)
 
@@ -3976,6 +4199,90 @@ func TestPlanCompletedReplacesPartialPlanAndTurnDoneShowsPicker(t *testing.T) {
 	snap := m.assembler.Snapshot()
 	if len(snap) != 0 {
 		t.Fatalf("expected completed turn to move plan out of live assembler, got %+v", snap)
+	}
+}
+
+func TestPlanImplementationIntentIncludesLastProposedPlan(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.mode = modePlanImplementation
+	m.planImplementation.index = 0
+	m.lastProposedPlan = "# Plan\n- Patch it"
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+
+	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentImplementPlan {
+		t.Fatalf("expected implement intent, got %+v", *intents)
+	}
+	if (*intents)[0].Input != "# Plan\n- Patch it" {
+		t.Fatalf("expected approved plan in intent input, got %q", (*intents)[0].Input)
+	}
+	if m.chatMode != "agent" {
+		t.Fatalf("expected chat mode switched to agent, got %q", m.chatMode)
+	}
+}
+
+func TestPlanUpdateEventRendersUpdatedPlan(t *testing.T) {
+	m := model{
+		assembler: tuirender.NewAssembler(),
+		mode:      modeChat,
+	}
+	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventPlanUpdate, Text: "[x] Inspect\n[~] Patch\n[ ] Test"}))
+	m = next.(model)
+	if len(m.transcript) != 0 {
+		t.Fatalf("plan update should wait for tool result before committing transcript, got %+v", m.transcript)
+	}
+	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventToolResult, ToolCallID: "plan-1", ToolName: "update_plan", Text: `{"success":true}`}))
+	m = next.(model)
+	if len(m.transcript) != 1 || m.transcript[0].Kind != tuirender.KindPlanUpdate {
+		t.Fatalf("expected plan update in transcript, got %+v", m.transcript)
+	}
+	rendered := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
+	if !strings.Contains(rendered, "Updated Plan") || !strings.Contains(rendered, "Patch") {
+		t.Fatalf("expected rendered updated plan, got %q", rendered)
+	}
+}
+
+func TestPlanUpdateDoesNotClearPendingToolCallsBeforeResult(t *testing.T) {
+	m := model{
+		assembler:        tuirender.NewAssembler(),
+		mode:             modeChat,
+		pendingToolCalls: map[string]struct{}{},
+	}
+	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventToolCall, ToolCallID: "read-1", ToolName: "read_file", Text: `read_file: docs/plugins.md`}))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventToolCall, ToolCallID: "plan-1", ToolName: "update_plan", Text: `update_plan: 2 step(s)`}))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventPlanUpdate, Text: "[x] Inspect\n[ ] Report"}))
+	m = next.(model)
+
+	if _, ok := m.pendingToolCalls["read-1"]; !ok {
+		t.Fatalf("plan update event cleared unrelated pending tool calls: %+v", m.pendingToolCalls)
+	}
+	if _, ok := m.pendingToolCalls["plan-1"]; ok {
+		t.Fatalf("update_plan should not create a pending tool row")
+	}
+	if len(m.transcript) != 0 {
+		t.Fatalf("plan update should remain live while another tool is pending, got %+v", m.transcript)
+	}
+
+	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventToolResult, ToolCallID: "plan-1", ToolName: "update_plan", Text: `{"success":true}`}))
+	m = next.(model)
+	if len(m.transcript) != 0 {
+		t.Fatalf("update_plan result should not commit while read tool is pending, got %+v", m.transcript)
+	}
+
+	readResult := `{"success":true,"data":{"content":"ok"},"metadata":{"duration_ms":1}}`
+	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventToolResult, ToolCallID: "read-1", ToolName: "read_file", Text: readResult}))
+	m = next.(model)
+	if len(m.transcript) != 2 {
+		t.Fatalf("expected read result and plan update committed together, got %+v", m.transcript)
+	}
+	if m.transcript[0].Text == "Updating plan" || strings.Contains(m.transcript[0].Text, "Updating plan") {
+		t.Fatalf("stale update_plan tool row was committed: %+v", m.transcript)
+	}
+	if m.transcript[1].Kind != tuirender.KindPlanUpdate {
+		t.Fatalf("expected plan update after pending tool resolves, got %+v", m.transcript)
 	}
 }
 
@@ -4121,7 +4428,7 @@ func TestChatIdleViewDoesNotRenderEmptyViewportFrame(t *testing.T) {
 	m.width = 80
 	m.height = 24
 	view := m.View()
-	if strings.Contains(view, "┌") || strings.Contains(view, "│\n│") {
+	if strings.Contains(view, "┌") {
 		t.Fatalf("idle chat view should not render an empty bordered viewport:\n%s", view)
 	}
 	if !strings.Contains(view, "Type message or command") {
@@ -4165,6 +4472,17 @@ func TestChatFooterStaysPinnedAfterSlashSuggestionsClose(t *testing.T) {
 	}
 }
 
+func TestChatFooterShowsWindowsDirectoryTail(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-pro", "high", "on")
+	m.width = 80
+	m.height = 24
+	m.cwd = `C:\Users\goranka`
+
+	view := m.View()
+	assertFooterLastLine(t, view, `goranka`)
+	assertFooterLastLineNotContains(t, view, ` ~`)
+}
+
 func TestChatTranscriptRetainsLocalCommandResultsAcrossSubmits(t *testing.T) {
 	m, _ := newModelWithDispatchSpy()
 	m.width = 80
@@ -4189,10 +4507,70 @@ func TestChatTranscriptRetainsLocalCommandResultsAcrossSubmits(t *testing.T) {
 	m = next.(model)
 
 	got := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
-	for _, want := range []string{"config: /tmp/mcp.json", "session: test-session"} {
+	for _, want := range []string{"config: /tmp/mcp.json", "/status", "session: test-session"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected transcript to retain %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestLocalSlashCommandsEchoBeforeResults(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.width = 80
+	m.height = 18
+	localInfo := func(text string) service.Event {
+		return service.Event{Kind: service.EventLocalSubmitResult, Status: "info", Text: text}
+	}
+	localDone := func() service.Event {
+		return service.Event{Kind: service.EventLocalSubmitDone, Metadata: map[string]any{service.EventMetadataLocalSubmit: true}}
+	}
+
+	m.input.SetValue("/mcp")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	next, _ = m.Update(svcMsg(localInfo("MCP\n\nconfig: /tmp/mcp.json servers: none")))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(localDone()))
+	m = next.(model)
+
+	m.input.SetValue("/status")
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	next, _ = m.Update(svcMsg(localInfo("Status\n\nsession: test-session")))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(localDone()))
+	m = next.(model)
+
+	got := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
+	for _, want := range []string{"/mcp", "config: /tmp/mcp.json", "/status", "session: test-session"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected transcript to contain %q:\n%s", want, got)
+		}
+	}
+	if strings.Index(got, "/mcp") > strings.Index(got, "config: /tmp/mcp.json") {
+		t.Fatalf("expected /mcp before its result:\n%s", got)
+	}
+	if strings.Index(got, "/status") > strings.Index(got, "session: test-session") {
+		t.Fatalf("expected /status before its result:\n%s", got)
+	}
+}
+
+func TestNewSessionLocalResultRendersAsNotice(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.width = 80
+	m.height = 14
+	next, _ := m.Update(svcMsg(service.Event{
+		Kind:   service.EventLocalSubmitResult,
+		Status: "info",
+		Text:   "New session\n\nsession:  fresh\nprevious: old\nresume:   whale resume old\nmode:     agent",
+	}))
+	m = next.(model)
+	if len(m.transcript) < 1 {
+		t.Fatalf("expected session notice, got %+v", m.transcript)
+	}
+	got := m.transcript[len(m.transcript)-1]
+	if got.Role != "notice" || got.Kind != tuirender.KindNotice {
+		t.Fatalf("expected session notice kind, got role=%q kind=%q text=%q", got.Role, got.Kind, got.Text)
 	}
 }
 
@@ -4505,19 +4883,50 @@ func TestBusyLocalCommandResultDoesNotDuplicateCompletedPlan(t *testing.T) {
 
 func TestChatStartupHeaderRendersInsideViewportHeight(t *testing.T) {
 	m := newModel(nil, "deepseek-v4-flash", "max", "off")
-	m.width = 80
-	m.height = 10
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 10})
+	m = next.(model)
 	view := m.View()
-	if !strings.Contains(view, "▸ Whale") {
+	if !strings.Contains(view, "WHALE") {
 		t.Fatalf("expected startup header in chat view:\n%s", view)
 	}
-	for _, want := range []string{"effort: max", "thinking: off"} {
+	if strings.Contains(view, "██╗") {
+		t.Fatalf("expected compact short-terminal header, got large logo:\n%s", view)
+	}
+	for _, want := range []string{"model: deepseek-v4-flash"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected startup header to contain %q:\n%s", want, view)
 		}
 	}
 	if got := strings.Count(strings.TrimRight(view, "\n"), "\n") + 1; got != m.height {
 		t.Fatalf("expected view to keep terminal height %d, got %d:\n%s", m.height, got, view)
+	}
+}
+
+func TestChatStartupHeaderUsesLargeLogoWhenTall(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = next.(model)
+	view := m.View()
+	if !strings.Contains(view, "███████╗") {
+		t.Fatalf("expected large startup header in tall chat view:\n%s", view)
+	}
+	for _, want := range []string{"model:     deepseek-v4-flash", "effort:    max", "thinking:  off"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected startup header to contain %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestChatHeaderOmittedWhenBodyTooShort(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = countVisibleLines(m.renderBottom(80)) + 2
+	view := m.View()
+	if strings.Contains(view, "╭") || strings.Contains(view, "╰") || strings.Contains(view, "WHALE") {
+		t.Fatalf("expected header to be omitted instead of partially clipped:\n%s", view)
+	}
+	if got := countVisibleLines(view); got != m.height {
+		t.Fatalf("expected view height %d, got %d:\n%s", m.height, got, view)
 	}
 }
 
@@ -4699,9 +5108,6 @@ func TestBusyMouseWheelFreezesLiveOutputAndScrollsChat(t *testing.T) {
 	}
 	if m.followTail {
 		t.Fatal("expected wheel up to disable tail following")
-	}
-	if !m.mouseCapture {
-		t.Fatal("expected busy chat mode to enable mouse capture for wheel scrolling")
 	}
 	view := m.View()
 	if !strings.Contains(view, "live-11") {
@@ -5216,7 +5622,7 @@ func TestNativeScrollbackSkipsHeaderAndPrintsNewTranscriptOnce(t *testing.T) {
 	m.height = 10
 
 	if cmd := m.flushNativeScrollbackCmd(); cmd != nil {
-		t.Fatal("expected startup header to be marked as already printed")
+		t.Fatal("expected startup chrome header not to enter native scrollback")
 	}
 
 	m.appendTranscript("you", tuirender.KindText, "hello native scrollback")
@@ -5685,6 +6091,32 @@ func TestChatFooterShowsEffectiveThinkingAndEffort(t *testing.T) {
 	assertFooterLastLine(t, view, "model: deepseek-v4-pro")
 	assertFooterLastLine(t, view, "effort: max")
 	assertFooterLastLine(t, view, "thinking: off")
+}
+
+func TestModelSetRefreshesHeaderCache(t *testing.T) {
+	m := newModel(nil, "old-model", "high", "on")
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = next.(model)
+	if view := m.View(); !strings.Contains(view, "model:     old-model") {
+		t.Fatalf("expected initial header model:\n%s", view)
+	}
+
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind:   service.EventLocalSubmitResult,
+		Status: "info",
+		Text:   "model set: newer-model  effort: low  thinking: off",
+	}))
+	m = next.(model)
+
+	view := m.View()
+	if !strings.Contains(view, "model:     newer-model") ||
+		!strings.Contains(view, "effort:    low") ||
+		!strings.Contains(view, "thinking:  off") {
+		t.Fatalf("expected refreshed header after model set:\n%s", view)
+	}
+	if strings.Contains(view, "model:     old-model") {
+		t.Fatalf("expected stale header model to disappear:\n%s", view)
+	}
 }
 
 func TestChatStoppingViewShowsStoppingAboveComposer(t *testing.T) {
@@ -6494,19 +6926,40 @@ func TestClearScreenResetsStateAndShowsHeader(t *testing.T) {
 	if len(m2.diffs) != 0 {
 		t.Fatalf("expected diffs cleared, got %d", len(m2.diffs))
 	}
-	// The transcript should keep only the header banner after clear.
+	// The transcript is cleared; the header is rendered as chat chrome.
 	snap := m2.assembler.Snapshot()
 	if len(snap) != 0 {
 		t.Fatalf("expected empty live assembler, got %+v", snap)
 	}
-	if len(m2.transcript) != 1 {
-		t.Fatalf("expected 1 transcript header, got %d: %+v", len(m2.transcript), m2.transcript)
+	if len(m2.transcript) != 0 {
+		t.Fatalf("expected empty transcript, got %d: %+v", len(m2.transcript), m2.transcript)
 	}
-	if m2.transcript[0].Role != "info" {
-		t.Fatalf("expected info role, got %q", m2.transcript[0].Role)
+	view := m2.View()
+	if !strings.Contains(view, "WHALE") && !strings.Contains(view, "██╗") {
+		t.Fatalf("expected header banner in view after clear:\n%s", view)
 	}
-	if !strings.Contains(m2.transcript[0].Text, "▸ Whale") {
-		t.Fatalf("expected header banner, got: %q", m2.transcript[0].Text)
+	if m2.nativeScrollbackPrinted != len(m2.transcript) {
+		t.Fatalf("expected clear screen to reset native scrollback cursor, got cursor %d for %d transcript items", m2.nativeScrollbackPrinted, len(m2.transcript))
+	}
+}
+
+func TestClearScreenInvalidatesRenderedChatCache(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "high", "on")
+	m.width = 80
+	m.height = 24
+	m.appendTranscript("assistant", tuirender.KindText, "old cached content")
+	if view := m.View(); !strings.Contains(view, "old cached content") {
+		t.Fatalf("expected old content before clear:\n%s", view)
+	}
+
+	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventClearScreen}))
+	m = next.(model)
+	view := m.View()
+	if strings.Contains(view, "old cached content") {
+		t.Fatalf("expected first clear to remove cached content:\n%s", view)
+	}
+	if !strings.Contains(view, "WHALE") && !strings.Contains(view, "██╗") {
+		t.Fatalf("expected header after first clear:\n%s", view)
 	}
 }
 

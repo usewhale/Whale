@@ -1,9 +1,11 @@
 package tui
 
 import (
+	"encoding/json"
 	"strings"
 
 	"github.com/usewhale/whale/internal/core"
+	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
 const maxHydratedVisibleMessages = 8
@@ -39,6 +41,9 @@ func (m *model) hydrateSessionMessages(msgs []core.Message) {
 				})
 			}
 			for _, tc := range msg.ToolCalls {
+				if tc.Name == "update_plan" {
+					continue
+				}
 				m.appendToolCall(tc.ID, tc.Name, summarizeHydratedToolCall(tc))
 			}
 		case core.RoleTool:
@@ -46,6 +51,15 @@ func (m *model) hydrateSessionMessages(msgs []core.Message) {
 				body := strings.TrimSpace(tr.Content)
 				if body == "" {
 					continue
+				}
+				if tr.Name == "update_plan" {
+					if text, ok := hydratedPlanUpdateText(body); ok {
+						if m.assembler == nil {
+							m.assembler = tuirender.NewAssembler()
+						}
+						m.assembler.AddPlanUpdate(text)
+						continue
+					}
 				}
 				role, text := summarizeToolResultForChat(tr.Name, body)
 				if !m.updateToolCallFromResult(tr.ToolCallID, tr.Name, tr.Content, role, text, tr.Metadata) {
@@ -58,6 +72,41 @@ func (m *model) hydrateSessionMessages(msgs []core.Message) {
 			}
 		}
 	}
+}
+
+func hydratedPlanUpdateText(body string) (string, bool) {
+	var payload struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Explanation string `json:"explanation"`
+			Plan        []struct {
+				Step   string `json:"step"`
+				Status string `json:"status"`
+			} `json:"plan"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(body), &payload); err != nil || !payload.Success || len(payload.Data.Plan) == 0 {
+		return "", false
+	}
+	var b strings.Builder
+	if strings.TrimSpace(payload.Data.Explanation) != "" {
+		b.WriteString(strings.TrimSpace(payload.Data.Explanation))
+		b.WriteString("\n\n")
+	}
+	for _, step := range payload.Data.Plan {
+		switch strings.TrimSpace(step.Status) {
+		case "completed":
+			b.WriteString("[x] ")
+		case "in_progress":
+			b.WriteString("[~] ")
+		default:
+			b.WriteString("[ ] ")
+		}
+		b.WriteString(strings.TrimSpace(step.Step))
+		b.WriteString("\n")
+	}
+	text := strings.TrimSpace(b.String())
+	return text, text != ""
 }
 
 func recentHydrationMessages(msgs []core.Message, maxVisible int) []core.Message {

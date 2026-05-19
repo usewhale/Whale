@@ -15,7 +15,7 @@ func TestHandleLocalCommandMCPShowsEmptyStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	handled, out, err := a.HandleLocalCommand("/mcp")
+	handled, out, _, err := a.HandleLocalCommand("/mcp")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -73,6 +73,11 @@ func (s *Service) runTurnWith(start func(context.Context) (<-chan agent.AgentEve
 		case agent.AgentEventTypePlanCompleted:
 			deltas.flushReliable()
 			s.emit(Event{Kind: EventPlanCompleted, Text: ev.Content})
+		case agent.AgentEventTypePlanUpdate:
+			if ev.PlanUpdate != nil {
+				deltas.flushReliable()
+				s.emit(Event{Kind: EventPlanUpdate, Text: agent.FormatPlanUpdateForDisplay(*ev.PlanUpdate)})
+			}
 		case agent.AgentEventTypeProviderRetryScheduled:
 			if ev.ProviderRetry != nil {
 				deltas.flushReliable()
@@ -290,6 +295,11 @@ func summarizeToolCall(call core.ToolCall) string {
 		if qs := body["questions"]; qs != nil {
 			return fmt.Sprintf("request_user_input: %d question(s)", len(asAnySlice(qs)))
 		}
+	case "update_plan":
+		if plan := asAnySlice(body["plan"]); len(plan) > 0 {
+			return fmt.Sprintf("update_plan: %d step(s)", len(plan))
+		}
+		return "update_plan"
 	case "todo_add":
 		if text := strings.TrimSpace(asString(body["text"])); text != "" {
 			return "todo_add: " + text

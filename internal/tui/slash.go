@@ -42,6 +42,11 @@ func (m *model) updateSlashMatches() {
 		return
 	}
 	raw := m.input.Value()
+	if m.inHistoryNav && raw == m.lastHistoryText {
+		m.slash.matches = nil
+		m.slash.selected = 0
+		return
+	}
 	if strings.Contains(raw, "\n") {
 		m.slash.matches = nil
 		m.slash.selected = 0

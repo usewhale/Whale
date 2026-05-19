@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -54,6 +55,8 @@ func Run(cfg app.Config, start app.StartOptions) error {
 		if line == "" {
 			continue
 		}
+		hiddenInput := false
+		skipHooks := false
 		if coreApp.IsResumeMenu(line) {
 			choices, err := coreApp.ListResumeChoices(20)
 			if err != nil {
@@ -80,45 +83,57 @@ func Run(cfg app.Config, start app.StartOptions) error {
 			continue
 		}
 
-		handled, out, synthetic, shouldExit, _, err := coreApp.HandleSlash(line)
+		cmd, err := coreApp.ExecuteSlash(line)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			continue
 		}
-		if handled {
-			if out != "" {
-				fmt.Println(out)
+		if cmd.Handled {
+			if cmd.ClearScreen {
+				clearCLIOutput(os.Stdout)
 			}
-			if shouldExit {
+			if cmd.Text != "" {
+				fmt.Println(cmd.Text)
+			}
+			if cmd.ShouldExit {
 				break
 			}
-			if synthetic == "" {
+			if cmd.Turn == nil {
 				continue
 			}
-			line = synthetic
+			line = cmd.Turn.Input
+			hiddenInput = cmd.Turn.Hidden
+			skipHooks = cmd.Turn.SkipUserPromptHooks
 		}
-		handled, out, err = coreApp.HandleLocalCommand(line)
+		cmd, err = coreApp.ExecuteLocalCommand(line)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			continue
 		}
-		if handled {
-			if out != "" {
-				fmt.Println(out)
+		if cmd.Handled {
+			if cmd.Text != "" {
+				fmt.Println(cmd.Text)
 			}
-			continue
+			if cmd.Turn == nil {
+				continue
+			}
+			line = cmd.Turn.Input
+			hiddenInput = cmd.Turn.Hidden
+			skipHooks = cmd.Turn.SkipUserPromptHooks
 		}
 		if strings.HasPrefix(line, "/") {
 			fmt.Fprintf(os.Stderr, "error: unknown command\n")
 			continue
 		}
-		hookOutBlocked, hookOut, updated := coreApp.RunUserPromptSubmitHook(line)
-		line = updated
-		if hookOut != "" {
-			fmt.Println(hookOut)
-		}
-		if hookOutBlocked {
-			continue
+		if !skipHooks {
+			hookOutBlocked, hookOut, updated := coreApp.RunUserPromptSubmitHook(line)
+			line = updated
+			if hookOut != "" {
+				fmt.Println(hookOut)
+			}
+			if hookOutBlocked {
+				continue
+			}
 		}
 
 		turnCtx, cancelTurn := context.WithCancel(ctx)
@@ -141,7 +156,7 @@ func Run(cfg app.Config, start app.StartOptions) error {
 				}
 			}
 		}()
-		events, runErr := coreApp.RunTurn(turnCtx, line, false)
+		events, runErr := coreApp.RunTurn(turnCtx, line, hiddenInput)
 		if runErr != nil {
 			cancelTurn()
 			turnCancelMu.Lock()
@@ -172,6 +187,11 @@ func Run(cfg app.Config, start app.StartOptions) error {
 		}
 	}
 	return scanner.Err()
+}
+
+func clearCLIOutput(out io.Writer) {
+	fmt.Fprint(out, "\033[H\033[2J\033[3J")
+	fmt.Fprintln(out, "terminal cleared")
 }
 
 func promptResumeChoice(scanner *bufio.Scanner, app *app.App) error {

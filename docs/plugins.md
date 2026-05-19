@@ -12,38 +12,30 @@ The current plugin platform supports:
 - global/project enablement through `[plugins].disabled`;
 - plugin-owned tools, slash commands, startup context, skills, hooks, storage
   paths, service status, and diagnostics;
-- `/plugins` discovery, `/plugins status`, `/plugins doctor`, and `/plugins reload`;
-- three official built-in plugins:
+- `/plugins` installed-plugin management in the TUI;
+- one official built-in plugin:
   - `memory`: functional explicit memory with tools, `/memory`, startup context,
-    and plugin storage;
-  - `skills-improver`: scaffold plugin that contributes a Skill and command
-    surface, plus a no-op `Stop` hook for future evidence collection, but does
-    not rewrite skills yet;
-  - `local-indexer`: scaffold plugin that declares local indexing/model
-    capabilities and a no-op `Stop` hook, but does not run inference yet.
+    and plugin storage.
 
 The first milestone is not a marketplace. It is a stable internal plugin
 contract proven by official plugins.
 
 ## Commands
 
-Use `/plugins` to inspect the host:
+Use `/plugins` to manage installed built-in plugins:
 
 ```text
 /plugins
-/plugins status memory
-/plugins status skills-improver
-/plugins status local-indexer
-/plugins doctor
-/plugins reload
 ```
 
-Official plugin commands are regular slash commands:
+The TUI lists installed plugins, their short descriptions, and contributed
+commands/tools/skills/hooks. Press Space to enable or disable the selected
+plugin. Press Esc to close the list.
+
+Official plugin commands are regular slash commands when the plugin exposes one:
 
 ```text
 /memory
-/skills-improver status
-/local-indexer status
 ```
 
 If a plugin is disabled, its slash command is unavailable and `/plugins` marks
@@ -428,8 +420,8 @@ The plugin should not inject full topic files automatically.
 Current command surface:
 
 - `/memory` shows current global and project indexes.
-- `/memory show <scope>/<name>` shows a body.
-- `/memory forget <scope>/<name>` deletes a named memory.
+- `/memory show <global|project>/<name>` shows a body.
+- `/memory forget <global|project>/<name>` deletes a named memory.
 - `/memory path` shows storage paths for manual inspection.
 
 Later shortcut:
@@ -466,32 +458,33 @@ memory plugin setting after users trust the basic flow.
 
 ## Skills Improver Plugin
 
-This is the second official plugin. It currently ships as a scaffold so the host
-can expose skill contribution and plugin command/status behavior before Whale
-implements proposal generation.
+This is a planned official plugin. It is not registered as a built-in plugin in
+the current release because the user workflow and review/apply boundary are not
+stable enough yet.
 
 Purpose:
 
-- inspect existing skills;
-- look at durable user feedback and selected session evidence;
-- propose skill improvements;
-- require user approval before writing.
+- inspect filesystem skills;
+- collect explicit user feedback and failed tool results through plugin hooks;
+- expose a reviewed proposal workflow;
+- save proposal artifacts in plugin storage;
+- avoid rewriting `SKILL.md` directly from background capture.
 
-It should not automatically rewrite `SKILL.md`.
+It should not automatically rewrite `SKILL.md`. Until the workflow is clearer,
+it should also not appear in `/plugins`, `/skills`, slash commands, tools, or
+hooks.
 
-Target command shape:
+Current user-facing entrypoint:
 
-- `/skills improve`: show proposals.
-- `/skills improve <name>`: focus on one skill.
-- `/skills apply-proposal <id>`: apply a confirmed patch.
+- none.
 
-The plugin depends on memory because stable feedback should first become memory
-before it changes reusable instructions.
+Saved proposals store the original `SKILL.md` SHA-256 so a future apply flow can
+reject stale, undiscovered, or invalid skill changes.
 
 ## Local Indexer Plugin
 
-This is the third official plugin. It currently ships as a scaffold so the host
-can expose local-model/indexing capabilities before Whale bundles a local model.
+This is a planned official plugin. It should not ship until the local
+model/indexing path is ready.
 
 Purpose:
 
@@ -572,4 +565,4 @@ official and built in.
 Build only the host features required by the memory plugin. Do not build a
 marketplace, arbitrary plugin runtime, local model layer, or automatic skill
 rewriter yet. Use memory to prove the extension boundary, then let
-skills-improver and local-indexer pressure-test the API later.
+skills-improver pressure-test the API later.

@@ -272,6 +272,19 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			events <- AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}
 			continue
 		}
+		if call.Name == "update_plan" {
+			res, err := a.handleUpdatePlan(call, events)
+			if err != nil {
+				tr := core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: err.Error(), IsError: true}
+				results = append(results, tr)
+				events <- AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}
+				continue
+			}
+			results = append(results, res)
+			r := res
+			events <- AgentEvent{Type: AgentEventTypeToolResult, Result: &r}
+			continue
+		}
 		decision := a.policy.Decide(spec, call)
 		events <- AgentEvent{
 			Type: AgentEventTypeToolPolicyDecision,

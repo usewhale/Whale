@@ -50,6 +50,10 @@ func (m *model) consumeMouseCSIFragment(msg tea.KeyMsg) bool {
 	if text == "" {
 		return false
 	}
+	if !m.busy && !m.mouseCapture {
+		m.pendingMouseCSIFragment = false
+		return false
+	}
 	if msg.Alt && text == "[" {
 		m.pendingMouseCSIFragment = true
 		return true

@@ -16,6 +16,7 @@ var excludedChildTools = map[string]bool{
 	"edit":               true,
 	"write":              true,
 	"apply_patch":        true,
+	"update_plan":        true,
 	"todo_add":           true,
 	"todo_update":        true,
 	"todo_remove":        true,

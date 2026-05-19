@@ -119,6 +119,8 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 		return m.handleSkillsMenuKey(msg), false, true
 	case modeSkillsManager:
 		return m.handleSkillsManagerKey(msg), false, true
+	case modePluginsManager:
+		return m.handlePluginsManagerKey(msg), false, true
 	}
 	cmd, quit, handled := m.handleGlobalKey(msg)
 	if handled {
@@ -174,6 +176,9 @@ func (m *model) handleChatModeKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 			return nil, true
 		}
 	case "up":
+		if m.shouldHandleHistoryNavigation() && m.historyPrev() {
+			return nil, true
+		}
 		if m.hasSlashSuggestions() {
 			if m.slash.selected > 0 {
 				m.slash.selected--
@@ -186,10 +191,10 @@ func (m *model) handleChatModeKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 			}
 			return nil, true
 		}
-		if m.shouldHandleHistoryNavigation() && m.historyPrev() {
+	case "down":
+		if m.shouldHandleHistoryNavigation() && m.historyNext() {
 			return nil, true
 		}
-	case "down":
 		if m.hasSlashSuggestions() {
 			if m.slash.selected < len(m.slash.matches)-1 {
 				m.slash.selected++
@@ -200,9 +205,6 @@ func (m *model) handleChatModeKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 			if m.skills.selected < len(m.skills.matches)-1 {
 				m.skills.selected++
 			}
-			return nil, true
-		}
-		if m.shouldHandleHistoryNavigation() && m.historyNext() {
 			return nil, true
 		}
 	case "tab":
@@ -464,7 +466,7 @@ func (m *model) handlePlanImplementationKey(msg tea.KeyMsg) tea.Cmd {
 			m.startBusy()
 			m.status = "running"
 			m.chatMode = "agent"
-			m.dispatchIntent(service.Intent{Kind: service.IntentImplementPlan})
+			m.dispatchIntent(service.Intent{Kind: service.IntentImplementPlan, Input: m.lastProposedPlan})
 			m.mode = modeChat
 			m.refreshViewportContentFollow(true)
 			return tea.Sequence(m.flushNativeScrollbackCmd(), busyTickCmd())

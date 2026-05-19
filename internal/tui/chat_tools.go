@@ -13,7 +13,7 @@ func (m *model) appendToolCall(toolCallID, toolName, text string) {
 		m.assembler = tuirender.NewAssembler()
 	}
 	m.markToolCallPending(toolCallID)
-	m.assembler.AddToolCall(toolCallID, summarizeToolCallForChat(toolName, text))
+	m.assembler.AddToolCall(toolCallID, toolName, summarizeToolCallForChat(toolName, text))
 	m.refreshLiveViewportContent()
 }
 
@@ -104,6 +104,8 @@ func summarizeToolCallForChat(toolName, text string) string {
 		}
 		role := taskRoleFromText(text)
 		return "Subagent " + role + "\n" + firstNonEmpty(detail, "starting")
+	case "plan":
+		return "Updating plan"
 	case "todo":
 		return todoToolTitle(toolName, text, "running")
 	default:
@@ -183,6 +185,8 @@ func completedToolTitle(toolName, raw, previous string) string {
 		}
 		role := firstNonEmpty(asString(env.data["role"]), "explore")
 		return "Subagent " + role
+	case "plan":
+		return "Updated plan"
 	case "todo":
 		return todoToolTitle(toolName, firstNonEmpty(previousToolActionLine(previous), raw), "done")
 	default:
@@ -219,7 +223,7 @@ func shouldShowUnmatchedToolResult(toolName, role, text string) bool {
 	if strings.TrimSpace(text) == "" {
 		return false
 	}
-	if toolDisplayKind(toolName) == "todo" && strings.TrimSpace(role) == "result_ok" {
+	if (toolDisplayKind(toolName) == "todo" || toolDisplayKind(toolName) == "plan") && strings.TrimSpace(role) == "result_ok" {
 		return false
 	}
 	return true
@@ -235,6 +239,8 @@ func toolDisplayKind(toolName string) string {
 		return "edit"
 	case "parallel_reason", "spawn_subagent":
 		return "task"
+	case "update_plan":
+		return "plan"
 	case "todo_add", "todo_list", "todo_update", "todo_remove", "todo_clear_done":
 		return "todo"
 	default:

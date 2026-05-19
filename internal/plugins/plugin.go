@@ -106,9 +106,10 @@ type DoctorProvider interface {
 type CommandClass string
 
 const (
-	CommandReadOnly CommandClass = "read_only"
-	CommandMutating CommandClass = "mutating"
-	CommandUI       CommandClass = "ui"
+	CommandReadOnly     CommandClass = "read_only"
+	CommandMutating     CommandClass = "mutating"
+	CommandUI           CommandClass = "ui"
+	CommandTurnStarting CommandClass = "turn"
 )
 
 type SlashCommand struct {
@@ -116,12 +117,21 @@ type SlashCommand struct {
 	Usage       string
 	Description string
 	Class       CommandClass
+	Classify    func(line string) CommandClass
 	Run         func(context.Context, Context, string) (CommandResult, error)
 }
 
 type CommandResult struct {
 	Text    string
 	Mutated bool
+	Turn    *CommandTurn
+}
+
+type CommandTurn struct {
+	Input               string
+	Hidden              bool
+	SkipUserPromptHooks bool
+	SkipSkillInjection  bool
 }
 
 type ServiceStatus struct {
@@ -160,7 +170,7 @@ type PluginStatus struct {
 type Manager struct {
 	ctx      Context
 	enabled  []Plugin
-	disabled []Manifest
+	disabled []Plugin
 	byID     map[string]Plugin
 	commands map[string]registeredCommand
 	diag     []Diagnostic
@@ -190,7 +200,7 @@ func NewManager(ctx Context, disabled []string) *Manager {
 			continue
 		}
 		if disabledSet[manifest.ID] {
-			m.disabled = append(m.disabled, manifest)
+			m.disabled = append(m.disabled, p)
 			continue
 		}
 		m.enabled = append(m.enabled, p)
@@ -199,7 +209,9 @@ func NewManager(ctx Context, disabled []string) *Manager {
 	sort.Slice(m.enabled, func(i, j int) bool {
 		return normalizeManifest(m.enabled[i].Manifest()).ID < normalizeManifest(m.enabled[j].Manifest()).ID
 	})
-	sort.Slice(m.disabled, func(i, j int) bool { return m.disabled[i].ID < m.disabled[j].ID })
+	sort.Slice(m.disabled, func(i, j int) bool {
+		return normalizeManifest(m.disabled[i].Manifest()).ID < normalizeManifest(m.disabled[j].Manifest()).ID
+	})
 	m.collectCommands()
 	return m
 }
@@ -351,6 +363,24 @@ func (m *Manager) CommandClass(name string) (CommandClass, bool) {
 	return cmd.command.Class, true
 }
 
+func (m *Manager) CommandClassForLine(line string) (CommandClass, bool) {
+	if m == nil {
+		return "", false
+	}
+	fields := strings.Fields(strings.TrimSpace(line))
+	if len(fields) == 0 {
+		return "", false
+	}
+	reg, ok := m.commands[fields[0]]
+	if !ok {
+		return "", false
+	}
+	if reg.command.Classify != nil {
+		return reg.command.Classify(line), true
+	}
+	return reg.command.Class, true
+}
+
 func (m *Manager) HandleCommand(ctx context.Context, line string) (CommandResult, bool, error) {
 	if m == nil {
 		return CommandResult{}, false, nil
@@ -368,6 +398,29 @@ func (m *Manager) HandleCommand(ctx context.Context, line string) (CommandResult
 	}
 	res, err := reg.command.Run(ctx, m.ctx, line)
 	return res, true, err
+}
+
+func BuiltinSlashCommandClass(line string) (CommandClass, bool) {
+	fields := strings.Fields(strings.TrimSpace(line))
+	if len(fields) == 0 {
+		return "", false
+	}
+	for _, p := range builtins() {
+		provider, ok := p.(SlashCommandProvider)
+		if !ok {
+			continue
+		}
+		for _, cmd := range provider.SlashCommands(Context{}) {
+			if cmd.Name != fields[0] {
+				continue
+			}
+			if cmd.Classify != nil {
+				return cmd.Classify(line), true
+			}
+			return cmd.Class, true
+		}
+	}
+	return "", false
 }
 
 func (m *Manager) EnabledIDs() []string {
@@ -392,9 +445,10 @@ func (m *Manager) Status(id string) (PluginStatus, bool) {
 	if p := m.byID[id]; p != nil {
 		return m.statusFor(p, true), true
 	}
-	for _, manifest := range m.disabled {
+	for _, p := range m.disabled {
+		manifest := normalizeManifest(p.Manifest())
 		if manifest.ID == id {
-			return PluginStatus{Manifest: manifest, Enabled: false, Paths: m.pathsFor(manifest.ID)}, true
+			return m.statusFor(p, false), true
 		}
 	}
 	return PluginStatus{}, false
@@ -408,8 +462,8 @@ func (m *Manager) Statuses() []PluginStatus {
 	for _, p := range m.enabled {
 		out = append(out, m.statusFor(p, true))
 	}
-	for _, manifest := range m.disabled {
-		out = append(out, PluginStatus{Manifest: manifest, Enabled: false, Paths: m.pathsFor(manifest.ID)})
+	for _, p := range m.disabled {
+		out = append(out, m.statusFor(p, false))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Manifest.ID < out[j].Manifest.ID })
 	return out
@@ -485,8 +539,6 @@ func (m *Manager) pathsFor(pluginID string) map[string]string {
 func builtins() []Plugin {
 	return []Plugin{
 		memoryPlugin{},
-		skillsImproverPlugin{},
-		localIndexerPlugin{},
 	}
 }
 
@@ -533,7 +585,7 @@ func (memoryPlugin) Manifest() Manifest {
 		ID:          memoryplugin.PluginID,
 		Name:        "Memory",
 		Version:     "0.1.0",
-		Description: "Durable global and project memory across Whale sessions.",
+		Description: "Durable global and project memory across sessions.",
 		Official:    true,
 		Capabilities: []Capability{
 			CapabilityTools,
@@ -561,15 +613,33 @@ func (p memoryPlugin) SlashCommands(ctx Context) []SlashCommand {
 	return []SlashCommand{
 		{
 			Name:        "/memory",
-			Usage:       "/memory [list|path|show <scope>/<name>|forget <scope>/<name>]",
-			Description: "List, inspect, or remove Whale memories.",
+			Usage:       "/memory [list|path|show <global|project>/<name>|forget <global|project>/<name>]",
+			Description: "List, inspect, or remove memories.",
 			Class:       CommandReadOnly,
+			Classify:    classifyMemoryCommand,
 			Run: func(_ context.Context, c Context, line string) (CommandResult, error) {
 				out, _, err := memoryplugin.HandleCommand(p.store(c), line)
 				return CommandResult{Text: out, Mutated: memoryForgetDeleted(line, out, err)}, err
 			},
 		},
 	}
+}
+
+func classifyMemoryCommand(line string) CommandClass {
+	fields := strings.Fields(strings.TrimSpace(line))
+	if len(fields) == 1 {
+		return CommandReadOnly
+	}
+	if len(fields) == 2 && (fields[1] == "list" || fields[1] == "path") {
+		return CommandReadOnly
+	}
+	if len(fields) == 3 && fields[1] == "show" {
+		return CommandReadOnly
+	}
+	if len(fields) == 3 && fields[1] == "forget" {
+		return CommandMutating
+	}
+	return ""
 }
 
 func memoryForgetDeleted(line, out string, err error) bool {
@@ -586,74 +656,6 @@ func (p memoryPlugin) Doctor(_ context.Context, ctx Context) []Diagnostic {
 		return []Diagnostic{{PluginID: memoryplugin.PluginID, Level: DiagnosticFail, Label: "storage", Detail: "memory data root is empty"}}
 	}
 	return []Diagnostic{{PluginID: memoryplugin.PluginID, Level: DiagnosticOK, Label: "storage", Detail: store.Root()}}
-}
-
-type skillsImproverPlugin struct{}
-
-func (skillsImproverPlugin) Manifest() Manifest {
-	return Manifest{
-		ID:          "skills-improver",
-		Name:        "Skills Improver",
-		Version:     "0.1.0",
-		Description: "Scaffold for proposing reviewed improvements to Whale skills.",
-		Official:    true,
-		Capabilities: []Capability{
-			CapabilitySlashCommands,
-			CapabilitySkills,
-			CapabilityHooks,
-			CapabilityStorage,
-		},
-		Permissions: []Permission{PermissionReadPluginData, PermissionWritePluginData, PermissionReadWorkspace},
-		Status:      "scaffold",
-	}
-}
-
-func (skillsImproverPlugin) SlashCommands(ctx Context) []SlashCommand {
-	return []SlashCommand{
-		{
-			Name:        "/skills-improver",
-			Usage:       "/skills-improver [status|proposals]",
-			Description: "Inspect the skills-improver official plugin scaffold.",
-			Class:       CommandReadOnly,
-			Run: func(_ context.Context, _ Context, line string) (CommandResult, error) {
-				fields := strings.Fields(strings.TrimSpace(line))
-				if len(fields) == 1 || (len(fields) == 2 && fields[1] == "status") {
-					return CommandResult{Text: "skills-improver\n\nstatus: scaffold\nproposals: none\nbehavior: proposes reviewed SKILL.md changes; automatic skill rewrites are not implemented"}, nil
-				}
-				if len(fields) == 2 && fields[1] == "proposals" {
-					return CommandResult{Text: "skills-improver proposals\n\nnone"}, nil
-				}
-				return CommandResult{}, fmt.Errorf("usage: /skills-improver [status|proposals]")
-			},
-		},
-	}
-}
-
-func (skillsImproverPlugin) Skills(ctx Context) []*skills.Skill {
-	return []*skills.Skill{{
-		Name:          "skills-improver",
-		Description:   "Review skill usage and draft human-reviewed SKILL.md improvement proposals.",
-		When:          "Use when asked to improve, evolve, review, or propose changes to Whale skills.",
-		Instructions:  "Inspect current skill files and usage evidence, identify one concrete improvement, and draft a proposal. Do not modify SKILL.md automatically unless the user explicitly asks for implementation after reviewing the proposal.",
-		Path:          "plugin://skills-improver",
-		SkillFilePath: "plugin://skills-improver/SKILL.md",
-	}}
-}
-
-func (skillsImproverPlugin) Hooks(Context) []agent.HookHandler {
-	return []agent.HookHandler{{
-		Event:       agent.HookEventStop,
-		Name:        "skills-improver.collect-evidence",
-		Source:      "plugin:skills-improver",
-		Description: "Observe completed turns for future skill improvement proposals.",
-		Run: func(context.Context, agent.HookPayload) agent.HookResult {
-			return agent.HookResult{Decision: agent.HookDecisionPass}
-		},
-	}}
-}
-
-func (skillsImproverPlugin) Doctor(_ context.Context, _ Context) []Diagnostic {
-	return []Diagnostic{{PluginID: "skills-improver", Level: DiagnosticWarn, Label: "implementation", Detail: "scaffold only; proposal generation is not implemented"}}
 }
 
 type localIndexerPlugin struct{}
@@ -684,6 +686,7 @@ func (localIndexerPlugin) SlashCommands(ctx Context) []SlashCommand {
 			Usage:       "/local-indexer [status|rebuild]",
 			Description: "Inspect the local-indexer official plugin scaffold.",
 			Class:       CommandReadOnly,
+			Classify:    classifyLocalIndexerCommand,
 			Run: func(_ context.Context, _ Context, line string) (CommandResult, error) {
 				fields := strings.Fields(strings.TrimSpace(line))
 				if len(fields) == 1 || (len(fields) == 2 && fields[1] == "status") {
@@ -696,6 +699,17 @@ func (localIndexerPlugin) SlashCommands(ctx Context) []SlashCommand {
 			},
 		},
 	}
+}
+
+func classifyLocalIndexerCommand(line string) CommandClass {
+	fields := strings.Fields(strings.TrimSpace(line))
+	if len(fields) == 1 {
+		return CommandReadOnly
+	}
+	if len(fields) == 2 && (fields[1] == "status" || fields[1] == "rebuild") {
+		return CommandReadOnly
+	}
+	return ""
 }
 
 func (localIndexerPlugin) Services(Context) []ServiceStatus {

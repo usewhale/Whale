@@ -12,7 +12,7 @@ import (
 
 func TestHandleLocalCommandCompactUsageError(t *testing.T) {
 	a := &App{sessionID: "s1", workspaceRoot: t.TempDir()}
-	handled, out, err := a.HandleLocalCommand("/compact extra")
+	handled, out, _, err := a.HandleLocalCommand("/compact extra")
 	if !handled {
 		t.Fatal("expected /compact extra to be handled")
 	}

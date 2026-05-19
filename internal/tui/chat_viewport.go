@@ -15,13 +15,13 @@ const (
 func (m *model) refreshViewportContent() {
 	mainWidth, _ := m.layoutDims()
 	bodyHeight := m.viewportBodyHeight(mainWidth)
-	m.refreshViewportContentForSize(mainWidth, bodyHeight, false)
+	m.refreshViewportContentForSize(mainWidth, m.chatViewportBodyHeight(mainWidth, bodyHeight), false)
 }
 
 func (m *model) refreshViewportContentFollow(forceBottom bool) {
 	mainWidth, _ := m.layoutDims()
 	bodyHeight := m.viewportBodyHeight(mainWidth)
-	m.refreshViewportContentForSize(mainWidth, bodyHeight, forceBottom)
+	m.refreshViewportContentForSize(mainWidth, m.chatViewportBodyHeight(mainWidth, bodyHeight), forceBottom)
 }
 
 func (m *model) refreshLiveViewportContent() {
@@ -34,12 +34,14 @@ func (m *model) refreshLiveViewportContent() {
 func (m *model) refreshViewportContentIfBodyHeightChanged(prevMainWidth, prevBodyHeight int) {
 	mainWidth, _ := m.layoutDims()
 	bodyHeight := m.viewportBodyHeight(mainWidth)
+	contentHeight := m.chatViewportBodyHeight(mainWidth, bodyHeight)
+	prevContentHeight := m.chatViewportBodyHeight(prevMainWidth, prevBodyHeight)
 	if !m.viewportLayoutReady || m.viewportLayoutPage != m.page || mainWidth != prevMainWidth {
-		m.refreshViewportContentForSize(mainWidth, bodyHeight, false)
+		m.refreshViewportContentForSize(mainWidth, contentHeight, false)
 		return
 	}
-	if bodyHeight != prevBodyHeight {
-		m.syncViewportLayoutForBodyHeight(mainWidth, bodyHeight)
+	if contentHeight != prevContentHeight {
+		m.syncViewportLayoutForBodyHeight(mainWidth, contentHeight)
 	}
 }
 
@@ -120,7 +122,8 @@ func (m *model) freezeChatViewport() {
 	}
 	mainWidth, _ := m.layoutDims()
 	bodyHeight := m.viewportBodyHeight(mainWidth)
-	m.chat.SetSize(max(10, mainWidth), max(1, bodyHeight))
+	chatHeight := m.chatViewportBodyHeight(mainWidth, bodyHeight)
+	m.chat.SetSize(max(10, mainWidth), max(1, chatHeight))
 	m.frozenChatMessages = append([]tuirender.UIMessage(nil), m.chatMessages()...)
 	m.chat.SetMessages(m.frozenChatMessages, max(20, mainWidth-2))
 	if m.followTail {
@@ -151,7 +154,7 @@ func (m model) renderChatLines(width int) []string {
 }
 
 func (m model) scrollbackText(messages []tuirender.UIMessage) string {
-	lines := tuirender.ChatLines(messages, m.chatRenderWidth())
+	lines := tuirender.ChatLines(m.focusMessages(messages), m.chatRenderWidth())
 	return strings.TrimRight(strings.Join(lines, "\n"), "\n")
 }
 
@@ -160,13 +163,14 @@ func (m model) chatMessages() []tuirender.UIMessage {
 	if m.assembler != nil {
 		live = m.assembler.Snapshot()
 	}
-	if len(m.transcript) == 0 && len(live) == 0 {
+	if len(m.transcript) == 0 && len(live) == 0 && len(m.ephemeralMessages) == 0 {
 		return nil
 	}
-	out := make([]tuirender.UIMessage, 0, len(m.transcript)+len(live))
+	out := make([]tuirender.UIMessage, 0, len(m.transcript)+len(live)+len(m.ephemeralMessages))
 	out = append(out, m.transcript...)
 	out = append(out, live...)
-	return out
+	out = append(out, m.ephemeralMessages...)
+	return m.focusMessages(out)
 }
 
 func (m model) chatContent(width int) string {

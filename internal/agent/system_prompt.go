@@ -42,6 +42,7 @@ Ask mode is active.
 - You have access to all tools, including read-only and write tools.
 - You may read, edit, and create files, run shell commands, and use all other available tools to accomplish the user's request.
 - When mode restrictions blocked a previous turn, you are no longer constrained by those restrictions — carry out the request fully.
+- For implementation work with more than one step, use update_plan to initialize and maintain a concise execution checklist. Keep at most one item in_progress and mark steps completed promptly.
 	`))
 	}
 	systemBlocks = append(systemBlocks, renderDelegationPolicyBlock())

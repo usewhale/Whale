@@ -41,6 +41,7 @@ const (
 	AgentEventTypeUserInputCancelled     AgentEventType = "user_input_cancelled"
 	AgentEventTypePlanDelta              AgentEventType = "plan_delta"
 	AgentEventTypePlanCompleted          AgentEventType = "plan_completed"
+	AgentEventTypePlanUpdate             AgentEventType = "plan_update"
 	AgentEventTypePlanStepBlocked        AgentEventType = "plan_step_blocked"
 	AgentEventTypeProviderRetryScheduled AgentEventType = "provider_retry_scheduled"
 	AgentEventTypeToolRecoveryScheduled  AgentEventType = "tool_recovery_scheduled"
@@ -141,12 +142,23 @@ type AgentEvent struct {
 	Budget         *BudgetWarningInfo
 	Hook           *HookEventInfo
 	Task           *TaskActivityInfo
+	PlanUpdate     *PlanUpdateInfo
 	ToolCall       *core.ToolCall
 	UserInputReq   *core.UserInputRequest
 	UserInputResp  *core.UserInputResponse
 	Result         *core.ToolResult
 	Message        *core.Message
 	Err            error
+}
+
+type PlanUpdateStep struct {
+	Step   string `json:"step"`
+	Status string `json:"status"`
+}
+
+type PlanUpdateInfo struct {
+	Explanation string           `json:"explanation,omitempty"`
+	Plan        []PlanUpdateStep `json:"plan"`
 }
 
 type TaskActivityInfo struct {

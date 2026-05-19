@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/usewhale/whale/internal/app"
 	"github.com/usewhale/whale/internal/app/service"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
@@ -75,6 +76,7 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 	case service.EventPlanCompleted:
 		m.clearProviderRetryStatus()
 		if strings.TrimSpace(ev.Text) != "" {
+			m.lastProposedPlan = strings.TrimSpace(ev.Text)
 			if m.assembler == nil {
 				m.assembler = tuirender.NewAssembler()
 			}
@@ -83,6 +85,16 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 			m.sawPlanThisTurn = true
 		}
 		m.addLog(logEntry{Kind: "plan_completed", Source: "plan", Summary: truncateLine(ev.Text, 120), Raw: ev.Text})
+	case service.EventPlanUpdate:
+		m.clearProviderRetryStatus()
+		if strings.TrimSpace(ev.Text) != "" {
+			if m.assembler == nil {
+				m.assembler = tuirender.NewAssembler()
+			}
+			m.assembler.AddPlanUpdate(ev.Text)
+			m.refreshLiveViewportContent()
+		}
+		m.addLog(logEntry{Kind: "plan_update", Source: "plan", Summary: truncateLine(ev.Text, 120), Raw: ev.Text})
 	case service.EventProviderRetry:
 		m.setProviderRetryStatus(ev)
 		m.addLog(logEntry{Kind: "api_retry", Source: "provider", Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Metadata)})
@@ -113,6 +125,7 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 			role = "info"
 		}
 		if !isEnvironmentInventoryBlock(ev.Text) {
+			m.appendLocalCommandEcho(m.popLocalSubmitCommand())
 			m.appendLocalSubmitResult(role, ev.Text)
 		} else {
 			m.addLog(logEntry{
@@ -131,7 +144,9 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		}
 	case service.EventToolCall:
 		m.clearProviderRetryStatus()
-		m.appendToolCall(ev.ToolCallID, ev.ToolName, ev.Text)
+		if ev.ToolName != "update_plan" {
+			m.appendToolCall(ev.ToolCallID, ev.ToolName, ev.Text)
+		}
 		m.addLog(logEntry{
 			Kind:    "tool_call",
 			Source:  ev.ToolName,
@@ -227,6 +242,9 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		if m.localSubmitPending > 0 {
 			m.localSubmitPending--
 		}
+		if len(m.localSubmitCommands) > m.localSubmitPending {
+			m.localSubmitCommands = m.localSubmitCommands[len(m.localSubmitCommands)-m.localSubmitPending:]
+		}
 		if !m.busy && m.localSubmitPending > 0 {
 			m.status = "wait for command to finish"
 		}
@@ -298,11 +316,48 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		m.skills.selected = 0
 		m.setSkillsManagerItems(ev.Skills)
 		m.status = "skills"
+	case service.EventPluginsManager:
+		m.clearProviderRetryStatus()
+		m.stopBusy()
+		m.stopping = false
+		m.mode = modePluginsManager
+		m.slash.matches = nil
+		m.slash.selected = 0
+		m.skills.matches = nil
+		m.skills.selected = 0
+		m.setPluginsManagerItems(ev.Plugins)
+		m.status = "plugins"
+	case service.EventViewModeChanged:
+		m.clearProviderRetryStatus()
+		mode := strings.TrimSpace(ev.ViewMode)
+		if mode == "" {
+			mode = strings.TrimSpace(ev.Text)
+			switch mode {
+			case app.ViewModeToggleMessage(app.ViewModeFocus):
+				mode = app.ViewModeFocus
+			case app.ViewModeToggleMessage(app.ViewModeDefault):
+				mode = app.ViewModeDefault
+			default:
+				mode = strings.TrimPrefix(mode, "view:")
+				mode = strings.TrimSpace(mode)
+			}
+		}
+		if mode == "" {
+			mode = app.ViewModeDefault
+		}
+		m.viewMode = mode
+		if strings.TrimSpace(ev.Text) != "" {
+			m.setEphemeralInfo(ev.Text)
+		} else {
+			m.refreshViewportContentFollow(true)
+		}
+		m.status = "ready"
 	case service.EventClearScreen:
 		m.clearProviderRetryStatus()
 		m.assembler.Reset()
 		m.clearPendingToolCalls()
-		m.resetTranscriptWithHeader()
+		m.ephemeralMessages = nil
+		m.resetTranscript()
 		m.resetTurnVisibility()
 		m.logs = nil
 		m.diffs = nil
@@ -312,7 +367,8 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		m.clearProviderRetryStatus()
 		m.assembler.Reset()
 		m.clearPendingToolCalls()
-		m.resetTranscriptWithHeader()
+		m.ephemeralMessages = nil
+		m.resetTranscript()
 		m.resetTurnVisibility()
 		m.logs = nil
 		m.diffs = nil
@@ -356,6 +412,7 @@ func (m *model) handleTurnDone(ev service.Event) tea.Cmd {
 	if isAgentTurnDone(ev) {
 		reconciledAssistant = m.reconcileFinalAssistant(ev.LastResponse)
 	}
+	m.markMissingProposedPlanIfNeeded(wasBusy)
 	m.markNoFinalAnswerIfNeeded()
 	m.commitLiveTranscript(reconciledAssistant && !wasFrozen)
 	if wasFrozen {
@@ -404,7 +461,40 @@ func (m *model) appendLocalSubmitResult(role, text string) {
 	if m.assembler != nil && m.assembler.Len() > 0 {
 		m.commitLiveTranscript(false)
 	}
+	if isSessionNotice(text) {
+		m.appendTranscript("notice", tuirender.KindNotice, text)
+		return
+	}
 	m.appendTranscript(role, tuirender.KindText, text)
+}
+
+func (m *model) popLocalSubmitCommand() string {
+	if len(m.localSubmitCommands) == 0 {
+		return ""
+	}
+	cmd := m.localSubmitCommands[0]
+	copy(m.localSubmitCommands, m.localSubmitCommands[1:])
+	m.localSubmitCommands = m.localSubmitCommands[:len(m.localSubmitCommands)-1]
+	return cmd
+}
+
+func (m *model) appendLocalCommandEcho(cmd string) {
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return
+	}
+	if m.busy {
+		m.append("you", cmd)
+		return
+	}
+	if m.assembler != nil && m.assembler.Len() > 0 {
+		m.commitLiveTranscript(false)
+	}
+	m.appendTranscript("you", tuirender.KindText, cmd)
+}
+
+func isSessionNotice(text string) bool {
+	return strings.HasPrefix(strings.TrimSpace(text), "New session\n")
 }
 
 func (m *model) resetTurnVisibility() {

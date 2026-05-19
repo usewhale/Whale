@@ -60,9 +60,9 @@ func shellRunDescriptionFor(rt shell.RuntimeDescription) string {
 var shellReadOnlyAllowPrefixes = []string{
 	"ls", "pwd", "echo", "cat", "head", "tail", "wc", "file", "tree", "find", "grep", "rg",
 	"git status", "git diff", "git log", "git show", "git branch", "git remote", "git rev-parse", "git config --get",
-	"go test", "go vet", "go version",
-	"cargo test", "cargo check", "cargo clippy", "rustc --version",
-	"python --version", "python3 --version", "node --version", "npm --version", "npx --version",
+	"go version",
+	"rustc --version",
+	"python --version", "python3 --version", "node --version", "npm --version", "npx --version", "cargo --version", "deno --version", "bun --version",
 }
 
 func shellReadOnlyCheck(args map[string]any) bool {

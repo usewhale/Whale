@@ -48,6 +48,10 @@ func hookOutcomeMessage(oc agent.HookOutcome) string {
 	return ""
 }
 
+func markdownInlineCode(value string) string {
+	return "`" + strings.ReplaceAll(value, "`", "\\`") + "`"
+}
+
 func formatHookEventLine(tag string, h *agent.HookEventInfo) string {
 	if h == nil {
 		return "[hook] <nil>"

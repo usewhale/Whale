@@ -6,6 +6,7 @@ import (
 
 	"github.com/usewhale/whale/internal/app"
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/plugins"
 	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/skills"
 )
@@ -28,26 +29,31 @@ const (
 	IntentSetApprovalMode      IntentKind = "set_approval_mode"
 	IntentSetProjectApproval   IntentKind = "set_project_approval"
 	IntentClearProjectApproval IntentKind = "clear_project_approval"
+	IntentSetViewMode          IntentKind = "set_view_mode"
 	IntentToggleMode           IntentKind = "toggle_mode"
 	IntentImplementPlan        IntentKind = "implement_plan"
 	IntentRequestSkillsManage  IntentKind = "request_skills_manage"
 	IntentSetSkillEnabled      IntentKind = "set_skill_enabled"
+	IntentSetPluginEnabled     IntentKind = "set_plugin_enabled"
 )
 
 type Intent struct {
-	Kind         IntentKind
-	Input        string
-	HiddenInput  bool
-	ToolCallID   string
-	UserInput    *core.UserInputResponse
-	SessionInput string
-	Model        string
-	Effort       string
-	Thinking     string
-	ApprovalMode string
-	SkillName    string
-	SkillEnabled bool
-	SkillBinding *app.SkillBinding
+	Kind          IntentKind
+	Input         string
+	HiddenInput   bool
+	ToolCallID    string
+	UserInput     *core.UserInputResponse
+	SessionInput  string
+	Model         string
+	Effort        string
+	Thinking      string
+	ApprovalMode  string
+	ViewMode      string
+	SkillName     string
+	SkillEnabled  bool
+	PluginID      string
+	PluginEnabled bool
+	SkillBinding  *app.SkillBinding
 }
 
 type EventKind string
@@ -64,6 +70,7 @@ const (
 	EventReasoningDelta    EventKind = "reasoning_delta"
 	EventPlanDelta         EventKind = "plan_delta"
 	EventPlanCompleted     EventKind = "plan_completed"
+	EventPlanUpdate        EventKind = "plan_update"
 	EventProviderRetry     EventKind = "provider_retry"
 	EventToolCall          EventKind = "tool_call"
 	EventToolResult        EventKind = "tool_result"
@@ -83,6 +90,8 @@ const (
 	EventPermissionsPicker EventKind = "permissions_picker"
 	EventSkillsMenu        EventKind = "skills_menu"
 	EventSkillsManager     EventKind = "skills_manager"
+	EventPluginsManager    EventKind = "plugins_manager"
+	EventViewModeChanged   EventKind = "view_mode_changed"
 	EventSkillLoaded       EventKind = "skill_loaded"
 	EventExitRequested     EventKind = "exit_requested"
 	EventClearScreen       EventKind = "clear_screen"
@@ -110,7 +119,9 @@ type Event struct {
 	CurrentThinking string
 	ApprovalChoices []string
 	CurrentApproval string
+	ViewMode        string
 	Skills          []skills.SkillView
+	Plugins         []plugins.PluginStatus
 	SessionID       string
 	Messages        []core.Message
 }
@@ -183,6 +194,7 @@ func (s *Service) WorkspaceRoot() string {
 func (s *Service) Model() string           { return s.app.Model() }
 func (s *Service) ReasoningEffort() string { return s.app.ReasoningEffort() }
 func (s *Service) ThinkingEnabled() bool   { return s.app.ThinkingEnabled() }
+func (s *Service) ViewMode() string        { return s.app.ViewMode() }
 func (s *Service) SkillSuggestions() []skills.SkillView {
 	if s == nil || s.app == nil {
 		return nil
@@ -195,6 +207,13 @@ func (s *Service) SkillsForManager() []skills.SkillView {
 		return nil
 	}
 	return s.app.SkillReport().All()
+}
+
+func (s *Service) PluginsForManager() []plugins.PluginStatus {
+	if s == nil || s.app == nil {
+		return nil
+	}
+	return s.app.PluginStatuses()
 }
 
 func (s *Service) Close() error {

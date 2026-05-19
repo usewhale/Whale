@@ -61,6 +61,7 @@ func (a *App) buildStatus() string {
 		fmt.Sprintf("- model: %s", a.model),
 		fmt.Sprintf("- effort: %s", a.reasoningEffort),
 		fmt.Sprintf("- thinking: %s", onOff(a.thinkingEnabled)),
+		fmt.Sprintf("- view: %s", a.ViewMode()),
 	}
 	parts = append(parts, formatContextWindowStatus(a))
 	parts = append(parts, a.formatBudgetStatusLine())
@@ -107,181 +108,11 @@ func (a *App) buildMCPStatus() string {
 	return strings.Join(lines, "\n")
 }
 
-func (a *App) handlePluginsCommand(line string) (string, error) {
-	fields := strings.Fields(strings.TrimSpace(line))
-	if len(fields) == 0 || fields[0] != "/plugins" {
-		return "", fmt.Errorf("usage: /plugins [status [id]|doctor|reload]")
-	}
+func (a *App) PluginStatuses() []plugins.PluginStatus {
 	if a == nil || a.pluginManager == nil {
-		return "Plugins\n\nunavailable", nil
+		return nil
 	}
-	if len(fields) == 1 {
-		return a.buildPluginsList(), nil
-	}
-	switch fields[1] {
-	case "status":
-		if len(fields) == 2 {
-			return a.buildPluginsList(), nil
-		}
-		if len(fields) == 3 {
-			return a.buildPluginStatus(fields[2])
-		}
-	case "doctor":
-		if len(fields) == 2 {
-			return a.buildPluginsDoctor(), nil
-		}
-	case "reload":
-		if len(fields) == 2 {
-			if err := a.reloadPluginDisabledConfig(); err != nil {
-				return "", err
-			}
-			a.pluginManager = plugins.NewManager(plugins.Context{DataDir: a.cfg.DataDir, WorkspaceRoot: a.workspaceRoot}, a.cfg.PluginsDisabled)
-			a.pluginTools = a.pluginManager.Tools()
-			a.toolset.SetExtraSkills(a.pluginManager.Skills())
-			a.hookRunner = agent.NewHookRunner(a.hooks, a.workspaceRoot)
-			a.hookRunner.AddHandlers(a.pluginManager.Hooks()...)
-			if err := a.refreshMCPTools(); err != nil {
-				return "", err
-			}
-			a.a = nil
-			return "plugins reloaded", nil
-		}
-	}
-	return "", fmt.Errorf("usage: /plugins [status [id]|doctor|reload]")
-}
-
-func (a *App) buildPluginsList() string {
-	statuses := a.pluginManager.Statuses()
-	lines := []string{"Plugins", ""}
-	if len(statuses) == 0 {
-		return "Plugins\n\nnone"
-	}
-	for _, st := range statuses {
-		state := "disabled"
-		if st.Enabled {
-			state = firstNonEmpty(st.Manifest.Status, "enabled")
-		}
-		line := fmt.Sprintf("- %s: %s", st.Manifest.ID, state)
-		if st.Manifest.Description != "" {
-			line += " — " + st.Manifest.Description
-		}
-		lines = append(lines, line)
-	}
-	lines = append(lines, "", "Use `/plugins status <id>` for details.")
-	return strings.Join(lines, "\n")
-}
-
-func (a *App) buildPluginStatus(id string) (string, error) {
-	st, ok := a.pluginManager.Status(id)
-	if !ok {
-		return "", fmt.Errorf("plugin not found: %s", id)
-	}
-	lines := []string{
-		st.Manifest.Name,
-		"",
-		"id: " + st.Manifest.ID,
-		"version: " + st.Manifest.Version,
-		"enabled: " + onOff(st.Enabled),
-		"status: " + firstNonEmpty(st.Manifest.Status, "ready"),
-	}
-	if st.Manifest.Description != "" {
-		lines = append(lines, "description: "+st.Manifest.Description)
-	}
-	if len(st.Manifest.Capabilities) > 0 {
-		lines = append(lines, "capabilities: "+formatPluginCapabilities(st.Manifest.Capabilities))
-	}
-	if len(st.Manifest.Permissions) > 0 {
-		lines = append(lines, "permissions: "+formatPluginPermissions(st.Manifest.Permissions))
-	}
-	if len(st.Commands) > 0 {
-		names := make([]string, 0, len(st.Commands))
-		for _, cmd := range st.Commands {
-			names = append(names, cmd.Name)
-		}
-		sort.Strings(names)
-		lines = append(lines, "commands: "+strings.Join(names, ", "))
-	}
-	if len(st.Tools) > 0 {
-		lines = append(lines, "tools: "+strings.Join(st.Tools, ", "))
-	}
-	if len(st.Skills) > 0 {
-		lines = append(lines, "skills: "+strings.Join(st.Skills, ", "))
-	}
-	if len(st.Hooks) > 0 {
-		lines = append(lines, "hooks: "+strings.Join(st.Hooks, ", "))
-	}
-	if len(st.Services) > 0 {
-		for _, svc := range st.Services {
-			line := fmt.Sprintf("service %s: %s", svc.Name, svc.Status)
-			if svc.Detail != "" {
-				line += " — " + svc.Detail
-			}
-			lines = append(lines, line)
-		}
-	}
-	if len(st.Paths) > 0 {
-		lines = append(lines, "paths:")
-		for _, key := range []string{"root", "data", "cache", "project"} {
-			if value := st.Paths[key]; value != "" {
-				lines = append(lines, "- "+key+": "+markdownInlineCode(value))
-			}
-		}
-	}
-	return strings.Join(lines, "\n"), nil
-}
-
-func (a *App) buildPluginsDoctor() string {
-	diagnostics := a.pluginManager.Diagnostics(a.ctx)
-	lines := []string{"Plugin Doctor", ""}
-	if len(diagnostics) == 0 {
-		return "Plugin Doctor\n\nno plugin diagnostics"
-	}
-	for _, diag := range diagnostics {
-		level := string(diag.Level)
-		if level == "" {
-			level = "ok"
-		}
-		line := fmt.Sprintf("- %s/%s: %s", diag.PluginID, diag.Label, level)
-		if diag.Detail != "" {
-			line += " — " + markdownDetail(diag.Detail)
-		}
-		lines = append(lines, line)
-	}
-	return strings.Join(lines, "\n")
-}
-
-func markdownDetail(value string) string {
-	if looksLikePath(value) {
-		return markdownInlineCode(value)
-	}
-	return value
-}
-
-func looksLikePath(value string) bool {
-	value = strings.TrimSpace(value)
-	return strings.Contains(value, `:\`) || strings.HasPrefix(value, `/`) || strings.HasPrefix(value, `\\`)
-}
-
-func markdownInlineCode(value string) string {
-	return "`" + strings.ReplaceAll(value, "`", "\\`") + "`"
-}
-
-func formatPluginCapabilities(in []plugins.Capability) string {
-	out := make([]string, 0, len(in))
-	for _, cap := range in {
-		out = append(out, string(cap))
-	}
-	sort.Strings(out)
-	return strings.Join(out, ", ")
-}
-
-func formatPluginPermissions(in []plugins.Permission) string {
-	out := make([]string, 0, len(in))
-	for _, perm := range in {
-		out = append(out, string(perm))
-	}
-	sort.Strings(out)
-	return strings.Join(out, ", ")
+	return a.pluginManager.Statuses()
 }
 
 func modeDisplay(mode session.Mode) string {
@@ -707,6 +538,55 @@ func (a *App) setSkillDisabled(name string, disabled bool) (string, error) {
 
 func (a *App) SetSkillEnabled(name string, enabled bool) (string, error) {
 	return a.setSkillDisabled(name, !enabled)
+}
+
+func (a *App) SetPluginEnabled(id string, enabled bool) (string, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", fmt.Errorf("plugin id must not be empty")
+	}
+	if a == nil || a.pluginManager == nil {
+		return "", fmt.Errorf("plugins unavailable")
+	}
+	st, ok := a.pluginManager.Status(id)
+	if !ok {
+		return "", fmt.Errorf("plugin not found: %s", id)
+	}
+	id = st.Manifest.ID
+
+	path := ProjectConfigPath(a.workspaceRoot)
+	cfg, _, err := LoadConfigFile(path)
+	if err != nil {
+		return "", err
+	}
+	disabled := disabledNameSet(cfg.Plugins.Disabled)
+	if enabled {
+		delete(disabled, strings.ToLower(id))
+	} else {
+		disabled[strings.ToLower(id)] = id
+	}
+	cfg.Plugins.Disabled = sortedSkillNames(disabled)
+	if err := SaveConfigFile(path, cfg); err != nil {
+		return "", err
+	}
+	if err := a.reloadPluginDisabledConfig(); err != nil {
+		return "", err
+	}
+	a.pluginManager = plugins.NewManager(plugins.Context{DataDir: a.cfg.DataDir, WorkspaceRoot: a.workspaceRoot}, a.cfg.PluginsDisabled)
+	a.pluginTools = a.pluginManager.Tools()
+	if a.toolset != nil {
+		a.toolset.SetExtraSkills(a.pluginManager.Skills())
+	}
+	a.hookRunner = agent.NewHookRunner(a.hooks, a.workspaceRoot)
+	a.hookRunner.AddHandlers(a.pluginManager.Hooks()...)
+	if err := a.refreshMCPTools(); err != nil {
+		return "", err
+	}
+	a.a = nil
+	if enabled {
+		return fmt.Sprintf("enabled plugin: %s\nconfig: %s", id, path), nil
+	}
+	return fmt.Sprintf("disabled plugin: %s\nconfig: %s", id, path), nil
 }
 
 func (a *App) reloadSkillDisabledConfig() error {

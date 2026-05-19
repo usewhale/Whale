@@ -47,6 +47,31 @@ func TestChatLines_ThinkingCardHasDistinctLabel(t *testing.T) {
 	}
 }
 
+func TestChatLines_PlanUpdateHasDistinctLabel(t *testing.T) {
+	entries := []UIMessage{
+		{Role: "plan", Kind: KindPlanUpdate, Text: "[x] Inspect\n[~] Patch\n[ ] Test"},
+	}
+	lines := ChatLines(entries, 80)
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "Updated Plan") {
+		t.Fatalf("expected updated plan label, got: %q", joined)
+	}
+	if !strings.Contains(joined, "Patch") || !strings.Contains(joined, "Test") {
+		t.Fatalf("expected plan update body, got: %q", joined)
+	}
+	for _, want := range []string{"✔ Inspect", "□ Patch", "□ Test"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected friendly plan marker %q, got: %q", want, joined)
+		}
+	}
+	if strings.Contains(joined, "[x]") || strings.Contains(joined, "[~]") || strings.Contains(joined, "[ ]") {
+		t.Fatalf("expected raw plan markers to be hidden, got: %q", joined)
+	}
+	if strings.Contains(joined, "✔ Inspect □ Patch") {
+		t.Fatalf("expected plan update lines to stay separate, got: %q", joined)
+	}
+}
+
 func TestChatLines_UserPromptGlyphAndContinuationIndent(t *testing.T) {
 	entries := []UIMessage{
 		{Role: "you", Kind: KindText, Text: "first line\nsecond line"},

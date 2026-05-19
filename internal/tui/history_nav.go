@@ -38,6 +38,7 @@ func (m *model) historyPrev() bool {
 	m.input.SetCursorEnd()
 	m.lastHistoryText = entry
 	m.inHistoryNav = true
+	m.updateSlashMatches()
 	return true
 }
 
@@ -52,6 +53,7 @@ func (m *model) historyNext() bool {
 		m.historyIndex = -1
 		m.lastHistoryText = ""
 		m.inHistoryNav = false
+		m.updateSlashMatches()
 		return true
 	}
 	m.historyIndex = next
@@ -61,6 +63,7 @@ func (m *model) historyNext() bool {
 	m.input.SetCursorEnd()
 	m.lastHistoryText = entry
 	m.inHistoryNav = true
+	m.updateSlashMatches()
 	return true
 }
 

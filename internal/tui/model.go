@@ -33,6 +33,7 @@ const (
 	modePlanImplementation
 	modeSkillsMenu
 	modeSkillsManager
+	modePluginsManager
 )
 
 type page int
@@ -52,6 +53,7 @@ type model struct {
 	assembler            *tuirender.Assembler
 	pendingToolCalls     map[string]struct{}
 	transcript           []tuirender.UIMessage
+	ephemeralMessages    []tuirender.UIMessage
 	logs                 []logEntry
 	diffs                []diffEntry
 	width                int
@@ -71,6 +73,7 @@ type model struct {
 	providerRetryStatus  string
 	providerRetryUntil   time.Time
 	localSubmitPending   int
+	localSubmitCommands  []string
 	deferredPlanPicker   bool
 	mouseCapture         bool
 	stopping             bool
@@ -78,6 +81,7 @@ type model struct {
 	model                string
 	effort               string
 	thinking             string
+	viewMode             string
 	chatMode             string
 	product              string
 	version              string
@@ -126,6 +130,11 @@ type model struct {
 		selected int
 		query    string
 	}
+	pluginsManager struct {
+		all      []pluginManagerItem
+		matches  []int
+		selected int
+	}
 	modelPicker struct {
 		stage     int // 0 model, 1 effort, 2 thinking
 		models    []string
@@ -145,6 +154,7 @@ type model struct {
 	planImplementation struct {
 		index int
 	}
+	lastProposedPlan               string
 	sawPlanThisTurn                bool
 	sawAssistantThisTurn           bool
 	sawReasoningThisTurn           bool
@@ -229,6 +239,10 @@ func newModel(svc *service.Service, modelName, effort, thinking string) model {
 	if thinking == "" {
 		thinking = "on"
 	}
+	viewMode := app.ViewModeDefault
+	if svc != nil {
+		viewMode = svc.ViewMode()
+	}
 	m := model{
 		svc:              svc,
 		input:            composer.New(),
@@ -244,6 +258,7 @@ func newModel(svc *service.Service, modelName, effort, thinking string) model {
 		model:            modelName,
 		effort:           effort,
 		thinking:         thinking,
+		viewMode:         viewMode,
 		chatMode:         "agent",
 		product:          "Whale",
 		version:          resolveVersion(),
@@ -255,7 +270,7 @@ func newModel(svc *service.Service, modelName, effort, thinking string) model {
 	}
 	m.slash.all = parseSlashCommands(app.CommandsHelp)
 	m.slash.autoRun = buildSlashAutoRunMap(app.CommandsHelp)
-	m.resetTranscriptWithHeader()
+	m.resetTranscript()
 	return m
 }
 
@@ -316,20 +331,21 @@ func busyTickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(time.Time) tea.Msg { return busyTickMsg{} })
 }
 
-// clearScreenCmd clears the terminal and forces a full TUI redraw.
-// Unix terminals keep the existing scrollback-clearing sequence; Windows uses
-// Bubble Tea's renderer path so Whale does not bypass its console setup.
+// clearScreenCmd clears the visible terminal, scrollback, and renderer cache.
 func clearScreenCmd() tea.Cmd {
 	return clearScreenCmdForOS(runtime.GOOS, os.Stdout)
 }
 
 func clearScreenCmdForOS(goos string, out io.Writer) tea.Cmd {
 	if goos == "windows" {
-		return tea.ClearScreen
+		return func() tea.Msg {
+			fmt.Fprint(out, "\033[H\033[2J\033[3J")
+			return tea.ClearScreen()
+		}
 	}
 	return func() tea.Msg {
 		fmt.Fprint(out, "\033[H\033[2J\033[3J")
-		return nil
+		return tea.ClearScreen()
 	}
 }
 
@@ -417,15 +433,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) withMouseCaptureCmd(cmds ...tea.Cmd) tea.Cmd {
-	out := make([]tea.Cmd, 0, len(cmds)+1)
-	want := m.busy && m.mode == modeChat && m.page == pageChat
-	if want && !m.mouseCapture {
-		m.mouseCapture = true
-		out = append(out, tea.EnableMouseCellMotion)
-	} else if !want && m.mouseCapture {
-		m.mouseCapture = false
-		out = append(out, tea.DisableMouse)
-	}
+	out := make([]tea.Cmd, 0, len(cmds))
+	m.mouseCapture = false
 	for _, cmd := range cmds {
 		if cmd != nil {
 			out = append(out, cmd)

@@ -20,6 +20,10 @@ func (m *model) updateSkillMatches() {
 		return
 	}
 	raw := m.input.Value()
+	if m.inHistoryNav && raw == m.lastHistoryText {
+		m.skills.selected = 0
+		return
+	}
 	query, ok := skillQuery(raw)
 	if !ok {
 		m.skills.selected = 0

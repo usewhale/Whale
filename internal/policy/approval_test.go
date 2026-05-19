@@ -48,6 +48,33 @@ func TestApprovalKeysKeepShellCommandScope(t *testing.T) {
 	}
 }
 
+func TestNormalizeShellApprovalCommand(t *testing.T) {
+	tests := map[string]string{
+		"go test ./...":                  "go test ./...",
+		"make test-tui":                  "make test-tui",
+		"npm install lodash":             "npm install lodash",
+		"python3 -m pytest tests":        "python3 -m pytest tests",
+		"node scripts/check.js --strict": "node scripts/check.js --strict",
+		"bash ./safe.sh":                 "bash ./safe.sh",
+		"   git   status  --short  ":     "git   status  --short",
+		"echo foo\nrm -rf /tmp/x":        "echo foo\nrm -rf /tmp/x",
+	}
+	for command, want := range tests {
+		if got := NormalizeShellApprovalCommand(command); got != want {
+			t.Fatalf("NormalizeShellApprovalCommand(%q) = %q, want %q", command, got, want)
+		}
+	}
+}
+
+func TestShellApprovalKeysPreserveSemanticWhitespace(t *testing.T) {
+	oneCommand := core.ToolCall{ID: "shell-1", Name: "shell_run", Input: `{"command":"echo foo rm -rf /tmp/x"}`}
+	twoCommands := core.ToolCall{ID: "shell-2", Name: "shell_run", Input: `{"command":"echo foo\nrm -rf /tmp/x"}`}
+
+	if reflect.DeepEqual(ApprovalKeys(oneCommand), ApprovalKeys(twoCommands)) {
+		t.Fatalf("shell approval keys should preserve semantic whitespace: %v", ApprovalKeys(oneCommand))
+	}
+}
+
 func TestApprovalKeysUseMemoryPayloadForWrites(t *testing.T) {
 	remember := core.ToolCall{ID: "memory-1", Name: "remember", Input: `{"scope":"global","type":"user","name":"style","description":"old","content":"old"}`}
 	rememberUpdate := core.ToolCall{ID: "memory-2", Name: "remember", Input: `{"scope":"global","type":"user","name":"style","description":"new","content":"new"}`}

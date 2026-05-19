@@ -97,7 +97,9 @@ func TestClassifySubmitSlashCommands(t *testing.T) {
 		{line: "/mcp", want: appcommands.SubmitLocalReadOnly},
 		{line: "/model", want: appcommands.SubmitLocalUI},
 		{line: "/permissions", want: appcommands.SubmitLocalUI},
+		{line: "/focus", want: appcommands.SubmitLocalUI},
 		{line: "/skills", want: appcommands.SubmitLocalUI},
+		{line: "/plugins", want: appcommands.SubmitLocalUI},
 		{line: "/memory", want: appcommands.SubmitLocalReadOnly},
 		{line: "/memory list", want: appcommands.SubmitLocalReadOnly},
 		{line: "/memory path", want: appcommands.SubmitLocalReadOnly},
@@ -117,9 +119,12 @@ func TestClassifySubmitSlashCommands(t *testing.T) {
 		{line: "/init", want: appcommands.SubmitTurnStarting},
 		{line: "/compact", want: appcommands.SubmitTurnStarting},
 		{line: "/model xxx", want: appcommands.SubmitUsageError},
+		{line: "/focus now", want: appcommands.SubmitUsageError},
 		{line: "/skills xxx", want: appcommands.SubmitUsageError},
+		{line: "/plugins status memory", want: appcommands.SubmitUsageError},
 		{line: "/memory bad", want: appcommands.SubmitUsageError},
 		{line: "/memory show", want: appcommands.SubmitUsageError},
+		{line: "/skills-improver status", want: appcommands.SubmitUsageError},
 		{line: "/resume xxx", want: appcommands.SubmitUsageError},
 		{line: "/new a b", want: appcommands.SubmitUsageError},
 		{line: "/stats bad", want: appcommands.SubmitUsageError},
@@ -319,7 +324,7 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		sessionsDir: sessionsDir,
 	}
 
-	handled, out, err := a.HandleLocalCommand("/stats")
+	handled, out, _, err := a.HandleLocalCommand("/stats")
 	if err != nil {
 		t.Fatalf("stats command: %v", err)
 	}
@@ -358,7 +363,7 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		t.Fatalf("stats should not expose raw input fields:\n%s", out)
 	}
 
-	handled, out, err = a.HandleLocalCommand("/stats usage")
+	handled, out, _, err = a.HandleLocalCommand("/stats usage")
 	if err != nil || !handled {
 		t.Fatalf("stats usage command handled=%v err=%v", handled, err)
 	}
@@ -374,7 +379,7 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		t.Fatalf("expected usage stats to omit tool input section:\n%s", out)
 	}
 
-	handled, out, err = a.HandleLocalCommand("/stats tools")
+	handled, out, _, err = a.HandleLocalCommand("/stats tools")
 	if err != nil || !handled {
 		t.Fatalf("stats tools command handled=%v err=%v", handled, err)
 	}
@@ -393,7 +398,7 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		t.Fatalf("expected tool stats to omit recent events:\n%s", out)
 	}
 
-	handled, out, err = a.HandleLocalCommand("/stats recent")
+	handled, out, _, err = a.HandleLocalCommand("/stats recent")
 	if err != nil || !handled {
 		t.Fatalf("stats recent command handled=%v err=%v", handled, err)
 	}
@@ -408,7 +413,7 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		}
 	}
 
-	handled, out, err = a.HandleLocalCommand("/stats all")
+	handled, out, _, err = a.HandleLocalCommand("/stats all")
 	if err != nil || !handled {
 		t.Fatalf("stats all command handled=%v err=%v", handled, err)
 	}
@@ -423,9 +428,31 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		}
 	}
 
-	handled, _, err = a.HandleLocalCommand("/stats extra")
+	handled, _, _, err = a.HandleLocalCommand("/stats extra")
 	if !handled || err == nil || !strings.Contains(err.Error(), "usage: /stats [usage|tools|repair|recent|all]") {
 		t.Fatalf("expected /stats usage error, handled=%v err=%v", handled, err)
+	}
+}
+
+func TestHandleLocalCommandFocusTogglesAndPersists(t *testing.T) {
+	dir := t.TempDir()
+	a := &App{cfg: Config{DataDir: dir, ViewMode: ViewModeDefault}}
+	handled, out, _, err := a.HandleLocalCommand("/focus")
+	if err != nil {
+		t.Fatalf("HandleLocalCommand: %v", err)
+	}
+	if !handled || out != "Focus view enabled" {
+		t.Fatalf("focus output: handled=%v out=%q", handled, out)
+	}
+	if a.ViewMode() != ViewModeFocus {
+		t.Fatalf("view mode: want focus, got %q", a.ViewMode())
+	}
+	loaded, ok, err := LoadConfigFile(GlobalConfigPath(dir))
+	if err != nil {
+		t.Fatalf("LoadConfigFile: %v", err)
+	}
+	if !ok || loaded.UI.ViewMode != ViewModeFocus {
+		t.Fatalf("persisted view mode: ok=%v cfg=%+v", ok, loaded.UI)
 	}
 }
 
@@ -498,8 +525,8 @@ func TestHandleSlashClearReturnsClearScreenFlag(t *testing.T) {
 	if synthetic != "" {
 		t.Fatal("expected no synthetic prompt")
 	}
-	if !strings.Contains(out, "terminal cleared") {
-		t.Fatalf("expected output to mention terminal cleared, got: %q", out)
+	if out != "" {
+		t.Fatalf("expected /clear to avoid appending a local result, got: %q", out)
 	}
 }
 
@@ -790,10 +817,10 @@ func TestHandleSlashNewIncludesResumeHint(t *testing.T) {
 	if app.SessionID() != "fresh" {
 		t.Fatalf("expected tab-separated session id fresh, got %s", app.SessionID())
 	}
-	if !strings.Contains(out, "new session: fresh") {
+	if !strings.Contains(out, "New session") || !strings.Contains(out, "session:  fresh") {
 		t.Fatalf("expected output to contain new session, got: %q", out)
 	}
-	if !strings.Contains(out, "dropped 1 message") {
+	if !strings.Contains(out, "dropped:  1 message") {
 		t.Fatalf("expected output to mention dropped messages, got: %q", out)
 	}
 	if !strings.Contains(out, "whale resume sess-1") {
