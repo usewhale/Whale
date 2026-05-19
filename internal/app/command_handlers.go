@@ -126,6 +126,13 @@ func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 	if trimmed == "/mcp" {
 		return CommandExecution{Handled: true, Text: a.buildMCPStatus()}, nil
 	}
+	if trimmed == "/focus" {
+		mode, err := a.ToggleViewMode()
+		if err != nil {
+			return CommandExecution{Handled: true}, err
+		}
+		return CommandExecution{Handled: true, Text: ViewModeToggleMessage(mode)}, nil
+	}
 	if trimmed == "/plugins" || strings.HasPrefix(trimmed, "/plugins ") {
 		out, err := a.handlePluginsCommand(trimmed)
 		return CommandExecution{Handled: true, Text: out}, err

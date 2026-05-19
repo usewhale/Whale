@@ -61,6 +61,7 @@ func (a *App) buildStatus() string {
 		fmt.Sprintf("- model: %s", a.model),
 		fmt.Sprintf("- effort: %s", a.reasoningEffort),
 		fmt.Sprintf("- thinking: %s", onOff(a.thinkingEnabled)),
+		fmt.Sprintf("- view: %s", a.ViewMode()),
 	}
 	parts = append(parts, formatContextWindowStatus(a))
 	parts = append(parts, a.formatBudgetStatusLine())

@@ -151,7 +151,7 @@ func (m model) renderChatLines(width int) []string {
 }
 
 func (m model) scrollbackText(messages []tuirender.UIMessage) string {
-	lines := tuirender.ChatLines(messages, m.chatRenderWidth())
+	lines := tuirender.ChatLines(m.focusMessages(messages), m.chatRenderWidth())
 	return strings.TrimRight(strings.Join(lines, "\n"), "\n")
 }
 
@@ -160,13 +160,14 @@ func (m model) chatMessages() []tuirender.UIMessage {
 	if m.assembler != nil {
 		live = m.assembler.Snapshot()
 	}
-	if len(m.transcript) == 0 && len(live) == 0 {
+	if len(m.transcript) == 0 && len(live) == 0 && len(m.ephemeralMessages) == 0 {
 		return nil
 	}
-	out := make([]tuirender.UIMessage, 0, len(m.transcript)+len(live))
+	out := make([]tuirender.UIMessage, 0, len(m.transcript)+len(live)+len(m.ephemeralMessages))
 	out = append(out, m.transcript...)
 	out = append(out, live...)
-	return out
+	out = append(out, m.ephemeralMessages...)
+	return m.focusMessages(out)
 }
 
 func (m model) chatContent(width int) string {

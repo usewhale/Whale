@@ -34,7 +34,7 @@ func (c SubmitClassification) LocalNoTurn() bool {
 }
 
 func (c SubmitClassification) BusyImmediate() bool {
-	return c.Class == SubmitLocalReadOnly || c.Class == SubmitExit
+	return c.Class == SubmitLocalReadOnly || c.Class == SubmitExit || c.Line == "/focus"
 }
 
 func (c SubmitClassification) SubmitBarrier() bool {
@@ -92,6 +92,11 @@ func classifySlashFields(head string, fields []string, line string) SubmitClass 
 		}
 		return SubmitUsageError
 	case "/model", "/permissions", "/skills", "/resume":
+		if len(fields) == 1 {
+			return SubmitLocalUI
+		}
+		return SubmitUsageError
+	case "/focus":
 		if len(fields) == 1 {
 			return SubmitLocalUI
 		}

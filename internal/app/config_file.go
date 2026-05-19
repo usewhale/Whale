@@ -22,6 +22,7 @@ type FileConfig struct {
 	ThinkingEnabled *bool  `toml:"thinking_enabled,omitempty"`
 
 	Permissions FilePermissionsConfig         `toml:"permissions,omitempty"`
+	UI          FileUIConfig                  `toml:"ui,omitempty"`
 	API         FileAPIConfig                 `toml:"api,omitempty"`
 	Retry       FileRetryConfig               `toml:"retry,omitempty"`
 	Budget      FileBudgetConfig              `toml:"budget,omitempty"`
@@ -31,6 +32,10 @@ type FileConfig struct {
 	Skills      FileSkillsConfig              `toml:"skills,omitempty"`
 	Plugins     FilePluginsConfig             `toml:"plugins,omitempty"`
 	Hooks       map[string][]agent.HookConfig `toml:"hooks,omitempty"`
+}
+
+type FileUIConfig struct {
+	ViewMode string `toml:"view_mode,omitempty"`
 }
 
 type FilePermissionsConfig struct {
@@ -165,6 +170,13 @@ func ApplyFileConfig(cfg *Config, file FileConfig) error {
 	if file.ThinkingEnabled != nil {
 		cfg.ThinkingEnabled = *file.ThinkingEnabled
 	}
+	if strings.TrimSpace(file.UI.ViewMode) != "" {
+		mode, err := NormalizeViewMode(file.UI.ViewMode)
+		if err != nil {
+			return err
+		}
+		cfg.ViewMode = mode
+	}
 	if strings.TrimSpace(file.Permissions.Mode) != "" {
 		cfg.ApprovalMode = strings.TrimSpace(file.Permissions.Mode)
 	}
@@ -279,6 +291,9 @@ func overlayExplicitConfig(dst *Config, src Config) {
 	if src.ThinkingEnabled != def.ThinkingEnabled {
 		dst.ThinkingEnabled = src.ThinkingEnabled
 	}
+	if strings.TrimSpace(src.ViewMode) != "" && src.ViewMode != def.ViewMode {
+		dst.ViewMode = src.ViewMode
+	}
 	if src.RetryMaxAttempts != 0 && src.RetryMaxAttempts != def.RetryMaxAttempts {
 		dst.RetryMaxAttempts = src.RetryMaxAttempts
 	}
@@ -309,6 +324,31 @@ func SaveGlobalPreferences(dataDir, model, effort string, thinking bool) error {
 	cfg.ReasoningEffort = strings.TrimSpace(effort)
 	cfg.ThinkingEnabled = &thinking
 	return SaveConfigFile(path, cfg)
+}
+
+func SaveGlobalViewMode(dataDir, mode string) error {
+	mode, err := NormalizeViewMode(mode)
+	if err != nil {
+		return err
+	}
+	path := GlobalConfigPath(dataDir)
+	cfg, _, err := LoadConfigFile(path)
+	if err != nil {
+		return err
+	}
+	cfg.UI.ViewMode = mode
+	return SaveConfigFile(path, cfg)
+}
+
+func NormalizeViewMode(mode string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", ViewModeDefault:
+		return ViewModeDefault, nil
+	case ViewModeFocus:
+		return ViewModeFocus, nil
+	default:
+		return "", fmt.Errorf("invalid ui.view_mode: %s (want %q or %q)", mode, ViewModeDefault, ViewModeFocus)
+	}
 }
 
 func ConfigSources(loaded LoadedConfig) []string {

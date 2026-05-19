@@ -13,7 +13,7 @@ func (m *model) appendToolCall(toolCallID, toolName, text string) {
 		m.assembler = tuirender.NewAssembler()
 	}
 	m.markToolCallPending(toolCallID)
-	m.assembler.AddToolCall(toolCallID, summarizeToolCallForChat(toolName, text))
+	m.assembler.AddToolCall(toolCallID, toolName, summarizeToolCallForChat(toolName, text))
 	m.refreshLiveViewportContent()
 }
 

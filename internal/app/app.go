@@ -23,7 +23,12 @@ import (
 	"github.com/usewhale/whale/internal/tools"
 )
 
-const CommandsHelp = "/model, /permissions, /agent, /ask [prompt], /plan [prompt], /skills, /plugins, /memory, /skills-improver, /local-indexer, /new [id], /resume, /clear, /status, /stats, /mcp, /compact, /init, /exit"
+const CommandsHelp = "/model, /permissions, /agent, /ask [prompt], /plan [prompt], /focus, /skills, /plugins, /memory, /skills-improver, /local-indexer, /new [id], /resume, /clear, /status, /stats, /mcp, /compact, /init, /exit"
+
+const (
+	ViewModeDefault = "default"
+	ViewModeFocus   = "focus"
+)
 
 type Config struct {
 	DataDir              string
@@ -41,6 +46,7 @@ type Config struct {
 	ModelExplicit        bool
 	ReasoningEffort      string
 	ThinkingEnabled      bool
+	ViewMode             string
 	RetryMaxAttempts     int
 	RetryMaxDelay        time.Duration
 	MCPConfigPath        string
@@ -113,6 +119,7 @@ func DefaultConfig() Config {
 		Model:                defaults.DefaultModel,
 		ReasoningEffort:      defaults.DefaultReasoningEffort,
 		ThinkingEnabled:      defaults.DefaultThinkingEnabled,
+		ViewMode:             ViewModeDefault,
 		RetryMaxAttempts:     llmretry.DefaultPolicy().MaxAttempts,
 		RetryMaxDelay:        llmretry.DefaultPolicy().MaxDelay,
 	}
@@ -207,6 +214,11 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 
 	model := firstNonEmpty(strings.TrimSpace(cfg.Model), defaults.DefaultModel)
 	effort := normalizeEffort(firstNonEmpty(strings.TrimSpace(cfg.ReasoningEffort), defaults.DefaultReasoningEffort))
+	viewMode, err := NormalizeViewMode(cfg.ViewMode)
+	if err != nil {
+		return nil, err
+	}
+	cfg.ViewMode = viewMode
 	thinking := cfg.ThinkingEnabled
 	contextWindow := contextWindowForModel(model)
 	apiKey, err := LoadDeepSeekAPIKey(cfg.DataDir)
@@ -328,7 +340,7 @@ func (a *App) SetUserInputFunc(fn agent.UserInputFunc) {
 
 func (a *App) StartupLines() []string {
 	lines := []string{"whale repl", fmt.Sprintf("session: %s", a.sessionID), fmt.Sprintf("mode: %s", a.currentMode), fmt.Sprintf("permissions.mode: %s", a.approvalMode)}
-	lines = append(lines, fmt.Sprintf("model: %s", a.model), fmt.Sprintf("effort: %s", a.reasoningEffort), fmt.Sprintf("thinking: %s", onOff(a.thinkingEnabled)))
+	lines = append(lines, fmt.Sprintf("model: %s", a.model), fmt.Sprintf("effort: %s", a.reasoningEffort), fmt.Sprintf("thinking: %s", onOff(a.thinkingEnabled)), fmt.Sprintf("view: %s", a.ViewMode()))
 	if a.budgetWarningUSD > 0 {
 		lines = append(lines, fmt.Sprintf("budget.session_limit_usd: %.4f", a.budgetWarningUSD))
 	} else {
@@ -391,6 +403,16 @@ func (a *App) WorkspaceRoot() string   { return a.workspaceRoot }
 func (a *App) Model() string           { return a.model }
 func (a *App) ReasoningEffort() string { return a.reasoningEffort }
 func (a *App) ThinkingEnabled() bool   { return a.thinkingEnabled }
+func (a *App) ViewMode() string {
+	if a == nil {
+		return ViewModeDefault
+	}
+	mode, err := NormalizeViewMode(a.cfg.ViewMode)
+	if err != nil {
+		return ViewModeDefault
+	}
+	return mode
+}
 func (a *App) ListMessages() ([]core.Message, error) {
 	return a.msgStore.List(a.ctx, a.sessionID)
 }
@@ -422,6 +444,33 @@ func (a *App) SetThinkingEnabled(enabled bool) {
 	a.thinkingEnabled = enabled
 	a.a = nil
 	a.savePreferences()
+}
+
+func (a *App) SetViewMode(mode string) error {
+	mode, err := NormalizeViewMode(mode)
+	if err != nil {
+		return err
+	}
+	a.cfg.ViewMode = mode
+	return SaveGlobalViewMode(a.cfg.DataDir, mode)
+}
+
+func (a *App) ToggleViewMode() (string, error) {
+	next := ViewModeFocus
+	if a.ViewMode() == ViewModeFocus {
+		next = ViewModeDefault
+	}
+	if err := a.SetViewMode(next); err != nil {
+		return "", err
+	}
+	return next, nil
+}
+
+func ViewModeToggleMessage(mode string) string {
+	if strings.TrimSpace(mode) == ViewModeFocus {
+		return "Focus view enabled"
+	}
+	return "Focus view disabled"
 }
 
 func (a *App) Close() error {

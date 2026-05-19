@@ -39,6 +39,7 @@ func (m *model) submitPromptWithBinding(value string, binding *app.SkillBinding)
 		m.submitLocalNoTurn(submit)
 		return nil
 	}
+	m.clearEphemeralMessages()
 	m.recordPromptHistory(value)
 	m.resetHistoryNavigation()
 	m.appendTranscript("you", tuirender.KindText, visibleSubmittedText(value))
@@ -124,6 +125,7 @@ func busySlashBlockedMessage(line string, stopping bool) string {
 
 func (m *model) submitLocalNoTurn(submit appcommands.SubmitClassification) {
 	cmd := submit.Line
+	m.clearEphemeralMessages()
 	m.recordPromptHistory(cmd)
 	m.resetHistoryNavigation()
 	m.input.SetValue("")

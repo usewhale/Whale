@@ -22,6 +22,28 @@ func (m *model) appendNotice(text string) {
 	m.refreshLiveViewportContent()
 }
 
+func (m *model) setEphemeralInfo(text string) {
+	t := strings.TrimSpace(strings.TrimRight(text, "\n"))
+	if t == "" {
+		m.ephemeralMessages = nil
+		return
+	}
+	m.ephemeralMessages = []tuirender.UIMessage{{
+		Role: "info",
+		Kind: tuirender.KindText,
+		Text: t,
+	}}
+	m.refreshViewportContentFollow(true)
+}
+
+func (m *model) clearEphemeralMessages() {
+	if len(m.ephemeralMessages) == 0 {
+		return
+	}
+	m.ephemeralMessages = nil
+	m.refreshViewportContent()
+}
+
 func (m *model) appendLiveToolResult(text, role string) {
 	if m.assembler == nil {
 		m.assembler = tuirender.NewAssembler()

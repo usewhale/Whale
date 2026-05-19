@@ -79,6 +79,9 @@ session_limit_usd = 1.0
 [mcp]
 config_path = "~/.whale/mcp.json"
 
+[ui]
+view_mode = "default" # "default" or "focus"
+
 [context]
 auto_compact = true
 compact_threshold = 0.85
@@ -127,6 +130,9 @@ If you started with Whale v0.1.9 or newer, you do not need this command.
   retries 429, 500, 502, 503, 504, and network errors with an internal 1s
   exponential backoff, 10% jitter, and `Retry-After` support. `max_attempts`
   counts the initial request.
+- `[ui].view_mode = "focus"` starts the TUI in focus view. `/focus` toggles this
+  global preference and hides thinking/tool detail while keeping prompts, tool
+  summaries, and final responses visible.
 - Skill enable/disable choices are stored in project config under
   `[skills].disabled`.
 - Official plugin enable/disable choices are stored under `[plugins].disabled`.

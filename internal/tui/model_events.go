@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/usewhale/whale/internal/app"
 	"github.com/usewhale/whale/internal/app/service"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
@@ -311,10 +312,36 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		m.skills.selected = 0
 		m.setSkillsManagerItems(ev.Skills)
 		m.status = "skills"
+	case service.EventViewModeChanged:
+		m.clearProviderRetryStatus()
+		mode := strings.TrimSpace(ev.ViewMode)
+		if mode == "" {
+			mode = strings.TrimSpace(ev.Text)
+			switch mode {
+			case app.ViewModeToggleMessage(app.ViewModeFocus):
+				mode = app.ViewModeFocus
+			case app.ViewModeToggleMessage(app.ViewModeDefault):
+				mode = app.ViewModeDefault
+			default:
+				mode = strings.TrimPrefix(mode, "view:")
+				mode = strings.TrimSpace(mode)
+			}
+		}
+		if mode == "" {
+			mode = app.ViewModeDefault
+		}
+		m.viewMode = mode
+		if strings.TrimSpace(ev.Text) != "" {
+			m.setEphemeralInfo(ev.Text)
+		} else {
+			m.refreshViewportContentFollow(true)
+		}
+		m.status = "ready"
 	case service.EventClearScreen:
 		m.clearProviderRetryStatus()
 		m.assembler.Reset()
 		m.clearPendingToolCalls()
+		m.ephemeralMessages = nil
 		m.resetTranscriptWithHeader()
 		m.resetTurnVisibility()
 		m.logs = nil
@@ -325,6 +352,7 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		m.clearProviderRetryStatus()
 		m.assembler.Reset()
 		m.clearPendingToolCalls()
+		m.ephemeralMessages = nil
 		m.resetTranscriptWithHeader()
 		m.resetTurnVisibility()
 		m.logs = nil

@@ -21,6 +21,7 @@ func (m *model) flushNativeScrollbackCmd() tea.Cmd {
 	}
 	messages := append([]tuirender.UIMessage(nil), m.transcript[m.nativeScrollbackPrinted:]...)
 	m.nativeScrollbackPrinted = len(m.transcript)
+	messages = m.focusMessages(messages)
 	return nativeScrollbackPrintCmd(messages, m.chatRenderWidth())
 }
 

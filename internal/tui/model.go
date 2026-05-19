@@ -52,6 +52,7 @@ type model struct {
 	assembler            *tuirender.Assembler
 	pendingToolCalls     map[string]struct{}
 	transcript           []tuirender.UIMessage
+	ephemeralMessages    []tuirender.UIMessage
 	logs                 []logEntry
 	diffs                []diffEntry
 	width                int
@@ -78,6 +79,7 @@ type model struct {
 	model                string
 	effort               string
 	thinking             string
+	viewMode             string
 	chatMode             string
 	product              string
 	version              string
@@ -230,6 +232,10 @@ func newModel(svc *service.Service, modelName, effort, thinking string) model {
 	if thinking == "" {
 		thinking = "on"
 	}
+	viewMode := app.ViewModeDefault
+	if svc != nil {
+		viewMode = svc.ViewMode()
+	}
 	m := model{
 		svc:              svc,
 		input:            composer.New(),
@@ -245,6 +251,7 @@ func newModel(svc *service.Service, modelName, effort, thinking string) model {
 		model:            modelName,
 		effort:           effort,
 		thinking:         thinking,
+		viewMode:         viewMode,
 		chatMode:         "agent",
 		product:          "Whale",
 		version:          resolveVersion(),

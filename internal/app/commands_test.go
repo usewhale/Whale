@@ -97,6 +97,7 @@ func TestClassifySubmitSlashCommands(t *testing.T) {
 		{line: "/mcp", want: appcommands.SubmitLocalReadOnly},
 		{line: "/model", want: appcommands.SubmitLocalUI},
 		{line: "/permissions", want: appcommands.SubmitLocalUI},
+		{line: "/focus", want: appcommands.SubmitLocalUI},
 		{line: "/skills", want: appcommands.SubmitLocalUI},
 		{line: "/memory", want: appcommands.SubmitLocalReadOnly},
 		{line: "/memory list", want: appcommands.SubmitLocalReadOnly},
@@ -123,6 +124,7 @@ func TestClassifySubmitSlashCommands(t *testing.T) {
 		{line: "/init", want: appcommands.SubmitTurnStarting},
 		{line: "/compact", want: appcommands.SubmitTurnStarting},
 		{line: "/model xxx", want: appcommands.SubmitUsageError},
+		{line: "/focus now", want: appcommands.SubmitUsageError},
 		{line: "/skills xxx", want: appcommands.SubmitUsageError},
 		{line: "/memory bad", want: appcommands.SubmitUsageError},
 		{line: "/memory show", want: appcommands.SubmitUsageError},
@@ -434,6 +436,28 @@ func TestHandleLocalCommandStats(t *testing.T) {
 	handled, _, _, err = a.HandleLocalCommand("/stats extra")
 	if !handled || err == nil || !strings.Contains(err.Error(), "usage: /stats [usage|tools|repair|recent|all]") {
 		t.Fatalf("expected /stats usage error, handled=%v err=%v", handled, err)
+	}
+}
+
+func TestHandleLocalCommandFocusTogglesAndPersists(t *testing.T) {
+	dir := t.TempDir()
+	a := &App{cfg: Config{DataDir: dir, ViewMode: ViewModeDefault}}
+	handled, out, _, err := a.HandleLocalCommand("/focus")
+	if err != nil {
+		t.Fatalf("HandleLocalCommand: %v", err)
+	}
+	if !handled || out != "Focus view enabled" {
+		t.Fatalf("focus output: handled=%v out=%q", handled, out)
+	}
+	if a.ViewMode() != ViewModeFocus {
+		t.Fatalf("view mode: want focus, got %q", a.ViewMode())
+	}
+	loaded, ok, err := LoadConfigFile(GlobalConfigPath(dir))
+	if err != nil {
+		t.Fatalf("LoadConfigFile: %v", err)
+	}
+	if !ok || loaded.UI.ViewMode != ViewModeFocus {
+		t.Fatalf("persisted view mode: ok=%v cfg=%+v", ok, loaded.UI)
 	}
 }
 

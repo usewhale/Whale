@@ -5,20 +5,22 @@ import "strings"
 type MessageKind string
 
 const (
-	KindText       MessageKind = "text"
-	KindNotice     MessageKind = "notice"
-	KindThinking   MessageKind = "thinking"
-	KindPlan       MessageKind = "plan"
-	KindPlanUpdate MessageKind = "plan_update"
-	KindToolCall   MessageKind = "tool_call"
-	KindToolResult MessageKind = "tool_result"
+	KindText        MessageKind = "text"
+	KindNotice      MessageKind = "notice"
+	KindThinking    MessageKind = "thinking"
+	KindPlan        MessageKind = "plan"
+	KindPlanUpdate  MessageKind = "plan_update"
+	KindToolCall    MessageKind = "tool_call"
+	KindToolResult  MessageKind = "tool_result"
+	KindToolSummary MessageKind = "tool_summary"
 )
 
 type UIMessage struct {
-	ID   string
-	Role string
-	Kind MessageKind
-	Text string
+	ID       string
+	Role     string
+	Kind     MessageKind
+	Text     string
+	ToolName string
 }
 
 type Assembler struct {
@@ -105,16 +107,17 @@ func (a *Assembler) AppendDelta(role, text string) {
 	})
 }
 
-func (a *Assembler) AddToolCall(toolCallID, text string) {
+func (a *Assembler) AddToolCall(toolCallID, toolName, text string) {
 	t := strings.TrimSpace(strings.TrimRight(text, "\n"))
 	if t == "" {
 		return
 	}
 	a.messages = append(a.messages, UIMessage{
-		ID:   toolCallID,
-		Role: "tool",
-		Kind: KindToolCall,
-		Text: t,
+		ID:       toolCallID,
+		Role:     "tool",
+		Kind:     KindToolCall,
+		Text:     t,
+		ToolName: strings.TrimSpace(toolName),
 	})
 	if toolCallID != "" {
 		a.toolEntryByID[toolCallID] = len(a.messages) - 1
@@ -256,9 +259,10 @@ func (a *Assembler) AddToolResultWithRole(name, text, role string) {
 		t = label + ": " + t
 	}
 	a.messages = append(a.messages, UIMessage{
-		Role: role,
-		Kind: KindToolResult,
-		Text: t,
+		Role:     role,
+		Kind:     KindToolResult,
+		Text:     t,
+		ToolName: strings.TrimSpace(name),
 	})
 }
 

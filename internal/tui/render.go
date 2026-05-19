@@ -58,13 +58,21 @@ func (m model) renderBottom(mainWidth int) string {
 	if m.chatMode == "ask" || m.chatMode == "plan" {
 		footerText += "  mode: " + m.chatMode + " (Shift+Tab to switch)"
 	}
+	viewIndicator := ""
+	if m.focusEnabled() {
+		viewIndicator = "focus"
+	}
 	dirReserve := 0
 	if m.cwd != "" {
 		dirReserve = footerDirReserve(m.cwd)
 	}
-	footerText = appendFooterHint(footerText, mainWidth, dirReserve)
+	viewReserve := footerViewIndicatorReserve(viewIndicator)
+	footerText = appendFooterHint(footerText, mainWidth, dirReserve+viewReserve)
 	if m.cwd != "" {
-		footerText = appendFooterDir(footerText, m.cwd, mainWidth)
+		footerText = appendFooterDir(footerText, m.cwd, mainWidth, viewReserve)
+	}
+	if viewIndicator != "" {
+		footerText = appendFooterViewIndicator(footerText, viewIndicator, mainWidth)
 	}
 	footer := lipgloss.NewStyle().Width(mainWidth).MaxWidth(mainWidth).Render(lipgloss.JoinHorizontal(lipgloss.Left, footerText))
 	bottomParts := m.bottomPartsBeforeInput(mainWidth)
@@ -371,13 +379,25 @@ func padVisibleLines(s string, targetLines, width int) string {
 	return strings.Join(lines, "\n")
 }
 
-func appendFooterDir(base, cwd string, width int) string {
+func appendFooterDir(base, cwd string, width, reserve int) string {
 	segment := "  "
-	available := width - lipgloss.Width(base) - lipgloss.Width(segment)
+	available := width - lipgloss.Width(base) - lipgloss.Width(segment) - reserve
 	if available <= 0 {
 		return base
 	}
 	return base + segment + fitTail(cwd, available)
+}
+
+func appendFooterViewIndicator(base, indicator string, width int) string {
+	indicator = strings.TrimSpace(indicator)
+	if indicator == "" {
+		return base
+	}
+	segment := "  " + indicator
+	if lipgloss.Width(base)+lipgloss.Width(segment) > width {
+		return base
+	}
+	return base + segment
 }
 
 func appendFooterHint(base string, width, reserve int) string {
@@ -403,6 +423,14 @@ func footerDirReserve(cwd string) int {
 		return 0
 	}
 	return lipgloss.Width("  ") + lipgloss.Width(tail)
+}
+
+func footerViewIndicatorReserve(indicator string) int {
+	indicator = strings.TrimSpace(indicator)
+	if indicator == "" {
+		return 0
+	}
+	return lipgloss.Width("  ") + lipgloss.Width(indicator)
 }
 
 func fitTail(s string, width int) string {

@@ -28,6 +28,7 @@ const (
 	IntentSetApprovalMode      IntentKind = "set_approval_mode"
 	IntentSetProjectApproval   IntentKind = "set_project_approval"
 	IntentClearProjectApproval IntentKind = "clear_project_approval"
+	IntentSetViewMode          IntentKind = "set_view_mode"
 	IntentToggleMode           IntentKind = "toggle_mode"
 	IntentImplementPlan        IntentKind = "implement_plan"
 	IntentRequestSkillsManage  IntentKind = "request_skills_manage"
@@ -45,6 +46,7 @@ type Intent struct {
 	Effort       string
 	Thinking     string
 	ApprovalMode string
+	ViewMode     string
 	SkillName    string
 	SkillEnabled bool
 	SkillBinding *app.SkillBinding
@@ -84,6 +86,7 @@ const (
 	EventPermissionsPicker EventKind = "permissions_picker"
 	EventSkillsMenu        EventKind = "skills_menu"
 	EventSkillsManager     EventKind = "skills_manager"
+	EventViewModeChanged   EventKind = "view_mode_changed"
 	EventSkillLoaded       EventKind = "skill_loaded"
 	EventExitRequested     EventKind = "exit_requested"
 	EventClearScreen       EventKind = "clear_screen"
@@ -111,6 +114,7 @@ type Event struct {
 	CurrentThinking string
 	ApprovalChoices []string
 	CurrentApproval string
+	ViewMode        string
 	Skills          []skills.SkillView
 	SessionID       string
 	Messages        []core.Message
@@ -184,6 +188,7 @@ func (s *Service) WorkspaceRoot() string {
 func (s *Service) Model() string           { return s.app.Model() }
 func (s *Service) ReasoningEffort() string { return s.app.ReasoningEffort() }
 func (s *Service) ThinkingEnabled() bool   { return s.app.ThinkingEnabled() }
+func (s *Service) ViewMode() string        { return s.app.ViewMode() }
 func (s *Service) SkillSuggestions() []skills.SkillView {
 	if s == nil || s.app == nil {
 		return nil

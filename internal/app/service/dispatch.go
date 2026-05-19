@@ -93,6 +93,13 @@ func (s *Service) Dispatch(in Intent) {
 		}
 		s.emit(Event{Kind: EventInfo, Text: fmt.Sprintf("project permissions default cleared\nconfig: %s\ncurrent session: %s", path, approvalModeDisplay(mode))})
 		s.emit(Event{Kind: EventTurnDone})
+	case IntentSetViewMode:
+		if err := s.app.SetViewMode(in.ViewMode); err != nil {
+			s.emit(Event{Kind: EventError, Text: err.Error()})
+			return
+		}
+		s.emit(Event{Kind: EventViewModeChanged, ViewMode: s.app.ViewMode(), Text: app.ViewModeToggleMessage(s.app.ViewMode())})
+		s.emit(Event{Kind: EventTurnDone})
 	case IntentToggleMode:
 		msg, err := s.app.ToggleMode()
 		if err != nil {
@@ -197,6 +204,15 @@ func (s *Service) handleLocalSubmit(line string) {
 		})
 		return
 	}
+	if line == "/focus" {
+		mode, err := s.app.ToggleViewMode()
+		if err != nil {
+			s.emit(localSubmitResultEvent("error", err.Error()))
+			return
+		}
+		s.emit(Event{Kind: EventViewModeChanged, ViewMode: mode, Text: app.ViewModeToggleMessage(mode)})
+		return
+	}
 	if line == "/skills" {
 		s.emit(Event{Kind: EventSkillsMenu})
 		return
@@ -280,6 +296,18 @@ func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.
 			ApprovalChoices: approvalModeChoices(),
 			CurrentApproval: approvalModeDisplay(s.app.ApprovalMode()),
 		})
+		return
+	}
+	if line == "/focus" {
+		mode, err := s.app.ToggleViewMode()
+		if err != nil {
+			s.emit(Event{Kind: EventError, Text: err.Error()})
+			s.emit(Event{Kind: EventTurnDone})
+			return
+		}
+		msg := app.ViewModeToggleMessage(mode)
+		s.emit(Event{Kind: EventViewModeChanged, ViewMode: mode, Text: msg})
+		s.emit(Event{Kind: EventTurnDone, LastResponse: msg})
 		return
 	}
 	if line == "/skills" {
