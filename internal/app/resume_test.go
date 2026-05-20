@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/usewhale/whale/internal/session"
+	"github.com/usewhale/whale/internal/store"
 )
 
 func TestListResumeChoicesShowsReadableConversationTable(t *testing.T) {
@@ -89,6 +90,60 @@ func TestApplyResumeChoiceBlocksCrossWorkspace(t *testing.T) {
 	}
 	if meta.Workspace != other {
 		t.Fatalf("workspace was mutated to %q, want %q", meta.Workspace, other)
+	}
+}
+
+func TestResolveResumeWorktreeReturnsSessionWorktree(t *testing.T) {
+	dataDir := t.TempDir()
+	sessionsDir := store.DefaultSessionsDir(dataDir)
+	worktreePath := t.TempDir()
+	if err := session.SaveSessionMeta(sessionsDir, "s1", session.SessionMeta{
+		Workspace:          worktreePath,
+		Branch:             "worktree-feature",
+		WorktreeName:       "feature",
+		WorktreePath:       worktreePath,
+		WorktreeBranch:     "worktree-feature",
+		OriginalWorkspace:  "/tmp/original",
+		OriginalBranch:     "main",
+		OriginalHeadCommit: "abc123",
+	}); err != nil {
+		t.Fatalf("save meta: %v", err)
+	}
+
+	got, err := ResolveResumeWorktree(Config{DataDir: dataDir}, StartOptions{SessionID: "s1"}, t.TempDir())
+	if err != nil {
+		t.Fatalf("ResolveResumeWorktree: %v", err)
+	}
+	if got.Name != "feature" || got.Path != worktreePath || got.Branch != "worktree-feature" || got.OriginalWorkspace != "/tmp/original" {
+		t.Fatalf("unexpected worktree session: %+v", got)
+	}
+}
+
+func TestResolveResumeWorktreeReportsMissingPath(t *testing.T) {
+	dataDir := t.TempDir()
+	sessionsDir := store.DefaultSessionsDir(dataDir)
+	missing := filepath.Join(t.TempDir(), "missing")
+	if err := session.SaveSessionMeta(sessionsDir, "s1", session.SessionMeta{
+		Workspace:    missing,
+		WorktreeName: "missing",
+		WorktreePath: missing,
+	}); err != nil {
+		t.Fatalf("save meta: %v", err)
+	}
+
+	_, err := ResolveResumeWorktree(Config{DataDir: dataDir}, StartOptions{SessionID: "s1"}, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "worktree missing") || !strings.Contains(err.Error(), "whale worktree list") {
+		t.Fatalf("expected missing worktree error, got %v", err)
+	}
+}
+
+func TestResolveResumeWorktreeSkipsPicker(t *testing.T) {
+	got, err := ResolveResumeWorktree(Config{DataDir: t.TempDir()}, StartOptions{ResumeMenu: true}, t.TempDir())
+	if err != nil {
+		t.Fatalf("ResolveResumeWorktree picker: %v", err)
+	}
+	if got.Path != "" {
+		t.Fatalf("picker should not resolve worktree, got %+v", got)
 	}
 }
 

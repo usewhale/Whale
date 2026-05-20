@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/usewhale/whale/internal/session"
+	"github.com/usewhale/whale/internal/store"
 )
 
 func (a *App) IsResumeMenu(line string) bool { return strings.TrimSpace(line) == "/resume" }
@@ -46,6 +47,56 @@ func CheckResumeWorkspace(sessionsDir, sessionID, currentWorkspace string) (stri
 		return "", false, nil
 	}
 	return crossWorkspaceResumeMessage(workspace, sessionID), true, nil
+}
+
+func ResolveResumeWorktree(cfg Config, start StartOptions, currentWorkspace string) (WorktreeSession, error) {
+	if start.ResumeMenu {
+		return WorktreeSession{}, nil
+	}
+	sessionID := strings.TrimSpace(start.SessionID)
+	if sessionID == "" {
+		sessionsDir := store.DefaultSessionsDir(cfg.DataDir)
+		var err error
+		sessionID, err = resolveInitialSessionID(sessionsDir)
+		if err != nil {
+			return WorktreeSession{}, fmt.Errorf("resolve session failed: %w", err)
+		}
+	}
+	sessionsDir := store.DefaultSessionsDir(cfg.DataDir)
+	meta, err := session.LoadSessionMeta(sessionsDir, sessionID)
+	if err != nil {
+		return WorktreeSession{}, err
+	}
+	if strings.TrimSpace(meta.WorktreePath) == "" {
+		return WorktreeSession{}, nil
+	}
+	path := strings.TrimSpace(meta.WorktreePath)
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return WorktreeSession{}, fmt.Errorf("worktree missing for session %s: %s\nRun `whale worktree list` to inspect worktrees.", sessionID, path)
+		}
+		return WorktreeSession{}, fmt.Errorf("stat worktree: %w", err)
+	}
+	if !sameWorkspace(path, currentWorkspace) {
+		return WorktreeSession{
+			Name:               meta.WorktreeName,
+			Workspace:          meta.Workspace,
+			Path:               path,
+			Branch:             meta.WorktreeBranch,
+			OriginalWorkspace:  meta.OriginalWorkspace,
+			OriginalBranch:     meta.OriginalBranch,
+			OriginalHeadCommit: meta.OriginalHeadCommit,
+		}, nil
+	}
+	return WorktreeSession{
+		Name:               meta.WorktreeName,
+		Workspace:          meta.Workspace,
+		Path:               path,
+		Branch:             meta.WorktreeBranch,
+		OriginalWorkspace:  meta.OriginalWorkspace,
+		OriginalBranch:     meta.OriginalBranch,
+		OriginalHeadCommit: meta.OriginalHeadCommit,
+	}, nil
 }
 
 func crossWorkspaceResumeMessage(workspace, sessionID string) string {

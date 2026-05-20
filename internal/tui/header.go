@@ -1,15 +1,16 @@
 package tui
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
 
 	"github.com/usewhale/whale/internal/build"
+	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
 
 const headerLargeLogoMinWidth = 64
@@ -60,29 +61,70 @@ func (h headerInfo) render() string {
 	innerWidth := h.innerWidth()
 	switch h.mode(innerWidth) {
 	case "large":
-		rows = append(rows, whaleLargeLogo...)
+		rows = append(rows, h.logoLines()...)
 		rows = append(rows, "")
-		rows = append(rows, fmt.Sprintf("version:   %s", h.version))
-		rows = append(rows, fmt.Sprintf("model:     %s   /model to change", h.model))
-		rows = append(rows, fmt.Sprintf("effort:    %s", h.effort))
-		rows = append(rows, fmt.Sprintf("thinking:  %s   /model to change", h.thinking))
-		rows = append(rows, fmt.Sprintf("directory: %s", h.formatDirectory()))
+		rows = append(rows, h.fieldLine("version:", h.version, ""))
+		rows = append(rows, h.fieldLine("model:", h.model, "/model to change"))
+		rows = append(rows, h.fieldLine("effort:", h.effort, ""))
+		rows = append(rows, h.fieldLine("thinking:", h.thinking, "/model to change"))
+		rows = append(rows, h.fieldLine("directory:", h.formatDirectory(), ""))
 	case "compact":
-		rows = append(rows, fmt.Sprintf("WHALE %s", h.version))
+		rows = append(rows, h.wordmarkLine())
 		rows = append(rows, "")
-		rows = append(rows, fmt.Sprintf("version:   %s", h.version))
-		rows = append(rows, fmt.Sprintf("model:     %s   /model to change", h.model))
-		rows = append(rows, fmt.Sprintf("effort:    %s", h.effort))
-		rows = append(rows, fmt.Sprintf("thinking:  %s   /model to change", h.thinking))
-		rows = append(rows, fmt.Sprintf("directory: %s", h.formatDirectory()))
+		rows = append(rows, h.fieldLine("version:", h.version, ""))
+		rows = append(rows, h.fieldLine("model:", h.model, "/model to change"))
+		rows = append(rows, h.fieldLine("effort:", h.effort, ""))
+		rows = append(rows, h.fieldLine("thinking:", h.thinking, "/model to change"))
+		rows = append(rows, h.fieldLine("directory:", h.formatDirectory(), ""))
 	case "tiny":
-		rows = append(rows, fmt.Sprintf("WHALE %s", h.version))
-		rows = append(rows, fmt.Sprintf("model: %s", h.model))
-		rows = append(rows, fmt.Sprintf("dir:   %s", h.formatDirectoryForPrefix("dir:   ")))
+		rows = append(rows, h.wordmarkLine())
+		rows = append(rows, h.compactFieldLine("model:", h.model, 1))
+		rows = append(rows, h.compactFieldLine("dir:", h.formatDirectoryForPrefix("dir:   "), 3))
 	default:
-		rows = append(rows, fmt.Sprintf("WHALE %s", h.version))
+		rows = append(rows, h.wordmarkLine())
 	}
 	return withHeaderBorder(rows, innerWidth)
+}
+
+func (h headerInfo) logoLines() []string {
+	out := make([]string, 0, len(whaleLargeLogo))
+	style := lipgloss.NewStyle().Foreground(tuitheme.Default.Accent).Bold(true)
+	for _, line := range whaleLargeLogo {
+		out = append(out, style.Render(line))
+	}
+	return out
+}
+
+func (h headerInfo) wordmarkLine() string {
+	return lipgloss.NewStyle().Foreground(tuitheme.Default.Accent).Bold(true).Render("WHALE") +
+		" " +
+		lipgloss.NewStyle().Foreground(tuitheme.Default.Muted).Render(h.version)
+}
+
+func (h headerInfo) fieldLine(label, value, hint string) string {
+	const labelWidth = len("directory:")
+	label = strings.TrimSpace(label)
+	value = strings.TrimSpace(value)
+	line := lipgloss.NewStyle().Foreground(tuitheme.Default.Muted).Render(label)
+	padding := labelWidth - lipgloss.Width(label) + 1
+	if padding < 1 {
+		padding = 1
+	}
+	line += strings.Repeat(" ", padding)
+	line += lipgloss.NewStyle().Foreground(tuitheme.Default.InfoSoft).Render(value)
+	if strings.TrimSpace(hint) != "" {
+		line += "   " + lipgloss.NewStyle().Foreground(tuitheme.Default.Muted).Render(hint)
+	}
+	return line
+}
+
+func (h headerInfo) compactFieldLine(label, value string, spaces int) string {
+	if spaces < 1 {
+		spaces = 1
+	}
+	return lipgloss.NewStyle().Foreground(tuitheme.Default.Muted).Render(strings.TrimSpace(label)) +
+		strings.Repeat(" ", spaces) +
+		lipgloss.NewStyle().Foreground(tuitheme.Default.InfoSoft).Render(strings.TrimSpace(value))
 }
 
 func (h headerInfo) mode(innerWidth int) string {
@@ -155,16 +197,17 @@ func whaleLogoWidth() int {
 func withHeaderBorder(lines []string, innerWidth int) string {
 	contentWidth := innerWidth
 	out := make([]string, 0, len(lines)+2)
-	out = append(out, "╭"+strings.Repeat("─", contentWidth+2)+"╮")
+	border := lipgloss.NewStyle().Foreground(tuitheme.Default.Border)
+	out = append(out, border.Render("╭"+strings.Repeat("─", contentWidth+2)+"╮"))
 	for _, line := range lines {
-		line = truncateRight(line, contentWidth)
+		line = truncateStyledRight(line, contentWidth)
 		padding := contentWidth - lipgloss.Width(line)
 		if padding < 0 {
 			padding = 0
 		}
-		out = append(out, "│ "+line+strings.Repeat(" ", padding)+" │")
+		out = append(out, border.Render("│ ")+line+strings.Repeat(" ", padding)+border.Render(" │"))
 	}
-	out = append(out, "╰"+strings.Repeat("─", contentWidth+2)+"╯")
+	out = append(out, border.Render("╰"+strings.Repeat("─", contentWidth+2)+"╯"))
 	return strings.Join(out, "\n")
 }
 
@@ -215,17 +258,32 @@ func truncateRight(s string, maxWidth int) string {
 	return out + "..."
 }
 
+func truncateStyledRight(s string, maxWidth int) string {
+	if maxWidth <= 3 {
+		return strings.Repeat(".", max(0, maxWidth))
+	}
+	if lipgloss.Width(s) <= maxWidth {
+		return s
+	}
+	return xansi.Truncate(s, maxWidth, "...")
+}
+
 func resolveVersion() string {
 	return build.CurrentVersion()
 }
 
 func resolveWorkingDirectory() string {
+	wd := resolveWorkingDirectoryPath()
+	home, _ := os.UserHomeDir()
+	return displayWorkingDirectory(wd, home, runtime.GOOS)
+}
+
+func resolveWorkingDirectoryPath() string {
 	wd, err := os.Getwd()
 	if err != nil {
 		return "."
 	}
-	home, _ := os.UserHomeDir()
-	return displayWorkingDirectory(wd, home, runtime.GOOS)
+	return wd
 }
 
 func displayWorkingDirectory(wd, home, goos string) string {

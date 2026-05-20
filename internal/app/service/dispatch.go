@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/usewhale/whale/internal/agent"
 	"github.com/usewhale/whale/internal/app"
 	appcommands "github.com/usewhale/whale/internal/app/commands"
 	"github.com/usewhale/whale/internal/core"
@@ -83,7 +84,7 @@ func (s *Service) Dispatch(in Intent) {
 			s.emit(Event{Kind: EventError, Text: err.Error()})
 			return
 		}
-		s.emit(Event{Kind: EventInfo, Text: fmt.Sprintf("project permissions saved: %s\nconfig: %s", projectApprovalModeDisplay(mode), path)})
+		s.emit(Event{Kind: EventInfo, Text: fmt.Sprintf("project local permissions saved: %s\nconfig: %s", projectApprovalModeDisplay(mode), path)})
 		s.emit(Event{Kind: EventTurnDone})
 	case IntentClearProjectApproval:
 		mode, path, err := s.app.ClearProjectApprovalMode()
@@ -91,7 +92,7 @@ func (s *Service) Dispatch(in Intent) {
 			s.emit(Event{Kind: EventError, Text: err.Error()})
 			return
 		}
-		s.emit(Event{Kind: EventInfo, Text: fmt.Sprintf("project permissions default cleared\nconfig: %s\ncurrent session: %s", path, approvalModeDisplay(mode))})
+		s.emit(Event{Kind: EventInfo, Text: fmt.Sprintf("project local permissions default cleared\nconfig: %s\ncurrent session: %s", path, approvalModeDisplay(mode))})
 		s.emit(Event{Kind: EventTurnDone})
 	case IntentSetViewMode:
 		if err := s.app.SetViewMode(in.ViewMode); err != nil {
@@ -227,12 +228,24 @@ func (s *Service) handleLocalSubmit(line string) {
 		s.emit(Event{Kind: EventPluginsManager, Plugins: s.PluginsForManager()})
 		return
 	}
+	if line == "/review" {
+		s.emit(Event{Kind: EventReviewMenu})
+		return
+	}
 	if s.app.IsResumeMenu(line) {
 		s.emitLocalSessionChoices()
 		return
 	}
 	if strings.HasPrefix(line, "/model ") {
 		s.emit(localSubmitResultEvent("error", "usage: /model"))
+		return
+	}
+	if question, ok := btwQuestionFromLine(line); ok {
+		if question == "" {
+			s.emit(localSubmitResultEvent("error", "Usage: /btw <your question>"))
+			return
+		}
+		s.runSideQuestion(question)
 		return
 	}
 	cmd, err := s.app.ExecuteSlash(line)
@@ -286,6 +299,7 @@ func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.
 	}
 	skipHooks := false
 	skipSkillInjection := false
+	turnOptions := agent.RunOptions{HiddenInput: hiddenInput}
 	line = appcommands.ExpandUniqueSlashPrefix(line, app.CommandsHelp, "/mcp")
 	prevSessionID := s.app.SessionID()
 	if line == "/model" {
@@ -328,6 +342,10 @@ func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.
 		s.emit(Event{Kind: EventPluginsManager, Plugins: s.PluginsForManager()})
 		return
 	}
+	if line == "/review" {
+		s.emit(Event{Kind: EventReviewMenu})
+		return
+	}
 	if prompt, ok := appcommands.PlanPromptFromSlash(line); ok {
 		out, err := s.app.SetMode(session.ModePlan)
 		if err != nil {
@@ -360,6 +378,16 @@ func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.
 		s.emit(Event{Kind: EventTurnDone})
 		return
 	}
+	if question, ok := btwQuestionFromLine(line); ok {
+		if question == "" {
+			s.emit(Event{Kind: EventError, Text: "Usage: /btw <your question>"})
+			s.emit(Event{Kind: EventTurnDone})
+			return
+		}
+		s.runSideQuestion(question)
+		s.emit(Event{Kind: EventTurnDone})
+		return
+	}
 	cmd, err := s.app.ExecuteSlash(line)
 	if err != nil {
 		s.emit(Event{Kind: EventError, Text: err.Error()})
@@ -387,6 +415,11 @@ func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.
 		}
 		line = cmd.Turn.Input
 		hiddenInput = cmd.Turn.Hidden
+		turnOptions = agent.RunOptions{
+			HiddenInput:        cmd.Turn.Hidden,
+			ReadOnly:           cmd.Turn.ReadOnly,
+			ShellAllowPrefixes: append([]string(nil), cmd.Turn.ShellAllowPrefixes...),
+		}
 		skipHooks = cmd.Turn.SkipUserPromptHooks
 		skipSkillInjection = cmd.Turn.SkipSkillInjection
 	}
@@ -406,6 +439,11 @@ func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.
 		}
 		line = cmd.Turn.Input
 		hiddenInput = cmd.Turn.Hidden
+		turnOptions = agent.RunOptions{
+			HiddenInput:        cmd.Turn.Hidden,
+			ReadOnly:           cmd.Turn.ReadOnly,
+			ShellAllowPrefixes: append([]string(nil), cmd.Turn.ShellAllowPrefixes...),
+		}
 		skipHooks = cmd.Turn.SkipUserPromptHooks
 		skipSkillInjection = cmd.Turn.SkipSkillInjection
 	}
@@ -429,7 +467,7 @@ func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.
 		}
 	}
 	if hiddenInput || skipSkillInjection {
-		go s.runTurn(line, hiddenInput)
+		go s.runTurnWithOptions(line, turnOptions)
 		return
 	}
 	skillMention, skillOut, skillSynthetic, err := s.app.BuildSkillMentionSyntheticPromptWithBinding(line, skillBinding)
@@ -491,4 +529,12 @@ func localSubmitResultEvent(status, text string) Event {
 
 func localSubmitDoneEvent() Event {
 	return Event{Kind: EventLocalSubmitDone, Metadata: map[string]any{EventMetadataLocalSubmit: true}}
+}
+
+func btwQuestionFromLine(line string) (string, bool) {
+	fields := strings.Fields(strings.TrimSpace(line))
+	if len(fields) == 0 || fields[0] != "/btw" {
+		return "", false
+	}
+	return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "/btw")), true
 }

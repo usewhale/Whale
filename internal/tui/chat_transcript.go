@@ -8,6 +8,11 @@ import (
 
 func (m *model) resetTranscript() {
 	m.transcript = nil
+	m.startupHeaderPrinted = false
+	if m.startupHeaderOnce == nil {
+		m.startupHeaderOnce = new(bool)
+	}
+	*m.startupHeaderOnce = false
 	m.nativeScrollbackPrinted = 0
 	m.turnTranscriptStart = len(m.transcript)
 	m.visibleAssistantThisTurn = ""

@@ -29,7 +29,7 @@ func (m *model) updateToolCallFromResult(toolCallID, toolName, result, role, sum
 	if summary != "" && summary != "✓" {
 		title += "\n" + summary
 	}
-	if diff := renderFileDiffMetadataMarkdown(metadata, 80); diff != "" && role == "result_ok" {
+	if diff := renderFileDiffMetadataMarkdown(metadata, fileDiffPreviewMaxLines); diff != "" && role == "result_ok" {
 		title += "\n\n" + diff
 	}
 	if toolDisplayKind(toolName) == "shell" {

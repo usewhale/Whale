@@ -75,7 +75,41 @@ func TestAgentPreToolHookBlockSkipsDispatch(t *testing.T) {
 	}
 }
 
-func TestLoadHooksProjectThenGlobalOrder(t *testing.T) {
+func TestReadOnlyTurnPolicyDeniesBeforePreToolHook(t *testing.T) {
+	store := NewInMemoryStore()
+	hookCalled := false
+	a := NewAgentWithRegistry(
+		&preBlockProvider{},
+		store,
+		core.NewToolRegistry([]core.Tool{writeLikeTool{}}),
+		WithHooks([]ResolvedHook{{HookConfig: HookConfig{Command: "side-effect"}, Event: HookEventPreToolUse}}, "."),
+	)
+	a.hooks.spawner = func(_ context.Context, _ HookSpawnInput) HookSpawnResult {
+		hookCalled = true
+		return HookSpawnResult{ExitCode: 0}
+	}
+	events, err := a.RunStreamWithTurnOptions(context.Background(), "s-readonly-hook", "review", RunOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	var sawPolicyDeny bool
+	for ev := range events {
+		if ev.Type == AgentEventTypeHookStarted || ev.Type == AgentEventTypeHookCompleted || ev.Type == AgentEventTypeHookBlocked || ev.Type == AgentEventTypeHookFailed || ev.Type == AgentEventTypeHookWarned {
+			t.Fatalf("PreToolUse hook should not run before read-only denial")
+		}
+		if ev.Type == AgentEventTypeToolPolicyDecision && ev.Policy != nil && ev.Policy.Code == "read_only_turn_denied" {
+			sawPolicyDeny = true
+		}
+	}
+	if hookCalled {
+		t.Fatal("PreToolUse hook side effect ran before read-only denial")
+	}
+	if !sawPolicyDeny {
+		t.Fatal("expected read-only policy denial")
+	}
+}
+
+func TestLoadHooksProjectThenLocalThenGlobalOrder(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	ws := filepath.Join(root, "ws")
@@ -86,9 +120,13 @@ func TestLoadHooksProjectThenGlobalOrder(t *testing.T) {
 		t.Fatalf("mkdir workspace hooks failed: %v", err)
 	}
 	projectCfg := "[[hooks.PreToolUse]]\ncommand = \"echo project\"\n"
+	projectLocalCfg := "[[hooks.PreToolUse]]\ncommand = \"echo project-local\"\n"
 	globalCfg := "[[hooks.PreToolUse]]\ncommand = \"echo global\"\n"
 	if err := os.WriteFile(filepath.Join(ws, ".whale", "config.toml"), []byte(projectCfg), 0o600); err != nil {
 		t.Fatalf("write project config failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".whale", "config.local.toml"), []byte(projectLocalCfg), 0o600); err != nil {
+		t.Fatalf("write project local config failed: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(globalCfg), 0o600); err != nil {
 		t.Fatalf("write global config failed: %v", err)
@@ -97,13 +135,13 @@ func TestLoadHooksProjectThenGlobalOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load hooks failed: %v", err)
 	}
-	if len(loaded) != 2 {
-		t.Fatalf("expected 2 loaded sources, got %d", len(loaded))
+	if len(loaded) != 3 {
+		t.Fatalf("expected 3 loaded sources, got %d", len(loaded))
 	}
-	if len(hooks) != 2 {
-		t.Fatalf("expected 2 hooks, got %d", len(hooks))
+	if len(hooks) != 3 {
+		t.Fatalf("expected 3 hooks, got %d", len(hooks))
 	}
-	if hooks[0].Command != "echo project" || hooks[1].Command != "echo global" {
+	if hooks[0].Command != "echo project" || hooks[1].Command != "echo project-local" || hooks[2].Command != "echo global" {
 		t.Fatalf("unexpected order: %+v", hooks)
 	}
 }

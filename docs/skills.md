@@ -112,7 +112,7 @@ The manager supports:
 - `Space` or `Enter` toggles the selected skill
 - `Esc` closes the manager
 
-Changes are saved automatically to `.whale/config.toml`.
+Changes are saved automatically to `.whale/config.local.toml`.
 
 Whale stores the original `$my-skill ...` message as the visible user turn and
 injects the loaded skill instructions as hidden context for that turn. The
@@ -126,11 +126,19 @@ the workspace boundary on `read_file`.
 ## Disabling Skills
 
 Disable skills from the `/skills` manager. Whale stores the result in the
-project `.whale/config.toml`:
+project local `.whale/config.local.toml`:
 
 ```toml
 [skills]
 disabled = ["legacy-review"]
+```
+
+If shared project config disables a skill, enabling it locally writes an
+override:
+
+```toml
+[skills]
+enabled = ["legacy-review"]
 ```
 
 Disabled skills do not appear in the `$` picker. Explicit `$legacy-review` or

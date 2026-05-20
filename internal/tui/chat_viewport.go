@@ -9,7 +9,6 @@ import (
 const (
 	chatTailRenderMessageLimit = 80
 	chatTailRenderLineFloor    = 80
-	chatTailElision            = "...\n"
 )
 
 func (m *model) refreshViewportContent() {
@@ -80,7 +79,7 @@ func (m *model) refreshViewportContentForSize(mainWidth, bodyHeight int, forceBo
 		}
 		m.chat.SetSize(max(10, mainWidth), max(1, bodyHeight))
 		renderWidth := max(20, mainWidth-2)
-		messages := m.chatMessages()
+		messages := m.chatViewportMessages()
 		if m.viewportFrozen {
 			messages = m.frozenChatMessages
 		} else if m.shouldRenderChatTailOnly(forceBottom) {
@@ -161,16 +160,68 @@ func (m model) scrollbackText(messages []tuirender.UIMessage) string {
 func (m model) chatMessages() []tuirender.UIMessage {
 	live := []tuirender.UIMessage(nil)
 	if m.assembler != nil {
-		live = m.assembler.Snapshot()
+		live = m.visibleLiveMessages(m.assembler.Snapshot())
 	}
-	if len(m.transcript) == 0 && len(live) == 0 && len(m.ephemeralMessages) == 0 {
+	header := m.startupHeaderMessage()
+	if header == nil && len(m.transcript) == 0 && len(live) == 0 && len(m.ephemeralMessages) == 0 {
 		return nil
 	}
-	out := make([]tuirender.UIMessage, 0, len(m.transcript)+len(live)+len(m.ephemeralMessages))
+	out := make([]tuirender.UIMessage, 0, len(m.transcript)+len(live)+len(m.ephemeralMessages)+1)
+	if header != nil {
+		out = append(out, *header)
+	}
 	out = append(out, m.transcript...)
 	out = append(out, live...)
 	out = append(out, m.ephemeralMessages...)
 	return m.focusMessages(out)
+}
+
+func (m model) chatViewportMessages() []tuirender.UIMessage {
+	if m.viewportFrozen || !m.followTail {
+		return m.chatMessages()
+	}
+	live := []tuirender.UIMessage(nil)
+	if m.assembler != nil {
+		live = m.visibleLiveMessages(m.assembler.Snapshot())
+	}
+	start := min(max(m.nativeScrollbackPrinted, 0), len(m.transcript))
+	header := m.startupHeaderMessage()
+	if header == nil && start >= len(m.transcript) && len(live) == 0 && len(m.ephemeralMessages) == 0 {
+		return nil
+	}
+	out := make([]tuirender.UIMessage, 0, len(m.transcript)-start+len(live)+len(m.ephemeralMessages)+1)
+	if header != nil && start == 0 {
+		out = append(out, *header)
+	}
+	out = append(out, m.transcript[start:]...)
+	out = append(out, live...)
+	out = append(out, m.ephemeralMessages...)
+	return m.focusMessages(out)
+}
+
+func (m model) visibleLiveMessages(messages []tuirender.UIMessage) []tuirender.UIMessage {
+	if m.mode != modeApproval || m.approval.toolCallID == "" || len(messages) == 0 {
+		return messages
+	}
+	out := messages[:0]
+	for _, msg := range messages {
+		if msg.Kind == tuirender.KindToolCall && msg.ID == m.approval.toolCallID {
+			continue
+		}
+		out = append(out, msg)
+	}
+	return out
+}
+
+func (m model) startupHeaderMessage() *tuirender.UIMessage {
+	if m.page != pageChat || m.width <= 0 || m.height <= 0 {
+		return nil
+	}
+	header := m.startupHeaderText()
+	if strings.TrimSpace(header) == "" {
+		return nil
+	}
+	return &tuirender.UIMessage{Role: "header", Kind: tuirender.KindText, Text: header}
 }
 
 func (m model) chatContent(width int) string {
@@ -197,55 +248,5 @@ func (m model) chatTailMessagesForView(messages []tuirender.UIMessage, renderWid
 		}
 		messages = messages[1:]
 	}
-	if len(messages) == 1 {
-		return []tuirender.UIMessage{tailMessageForLineLimit(messages[0], renderWidth, lineLimit)}
-	}
 	return messages
-}
-
-func tailMessageForLineLimit(msg tuirender.UIMessage, renderWidth, lineLimit int) tuirender.UIMessage {
-	if lineLimit <= 0 || strings.TrimSpace(msg.Text) == "" {
-		return msg
-	}
-	msg.Text = tailTextForRender(msg.Text, renderWidth, lineLimit)
-	for {
-		lines := renderChatItemLines(msg, renderWidth)
-		if len(lines) <= lineLimit {
-			break
-		}
-		next := trimLeadingTailText(msg.Text, renderWidth, len(lines)-lineLimit+1)
-		if next == msg.Text {
-			break
-		}
-		msg.Text = next
-	}
-	return msg
-}
-
-func tailTextForRender(text string, renderWidth, lineLimit int) string {
-	text = strings.TrimRight(text, "\n")
-	if text == "" {
-		return text
-	}
-	runes := []rune(text)
-	contentWidth := max(16, renderWidth-6)
-	maxRunes := max(256, contentWidth*lineLimit)
-	if len(runes) <= maxRunes {
-		return text
-	}
-	return chatTailElision + strings.TrimLeft(string(runes[len(runes)-maxRunes:]), "\n")
-}
-
-func trimLeadingTailText(text string, renderWidth, linesToDrop int) string {
-	base := strings.TrimPrefix(text, chatTailElision)
-	runes := []rune(base)
-	if len(runes) == 0 {
-		return text
-	}
-	contentWidth := max(16, renderWidth-6)
-	drop := max(1, contentWidth*max(1, linesToDrop))
-	if drop >= len(runes) {
-		drop = max(1, len(runes)/2)
-	}
-	return chatTailElision + strings.TrimLeft(string(runes[drop:]), "\n")
 }

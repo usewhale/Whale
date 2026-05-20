@@ -36,12 +36,23 @@ func (l *chatList) SetSize(width, height int) {
 
 func (l *chatList) SetMessages(messages []tuirender.UIMessage, renderWidth int) {
 	items := make([]chatItem, 0, len(messages))
+	pendingWorkSeparator := false
 	for _, msg := range messages {
 		lines := renderChatItemLines(msg, renderWidth)
 		if len(lines) == 0 {
 			continue
 		}
+		if pendingWorkSeparator && tuirender.NeedsWorkSeparatorBefore(msg) {
+			lines = append([]string{tuirender.WorkSeparator(max(20, renderWidth)), ""}, lines...)
+			pendingWorkSeparator = false
+		}
 		items = append(items, chatItem{msg: msg, lines: lines})
+		switch {
+		case tuirender.IsWorkEvent(msg):
+			pendingWorkSeparator = true
+		case msg.Role == "you" || tuirender.NeedsWorkSeparatorBefore(msg):
+			pendingWorkSeparator = false
+		}
 	}
 	l.items = items
 	l.generation++
@@ -55,10 +66,17 @@ func (l *chatList) SetMessages(messages []tuirender.UIMessage, renderWidth int) 
 
 func renderChatItemLines(msg tuirender.UIMessage, width int) []string {
 	lines := tuirender.ChatLines([]tuirender.UIMessage{msg}, max(20, width))
-	for len(lines) > 0 && strings.TrimSpace(xansi.Strip(lines[len(lines)-1])) == "" {
+	for len(lines) > 0 && isPlainBlankLine(lines[len(lines)-1]) {
 		lines = lines[:len(lines)-1]
 	}
 	return lines
+}
+
+func isPlainBlankLine(line string) bool {
+	if strings.TrimSpace(xansi.Strip(line)) != "" {
+		return false
+	}
+	return line == xansi.Strip(line)
 }
 
 func (l *chatList) View() string {

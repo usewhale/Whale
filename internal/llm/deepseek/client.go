@@ -19,18 +19,24 @@ import (
 	llmretry "github.com/usewhale/whale/internal/llm/retry"
 )
 
-const defaultBaseURL = "https://api.deepseek.com"
+const (
+	defaultBaseURL           = "https://api.deepseek.com"
+	defaultStreamMaxAttempts = 6
+)
+
+var errIncompleteStream = errors.New("stream disconnected before completion")
 
 type Client struct {
-	apiKey          string
-	baseURL         string
-	httpClient      *http.Client
-	model           string
-	reasoningEffort string
-	thinkingEnabled bool
-	maxTokens       int
-	retryPolicy     llmretry.Policy
-	retrySleeper    llmretry.Sleeper
+	apiKey            string
+	baseURL           string
+	httpClient        *http.Client
+	model             string
+	reasoningEffort   string
+	thinkingEnabled   bool
+	maxTokens         int
+	retryPolicy       llmretry.Policy
+	retrySleeper      llmretry.Sleeper
+	streamMaxAttempts int
 }
 
 type Option func(*Client)
@@ -67,6 +73,14 @@ func WithRetryPolicy(policy llmretry.Policy) Option {
 	return func(c *Client) { c.retryPolicy = llmretry.NormalizePolicy(policy) }
 }
 
+func WithStreamMaxAttempts(v int) Option {
+	return func(c *Client) {
+		if v > 0 {
+			c.streamMaxAttempts = v
+		}
+	}
+}
+
 func withRetrySleeper(s llmretry.Sleeper) Option {
 	return func(c *Client) {
 		if s != nil {
@@ -81,11 +95,12 @@ func New(opts ...Option) (*Client, error) {
 		httpClient: &http.Client{
 			Timeout: 11 * time.Minute,
 		},
-		model:           defaults.DefaultModel,
-		reasoningEffort: defaults.DefaultReasoningEffort,
-		thinkingEnabled: defaults.DefaultThinkingEnabled,
-		retryPolicy:     llmretry.DefaultPolicy(),
-		retrySleeper:    llmretry.Sleep,
+		model:             defaults.DefaultModel,
+		reasoningEffort:   defaults.DefaultReasoningEffort,
+		thinkingEnabled:   defaults.DefaultThinkingEnabled,
+		retryPolicy:       llmretry.DefaultPolicy(),
+		retrySleeper:      llmretry.Sleep,
+		streamMaxAttempts: defaultStreamMaxAttempts,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -102,6 +117,9 @@ func New(opts ...Option) (*Client, error) {
 	c.retryPolicy = llmretry.NormalizePolicy(c.retryPolicy)
 	if c.retrySleeper == nil {
 		c.retrySleeper = llmretry.Sleep
+	}
+	if c.streamMaxAttempts <= 0 {
+		c.streamMaxAttempts = defaultStreamMaxAttempts
 	}
 	return c, nil
 }
@@ -152,45 +170,47 @@ func (c *Client) stream(ctx context.Context, history []core.Message, tools []cor
 		return fmt.Errorf("marshal payload: %w", err)
 	}
 
-	resp, err := c.doStreamRequest(ctx, body, out)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	return parseSSE(resp.Body, c.model, estimateReasoningReplayTokens(msgs), out)
+	return c.streamWithRetries(ctx, body, msgs, out)
 }
 
-func (c *Client) doStreamRequest(ctx context.Context, body []byte, out chan<- llm.ProviderEvent) (*http.Response, error) {
+func (c *Client) streamWithRetries(ctx context.Context, body []byte, msgs []map[string]any, out chan<- llm.ProviderEvent) error {
 	policy := llmretry.NormalizePolicy(c.retryPolicy)
-	for attempt := 1; attempt <= policy.MaxAttempts; attempt++ {
+	requestAttempt := 1
+	streamAttempt := 1
+	for {
 		resp, err := c.sendStreamRequest(ctx, body)
-		if err == nil {
-			return resp, nil
+		if err != nil {
+			var buildErr *requestBuildError
+			if errors.As(err, &buildErr) {
+				return err
+			}
+			if !llmretry.ShouldRetry(policy, err) || requestAttempt >= policy.MaxAttempts {
+				return deepSeekRequestError(err)
+			}
+			delay := llmretry.Backoff(policy, requestAttempt, err)
+			out <- retryScheduledEvent(requestAttempt, policy.MaxAttempts, delay, err, "request", false)
+			requestAttempt++
+			if sleepErr := c.retrySleeper(ctx, delay); sleepErr != nil {
+				return sleepErr
+			}
+			continue
 		}
-		var buildErr *requestBuildError
-		if errors.As(err, &buildErr) {
-			return nil, err
+
+		parseErr := parseSSE(resp.Body, c.model, estimateReasoningReplayTokens(msgs), out)
+		_ = resp.Body.Close()
+		if parseErr == nil {
+			return nil
 		}
-		if !llmretry.ShouldRetry(policy, err) || attempt >= policy.MaxAttempts {
-			return nil, deepSeekRequestError(err)
+		if !shouldRetryStreamError(parseErr) || streamAttempt >= c.streamMaxAttempts {
+			return parseErr
 		}
-		delay := llmretry.Backoff(policy, attempt, err)
-		out <- llm.ProviderEvent{
-			Type: llm.EventRetryScheduled,
-			Retry: &llmretry.Info{
-				Attempt:     attempt,
-				MaxAttempts: policy.MaxAttempts,
-				Delay:       delay,
-				StatusCode:  retryStatusCode(err),
-				Reason:      llmretry.Reason(err),
-			},
-		}
+		delay := llmretry.Backoff(policy, streamAttempt, parseErr)
+		out <- retryScheduledEvent(streamAttempt, c.streamMaxAttempts, delay, parseErr, "stream", true)
+		streamAttempt++
 		if sleepErr := c.retrySleeper(ctx, delay); sleepErr != nil {
-			return nil, sleepErr
+			return sleepErr
 		}
 	}
-	return nil, errors.New("request failed")
 }
 
 func (c *Client) sendStreamRequest(ctx context.Context, body []byte) (*http.Response, error) {
@@ -246,6 +266,35 @@ func retryStatusCode(err error) int {
 	return 0
 }
 
+func retryScheduledEvent(attempt, maxAttempts int, delay time.Duration, err error, stage string, streamReset bool) llm.ProviderEvent {
+	return llm.ProviderEvent{
+		Type: llm.EventRetryScheduled,
+		Retry: &llmretry.Info{
+			Attempt:     attempt,
+			MaxAttempts: maxAttempts,
+			Delay:       delay,
+			StatusCode:  retryStatusCode(err),
+			Reason:      retryReason(err, stage),
+			Stage:       stage,
+			StreamReset: streamReset,
+		},
+	}
+}
+
+func retryReason(err error, stage string) string {
+	if stage == "stream" {
+		return "API stream disconnected"
+	}
+	return llmretry.Reason(err)
+}
+
+func shouldRetryStreamError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+}
+
 func parseSSE(r io.Reader, model string, replayTokens int, out chan<- llm.ProviderEvent) error {
 	reader := bufio.NewReader(r)
 	var dataLines []string
@@ -271,12 +320,13 @@ func parseSSE(r io.Reader, model string, replayTokens int, out chan<- llm.Provid
 		if errors.Is(err, io.EOF) {
 			if len(dataLines) > 0 {
 				data := strings.Join(dataLines, "\n")
-				_, perr := parseSSEData(data, model, out, &acc)
-				if perr != nil {
+				if done, perr := parseSSEData(data, model, out, &acc); perr != nil {
 					return perr
+				} else if done {
+					return nil
 				}
 			}
-			return nil
+			return errIncompleteStream
 		}
 	}
 }

@@ -5,25 +5,34 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/usewhale/whale/internal/session"
 )
 
 type Result struct {
-	Handled     bool
-	ShouldExit  bool
-	ClearScreen bool
-	SessionID   string
-	Output      string
-	ShowStatus  bool
-	Mode        string
-	AskPrompt   string
-	PlanPrompt  string
-	InitMemory  bool
-	ShowSkills  bool
+	Handled            bool
+	ShouldExit         bool
+	ClearScreen        bool
+	SessionID          string
+	Output             string
+	ShowStatus         bool
+	Mode               string
+	AskPrompt          string
+	PlanPrompt         string
+	InitMemory         bool
+	ShowSkills         bool
+	ReviewPrompt       string
+	AllowShellPrefixes []string
+	ForkName           string
+	BtwQuestion        string
 }
 
 func NewSessionID(now time.Time) string {
-	return now.Format("20060102-150405")
+	u, err := uuid.NewV7()
+	if err != nil {
+		return now.Format("20060102-150405")
+	}
+	return u.String()
 }
 
 func Parse(line, currentSessionID string, now time.Time) (Result, error) {
@@ -58,6 +67,16 @@ func Parse(line, currentSessionID string, now time.Time) (Result, error) {
 		}
 		return Result{Handled: true, SessionID: next, Output: fmt.Sprintf("new session: %s", next)}, nil
 	}
+	if head == "/fork" {
+		if len(fields) > 2 {
+			return Result{}, fmt.Errorf("usage: /fork [name]")
+		}
+		name := ""
+		if len(fields) == 2 {
+			name = strings.TrimSpace(fields[1])
+		}
+		return Result{Handled: true, SessionID: currentSessionID, ForkName: name}, nil
+	}
 	if trimmed == "/clear" {
 		return Result{Handled: true, SessionID: currentSessionID, ClearScreen: true}, nil
 	}
@@ -90,6 +109,25 @@ func Parse(line, currentSessionID string, now time.Time) (Result, error) {
 			return Result{Handled: true, SessionID: currentSessionID, ShowSkills: true}, nil
 		}
 		return Result{}, fmt.Errorf("usage: /skills")
+	}
+	if head == "/review" {
+		args := strings.TrimSpace(strings.TrimPrefix(trimmed, "/review"))
+		prompt, err := ReviewPromptFromArgs(args)
+		if err != nil {
+			return Result{}, err
+		}
+		allowPrefixes, err := ReviewShellAllowPrefixesFromArgs(args)
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{Handled: true, SessionID: currentSessionID, ReviewPrompt: prompt, AllowShellPrefixes: allowPrefixes}, nil
+	}
+	if head == "/btw" {
+		question := strings.TrimSpace(strings.TrimPrefix(trimmed, "/btw"))
+		if question == "" {
+			return Result{}, fmt.Errorf("Usage: /btw <your question>")
+		}
+		return Result{Handled: true, SessionID: currentSessionID, BtwQuestion: question}, nil
 	}
 	return Result{}, nil
 }

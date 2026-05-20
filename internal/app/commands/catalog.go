@@ -1,0 +1,109 @@
+package commands
+
+import (
+	"strings"
+)
+
+type SlashCommandSpec struct {
+	Name         string
+	Description  string
+	ArgumentHint string
+	AutoRun      bool
+	Options      []SlashCommandOption
+}
+
+type SlashCommandOption struct {
+	Token       string
+	Description string
+	InsertText  string
+	AutoRun     bool
+}
+
+func DefaultSlashCommands() []SlashCommandSpec {
+	return []SlashCommandSpec{
+		{Name: "/help", Description: "Show help and available commands", AutoRun: true},
+		{Name: "/model", Description: "Choose model, effort, and thinking settings", ArgumentHint: "[model]", AutoRun: true},
+		{Name: "/permissions", Description: "Choose tool approval behavior", AutoRun: true},
+		{Name: "/agent", Description: "Switch to agent mode", AutoRun: true},
+		{Name: "/ask", Description: "Switch to ask mode, optionally submit a prompt", ArgumentHint: "[prompt]", AutoRun: true},
+		{Name: "/plan", Description: "Switch to plan mode, optionally submit a prompt", ArgumentHint: "[prompt]", AutoRun: true},
+		{Name: "/btw", Description: "Ask a side question without changing the conversation", ArgumentHint: "<question>"},
+		{Name: "/focus", Description: "Toggle focus view", AutoRun: true},
+		{Name: "/review", Description: "Open review mode or review a target", ArgumentHint: "[local|branch|pr|commit|<instructions>]", AutoRun: true, Options: []SlashCommandOption{
+			{Token: "local", Description: "Review staged, unstaged, and relevant untracked files", AutoRun: true},
+			{Token: "branch", Description: "Review current branch against default branch or base", AutoRun: true},
+			{Token: "pr", Description: "Review a GitHub PR by number or URL", InsertText: "/review pr "},
+			{Token: "commit", Description: "Review one commit by SHA", InsertText: "/review commit "},
+		}},
+		{Name: "/skills", Description: "Show available skills", AutoRun: true},
+		{Name: "/plugins", Description: "Manage plugins", AutoRun: true},
+		{Name: "/memory", Description: "Manage memory entries", ArgumentHint: "[list|path|show <scope/name>|forget <scope/name>]", Options: []SlashCommandOption{
+			{Token: "list", Description: "List remembered entries", AutoRun: true},
+			{Token: "path", Description: "Show memory storage path", AutoRun: true},
+			{Token: "show", Description: "Show one memory entry", InsertText: "/memory show "},
+			{Token: "forget", Description: "Forget one memory entry", InsertText: "/memory forget "},
+		}},
+		{Name: "/feedback", Description: "Open the Whale issue tracker", AutoRun: true},
+		{Name: "/new", Description: "Start a new session", ArgumentHint: "[id]", AutoRun: true},
+		{Name: "/fork", Description: "Fork the current session", ArgumentHint: "[name]", AutoRun: true},
+		{Name: "/resume", Description: "Open the resume picker", AutoRun: true},
+		{Name: "/worktree", Description: "Show or manage Whale worktrees", ArgumentHint: "[list|status [name]|remove <name> [--force]]", Options: []SlashCommandOption{
+			{Token: "list", Description: "List worktrees", AutoRun: true},
+			{Token: "status", Description: "Show current or named worktree status", AutoRun: true},
+			{Token: "remove", Description: "Remove a worktree", InsertText: "/worktree remove "},
+		}},
+		{Name: "/clear", Description: "Clear the visible conversation", AutoRun: true},
+		{Name: "/status", Description: "Show session and configuration status", AutoRun: true},
+		{Name: "/stats", Description: "Show usage and tool statistics", ArgumentHint: "[usage|tools|repair|recent|all]", Options: []SlashCommandOption{
+			{Token: "usage", Description: "Show token and cost usage", AutoRun: true},
+			{Token: "tools", Description: "Show tool-call counts", AutoRun: true},
+			{Token: "repair", Description: "Show repair statistics", AutoRun: true},
+			{Token: "recent", Description: "Show recent activity", AutoRun: true},
+			{Token: "all", Description: "Show all statistics", AutoRun: true},
+		}},
+		{Name: "/mcp", Description: "Show MCP server status", AutoRun: true},
+		{Name: "/compact", Description: "Compact the current conversation", AutoRun: true},
+		{Name: "/init", Description: "Create AGENTS.md from repository context", AutoRun: true},
+		{Name: "/exit", Description: "Exit Whale", AutoRun: true},
+	}
+}
+
+func CommandsHelp() string {
+	specs := DefaultSlashCommands()
+	parts := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		name := strings.TrimSpace(spec.Name)
+		if name == "" {
+			continue
+		}
+		if hint := strings.TrimSpace(spec.ArgumentHint); hint != "" {
+			parts = append(parts, name+" "+hint)
+		} else {
+			parts = append(parts, name)
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func SlashCommandNames(localCommands ...string) []string {
+	specs := DefaultSlashCommands()
+	out := make([]string, 0, len(specs)+len(localCommands))
+	seen := map[string]bool{}
+	for _, spec := range specs {
+		name := strings.TrimSpace(spec.Name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	for _, cmd := range localCommands {
+		cmd = strings.TrimSpace(cmd)
+		if cmd == "" || seen[cmd] {
+			continue
+		}
+		seen[cmd] = true
+		out = append(out, cmd)
+	}
+	return out
+}

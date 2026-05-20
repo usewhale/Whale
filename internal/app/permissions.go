@@ -7,7 +7,7 @@ import (
 )
 
 func (a *App) SetProjectApprovalMode(mode policy.ApprovalMode) (string, error) {
-	path := ProjectConfigPath(a.workspaceRoot)
+	path := ProjectLocalConfigPath(a.workspaceRoot)
 	cfg, _, err := LoadConfigFile(path)
 	if err != nil {
 		return "", err
@@ -23,7 +23,7 @@ func (a *App) SetProjectApprovalMode(mode policy.ApprovalMode) (string, error) {
 }
 
 func (a *App) ClearProjectApprovalMode() (policy.ApprovalMode, string, error) {
-	path := ProjectConfigPath(a.workspaceRoot)
+	path := ProjectLocalConfigPath(a.workspaceRoot)
 	cfg, loaded, err := LoadConfigFile(path)
 	if err != nil {
 		return "", "", err
@@ -35,17 +35,17 @@ func (a *App) ClearProjectApprovalMode() (policy.ApprovalMode, string, error) {
 		}
 	}
 
-	mode := policy.ApprovalModeOnRequest
 	loadedCfg, err := LoadConfigFiles(a.cfg.DataDir, a.workspaceRoot)
 	if err != nil {
 		return "", "", err
 	}
-	if raw := strings.TrimSpace(loadedCfg.Global.Permissions.Mode); raw != "" {
-		parsed, err := policy.ParseApprovalMode(raw)
-		if err != nil {
-			return "", "", err
-		}
-		mode = parsed
+	effective := DefaultConfig()
+	if err := ApplyLoadedConfig(&effective, loadedCfg); err != nil {
+		return "", "", err
+	}
+	mode, err := policy.ParseApprovalMode(strings.TrimSpace(effective.ApprovalMode))
+	if err != nil {
+		return "", "", err
 	}
 	a.approvalMode = mode
 	a.cfg.ApprovalMode = string(mode)

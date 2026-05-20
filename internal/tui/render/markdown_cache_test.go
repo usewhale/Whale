@@ -14,7 +14,7 @@ func TestMarkdownCache_HitProducesIdenticalOutput(t *testing.T) {
 	if first != second {
 		t.Fatalf("cache hit produced different output\n--- first ---\n%s\n--- second ---\n%s", first, second)
 	}
-	if _, ok := markdownCacheGet(markdownCacheKey{input: normalizeMarkdownLinks(input), width: 80, quiet: false}); !ok {
+	if _, ok := markdownCacheGet(markdownCacheKey{input: normalizeMarkdownLinks(input, escapeAutolinksForRenderer), width: 80, quiet: false}); !ok {
 		t.Fatalf("expected entry to be cached after Markdown() call")
 	}
 }

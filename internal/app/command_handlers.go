@@ -56,6 +56,23 @@ func (a *App) ExecuteSlash(line string) (CommandExecution, error) {
 	if cmdResult.ShowSkills {
 		return CommandExecution{Handled: true, Text: a.buildSkillsList()}, nil
 	}
+	if cmdResult.BtwQuestion != "" {
+		return CommandExecution{Handled: true}, errors.New("/btw is only available in the interactive TUI")
+	}
+	if cmdResult.ReviewPrompt != "" {
+		return CommandExecution{Handled: true, Turn: &plugins.CommandTurn{
+			Input:               cmdResult.ReviewPrompt,
+			Hidden:              true,
+			ReadOnly:            true,
+			SkipUserPromptHooks: true,
+			SkipSkillInjection:  true,
+			ShellAllowPrefixes:  append([]string(nil), cmdResult.AllowShellPrefixes...),
+		}}, nil
+	}
+	if strings.TrimSpace(cmdResult.ForkName) != "" || trimmedCommandHead(line) == "/fork" {
+		msg, err := a.forkCurrentSession(cmdResult.ForkName)
+		return CommandExecution{Handled: true, Text: msg}, err
+	}
 	out := CommandExecution{Handled: true, ShouldExit: cmdResult.ShouldExit}
 	if cmdResult.Mode != "" {
 		mode, err := session.ParseMode(cmdResult.Mode)
@@ -106,11 +123,19 @@ func (a *App) ExecuteSlash(line string) (CommandExecution, error) {
 		}
 		out.Text += fmt.Sprintf("\nresume:   whale resume %s", oldID)
 		out.Text += fmt.Sprintf("\nmode:     %s", a.currentMode)
-		if _, err := session.PatchSessionMeta(a.sessionsDir, a.sessionID, session.SessionMeta{Workspace: a.workspaceRoot, Branch: a.branch}); err != nil {
+		if _, err := session.PatchSessionMeta(a.sessionsDir, a.sessionID, a.baseSessionMeta()); err != nil {
 			return out, err
 		}
 	}
 	return out, nil
+}
+
+func trimmedCommandHead(line string) string {
+	fields := strings.Fields(strings.TrimSpace(line))
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[0]
 }
 
 func (a *App) HandleLocalCommand(line string) (handled bool, output string, synthetic string, err error) {
@@ -125,6 +150,25 @@ func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "/mcp" {
 		return CommandExecution{Handled: true, Text: a.buildMCPStatus()}, nil
+	}
+	if trimmed == "/help" {
+		return CommandExecution{Handled: true, Text: BuildHelpText()}, nil
+	}
+	if strings.HasPrefix(trimmed, "/help ") {
+		return CommandExecution{Handled: true}, errors.New("usage: /help")
+	}
+	if trimmed == "/feedback" {
+		return CommandExecution{Handled: true, Text: openFeedbackIssues()}, nil
+	}
+	if trimmed == "/worktree" || strings.HasPrefix(trimmed, "/worktree ") {
+		fields := strings.Fields(trimmed)
+		args := fields[1:]
+		if len(args) > 0 && args[0] == "remove" {
+			text, err := a.removeWorktree(args)
+			return CommandExecution{Handled: true, Text: text, Mutated: err == nil}, err
+		}
+		text, err := a.buildWorktreeStatus(args)
+		return CommandExecution{Handled: true, Text: text}, err
 	}
 	if trimmed == "/focus" {
 		mode, err := a.ToggleViewMode()

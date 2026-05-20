@@ -311,7 +311,7 @@ func doctorCheckConfig(loaded LoadedConfig, err error) DoctorCheck {
 		return DoctorCheck{
 			Label:  "config",
 			Level:  DoctorOK,
-			Detail: "no config.toml found — defaults will be used",
+			Detail: "no config.toml or config.local.toml found — defaults will be used",
 		}
 	}
 	return DoctorCheck{
@@ -373,6 +373,10 @@ func doctorCheckHooks(dataDir, workspaceRoot string) DoctorCheck {
 	loadedFiles := 0
 	if loaded.ProjectLoaded {
 		totalHooks += countFileConfigHooks(loaded.Project)
+		loadedFiles++
+	}
+	if loaded.ProjectLocalLoaded {
+		totalHooks += countFileConfigHooks(loaded.ProjectLocal)
 		loadedFiles++
 	}
 	if loaded.GlobalLoaded {

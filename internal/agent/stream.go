@@ -13,7 +13,7 @@ import (
 	"github.com/usewhale/whale/internal/session"
 )
 
-func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history []core.Message, rt *memory.RuntimeState, events chan<- AgentEvent) (core.Message, *core.Message, llm.Usage, string, bool, error) {
+func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history []core.Message, rt *memory.RuntimeState, events chan<- AgentEvent, toolPolicy policy.ToolPolicy) (core.Message, *core.Message, llm.Usage, string, bool, error) {
 	assistant, err := a.store.Create(ctx, core.Message{SessionID: sessionID, Role: core.RoleAssistant})
 	if err != nil {
 		return core.Message{}, nil, llm.Usage{}, "", false, fmt.Errorf("create assistant message: %w", err)
@@ -68,6 +68,22 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 		case llm.EventRetryScheduled:
 			if ev.Retry != nil {
 				info := *ev.Retry
+				if info.StreamReset {
+					assistant.Text = ""
+					assistant.Reasoning = ""
+					assistant.ToolCalls = nil
+					assistant.FinishReason = ""
+					rt.Scratch.ResetTurn()
+					planParser = core.ProposedPlanParser{}
+					planText.Reset()
+					planStarted = false
+					planCompleted = false
+					assistantDeltaSeen = false
+					streamPersisted = false
+					if err := a.store.Update(ctx, assistant); err != nil {
+						return core.Message{}, nil, llm.Usage{}, "", false, err
+					}
+				}
 				events <- AgentEvent{Type: AgentEventTypeProviderRetryScheduled, ProviderRetry: &info}
 			}
 		case llm.EventComplete:
@@ -202,6 +218,40 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			}
 		}
 		var preHookContext string
+		a.ensureApprovalCacheLoaded(ctx, sessionID)
+		spec, ok := a.tools.Spec(call.Name)
+		if !ok {
+			spec = core.ToolSpec{Name: call.Name}
+		}
+		// Evaluate policy before PreToolUse hooks so that denied calls do not
+		// trigger user-defined hook side effects. The second Decide() further
+		// below is intentional: hooks may rewrite call.Input, which must be
+		// re-evaluated by policy.
+		earlyDecision := toolPolicy.Decide(spec, call)
+		if !earlyDecision.Allow {
+			events <- AgentEvent{
+				Type: AgentEventTypeToolPolicyDecision,
+				Policy: &ToolPolicyDecision{
+					ToolCallID:    call.ID,
+					ToolName:      call.Name,
+					Allow:         earlyDecision.Allow,
+					NeedsApproval: earlyDecision.RequiresApproval,
+					Reason:        earlyDecision.Reason,
+					Code:          earlyDecision.Code,
+					Phase:         earlyDecision.Phase,
+					MatchedRule:   earlyDecision.MatchedRule,
+				},
+			}
+			tr := core.ToolResult{
+				ToolCallID: call.ID,
+				Name:       call.Name,
+				Content:    policyDenialEnvelope(earlyDecision),
+				IsError:    true,
+			}
+			results = append(results, tr)
+			events <- AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}
+			continue
+		}
 		if !a.hooks.Empty() {
 			var toolArgs any
 			_ = json.Unmarshal([]byte(call.Input), &toolArgs)
@@ -234,11 +284,6 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 				call.Input = strings.TrimSpace(report.UpdatedInput)
 			}
 			preHookContext = strings.TrimSpace(report.AdditionalContext)
-		}
-		a.ensureApprovalCacheLoaded(ctx, sessionID)
-		spec, ok := a.tools.Spec(call.Name)
-		if !ok {
-			spec = core.ToolSpec{Name: call.Name}
 		}
 		if (a.mode == session.ModePlan || a.mode == session.ModeAsk) && !core.IsReadOnlyToolCall(spec, call) {
 			blockedCode, blockedMsg, blockedSummary, blockedData := modeBlockedDetails(a.mode)
@@ -285,7 +330,7 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			events <- AgentEvent{Type: AgentEventTypeToolResult, Result: &r}
 			continue
 		}
-		decision := a.policy.Decide(spec, call)
+		decision := toolPolicy.Decide(spec, call)
 		events <- AgentEvent{
 			Type: AgentEventTypeToolPolicyDecision,
 			Policy: &ToolPolicyDecision{
@@ -303,7 +348,7 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			tr := core.ToolResult{
 				ToolCallID: call.ID,
 				Name:       call.Name,
-				Content:    `{"success":false,"error":"policy denied tool call","code":"policy_denied"}`,
+				Content:    policyDenialEnvelope(decision),
 				IsError:    true,
 			}
 			results = append(results, tr)
@@ -509,4 +554,26 @@ func modeBlockedDetails(mode session.Mode) (code, message, summary string, data 
 			"Tool unavailable in the current mode.",
 			map[string]any{}
 	}
+}
+
+func policyDenialEnvelope(d policy.PolicyDecision) string {
+	code := strings.TrimSpace(d.Code)
+	if code == "" {
+		code = "policy_denied"
+	}
+	reason := strings.TrimSpace(d.Reason)
+	if reason == "" {
+		reason = "policy denied tool call"
+	}
+	content, err := core.MarshalToolEnvelope(core.ToolEnvelope{
+		OK:      false,
+		Success: false,
+		Code:    code,
+		Error:   reason,
+		Message: reason,
+	})
+	if err != nil {
+		return fmt.Sprintf(`{"success":false,"error":%q,"code":%q}`, reason, code)
+	}
+	return content
 }

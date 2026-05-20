@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/policy/shellrisk"
 )
 
 type ApprovalRequest struct {
@@ -156,7 +157,7 @@ func ApprovalKeys(call core.ToolCall) []string {
 		}
 	case "shell_run":
 		if v, _ := body["command"].(string); strings.TrimSpace(v) != "" {
-			return []string{base + "|cmd:" + NormalizeShellApprovalCommand(v)}
+			return ShellApprovalKeys(v)
 		}
 	case "remember":
 		scope, _ := body["scope"].(string)
@@ -245,6 +246,9 @@ func ApprovalSessionScope(call core.ToolCall) string {
 	switch len(files) {
 	case 0:
 		if call.Name == "shell_run" {
+			if decision := ShellRiskDecision(call); strings.TrimSpace(decision.SessionScope) != "" {
+				return decision.SessionScope
+			}
 			return "this shell command"
 		}
 		return "this tool request"
@@ -257,6 +261,29 @@ func ApprovalSessionScope(call core.ToolCall) string {
 
 func NormalizeShellApprovalCommand(command string) string {
 	return strings.TrimSpace(command)
+}
+
+func ShellApprovalKeys(command string) []string {
+	decision := shellrisk.Classify(command)
+	if len(decision.ApprovalKeys) > 0 && decision.Level != shellrisk.LevelNeedsApproval {
+		return compactApprovalKeys(decision.ApprovalKeys)
+	}
+	return []string{"shell_run|cmd:" + NormalizeShellApprovalCommand(command)}
+}
+
+func ShellRiskDecision(call core.ToolCall) shellrisk.Decision {
+	if call.Name != "shell_run" {
+		return shellrisk.Decision{}
+	}
+	var body map[string]any
+	if err := json.Unmarshal([]byte(call.Input), &body); err != nil {
+		return shellrisk.Decision{}
+	}
+	command, _ := body["command"].(string)
+	if strings.TrimSpace(command) == "" {
+		return shellrisk.Decision{}
+	}
+	return shellrisk.Classify(command)
 }
 
 func ApprovalMetadata(call core.ToolCall, keys []string, metadata map[string]any) map[string]any {
@@ -278,6 +305,24 @@ func ApprovalMetadata(call core.ToolCall, keys []string, metadata map[string]any
 	}
 	if files := ApprovalFiles(call); len(files) > 0 {
 		out["approval_files"] = files
+	}
+	if call.Name == "shell_run" {
+		decision := ShellRiskDecision(call)
+		if strings.TrimSpace(decision.Code) != "" {
+			out["shell_risk_code"] = decision.Code
+		}
+		if strings.TrimSpace(decision.Level) != "" {
+			out["shell_risk_level"] = decision.Level
+		}
+		if strings.TrimSpace(decision.Reason) != "" {
+			out["shell_risk_reason"] = decision.Reason
+		}
+		if len(decision.WriteScopes) > 0 {
+			out["shell_write_scopes"] = append([]string(nil), decision.WriteScopes...)
+		}
+		if len(decision.ApprovalKeys) > 0 && decision.Level == shellrisk.LevelBoundedWrite {
+			out["shell_approval_family"] = true
+		}
 	}
 	return out
 }

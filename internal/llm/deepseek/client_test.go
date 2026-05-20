@@ -3,6 +3,7 @@ package deepseek
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -195,7 +196,7 @@ func TestStreamResponseRetriesRateLimitBeforeSSE(t *testing.T) {
 			t.Fatalf("provider error: %v", ev.Err)
 		case llm.EventRetryScheduled:
 			sawRetry = true
-			if ev.Retry == nil || ev.Retry.Attempt != 1 || ev.Retry.StatusCode != http.StatusTooManyRequests {
+			if ev.Retry == nil || ev.Retry.Attempt != 1 || ev.Retry.StatusCode != http.StatusTooManyRequests || ev.Retry.Stage != "request" || ev.Retry.StreamReset {
 				t.Fatalf("retry info: %+v", ev.Retry)
 			}
 		case llm.EventComplete:
@@ -216,12 +217,123 @@ func TestStreamResponseRetriesRateLimitBeforeSSE(t *testing.T) {
 	}
 }
 
+func TestStreamResponseRetriesDisconnectedSSE(t *testing.T) {
+	var requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "text/event-stream")
+		if requests == 1 {
+			_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"old\"}}]}\n\n")
+			return
+		}
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	policy := llmretry.DefaultPolicy()
+	policy.Jitter = 0
+	c, err := New(
+		WithAPIKey("test-key"),
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+		WithRetryPolicy(policy),
+		WithStreamMaxAttempts(2),
+		withRetrySleeper(func(_ context.Context, d time.Duration) error {
+			if d != time.Second {
+				t.Fatalf("delay: want 1s, got %s", d)
+			}
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	var sawOld bool
+	var sawRetry bool
+	var complete string
+	for ev := range c.StreamResponse(context.Background(), []core.Message{{Role: core.RoleUser, Text: "hi"}}, nil) {
+		switch ev.Type {
+		case llm.EventError:
+			t.Fatalf("provider error: %v", ev.Err)
+		case llm.EventContentDelta:
+			if ev.Content == "old" {
+				sawOld = true
+			}
+		case llm.EventRetryScheduled:
+			sawRetry = true
+			if ev.Retry == nil || ev.Retry.Stage != "stream" || !ev.Retry.StreamReset || ev.Retry.Attempt != 1 || ev.Retry.MaxAttempts != 2 {
+				t.Fatalf("retry info: %+v", ev.Retry)
+			}
+		case llm.EventComplete:
+			if ev.Response != nil {
+				complete = ev.Response.Content
+			}
+		}
+	}
+	if requests != 2 {
+		t.Fatalf("requests: want 2, got %d", requests)
+	}
+	if !sawOld || !sawRetry {
+		t.Fatalf("sawOld=%v sawRetry=%v", sawOld, sawRetry)
+	}
+	if complete != "ok" {
+		t.Fatalf("complete content: %q", complete)
+	}
+}
+
+func TestStreamResponseExhaustsDisconnectedSSE(t *testing.T) {
+	var requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n")
+	}))
+	defer srv.Close()
+
+	policy := llmretry.DefaultPolicy()
+	policy.Jitter = 0
+	c, err := New(
+		WithAPIKey("test-key"),
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+		WithRetryPolicy(policy),
+		WithStreamMaxAttempts(2),
+		withRetrySleeper(func(_ context.Context, _ time.Duration) error { return nil }),
+	)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	var retryEvents int
+	var gotErr error
+	for ev := range c.StreamResponse(context.Background(), []core.Message{{Role: core.RoleUser, Text: "hi"}}, nil) {
+		switch ev.Type {
+		case llm.EventRetryScheduled:
+			retryEvents++
+		case llm.EventError:
+			gotErr = ev.Err
+		}
+	}
+	if requests != 2 {
+		t.Fatalf("requests: want 2, got %d", requests)
+	}
+	if retryEvents != 1 {
+		t.Fatalf("retry events: want 1, got %d", retryEvents)
+	}
+	if !errors.Is(gotErr, errIncompleteStream) {
+		t.Fatalf("error: want incomplete stream, got %v", gotErr)
+	}
+}
+
 func TestStreamResponseDoesNotRetryMalformedSSEFrame(t *testing.T) {
 	var requests int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = fmt.Fprint(w, "data: {not-json}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	defer srv.Close()
 

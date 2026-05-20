@@ -8,25 +8,40 @@ import (
 	"github.com/usewhale/whale/internal/compact"
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/memory"
+	"github.com/usewhale/whale/internal/policy"
 )
 
+type RunOptions struct {
+	HiddenInput        bool
+	ReadOnly           bool
+	ShellAllowPrefixes []string
+}
+
 func (a *Agent) RunStreamWithOptions(ctx context.Context, sessionID, input string, hiddenInput bool) (<-chan AgentEvent, error) {
+	return a.RunStreamWithTurnOptions(ctx, sessionID, input, RunOptions{HiddenInput: hiddenInput})
+}
+
+func (a *Agent) RunStreamWithTurnOptions(ctx context.Context, sessionID, input string, opts RunOptions) (<-chan AgentEvent, error) {
 	return a.runStreamWithNewMessages(ctx, sessionID, []core.Message{{
 		SessionID: sessionID,
 		Role:      core.RoleUser,
 		Text:      input,
-		Hidden:    hiddenInput,
-	}})
+		Hidden:    opts.HiddenInput,
+	}}, opts)
 }
 
 func (a *Agent) RunStreamWithInjectedInput(ctx context.Context, sessionID, visibleInput, hiddenInput string) (<-chan AgentEvent, error) {
+	return a.RunStreamWithInjectedInputOptions(ctx, sessionID, visibleInput, hiddenInput, RunOptions{})
+}
+
+func (a *Agent) RunStreamWithInjectedInputOptions(ctx context.Context, sessionID, visibleInput, hiddenInput string, opts RunOptions) (<-chan AgentEvent, error) {
 	return a.runStreamWithNewMessages(ctx, sessionID, []core.Message{
 		{SessionID: sessionID, Role: core.RoleUser, Text: visibleInput},
 		{SessionID: sessionID, Role: core.RoleUser, Text: hiddenInput, Hidden: true},
-	})
+	}, opts)
 }
 
-func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, newMessages []core.Message) (<-chan AgentEvent, error) {
+func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, newMessages []core.Message, opts RunOptions) (<-chan AgentEvent, error) {
 	if _, loaded := a.active.LoadOrStore(sessionID, struct{}{}); loaded {
 		return nil, ErrSessionBusy
 	}
@@ -58,6 +73,16 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 		toolIters := 0
 		if a.repairer != nil {
 			a.repairer.resetStorm()
+		}
+		turnPolicy := a.policy
+		if len(opts.ShellAllowPrefixes) > 0 {
+			turnPolicy = policy.ScopedAllowPolicy{
+				Base:               a.policy,
+				ShellAllowPrefixes: append([]string(nil), opts.ShellAllowPrefixes...),
+			}
+		}
+		if opts.ReadOnly {
+			turnPolicy = policy.ReadOnlyTurnPolicy{Base: turnPolicy}
 		}
 		for {
 			rt.Scratch.ResetTurn()
@@ -99,7 +124,7 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 					}
 				}
 			}
-			assistant, toolMsg, usage, modelName, abortTurn, sErr := a.streamAndHandle(ctx, sessionID, history, rt, out)
+			assistant, toolMsg, usage, modelName, abortTurn, sErr := a.streamAndHandle(ctx, sessionID, history, rt, out, turnPolicy)
 			if sErr != nil {
 				if errors.Is(sErr, context.Canceled) || errors.Is(sErr, context.DeadlineExceeded) {
 					a.persistInterruptedTurnMarker(sessionID)

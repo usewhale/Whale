@@ -7,26 +7,49 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
+var (
+	metaLocksMu sync.Mutex
+	metaLocks   = map[string]*sync.Mutex{}
+)
+
+func metaLock(path string) *sync.Mutex {
+	metaLocksMu.Lock()
+	defer metaLocksMu.Unlock()
+	if m, ok := metaLocks[path]; ok {
+		return m
+	}
+	m := &sync.Mutex{}
+	metaLocks[path] = m
+	return m
+}
+
 type SessionMeta struct {
-	Branch          string    `json:"branch,omitempty"`
-	Title           string    `json:"title,omitempty"`
-	Summary         string    `json:"summary,omitempty"`
-	TotalCostUSD    float64   `json:"total_cost_usd,omitempty"`
-	TurnCount       int       `json:"turn_count,omitempty"`
-	Workspace       string    `json:"workspace,omitempty"`
-	Kind            string    `json:"kind,omitempty"`
-	ParentSessionID string    `json:"parent_session_id,omitempty"`
-	Role            string    `json:"role,omitempty"`
-	Model           string    `json:"model,omitempty"`
-	Task            string    `json:"task,omitempty"`
-	Status          string    `json:"status,omitempty"`
-	Error           string    `json:"error,omitempty"`
-	StartedAt       time.Time `json:"started_at,omitempty"`
-	CompletedAt     time.Time `json:"completed_at,omitempty"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	Branch             string    `json:"branch,omitempty"`
+	Title              string    `json:"title,omitempty"`
+	Summary            string    `json:"summary,omitempty"`
+	TotalCostUSD       float64   `json:"total_cost_usd,omitempty"`
+	TurnCount          int       `json:"turn_count,omitempty"`
+	Workspace          string    `json:"workspace,omitempty"`
+	WorktreeName       string    `json:"worktree_name,omitempty"`
+	WorktreePath       string    `json:"worktree_path,omitempty"`
+	WorktreeBranch     string    `json:"worktree_branch,omitempty"`
+	OriginalWorkspace  string    `json:"original_workspace,omitempty"`
+	OriginalBranch     string    `json:"original_branch,omitempty"`
+	OriginalHeadCommit string    `json:"original_head_commit,omitempty"`
+	Kind               string    `json:"kind,omitempty"`
+	ParentSessionID    string    `json:"parent_session_id,omitempty"`
+	Role               string    `json:"role,omitempty"`
+	Model              string    `json:"model,omitempty"`
+	Task               string    `json:"task,omitempty"`
+	Status             string    `json:"status,omitempty"`
+	Error              string    `json:"error,omitempty"`
+	StartedAt          time.Time `json:"started_at,omitempty"`
+	CompletedAt        time.Time `json:"completed_at,omitempty"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 func metaStatePath(sessionsDir, sessionID string) string {
@@ -35,6 +58,13 @@ func metaStatePath(sessionsDir, sessionID string) string {
 
 func LoadSessionMeta(sessionsDir, sessionID string) (SessionMeta, error) {
 	path := metaStatePath(sessionsDir, sessionID)
+	lock := metaLock(path)
+	lock.Lock()
+	defer lock.Unlock()
+	return loadSessionMetaAt(path)
+}
+
+func loadSessionMetaAt(path string) (SessionMeta, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -50,12 +80,19 @@ func LoadSessionMeta(sessionsDir, sessionID string) (SessionMeta, error) {
 }
 
 func SaveSessionMeta(sessionsDir, sessionID string, st SessionMeta) error {
+	path := metaStatePath(sessionsDir, sessionID)
+	lock := metaLock(path)
+	lock.Lock()
+	defer lock.Unlock()
+	return saveSessionMetaAt(path, st)
+}
+
+func saveSessionMetaAt(path string, st SessionMeta) error {
 	st.UpdatedAt = time.Now()
 	b, err := json.Marshal(st)
 	if err != nil {
 		return fmt.Errorf("marshal session meta: %w", err)
 	}
-	path := metaStatePath(sessionsDir, sessionID)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("mkdir session meta dir: %w", err)
 	}
@@ -65,8 +102,30 @@ func SaveSessionMeta(sessionsDir, sessionID string, st SessionMeta) error {
 	return nil
 }
 
+// UpdateSessionMeta atomically loads, mutates, and saves session meta under
+// a per-file lock so concurrent writers cannot lose each other's updates.
+func UpdateSessionMeta(sessionsDir, sessionID string, mutate func(*SessionMeta)) (SessionMeta, error) {
+	path := metaStatePath(sessionsDir, sessionID)
+	lock := metaLock(path)
+	lock.Lock()
+	defer lock.Unlock()
+	cur, err := loadSessionMetaAt(path)
+	if err != nil {
+		return SessionMeta{}, err
+	}
+	mutate(&cur)
+	if err := saveSessionMetaAt(path, cur); err != nil {
+		return SessionMeta{}, err
+	}
+	return cur, nil
+}
+
 func PatchSessionMeta(sessionsDir, sessionID string, patch SessionMeta) (SessionMeta, error) {
-	cur, err := LoadSessionMeta(sessionsDir, sessionID)
+	path := metaStatePath(sessionsDir, sessionID)
+	lock := metaLock(path)
+	lock.Lock()
+	defer lock.Unlock()
+	cur, err := loadSessionMetaAt(path)
 	if err != nil {
 		return SessionMeta{}, err
 	}
@@ -87,6 +146,24 @@ func PatchSessionMeta(sessionsDir, sessionID string, patch SessionMeta) (Session
 	}
 	if strings.TrimSpace(patch.Workspace) != "" {
 		cur.Workspace = strings.TrimSpace(patch.Workspace)
+	}
+	if strings.TrimSpace(patch.WorktreeName) != "" {
+		cur.WorktreeName = strings.TrimSpace(patch.WorktreeName)
+	}
+	if strings.TrimSpace(patch.WorktreePath) != "" {
+		cur.WorktreePath = strings.TrimSpace(patch.WorktreePath)
+	}
+	if strings.TrimSpace(patch.WorktreeBranch) != "" {
+		cur.WorktreeBranch = strings.TrimSpace(patch.WorktreeBranch)
+	}
+	if strings.TrimSpace(patch.OriginalWorkspace) != "" {
+		cur.OriginalWorkspace = strings.TrimSpace(patch.OriginalWorkspace)
+	}
+	if strings.TrimSpace(patch.OriginalBranch) != "" {
+		cur.OriginalBranch = strings.TrimSpace(patch.OriginalBranch)
+	}
+	if strings.TrimSpace(patch.OriginalHeadCommit) != "" {
+		cur.OriginalHeadCommit = strings.TrimSpace(patch.OriginalHeadCommit)
 	}
 	if strings.TrimSpace(patch.Kind) != "" {
 		cur.Kind = strings.TrimSpace(patch.Kind)
@@ -115,7 +192,7 @@ func PatchSessionMeta(sessionsDir, sessionID string, patch SessionMeta) (Session
 	if !patch.CompletedAt.IsZero() {
 		cur.CompletedAt = patch.CompletedAt
 	}
-	if err := SaveSessionMeta(sessionsDir, sessionID, cur); err != nil {
+	if err := saveSessionMetaAt(path, cur); err != nil {
 		return SessionMeta{}, err
 	}
 	return cur, nil

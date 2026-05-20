@@ -3,14 +3,20 @@ package tui
 import (
 	"bytes"
 	"fmt"
-	"reflect"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 
 	"github.com/usewhale/whale/internal/app"
+	appcommands "github.com/usewhale/whale/internal/app/commands"
 	"github.com/usewhale/whale/internal/app/service"
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/plugins"
@@ -24,6 +30,23 @@ func newFakeClock() *fakeClock { return &fakeClock{t: time.Unix(1700000000, 0)} 
 
 func (c *fakeClock) now() time.Time          { return c.t }
 func (c *fakeClock) advance(d time.Duration) { c.t = c.t.Add(d) }
+
+func requireGit(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+	}
+}
 
 func newModelWithDispatchSpy() (model, *[]service.Intent) {
 	m := newModel(nil, "", "", "")
@@ -1971,7 +1994,7 @@ func agentTurnMetadata() map[string]any {
 func selectSlashCommand(t *testing.T, m *model, want string) {
 	t.Helper()
 	for i, cmd := range m.slash.matches {
-		if cmd == want {
+		if cmd.InsertText == want || cmd.Display == want {
 			m.slash.selected = i
 			return
 		}
@@ -2269,9 +2292,9 @@ func TestPermissionsPickerCopyClarifiesAutoApproveScope(t *testing.T) {
 		"No approval prompts until Whale exits.",
 		"Project default",
 		"Trust this project...",
-		"Auto-approve by default in this workspace.",
+		"Auto-approve by default in this workspace for you.",
 		"Clear project default",
-		"Remove permissions.mode from ./.whale/config.toml.",
+		"Remove permissions.mode from ./.whale/config.local.toml.",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected permissions picker to contain %q:\n%s", want, view)
@@ -2289,8 +2312,8 @@ func TestPermissionsProjectTrustConfirmCopy(t *testing.T) {
 	for _, want := range []string{
 		"Trust this project?",
 		"Auto-approve write, patch, shell, and MCP tools by default in this workspace.",
-		"This affects future sessions in this workspace.",
-		"Config: ./.whale/config.toml",
+		"This affects your future sessions in this workspace.",
+		"Config: ./.whale/config.local.toml",
 		"Trust this project",
 		"Cancel",
 	} {
@@ -2300,6 +2323,26 @@ func TestPermissionsProjectTrustConfirmCopy(t *testing.T) {
 	}
 	if strings.Contains(view, "Whale will") {
 		t.Fatalf("trust confirmation should state facts without product-name narration:\n%s", view)
+	}
+}
+
+func TestPermissionsProjectClearConfirmCopy(t *testing.T) {
+	m := newModel(nil, "", "", "")
+
+	view := m.renderPermissionsProjectClearConfirm()
+	for _, want := range []string{
+		"Clear project default?",
+		"Remove permissions.mode from ./.whale/config.local.toml.",
+		"Future sessions will fall back to shared project, global, or default approval settings.",
+		"Clear project default",
+		"Cancel",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected clear confirmation to contain %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "will use the global/default approval setting") {
+		t.Fatalf("clear confirmation should not skip shared project fallback:\n%s", view)
 	}
 }
 
@@ -2419,8 +2462,8 @@ func TestTurnDoneReasoningOnlyCommitsFallback(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected wait-event command")
 	}
-	if got := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n"); !strings.Contains(got, "No final answer was produced") {
-		t.Fatalf("expected fallback notice in transcript:\n%s", got)
+	if got := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n"); !strings.Contains(got, "Reasoning only") || !strings.Contains(got, "did not produce a visible answer") {
+		t.Fatalf("expected reasoning-only status in transcript:\n%s", got)
 	}
 	if m.sawReasoningThisTurn || m.sawAssistantThisTurn {
 		t.Fatal("expected turn tracking flags to reset")
@@ -2499,8 +2542,8 @@ func TestTurnDoneRecoversAssistantWhenAllDeltasDropped(t *testing.T) {
 	if !strings.Contains(got, "final answer only present in LastResponse") {
 		t.Fatalf("expected turn completion to recover assistant text from LastResponse:\n%s", got)
 	}
-	if strings.Contains(got, "No final answer was produced") {
-		t.Fatalf("did not expect no-final-answer fallback after LastResponse recovery:\n%s", got)
+	if strings.Contains(got, "did not produce a visible answer") {
+		t.Fatalf("did not expect reasoning-only fallback after LastResponse recovery:\n%s", got)
 	}
 }
 
@@ -2543,11 +2586,11 @@ func TestMarkNoFinalAnswerIfNeeded(t *testing.T) {
 	if len(snap) != 1 {
 		t.Fatalf("expected one notice entry, got %+v", snap)
 	}
-	if snap[0].Kind != tuirender.KindNotice || snap[0].Role != "notice" {
-		t.Fatalf("expected notice entry, got %+v", snap[0])
+	if snap[0].Kind != tuirender.KindStatus || snap[0].Role != "status" {
+		t.Fatalf("expected status entry, got %+v", snap[0])
 	}
-	if !strings.Contains(snap[0].Text, "No final answer was produced") {
-		t.Fatalf("expected generic missing-answer notice, got %q", snap[0].Text)
+	if !strings.Contains(snap[0].Text, "reasoning only") || !strings.Contains(snap[0].Text, "visible answer") {
+		t.Fatalf("expected generic reasoning-only status, got %q", snap[0].Text)
 	}
 	if len(m.logs) != 1 || m.logs[0].Kind != "no_final_answer" {
 		t.Fatalf("expected diagnostic log entry, got %+v", m.logs)
@@ -2567,11 +2610,11 @@ func TestMarkNoFinalAnswerIfNeededAddsPlanNotice(t *testing.T) {
 	if len(snap) != 1 {
 		t.Fatalf("expected one notice entry, got %+v", snap)
 	}
-	if snap[0].Kind != tuirender.KindNotice || snap[0].Role != "notice" {
-		t.Fatalf("expected notice entry, got %+v", snap[0])
+	if snap[0].Kind != tuirender.KindStatus || snap[0].Role != "status" {
+		t.Fatalf("expected status entry, got %+v", snap[0])
 	}
-	if !strings.Contains(snap[0].Text, "No plan was produced") {
-		t.Fatalf("expected missing-plan notice, got %q", snap[0].Text)
+	if !strings.Contains(snap[0].Text, "reasoning only") || !strings.Contains(snap[0].Text, "visible plan") {
+		t.Fatalf("expected reasoning-only plan status, got %q", snap[0].Text)
 	}
 }
 
@@ -2675,6 +2718,149 @@ func TestSlashSuggestionsShownForSingleLineSlash(t *testing.T) {
 	}
 }
 
+func TestSlashSuggestionsRenderDescriptions(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.input.SetValue("/")
+	m.updateSlashMatches()
+	rendered := m.renderSlashSuggestions()
+	for _, want := range []string{"/model", "Choose model, effort, and thinking settings"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected slash suggestions to contain %q:\n%s", want, rendered)
+		}
+	}
+}
+
+func TestSlashArgumentHintShownForCommandSpace(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.input.SetValue("/model ")
+	m.updateSlashMatches()
+	if !m.hasSlashPanel() {
+		t.Fatal("expected slash argument hint panel")
+	}
+	if len(m.slash.matches) != 0 {
+		t.Fatalf("did not expect /model option matches, got %+v", m.slash.matches)
+	}
+	if rendered := m.renderSlashSuggestions(); !strings.Contains(rendered, "Arguments [model]") {
+		t.Fatalf("expected /model argument hint, got:\n%s", rendered)
+	}
+}
+
+func TestSlashArgumentHintEscClearsPanelWithoutMutatingInput(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.input.SetValue("/model ")
+	m.updateSlashMatches()
+	if !m.hasSlashPanel() {
+		t.Fatal("expected slash argument hint panel")
+	}
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(model)
+	if got := m.input.Value(); got != "/model " {
+		t.Fatalf("expected esc to preserve input, got %q", got)
+	}
+	if m.hasSlashPanel() || m.slash.argumentHint != "" || len(m.slash.matches) != 0 {
+		t.Fatalf("expected esc to clear hint-only slash panel, hint=%q matches=%+v", m.slash.argumentHint, m.slash.matches)
+	}
+}
+
+func TestSlashOptionSuggestionsInsertSubcommand(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.input.SetValue("/stats ")
+	m.updateSlashMatches()
+	if len(m.slash.matches) == 0 {
+		t.Fatal("expected /stats option suggestions")
+	}
+	selectSlashCommand(t, &m, "/stats usage")
+	if rendered := m.renderSlashSuggestions(); !strings.Contains(rendered, "usage") || !strings.Contains(rendered, "Show token and cost usage") {
+		t.Fatalf("expected /stats option description, got:\n%s", rendered)
+	}
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if len(*intents) != 1 {
+		t.Fatalf("expected /stats usage option to dispatch, got intents %+v", *intents)
+	}
+	if (*intents)[0].Kind != service.IntentSubmitLocal || (*intents)[0].Input != "/stats usage" {
+		t.Fatalf("unexpected dispatched intent: %+v", (*intents)[0])
+	}
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected input cleared after /stats usage option, got %q", got)
+	}
+}
+
+func TestSlashCommandWithOptionsDrillsDownWhenSelected(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.input.SetValue("/mem")
+	m.updateSlashMatches()
+	selectSlashCommand(t, &m, "/memory ")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if len(*intents) != 0 {
+		t.Fatalf("selecting /memory should only show options, got intents %+v", *intents)
+	}
+	if got := m.input.Value(); got != "/memory " {
+		t.Fatalf("expected /memory selection to add trailing space, got %q", got)
+	}
+	if len(m.slash.matches) == 0 {
+		t.Fatal("expected /memory option suggestions after selection")
+	}
+	if rendered := m.renderSlashSuggestions(); !strings.Contains(rendered, "list") || !strings.Contains(rendered, "List remembered entries") {
+		t.Fatalf("expected /memory option list after selection, got:\n%s", rendered)
+	}
+}
+
+func TestSlashCommandWithOptionsAndAutoRunStillExecutesBareCommand(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.input.SetValue("/rev")
+	m.updateSlashMatches()
+	selectSlashCommand(t, &m, "/review")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if len(*intents) != 1 {
+		t.Fatalf("expected selected /review to dispatch, got %+v", *intents)
+	}
+	if (*intents)[0].Kind != service.IntentSubmitLocal || (*intents)[0].Input != "/review" {
+		t.Fatalf("unexpected dispatched intent: %+v", (*intents)[0])
+	}
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected input cleared after /review autorun, got %q", got)
+	}
+}
+
+func TestSlashOptionSuggestionsFilterByTypedPrefix(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.input.SetValue("/review p")
+	m.updateSlashMatches()
+	if len(m.slash.matches) != 1 {
+		t.Fatalf("expected one /review option match, got %+v", m.slash.matches)
+	}
+	if got := m.slash.matches[0].InsertText; got != "/review pr " {
+		t.Fatalf("expected /review pr option, got %q", got)
+	}
+}
+
+func TestSlashOptionNeedingArgumentOnlyFillsInput(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.input.SetValue("/review p")
+	m.updateSlashMatches()
+	selectSlashCommand(t, &m, "/review pr ")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if len(*intents) != 0 {
+		t.Fatalf("/review pr option should wait for argument, got intents %+v", *intents)
+	}
+	if got := m.input.Value(); got != "/review pr " {
+		t.Fatalf("expected /review pr option to keep trailing space, got %q", got)
+	}
+}
+
+func TestSlashExactOptionDoesNotShowNestedSuggestions(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.input.SetValue("/review branch")
+	m.updateSlashMatches()
+	if m.hasSlashPanel() {
+		t.Fatalf("expected no nested slash panel for exact option, got hint=%q matches=%+v", m.slash.argumentHint, m.slash.matches)
+	}
+}
+
 func TestSlashSuggestionsHiddenForAbsolutePathInput(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.input.SetValue("/Users/goranka/Engineer/ai/dsk 里有好几个go项目的，你看看它们怎么做的")
@@ -2708,6 +2894,62 @@ func TestSlashSuggestionEnterAutoRunsSingleCommandAndClearsSuggestions(t *testin
 	}
 	if !m.busy || m.status != "running" {
 		t.Fatalf("expected running state after autorun slash enter, busy=%v status=%q", m.busy, m.status)
+	}
+}
+
+func TestHelpCommandOpensInteractiveHelp(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.width = 100
+	m.height = 30
+	m.input.SetValue("/help")
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+
+	if len(*intents) != 0 {
+		t.Fatalf("/help should open local help without dispatching, got %+v", *intents)
+	}
+	if m.mode != modeHelp {
+		t.Fatalf("expected help mode, got %v", m.mode)
+	}
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected input cleared, got %q", got)
+	}
+	view := m.View()
+	for _, want := range []string{"Whale help", "Browse default commands:", "/review", "For more help:", helpDocsURL, "Esc to cancel"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected help view to contain %q:\n%s", want, view)
+		}
+	}
+	for _, msg := range m.transcript {
+		if msg.Role == "you" && msg.Text == "/help" {
+			t.Fatalf("/help should not be written as a user transcript row")
+		}
+	}
+}
+
+func TestHelpCommandKeyboardNavigationIgnoresMouse(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.width = 100
+	m.height = 18
+	m.openHelp()
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(model)
+	if m.help.selected != 1 {
+		t.Fatalf("expected down to move help selection, got %d", m.help.selected)
+	}
+
+	next, _ = m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
+	m = next.(model)
+	if m.help.selected != 1 {
+		t.Fatalf("expected mouse wheel to be ignored in help, got selection %d", m.help.selected)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(model)
+	if m.mode != modeChat {
+		t.Fatalf("expected esc to close help, got mode %v", m.mode)
 	}
 }
 
@@ -2775,10 +3017,13 @@ func TestLocalImmediateSlashCommandsDoNotStartWorkingState(t *testing.T) {
 		"/clear",
 		"/new",
 		"/new scratch",
+		"/fork",
+		"/fork scratch",
 		"/model xxx",
 		"/skills xxx",
 		"/resume xxx",
 		"/new a b",
+		"/fork a b",
 		"/stats bad",
 		"/compact bad",
 		"/plan show",
@@ -3039,6 +3284,35 @@ func TestProviderRetryStatusClearsOnAssistantDelta(t *testing.T) {
 	}
 }
 
+func TestProviderRetryStreamResetClearsLiveAttempt(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.handleServiceEvent(service.Event{Kind: service.EventAssistantDelta, Text: "old answer"})
+	m.handleServiceEvent(service.Event{Kind: service.EventReasoningDelta, Text: "old thought"})
+	m.appendToolCall("tc-old", "shell_run", `{"command":"date"}`)
+
+	if len(m.assembler.Snapshot()) == 0 {
+		t.Fatal("expected live attempt content before retry reset")
+	}
+	m.handleServiceEvent(service.Event{
+		Kind:     service.EventProviderRetry,
+		Text:     "API stream disconnected, retrying in 1s (1/1)",
+		Metadata: map[string]any{"delay_ms": int64(1000), "stage": "stream", "stream_reset": true},
+	})
+
+	if got := len(m.assembler.Snapshot()); got != 0 {
+		t.Fatalf("expected live attempt cleared, got %+v", m.assembler.Snapshot())
+	}
+	if m.visibleAssistantThisTurn != "" || m.sawAssistantThisTurn || m.sawReasoningThisTurn {
+		t.Fatalf("turn visibility not reset: visible=%q assistant=%v reasoning=%v", m.visibleAssistantThisTurn, m.sawAssistantThisTurn, m.sawReasoningThisTurn)
+	}
+	if m.providerRetryStatus == "" {
+		t.Fatal("expected provider retry status after reset")
+	}
+	if len(m.transcript) != 0 {
+		t.Fatalf("retry reset should not append transcript: %+v", m.transcript)
+	}
+}
+
 func TestSkillsManagerRendersSearchesAndToggles(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.handleServiceEvent(service.Event{
@@ -3173,6 +3447,229 @@ func TestPluginsManagerRendersAndToggles(t *testing.T) {
 	m = next.(model)
 	if m.mode != modeChat {
 		t.Fatalf("expected esc to close plugins manager, got mode %v", m.mode)
+	}
+}
+
+func TestReviewMenuDispatchesAndPrefillsTargets(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.handleServiceEvent(service.Event{Kind: service.EventReviewMenu})
+	if m.mode != modeReviewMenu {
+		t.Fatalf("expected review menu mode, got %v", m.mode)
+	}
+	rendered := m.renderReviewMenu()
+	for _, want := range []string{"Review", "Local changes", "Branch", "vs default branch", "Pull request", "Custom instructions"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected review menu render to contain %q, got:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "Current branch") {
+		t.Fatalf("review menu should not contain duplicate Current branch entry:\n%s", rendered)
+	}
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSubmit || (*intents)[0].Input != "/review local" {
+		t.Fatalf("expected /review local submit intent, got %+v", *intents)
+	}
+	if m.mode != modeChat {
+		t.Fatalf("expected review menu to close, got mode %v", m.mode)
+	}
+	if !m.busy || m.status != "running" {
+		t.Fatalf("expected review action to enter running state, busy=%v status=%q", m.busy, m.status)
+	}
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected review action to clear input, got %q", got)
+	}
+
+	m, _ = newModelWithDispatchSpy()
+	m.handleServiceEvent(service.Event{Kind: service.EventReviewMenu})
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if m.mode != modeReviewBranchPicker || !m.reviewTargetPicker.loading {
+		t.Fatalf("expected branch picker loading mode, mode=%v picker=%+v", m.mode, m.reviewTargetPicker)
+	}
+}
+
+func TestReviewTargetPickersSubmitSelectedTargets(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.handleServiceEvent(service.Event{Kind: service.EventReviewMenu})
+	m.reviewMenu.selected = 2
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if m.mode != modeReviewPRPicker {
+		t.Fatalf("expected PR picker, got %v", m.mode)
+	}
+	m, _ = updateTestModel(t, m, reviewPRsLoadedMsg{items: []reviewPRItem{
+		{Number: 102, Title: "Improve review command", Head: "feat/review", Author: "alice"},
+	}})
+	rendered := m.renderReviewTargetPicker()
+	if !strings.Contains(rendered, "#102 Improve review command") || !strings.Contains(rendered, "Type number or URL manually") {
+		t.Fatalf("unexpected PR picker render:\n%s", rendered)
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSubmit || (*intents)[0].Input != "/review pr 102" {
+		t.Fatalf("expected selected PR submit intent, got %+v", *intents)
+	}
+
+	m, intents = newModelWithDispatchSpy()
+	m.handleServiceEvent(service.Event{Kind: service.EventReviewMenu})
+	m.reviewMenu.selected = 3
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if m.mode != modeReviewCommitPicker {
+		t.Fatalf("expected commit picker, got %v", m.mode)
+	}
+	m, _ = updateTestModel(t, m, reviewCommitsLoadedMsg{items: []reviewCommitItem{
+		{SHA: "abc1234", Subject: "fix review picker", Author: "g", When: "2 minutes ago"},
+	}})
+	rendered = m.renderReviewTargetPicker()
+	if !strings.Contains(rendered, "abc1234 fix review picker") || !strings.Contains(rendered, "Type SHA manually") {
+		t.Fatalf("unexpected commit picker render:\n%s", rendered)
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSubmit || (*intents)[0].Input != "/review commit abc1234" {
+		t.Fatalf("expected selected commit submit intent, got %+v", *intents)
+	}
+	if m.mode != modeChat {
+		t.Fatalf("expected chat mode after commit submit, got %v", m.mode)
+	}
+
+	m, intents = newModelWithDispatchSpy()
+	m.handleServiceEvent(service.Event{Kind: service.EventReviewMenu})
+	m.reviewMenu.selected = 1
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if m.mode != modeReviewBranchPicker {
+		t.Fatalf("expected branch picker, got %v", m.mode)
+	}
+	m, _ = updateTestModel(t, m, reviewBranchesLoadedMsg{items: []reviewBranchItem{
+		{Name: "feature/review", Current: true},
+		{Name: "diagnose/input-scroll"},
+	}, defaultBranch: "origin/main"})
+	rendered = m.renderReviewTargetPicker()
+	if !strings.Contains(rendered, "Type to search branches") ||
+		!strings.Contains(rendered, "feature/review -> origin/main") ||
+		!strings.Contains(rendered, "feature/review -> diagnose/input-scroll") ||
+		strings.Contains(rendered, "feature/review -> feature/review") ||
+		!strings.Contains(rendered, "Type branch manually") {
+		t.Fatalf("unexpected branch picker render:\n%s", rendered)
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSubmit || (*intents)[0].Input != "/review branch origin/main" {
+		t.Fatalf("expected selected branch submit intent, got %+v", *intents)
+	}
+}
+
+func TestReviewBranchPickerFiltersBranches(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.handleServiceEvent(service.Event{Kind: service.EventReviewMenu})
+	m.reviewMenu.selected = 1
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	m, _ = updateTestModel(t, m, reviewBranchesLoadedMsg{items: []reviewBranchItem{
+		{Name: "main"},
+		{Name: "feat/btw-command", Current: true},
+		{Name: "diagnose/input-scroll-garbled"},
+		{Name: "design/plugin-memory"},
+	}})
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("diag")})
+	m = next.(model)
+	rendered := m.renderReviewTargetPicker()
+	if !strings.Contains(rendered, "Type to search branches: diag") ||
+		!strings.Contains(rendered, "feat/btw-command -> diagnose/input-scroll-garbled") ||
+		strings.Contains(rendered, "feat/btw-command -> design/plugin-memory") ||
+		strings.Contains(rendered, "feat/btw-command -> feat/btw-command") {
+		t.Fatalf("unexpected filtered branch picker render:\n%s", rendered)
+	}
+}
+
+func TestReviewBranchPickerDefaultFirstAndLimitsVisibleRows(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.handleServiceEvent(service.Event{Kind: service.EventReviewMenu})
+	m.reviewMenu.selected = 1
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	m, _ = updateTestModel(t, m, reviewBranchesLoadedMsg{items: []reviewBranchItem{
+		{Name: "topic", Current: true},
+		{Name: "z-last"},
+		{Name: "main"},
+		{Name: "branch-1"},
+		{Name: "branch-2"},
+		{Name: "branch-3"},
+		{Name: "branch-4"},
+		{Name: "branch-5"},
+		{Name: "branch-6"},
+	}, defaultBranch: "origin/main"})
+
+	branches := m.filteredReviewBranches()
+	if len(branches) == 0 || branches[0].Name != "origin/main" {
+		t.Fatalf("expected default branch first, got %+v", branches)
+	}
+	rendered := m.renderReviewTargetPicker()
+	if !strings.Contains(rendered, "topic -> origin/main") || strings.Contains(rendered, "topic -> branch-6") || strings.Contains(rendered, "Type branch manually") {
+		t.Fatalf("expected first page of 6 branch rows, got:\n%s", rendered)
+	}
+
+	for i := 0; i < 7; i++ {
+		next, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+		m = next.(model)
+	}
+	rendered = m.renderReviewTargetPicker()
+	if !strings.Contains(rendered, "topic -> branch-5") {
+		t.Fatalf("expected down arrow to scroll branch rows, got:\n%s", rendered)
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSubmit || (*intents)[0].Input != "/review branch branch-5" {
+		t.Fatalf("expected selected branch submit intent, got %+v", *intents)
+	}
+}
+
+func TestParseReviewBranchesParsesTabSeparator(t *testing.T) {
+	items := parseReviewBranches("main\t\nfeature\t*\n")
+	if len(items) != 2 || items[0].Name != "main" || items[0].Current || items[1].Name != "feature" || !items[1].Current {
+		t.Fatalf("unexpected parsed branches: %+v", items)
+	}
+}
+
+func TestReviewTargetPickerManualInputAndEsc(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.handleServiceEvent(service.Event{Kind: service.EventReviewMenu})
+	m.reviewMenu.selected = 3
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	m, _ = updateTestModel(t, m, reviewCommitsLoadedMsg{})
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m = next.(model)
+	if m.mode != modeChat || m.input.Value() != "/review commit a" {
+		t.Fatalf("expected manual commit prefill, mode=%v input=%q", m.mode, m.input.Value())
+	}
+
+	m, _ = newModelWithDispatchSpy()
+	m.handleServiceEvent(service.Event{Kind: service.EventReviewMenu})
+	m.reviewMenu.selected = 1
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	m, _ = updateTestModel(t, m, reviewPRsLoadedMsg{})
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(model)
+	if m.mode != modeReviewMenu || m.status != "review" {
+		t.Fatalf("expected esc to return to review menu, mode=%v status=%q", m.mode, m.status)
+	}
+}
+
+func TestReviewMenuEscCloses(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.handleServiceEvent(service.Event{Kind: service.EventReviewMenu})
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(model)
+	if m.mode != modeChat || m.status != "ready" {
+		t.Fatalf("expected review menu to close, mode=%v status=%q", m.mode, m.status)
 	}
 }
 
@@ -3433,6 +3930,8 @@ func TestEnterWhileBusyBlocksSlashCommandsWithoutQueueing(t *testing.T) {
 		"/resume",
 		"/clear",
 		"/new scratch",
+		"/fork",
+		"/fork scratch",
 		"/model",
 		"/skills",
 		"/stats bad",
@@ -3842,6 +4341,89 @@ func TestApprovalNoticeTextUsesDecisionAndSummary(t *testing.T) {
 	}
 	if got := m.approvalNoticeText("deny"); !strings.Contains(got, "You canceled the request to run go test ./...") {
 		t.Fatalf("unexpected deny notice: %q", got)
+	}
+	if got := m.approvalNoticeText("cancel"); !strings.Contains(got, "You canceled the request to run go test ./...") {
+		t.Fatalf("unexpected cancel notice: %q", got)
+	}
+}
+
+func TestApprovalEscCancelsInsteadOfDenying(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.width = 80
+	m.height = 24
+	m.mode = modeApproval
+	m.approval.toolCallID = "tool-1"
+	m.approval.toolName = "shell_run"
+	m.approval.reason = "shell_run: date"
+
+	cmd := m.handleApprovalKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd != nil {
+		t.Fatal("expected esc approval handling to return no command")
+	}
+	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentCancelToolApproval || (*intents)[0].ToolCallID != "tool-1" {
+		t.Fatalf("expected esc to cancel approval, got %+v", *intents)
+	}
+	if m.mode != modeChat || m.status != "canceled" {
+		t.Fatalf("expected approval cancel to return to chat canceled state, got mode=%v status=%q", m.mode, m.status)
+	}
+}
+
+func TestApprovalEscRemovesPendingToolCallBeforeTurnDone(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.width = 100
+	m.height = 24
+	m.busy = true
+	m.mode = modeApproval
+	m.approval.toolCallID = "tool-1"
+	m.approval.toolName = "shell_run"
+	m.approval.reason = "shell_run: date"
+	m.assembler.AddToolCall("tool-1", "shell_run", "Running date")
+	m.markToolCallPending("tool-1")
+	m.sawReasoningThisTurn = true
+
+	_ = m.handleApprovalKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentCancelToolApproval {
+		t.Fatalf("expected esc to cancel approval, got %+v", *intents)
+	}
+	if got := m.assembler.ToolCallText("tool-1"); got != "" {
+		t.Fatalf("cancel should remove pending tool call before turn done, got %q", got)
+	}
+	if m.hasPendingToolCalls() {
+		t.Fatalf("cancel should clear pending tool call state: %+v", m.pendingToolCalls)
+	}
+	if !m.sawTerminalToolOutcomeThisTurn {
+		t.Fatal("cancel should mark the turn as terminal to suppress reasoning-only fallback")
+	}
+
+	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+	m = next.(model)
+	rendered := strings.Join(tuirender.ChatLines(m.transcript, 100), "\n")
+	if strings.Contains(rendered, "Running date") {
+		t.Fatalf("canceled approval committed pending running row:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "Reasoning only") || strings.Contains(rendered, "did not produce a visible answer") {
+		t.Fatalf("approval cancel should suppress reasoning-only fallback:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "You canceled the request to run date") {
+		t.Fatalf("expected cancel notice in transcript:\n%s", rendered)
+	}
+}
+
+func TestApprovalDStillDenies(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.width = 80
+	m.height = 24
+	m.mode = modeApproval
+	m.approval.toolCallID = "tool-1"
+	m.approval.toolName = "shell_run"
+	m.approval.reason = "shell_run: date"
+
+	cmd := m.handleApprovalKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	if cmd != nil {
+		t.Fatal("expected deny approval handling to return no command")
+	}
+	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentDenyTool || (*intents)[0].ToolCallID != "tool-1" {
+		t.Fatalf("expected d to deny approval, got %+v", *intents)
 	}
 }
 
@@ -4442,7 +5024,7 @@ func TestChatIdleViewDoesNotRenderEmptyViewportFrame(t *testing.T) {
 	}
 }
 
-func TestChatFooterStaysPinnedAfterSlashSuggestionsClose(t *testing.T) {
+func TestChatFooterFollowsContentAfterSlashSuggestionsClose(t *testing.T) {
 	m := newModel(nil, "deepseek-v4-pro", "normal", "on")
 	m.width = 80
 	m.height = 24
@@ -4452,6 +5034,7 @@ func TestChatFooterStaysPinnedAfterSlashSuggestionsClose(t *testing.T) {
 	m = next.(model)
 	withSlash := m.View()
 	assertFooterLastLine(t, withSlash, "model: deepseek-v4-pro")
+	assertFooterLastLine(t, withSlash, "effort: normal")
 	assertFooterLastLine(t, withSlash, "whale")
 	assertFooterLastLineNotContains(t, withSlash, "dir:")
 	if !strings.Contains(withSlash, "Tab/Enter pick") {
@@ -4462,13 +5045,14 @@ func TestChatFooterStaysPinnedAfterSlashSuggestionsClose(t *testing.T) {
 	m = next.(model)
 	afterDelete := m.View()
 	assertFooterLastLine(t, afterDelete, "model: deepseek-v4-pro")
+	assertFooterLastLine(t, afterDelete, "effort: normal")
 	assertFooterLastLine(t, afterDelete, "whale")
 	assertFooterLastLineNotContains(t, afterDelete, "dir:")
 	if strings.Contains(afterDelete, "Tab/Enter pick") {
 		t.Fatalf("expected slash suggestions to disappear after deleting /:\n%s", afterDelete)
 	}
-	if got := strings.Count(afterDelete, "\n") + 1; got != m.height {
-		t.Fatalf("expected view to keep terminal height %d after slash closes, got %d:\n%s", m.height, got, afterDelete)
+	if got := countVisibleLines(afterDelete); got >= m.height {
+		t.Fatalf("expected short chat view to use natural height below terminal height %d, got %d:\n%s", m.height, got, afterDelete)
 	}
 }
 
@@ -4481,6 +5065,140 @@ func TestChatFooterShowsWindowsDirectoryTail(t *testing.T) {
 	view := m.View()
 	assertFooterLastLine(t, view, `goranka`)
 	assertFooterLastLineNotContains(t, view, ` ~`)
+}
+
+func TestChatFooterShowsGitBranchInsteadOfScrollHint(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-pro", "high", "on")
+	m.width = 100
+	m.height = 24
+	m.cwd = "~/Engineer/ai/dsk/whale-footer-branch-display"
+	m.gitBranch = "feat/footer-branch"
+
+	view := m.View()
+	assertFooterLastLine(t, view, "footer-branch-display")
+	assertFooterLastLine(t, view, "feat/footer-branch")
+	assertFooterLastLineNotContains(t, view, "PgUp/PgDn scroll")
+}
+
+func TestChatFooterOmitsEmptyGitBranch(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-pro", "high", "on")
+	m.width = 100
+	m.height = 24
+	m.cwd = "~/Engineer/ai/dsk/whale-footer-branch-display"
+
+	view := m.View()
+	assertFooterLastLine(t, view, "whale-footer-branch-display")
+	assertFooterLastLineNotContains(t, view, "PgUp/PgDn scroll")
+}
+
+func TestChatFooterLongGitBranchDoesNotHideDirectory(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-pro", "high", "on")
+	m.width = 80
+	m.height = 24
+	m.cwd = "~/Engineer/ai/dsk/whale-footer-branch-display"
+	m.gitBranch = "feat/this-is-an-extremely-long-branch-name-that-cannot-fit-in-the-footer"
+
+	view := m.View()
+	assertFooterLastLine(t, view, "footer-branch-display")
+	assertFooterLastLineNotContains(t, view, m.gitBranch)
+	assertFooterLastLineNotContains(t, view, "PgUp/PgDn scroll")
+}
+
+func TestChatFooterKeepsFocusIndicatorWithGitBranch(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-pro", "high", "on")
+	m.width = 100
+	m.height = 24
+	m.viewMode = app.ViewModeFocus
+	m.cwd = "/Users/goranka/Engineer/ai/dsk/whale-output-mouse-copy"
+	m.gitBranch = "feat/footer-branch"
+
+	view := m.View()
+	assertFooterLastLine(t, view, "focus")
+	assertFooterLastLine(t, view, "feat/footer-branch")
+	assertFooterLastLineNotContains(t, view, "PgUp/PgDn scroll")
+}
+
+func TestGitBranchUpdatedIgnoresStaleCwd(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.cwdPath = "/tmp/current"
+	next, _ := m.Update(gitBranchUpdatedMsg{cwd: "/tmp/old", branch: "old"})
+	m = next.(model)
+	if m.gitBranch != "" {
+		t.Fatalf("expected stale branch update to be ignored, got %q", m.gitBranch)
+	}
+
+	next, _ = m.Update(gitBranchUpdatedMsg{cwd: "/tmp/current", branch: "current"})
+	m = next.(model)
+	if m.gitBranch != "current" {
+		t.Fatalf("expected current branch update, got %q", m.gitBranch)
+	}
+}
+
+func TestDetectGitBranch(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	runGit(t, dir, "checkout", "-b", "feat/footer-branch")
+
+	if got := detectGitBranch(dir); got != "feat/footer-branch" {
+		t.Fatalf("expected branch %q, got %q", "feat/footer-branch", got)
+	}
+}
+
+func TestShellToolResultRefreshesGitBranch(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	runGit(t, dir, "checkout", "-B", "whale-test-base")
+	runGit(t, dir, "checkout", "-b", "feat/after-shell")
+
+	m := newModel(nil, "", "", "")
+	m.cwdPath = dir
+	cmd, _, _ := m.handleServiceEvent(service.Event{
+		Kind:       service.EventToolResult,
+		ToolCallID: "tc-shell",
+		ToolName:   "shell_run",
+		Text:       `{"success":true,"code":"ok","data":{"status":"ok","metrics":{"exit_code":0},"payload":{"command":"git checkout -b feat/after-shell","stdout":"","stderr":""}}}`,
+	})
+	if cmd == nil {
+		t.Fatal("expected shell tool result to schedule git branch refresh")
+	}
+	msg, ok := cmd().(gitBranchUpdatedMsg)
+	if !ok {
+		t.Fatalf("expected gitBranchUpdatedMsg, got %T", msg)
+	}
+	if msg.cwd != dir {
+		t.Fatalf("expected cwd %q, got %q", dir, msg.cwd)
+	}
+	if msg.branch != "feat/after-shell" {
+		t.Fatalf("expected refreshed branch %q, got %q", "feat/after-shell", msg.branch)
+	}
+}
+
+func TestDetectGitBranchNonGitDirectory(t *testing.T) {
+	requireGit(t)
+	if got := detectGitBranch(t.TempDir()); got != "" {
+		t.Fatalf("expected no branch outside git repo, got %q", got)
+	}
+}
+
+func TestDetectGitBranchDetachedHead(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	runGit(t, dir, "checkout", "-B", "whale-test-base")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	runGit(t, dir, "add", "README.md")
+	runGit(t, dir, "commit", "-m", "initial")
+	runGit(t, dir, "checkout", "--detach", "HEAD")
+
+	if got := detectGitBranch(dir); got != "" {
+		t.Fatalf("expected no branch in detached HEAD, got %q", got)
+	}
 }
 
 func TestChatTranscriptRetainsLocalCommandResultsAcrossSubmits(t *testing.T) {
@@ -4552,6 +5270,25 @@ func TestLocalSlashCommandsEchoBeforeResults(t *testing.T) {
 	}
 	if strings.Index(got, "/status") > strings.Index(got, "session: test-session") {
 		t.Fatalf("expected /status before its result:\n%s", got)
+	}
+}
+
+func TestHelpInfoRendersAsListInsteadOfCollapsedParagraph(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.width = 100
+	m.height = 30
+
+	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventLocalSubmitResult, Status: "info", Text: app.BuildHelpText()}))
+	m = next.(model)
+
+	got := strings.Join(tuirender.ChatLines(m.transcript, 100), "\n")
+	if strings.Contains(got, "/agent Switch to agent mode /ask") {
+		t.Fatalf("expected help commands to render as a list, got:\n%s", got)
+	}
+	for _, want := range []string{"Whale help", "Browse default commands:", "/agent", "Switch to agent mode", "/feedback", "For more help:"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected help output to contain %q:\n%s", want, got)
+		}
 	}
 }
 
@@ -4881,39 +5618,200 @@ func TestBusyLocalCommandResultDoesNotDuplicateCompletedPlan(t *testing.T) {
 	}
 }
 
-func TestChatStartupHeaderRendersInsideViewportHeight(t *testing.T) {
+func TestChatStartupHeaderPrintsCompactWhenShort(t *testing.T) {
 	m := newModel(nil, "deepseek-v4-flash", "max", "off")
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 10})
 	m = next.(model)
+	if !m.startupHeaderPrinted {
+		t.Fatal("expected window size update to mark startup header printed")
+	}
 	view := m.View()
 	if !strings.Contains(view, "WHALE") {
-		t.Fatalf("expected startup header in chat view:\n%s", view)
+		t.Fatalf("expected compact startup header in chat viewport:\n%s", view)
 	}
-	if strings.Contains(view, "██╗") {
-		t.Fatalf("expected compact short-terminal header, got large logo:\n%s", view)
+	header := m.startupHeaderText()
+	if !strings.Contains(header, "WHALE") {
+		t.Fatalf("expected compact startup header text:\n%s", header)
+	}
+	if strings.Contains(header, "██╗") {
+		t.Fatalf("expected compact short-terminal header, got large logo:\n%s", header)
 	}
 	for _, want := range []string{"model: deepseek-v4-flash"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("expected startup header to contain %q:\n%s", want, view)
+		if !strings.Contains(header, want) {
+			t.Fatalf("expected startup header to contain %q:\n%s", want, header)
 		}
 	}
-	if got := strings.Count(strings.TrimRight(view, "\n"), "\n") + 1; got != m.height {
-		t.Fatalf("expected view to keep terminal height %d, got %d:\n%s", m.height, got, view)
+	if got := countVisibleLines(view); got >= m.height {
+		t.Fatalf("expected compact header view to use natural height below terminal height %d, got %d:\n%s", m.height, got, view)
 	}
 }
 
-func TestChatStartupHeaderUsesLargeLogoWhenTall(t *testing.T) {
+func TestChatStartupHeaderLeavesGapAboveComposer(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 24
+	view := m.View()
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	promptIdx := -1
+	for i, line := range lines {
+		if strings.Contains(line, "Type message or command") {
+			promptIdx = i
+			break
+		}
+	}
+	if promptIdx < 1 {
+		t.Fatalf("expected composer after startup header:\n%s", view)
+	}
+	if strings.TrimSpace(lines[promptIdx-1]) != "" {
+		t.Fatalf("expected blank line between startup header and composer, got %q in view:\n%s", lines[promptIdx-1], view)
+	}
+}
+
+func TestChatStartupHeaderGapDoesNotOverflowConstrainedHeight(t *testing.T) {
+	for _, height := range []int{5, 11} {
+		m := newModel(nil, "deepseek-v4-flash", "max", "off")
+		m.width = 80
+		m.height = height
+		view := m.View()
+		if got := countVisibleLines(view); got > height {
+			t.Fatalf("startup header view overflowed height %d with %d lines:\n%s", height, got, view)
+		}
+	}
+}
+
+func TestChatStartupHeaderPrintsLargeLogoWhenTall(t *testing.T) {
 	m := newModel(nil, "deepseek-v4-flash", "max", "off")
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = next.(model)
-	view := m.View()
-	if !strings.Contains(view, "███████╗") {
-		t.Fatalf("expected large startup header in tall chat view:\n%s", view)
+	if !m.startupHeaderPrinted {
+		t.Fatal("expected window size update to mark startup header printed")
+	}
+	header := m.startupHeaderText()
+	if !strings.Contains(header, "███████╗") {
+		t.Fatalf("expected large startup header:\n%s", header)
 	}
 	for _, want := range []string{"model:     deepseek-v4-flash", "effort:    max", "thinking:  off"} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("expected startup header to contain %q:\n%s", want, view)
+		if !strings.Contains(header, want) {
+			t.Fatalf("expected startup header to contain %q:\n%s", want, header)
 		}
+	}
+}
+
+func TestChatStartupHeaderPrintCommandIsOneShot(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 24
+	if cmd := m.startupHeaderPrintCmd(); cmd != nil {
+		t.Fatal("startup header is rendered in the chat viewport, not printed")
+	}
+	if !m.startupHeaderPrinted {
+		t.Fatal("expected startup header to be marked printed")
+	}
+	if cmd := m.startupHeaderPrintCmd(); cmd != nil {
+		t.Fatal("expected startup header print command to be one-shot")
+	}
+}
+
+func TestChatStartupHeaderStaysVisibleWithSmallTranscript(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = next.(model)
+
+	m.appendTranscript("info", tuirender.KindText, "first content")
+	view := m.View()
+	if !strings.Contains(view, "███████╗") {
+		t.Fatalf("expected startup header to remain visible while content fits:\n%s", view)
+	}
+	if !strings.Contains(view, "first content") {
+		t.Fatalf("expected transcript content in view:\n%s", view)
+	}
+	if got := countVisibleLines(view); got >= m.height {
+		t.Fatalf("expected short transcript view to use natural height below terminal height %d, got %d:\n%s", m.height, got, view)
+	}
+}
+
+func TestChatStartupHeaderStaysOutOfViewportAfterFirstPrompt(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.model = "deepseek-v4-flash"
+	m.effort = "max"
+	m.thinking = "off"
+	m.width = 80
+	m.height = 24
+	m.startupHeaderPrintCmd()
+	m.input.SetValue("hi")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+
+	view := m.View()
+	if !strings.Contains(view, "███████╗") {
+		t.Fatalf("expected startup header to remain visible while first prompt fits:\n%s", view)
+	}
+	if !strings.Contains(view, "hi") {
+		t.Fatalf("expected first prompt in view:\n%s", view)
+	}
+}
+
+func TestChatStartupHeaderReturnsAfterNewSessionNotice(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 24
+	m.startupHeaderPrinted = true
+	m.appendTranscript("assistant", tuirender.KindText, "old content")
+
+	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventClearScreen}))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind: service.EventInfo,
+		Text: "New session\n\nsession: fresh",
+	}))
+	m = next.(model)
+
+	if !m.startupHeaderPrinted {
+		t.Fatal("expected clear screen to schedule a fresh startup header print")
+	}
+	view := m.View()
+	if strings.Contains(view, "old content") {
+		t.Fatalf("expected old content cleared after new session:\n%s", view)
+	}
+	if strings.Contains(view, "session: fresh") {
+		t.Fatalf("expected printed new session notice not to repeat in tail viewport:\n%s", view)
+	}
+}
+
+func TestSessionHydratedPreservesPrintedStartupHeaderForInitialEmptySession(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 24
+	if cmd := m.startupHeaderPrintCmd(); cmd != nil {
+		t.Fatal("startup header is rendered in the chat viewport, not printed")
+	}
+
+	next, cmd := m.Update(svcMsg(service.Event{Kind: service.EventSessionHydrated, SessionID: "s1"}))
+	m = next.(model)
+	if cmd == nil {
+		t.Fatal("expected wait command after hydration")
+	}
+	if !m.startupHeaderPrinted || m.startupHeaderOnce == nil || !*m.startupHeaderOnce {
+		t.Fatal("expected initial empty hydration to preserve printed startup header")
+	}
+}
+
+func TestSessionHydratedResetsStartupHeaderForNewEmptySession(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 24
+	m.sessionID = "old"
+	if cmd := m.startupHeaderPrintCmd(); cmd != nil {
+		t.Fatal("startup header is rendered in the chat viewport, not printed")
+	}
+
+	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventSessionHydrated, SessionID: "new"}))
+	m = next.(model)
+	if !m.startupHeaderPrinted || m.startupHeaderOnce == nil || !*m.startupHeaderOnce {
+		t.Fatal("expected new empty session hydration to schedule startup header print")
+	}
+	if m.sessionID != "new" {
+		t.Fatalf("expected session id to update, got %q", m.sessionID)
 	}
 }
 
@@ -4923,10 +5821,33 @@ func TestChatHeaderOmittedWhenBodyTooShort(t *testing.T) {
 	m.height = countVisibleLines(m.renderBottom(80)) + 2
 	view := m.View()
 	if strings.Contains(view, "╭") || strings.Contains(view, "╰") || strings.Contains(view, "WHALE") {
-		t.Fatalf("expected header to be omitted instead of partially clipped:\n%s", view)
+		t.Fatalf("startup header should not render inside chat viewport:\n%s", view)
 	}
+	if got := countVisibleLines(view); got != countVisibleLines(m.renderBottom(80)) {
+		t.Fatalf("expected body to collapse when header cannot fit, got %d lines:\n%s", got, view)
+	}
+}
+
+func TestChatViewPinsBottomAfterContentExceedsScreen(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 12
+	m.transcript = nil
+	for i := 0; i < 40; i++ {
+		m.appendTranscript("info", tuirender.KindText, fmt.Sprintf("entry-%02d", i))
+	}
+
+	view := m.View()
 	if got := countVisibleLines(view); got != m.height {
-		t.Fatalf("expected view height %d, got %d:\n%s", m.height, got, view)
+		t.Fatalf("expected overflowing chat view to occupy terminal height %d, got %d:\n%s", m.height, got, view)
+	}
+	assertFooterLastLine(t, view, "model: deepseek-v4-flash")
+	assertFooterLastLine(t, view, "effort: max")
+	if !strings.Contains(view, "entry-39") {
+		t.Fatalf("expected overflowing chat view to follow latest content:\n%s", view)
+	}
+	if strings.Contains(view, "entry-00") {
+		t.Fatalf("expected overflowing chat view to scroll older content out of the visible frame:\n%s", view)
 	}
 }
 
@@ -4946,8 +5867,8 @@ func TestChatViewportScrollsTranscript(t *testing.T) {
 
 	m.handleViewportScrollKey("home")
 	atTop := m.View()
-	if !strings.Contains(atTop, "entry-00") {
-		t.Fatalf("expected home to scroll chat transcript to top:\n%s", atTop)
+	if !strings.Contains(atTop, "WHALE") {
+		t.Fatalf("expected home to scroll chat transcript to startup header:\n%s", atTop)
 	}
 }
 
@@ -4985,8 +5906,11 @@ func TestChatViewportScrollKeysUseTranscriptBeforeComposer(t *testing.T) {
 
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnd})
 	m = next.(model)
-	if m.viewport.YOffset != bottomOffset {
-		t.Fatalf("expected End to jump to bottom, offset=%d bottom=%d", m.viewport.YOffset, bottomOffset)
+	if !m.followTail {
+		t.Fatal("expected End to resume tail following")
+	}
+	if m.viewport.YOffset != 0 {
+		t.Fatalf("expected printed transcript to leave an empty tail viewport, offset=%d", m.viewport.YOffset)
 	}
 }
 
@@ -5083,86 +6007,6 @@ func TestWindowsPasteFallbackDoesNotCaptureMouseCSIFragments(t *testing.T) {
 	}
 	if got := m.windowsPaste.buffer; got != "" {
 		t.Fatalf("expected split mouse CSI fragment not to enter Windows paste buffer, got %q", got)
-	}
-}
-
-func TestBusyMouseWheelFreezesLiveOutputAndScrollsChat(t *testing.T) {
-	m := newModel(nil, "", "", "")
-	m.width = 80
-	m.height = 10
-	m.transcript = nil
-	for i := 0; i < 40; i++ {
-		m.appendTranscript("info", tuirender.KindText, fmt.Sprintf("entry-%02d", i))
-	}
-	m.beginTurnTranscript()
-	m.startBusy()
-	for i := 0; i < 12; i++ {
-		m.append("assistant", fmt.Sprintf("live-%02d\n", i))
-	}
-	m.refreshViewportContentFollow(true)
-
-	next, _ := m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
-	m = next.(model)
-	if !m.viewportFrozen {
-		t.Fatal("expected wheel up during busy output to freeze chat viewport")
-	}
-	if m.followTail {
-		t.Fatal("expected wheel up to disable tail following")
-	}
-	view := m.View()
-	if !strings.Contains(view, "live-11") {
-		t.Fatalf("expected small wheel scroll to keep current live output nearby:\n%s", view)
-	}
-
-	frozenView := m.View()
-	events := make([]service.Event, 0, 10)
-	for i := 0; i < 10; i++ {
-		events = append(events, service.Event{Kind: service.EventAssistantDelta, Text: fmt.Sprintf("hidden-live-%02d\n", i)})
-	}
-	next, _ = m.Update(svcBatchMsg(events))
-	m = next.(model)
-	if got := m.View(); got != frozenView {
-		t.Fatalf("expected wheel-scrolled live viewport to stay frozen\nbefore:\n%s\n\nafter:\n%s", frozenView, got)
-	}
-	if strings.Contains(m.View(), "hidden-live-09") {
-		t.Fatalf("expected hidden live tail not to redraw frozen viewport:\n%s", m.View())
-	}
-}
-
-func TestBusyMouseWheelDownResumesTail(t *testing.T) {
-	m := newModel(nil, "", "", "")
-	m.width = 80
-	m.height = 10
-	m.transcript = nil
-	for i := 0; i < 20; i++ {
-		m.appendTranscript("info", tuirender.KindText, fmt.Sprintf("entry-%02d", i))
-	}
-	m.beginTurnTranscript()
-	m.startBusy()
-	for i := 0; i < 12; i++ {
-		m.append("assistant", fmt.Sprintf("live-%02d\n", i))
-	}
-	m.refreshViewportContentFollow(true)
-
-	next, _ := m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelUp, Action: tea.MouseActionPress})
-	m = next.(model)
-	if !m.viewportFrozen {
-		t.Fatal("expected wheel up to freeze chat viewport")
-	}
-
-	next, _ = m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
-	m = next.(model)
-	if m.viewportFrozen {
-		t.Fatal("expected wheel down at tail to unfreeze chat viewport")
-	}
-	if !m.followTail {
-		t.Fatal("expected wheel down at tail to resume following")
-	}
-
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventAssistantDelta, Text: "latest-after-tail\n"}))
-	m = next.(model)
-	if view := m.View(); !strings.Contains(view, "latest-after-tail") {
-		t.Fatalf("expected resumed tail to render new live output:\n%s", view)
 	}
 }
 
@@ -5304,7 +6148,7 @@ func TestChatViewportIdleFollowTailUsesTailRenderWindow(t *testing.T) {
 	}
 }
 
-func TestChatViewportBusyFollowTailCropsSingleLargeLiveMessage(t *testing.T) {
+func TestChatViewportBusyFollowTailKeepsSingleLargeLiveMessageScrollable(t *testing.T) {
 	for _, height := range []int{8, 10, 20} {
 		t.Run(fmt.Sprintf("height_%d", height), func(t *testing.T) {
 			m := newModel(nil, "", "", "")
@@ -5318,16 +6162,17 @@ func TestChatViewportBusyFollowTailCropsSingleLargeLiveMessage(t *testing.T) {
 			}
 			m.refreshViewportContentFollow(false)
 
-			lineLimit := max(chatTailRenderLineFloor, m.viewportBodyHeight(m.width)*4)
-			if lines := m.viewport.TotalLineCount(); lines > lineLimit {
-				t.Fatalf("expected single coalesced live message to be cropped to %d lines, got %d", lineLimit, lines)
+			if lines := m.viewport.TotalLineCount(); lines <= m.viewportBodyHeight(m.width) {
+				t.Fatalf("expected single coalesced live message to exceed viewport height, got %d lines", lines)
 			}
 			view := m.View()
-			if strings.Contains(view, "single-live-000") {
-				t.Fatalf("expected old single-message live lines to be cropped out:\n%s", view)
+			if !strings.Contains(view, "live-399") {
+				t.Fatalf("expected single-message live tail to remain visible:\n%s", view)
 			}
-			if !strings.Contains(view, "single-live-399") {
-				t.Fatalf("expected cropped single-message live tail to remain visible:\n%s", view)
+			m.handleViewportScrollKey("home")
+			view = m.View()
+			if !strings.Contains(view, "live-000") {
+				t.Fatalf("expected full single-message live output to be scrollable to the top:\n%s", view)
 			}
 		})
 	}
@@ -5597,8 +6442,8 @@ func TestChatViewportResizePreservesUserScrollPosition(t *testing.T) {
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 8})
 	m = next.(model)
 	view := m.View()
-	if !strings.Contains(view, "entry-00") {
-		t.Fatalf("expected resized scrolled-up view to preserve top position:\n%s", view)
+	if !strings.Contains(view, "WHALE") {
+		t.Fatalf("expected resized scrolled-up view to preserve top position at startup header:\n%s", view)
 	}
 	if strings.Contains(view, "entry-49") {
 		t.Fatalf("expected resized scrolled-up view not to jump to tail:\n%s", view)
@@ -5611,8 +6456,8 @@ func TestChatViewportResizePreservesUserScrollPosition(t *testing.T) {
 	next, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 10})
 	m = next.(model)
 	view = m.View()
-	if !strings.Contains(view, "entry-49") {
-		t.Fatalf("expected resized view to follow tail after End:\n%s", view)
+	if strings.Contains(view, "entry-49") {
+		t.Fatalf("expected printed tail content not to repeat in viewport after End:\n%s", view)
 	}
 }
 
@@ -5630,15 +6475,69 @@ func TestNativeScrollbackSkipsHeaderAndPrintsNewTranscriptOnce(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected new transcript entry to produce a native scrollback print command")
 	}
-	msg := cmd()
-	if got := reflect.TypeOf(msg).String(); got != "tea.printLineMessage" {
-		t.Fatalf("expected Bubble Tea print message, got %s", got)
-	}
-	if got := fmt.Sprintf("%#v", msg); !strings.Contains(got, "hello native scrollback") {
-		t.Fatalf("expected printed message to include transcript text, got %s", got)
+	if got := fmt.Sprintf("%#v", cmd()); !strings.Contains(got, "hello native scrollback") || !strings.Contains(got, "WHALE") {
+		t.Fatalf("expected printed message to include startup header and transcript text, got %s", got)
 	}
 	if cmd := m.flushNativeScrollbackCmd(); cmd != nil {
 		t.Fatal("expected transcript entry not to be printed twice")
+	}
+}
+
+func TestPrintedNativeScrollbackIsNotRepeatedInTailViewport(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "high", "on")
+	m.width = 80
+	m.height = 24
+	m.startupHeaderPrintCmd()
+	m.appendTranscript("you", tuirender.KindText, "hi")
+	m.appendTranscript("think", tuirender.KindThinking, "thinking once")
+	m.appendTranscript("assistant", tuirender.KindText, "hello once")
+	cmd := m.flushNativeScrollbackCmd()
+	if cmd == nil {
+		t.Fatal("expected committed turn to print to native scrollback")
+	}
+
+	view := m.View()
+	for _, repeated := range []string{"thinking once", "hello once"} {
+		if strings.Contains(view, repeated) {
+			t.Fatalf("expected printed transcript %q not to repeat in tail viewport:\n%s", repeated, view)
+		}
+	}
+	if strings.Contains(view, "███████╗") || strings.Contains(view, "WHALE") {
+		t.Fatalf("expected printed startup header not to repeat in tail viewport:\n%s", view)
+	}
+
+	m.startBusy()
+	m.append("assistant", "live tail")
+	view = m.View()
+	if !strings.Contains(view, "live tail") {
+		t.Fatalf("expected uncommitted live output to remain visible:\n%s", view)
+	}
+}
+
+func TestFirstNativeScrollbackFlushKeepsStartupHeaderVisibleOutsideViewport(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "high", "on")
+	m.width = 80
+	m.height = 24
+	m.startupHeaderPrintCmd()
+	m.appendTranscript("you", tuirender.KindText, "hi")
+	m.appendTranscript("assistant", tuirender.KindText, "hello once")
+
+	cmd := m.flushNativeScrollbackCmd()
+	if cmd == nil {
+		t.Fatal("expected first committed turn to print to native scrollback")
+	}
+	printed := fmt.Sprintf("%#v", cmd())
+	for _, want := range []string{"███████", "version:", "hello once"} {
+		if !strings.Contains(printed, want) {
+			t.Fatalf("expected first native scrollback flush to include %q, got %s", want, printed)
+		}
+	}
+
+	view := m.View()
+	for _, repeated := range []string{"███████", "hello once"} {
+		if strings.Contains(view, repeated) {
+			t.Fatalf("expected first native scrollback content %q not to repeat in tail viewport:\n%s", repeated, view)
+		}
 	}
 }
 
@@ -5647,7 +6546,6 @@ func TestNativeScrollbackWaitsWhileChatIsScrolledUpAndFlushesAtTail(t *testing.T
 	m.width = 80
 	m.height = 10
 	printed := m.nativeScrollbackPrinted
-
 	m.appendTranscript("assistant", tuirender.KindText, "pending native scrollback")
 	m.followTail = false
 
@@ -5676,7 +6574,6 @@ func TestNativeScrollbackWaitsWhileChatViewportFrozenAndFlushesAtTail(t *testing
 	m.width = 80
 	m.height = 10
 	printed := m.nativeScrollbackPrinted
-
 	m.appendTranscript("assistant", tuirender.KindText, "pending frozen scrollback")
 	m.viewportFrozen = true
 
@@ -6063,7 +6960,7 @@ func TestChatBusyViewIgnoresExpiredProviderRetryStatus(t *testing.T) {
 	}
 }
 
-func TestApprovalBusyViewShowsCtrlCOnlyInterruptHint(t *testing.T) {
+func TestApprovalBusyViewDoesNotDuplicatePromptInBusyStatus(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 80
 	m.height = 24
@@ -6074,11 +6971,14 @@ func TestApprovalBusyViewShowsCtrlCOnlyInterruptHint(t *testing.T) {
 	m.approval.reason = "shell_run: sleep 30"
 
 	view := m.View()
-	if !strings.Contains(view, "Working (12s) · Ctrl+C to interrupt") {
-		t.Fatalf("expected approval busy status line to advertise ctrl+c interrupt:\n%s", view)
+	if strings.Contains(view, "Approval required · shell command") {
+		t.Fatalf("approval view should not duplicate the prompt in a busy status line:\n%s", view)
 	}
 	if strings.Contains(view, "Esc/Ctrl+C to interrupt") {
 		t.Fatalf("approval busy status line should not advertise esc as interrupt:\n%s", view)
+	}
+	if count := strings.Count(view, "Approval required"); count != 1 {
+		t.Fatalf("approval view should show one approval title, got %d:\n%s", count, view)
 	}
 }
 
@@ -6093,12 +6993,46 @@ func TestChatFooterShowsEffectiveThinkingAndEffort(t *testing.T) {
 	assertFooterLastLine(t, view, "thinking: off")
 }
 
+func TestChatFooterUsesSemanticColorSegments(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	m := newModel(nil, "deepseek-v4-pro", "max", "on")
+	m.width = 100
+	m.height = 24
+	m.cwd = "~/Engineer/ai/dsk/whale-theme-colors"
+	m.viewMode = app.ViewModeFocus
+
+	view := m.View()
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	footer := lines[len(lines)-1]
+	if !strings.Contains(footer, "\x1b[") {
+		t.Fatalf("expected styled footer segments, got %q in view:\n%s", footer, view)
+	}
+	plain := xansi.Strip(footer)
+	for _, want := range []string{
+		"model: deepseek-v4-pro",
+		"effort: max",
+		"thinking: on",
+		"whale-theme-colors",
+		"focus",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected stripped footer to contain %q, got %q", want, plain)
+		}
+	}
+}
+
 func TestModelSetRefreshesHeaderCache(t *testing.T) {
 	m := newModel(nil, "old-model", "high", "on")
-	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	next, cmd := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m = next.(model)
-	if view := m.View(); !strings.Contains(view, "model:     old-model") {
-		t.Fatalf("expected initial header model:\n%s", view)
+	if cmd != nil {
+		t.Fatal("startup header is rendered in the chat viewport, not printed")
+	}
+	if header := m.startupHeaderText(); !strings.Contains(header, "model:     old-model") {
+		t.Fatalf("expected initial header model:\n%s", header)
 	}
 
 	next, _ = m.Update(svcMsg(service.Event{
@@ -6108,15 +7042,20 @@ func TestModelSetRefreshesHeaderCache(t *testing.T) {
 	}))
 	m = next.(model)
 
+	header := m.startupHeaderText()
+	if !strings.Contains(header, "model:     newer-model") {
+		t.Fatalf("expected refreshed header after model set:\n%s", header)
+	}
+	if strings.Contains(header, "model:     old-model") {
+		t.Fatalf("expected stale header model to disappear:\n%s", header)
+	}
 	view := m.View()
-	if !strings.Contains(view, "model:     newer-model") ||
-		!strings.Contains(view, "effort:    low") ||
-		!strings.Contains(view, "thinking:  off") {
-		t.Fatalf("expected refreshed header after model set:\n%s", view)
+	if strings.Contains(view, "model set: newer-model") {
+		t.Fatalf("expected printed model set result not to repeat in tail viewport:\n%s", view)
 	}
-	if strings.Contains(view, "model:     old-model") {
-		t.Fatalf("expected stale header model to disappear:\n%s", view)
-	}
+	assertFooterLastLine(t, view, "model: newer-model")
+	assertFooterLastLine(t, view, "effort: low")
+	assertFooterLastLine(t, view, "thinking: off")
 }
 
 func TestChatStoppingViewShowsStoppingAboveComposer(t *testing.T) {
@@ -6166,8 +7105,70 @@ func TestApprovalViewSeparatesToolNameFromDetail(t *testing.T) {
 	if strings.Contains(view, "shell_run") {
 		t.Fatalf("approval view should not expose internal shell tool name:\n%s", view)
 	}
-	if !strings.Contains(view, "Approval required") || !strings.Contains(view, "shell command") || !strings.Contains(view, "  date") {
+	if !strings.Contains(view, "Approval required") || !strings.Contains(view, "shell command") || !strings.Contains(xansi.Strip(view), "$ date") {
 		t.Fatalf("expected separated approval tool and detail:\n%s", view)
+	}
+}
+
+func TestApprovalViewHidesDuplicatePendingToolRow(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 100
+	m.height = 24
+	m.startBusy()
+	m.mode = modeApproval
+	m.approval.toolCallID = "tool-1"
+	m.approval.toolName = "shell_run"
+	m.approval.reason = "shell_run: git diff -- internal/tui/render.go | head -600"
+	m.assembler.AddToolCall("tool-1", "shell_run", "Running git diff -- internal/tui/render.go | head -600")
+
+	view := xansi.Strip(m.View())
+	if strings.Contains(view, "Running git diff") {
+		t.Fatalf("approval view should hide duplicate pending tool row:\n%s", view)
+	}
+	if count := strings.Count(view, "git diff -- internal/tui/render.go | head -600"); count != 1 {
+		t.Fatalf("approval view should render the command exactly once, got %d:\n%s", count, view)
+	}
+	if !strings.Contains(view, "$ git diff -- internal/tui/render.go | head -600") {
+		t.Fatalf("approval view should render a command body:\n%s", view)
+	}
+}
+
+func TestApprovalViewShortensShellSessionScope(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 100
+	m.height = 24
+	m.mode = modeApproval
+	m.approval.toolName = "shell_run"
+	m.approval.reason = "shell_run: date"
+	m.approval.metadata = map[string]any{"approval_session_scope": "this shell command"}
+
+	view := xansi.Strip(m.View())
+	if !strings.Contains(view, "Allow session (s) same command") {
+		t.Fatalf("expected shortened shell session option:\n%s", view)
+	}
+	if strings.Contains(view, "Allow for session") || strings.Contains(view, "this shell command") {
+		t.Fatalf("approval shell session option should stay compact:\n%s", view)
+	}
+}
+
+func TestApprovalViewPreservesExactShellCommandText(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 120
+	m.height = 30
+	m.mode = modeApproval
+	m.approval.toolName = "shell_run"
+	cmd := "printf 'a  b'\n  echo \"c  d\" | head -1"
+	m.approval.reason = "shell_run: " + cmd
+
+	view := xansi.Strip(m.View())
+	if !strings.Contains(view, "$ printf 'a  b'") {
+		t.Fatalf("approval should preserve quoted repeated spaces:\n%s", view)
+	}
+	if !strings.Contains(view, "  echo \"c  d\" | head -1") {
+		t.Fatalf("approval should preserve embedded newline and indentation:\n%s", view)
+	}
+	if strings.Contains(view, "printf 'a b'") || strings.Contains(view, "echo \"c d\"") {
+		t.Fatalf("approval collapsed command whitespace:\n%s", view)
 	}
 }
 
@@ -6207,12 +7208,58 @@ func TestApprovalViewShowsFileReviewSessionScope(t *testing.T) {
 	for _, want := range []string{
 		"Approval required: file diff review",
 		"Review file changes before Whale applies them.",
-		"Allow for session = these files: a.txt, b.txt",
+		"Allow session (s)",
 		"a.txt (+1 -1)",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected approval view to contain %q:\n%s", want, view)
 		}
+	}
+	if strings.Contains(view, "Allow for session =") || strings.Contains(view, "these files: a.txt, b.txt") {
+		t.Fatalf("approval view should not expose session scope detail:\n%s", view)
+	}
+}
+
+func TestApprovalViewUsesSimilarCommandsLabelForShellFamily(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 100
+	m.height = 30
+	m.mode = modeApproval
+	m.approval.toolName = "shell_run"
+	m.approval.reason = "shell_run: go test ./internal/policy"
+	m.approval.metadata = map[string]any{
+		"approval_session_scope": "this bounded shell command family",
+		"shell_approval_family":  true,
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "Allow similar commands") {
+		t.Fatalf("expected similar-commands option:\n%s", view)
+	}
+	if strings.Contains(view, "this bounded shell command family") || strings.Contains(view, "Allow for session =") {
+		t.Fatalf("approval view should not expose shell scope detail:\n%s", view)
+	}
+}
+
+func TestApprovalViewKeepsLargeDiffPreviewBounded(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 120
+	m.height = 30
+	m.mode = modeApproval
+	m.approval.toolName = "apply_patch"
+	m.approval.reason = "apply_patch: roadmap.md"
+	m.approval.metadata = largeTranslationDiffMetadata(190, 190)
+	m.approval.metadata["approval_kind"] = "file_diff_review"
+
+	view := m.View()
+	if !strings.Contains(view, "Allow once") || !strings.Contains(view, "Deny") {
+		t.Fatalf("expected approval controls to remain visible:\n%s", view)
+	}
+	if !strings.Contains(view, "... diff truncated (") {
+		t.Fatalf("expected approval diff preview to stay bounded:\n%s", view)
+	}
+	if strings.Contains(view, "+English 189") {
+		t.Fatalf("approval preview should not render the full large diff:\n%s", view)
 	}
 }
 
@@ -6243,11 +7290,14 @@ func TestApprovalViewShowsMemoryWriteMetadata(t *testing.T) {
 		"Description: prefers concise Chinese answers",
 		"Content:",
 		"Answer in concise Chinese with repo evidence.",
-		"Allow for session = global memory: response-style",
+		"Allow session (s)",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected approval view to contain %q:\n%s", want, view)
 		}
+	}
+	if strings.Contains(view, "Allow for session =") || strings.Contains(view, "global memory: response-style") {
+		t.Fatalf("approval view should not expose memory session scope detail:\n%s", view)
 	}
 }
 
@@ -6276,11 +7326,14 @@ func TestApprovalViewShowsMemoryDeleteMetadata(t *testing.T) {
 		"Name: roadmap",
 		"Description: plugin-first memory",
 		"Memory is the first official plugin.",
-		"Allow for session = project memory: roadmap",
+		"Allow session (s)",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected approval view to contain %q:\n%s", want, view)
 		}
+	}
+	if strings.Contains(view, "Allow for session =") || strings.Contains(view, "project memory: roadmap") {
+		t.Fatalf("approval view should not expose memory session scope detail:\n%s", view)
 	}
 }
 
@@ -6342,6 +7395,45 @@ func TestApprovalDiffMetadataTruncatesLongPreview(t *testing.T) {
 	}
 }
 
+func TestFileDiffMetadataPreviewAllowsLargeTranslationDiff(t *testing.T) {
+	metadata := largeTranslationDiffMetadata(190, 190)
+	got := renderFileDiffMetadataPlain(metadata, fileDiffPreviewMaxLines)
+	if !strings.Contains(got, "-中文 000") {
+		t.Fatalf("expected diff preview to include deletions:\n%s", got)
+	}
+	if !strings.Contains(got, "+English 189") {
+		t.Fatalf("expected 400-line diff preview to include additions:\n%s", got)
+	}
+	if strings.Contains(got, "... diff truncated (") {
+		t.Fatalf("expected translation-size diff to fit in preview:\n%s", got)
+	}
+}
+
+func largeTranslationDiffMetadata(deletions, additions int) map[string]any {
+	lines := []string{
+		"--- a/roadmap.md",
+		"+++ b/roadmap.md",
+		fmt.Sprintf("@@ -1,%d +1,%d @@", deletions, additions),
+	}
+	for i := 0; i < deletions; i++ {
+		lines = append(lines, fmt.Sprintf("-中文 %03d", i))
+	}
+	for i := 0; i < additions; i++ {
+		lines = append(lines, fmt.Sprintf("+English %03d", i))
+	}
+	return map[string]any{
+		"kind": "file_diff",
+		"files": []any{
+			map[string]any{
+				"path":         "roadmap.md",
+				"unified_diff": strings.Join(lines, "\n"),
+				"additions":    additions,
+				"deletions":    deletions,
+			},
+		},
+	}
+}
+
 func TestApprovalDiffMetadataShowsFileTruncatedMarker(t *testing.T) {
 	metadata := map[string]any{
 		"kind": "file_diff",
@@ -6393,6 +7485,40 @@ func TestToolResultShowsDiffMetadata(t *testing.T) {
 	}
 }
 
+func TestToolResultShowsLargeTranslationDiffTailInChat(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 120
+	m.height = 30
+	next, _ := m.Update(svcMsg(service.Event{
+		Kind:       service.EventToolCall,
+		ToolCallID: "tc-translation",
+		ToolName:   "write",
+		Text:       `write: roadmap.md`,
+	}))
+	m = next.(model)
+	next, cmd := m.Update(svcMsg(service.Event{
+		Kind:       service.EventToolResult,
+		ToolCallID: "tc-translation",
+		ToolName:   "write",
+		Text:       `{"success":true,"data":{"payload":{"file_path":"roadmap.md"}}}`,
+		Metadata:   largeTranslationDiffMetadata(190, 190),
+	}))
+	m = next.(model)
+	if cmd == nil {
+		t.Fatal("expected wait-event command")
+	}
+	got := strings.Join(tuirender.ChatLines(m.transcript, 120), "\n")
+	if !strings.Contains(got, "Edited roadmap.md") {
+		t.Fatalf("expected completed tool cell in transcript:\n%s", got)
+	}
+	if !strings.Contains(got, "+English 189") {
+		t.Fatalf("expected output box diff preview to include translated additions:\n%s", got)
+	}
+	if strings.Contains(got, "... diff truncated (") {
+		t.Fatalf("expected translation-size diff to fit in output preview:\n%s", got)
+	}
+}
+
 func testFileDiffMetadata() map[string]any {
 	return map[string]any{
 		"kind": "file_diff",
@@ -6435,6 +7561,181 @@ func TestFormatElapsedCompact(t *testing.T) {
 		if got := formatElapsedCompact(tc.elapsed); got != tc.want {
 			t.Fatalf("formatElapsedCompact(%v) = %q, want %q", tc.elapsed, got, tc.want)
 		}
+	}
+}
+
+func TestBtwBusySubmitDispatchesLocalSubmit(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.busy = true
+	m.submitPromptWhileBusy("/btw what is happening?")
+	if len(*intents) != 1 {
+		t.Fatalf("expected one intent, got %d", len(*intents))
+	}
+	if got := (*intents)[0]; got.Kind != service.IntentSubmitLocal || got.Input != "/btw what is happening?" {
+		t.Fatalf("unexpected intent: %+v", got)
+	}
+	if m.localSubmitPending != 1 {
+		t.Fatalf("expected pending local submit, got %d", m.localSubmitPending)
+	}
+}
+
+func TestBtwSlashSuggestionDoesNotAutoRunWithoutQuestion(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.input.SetValue("/bt")
+	m.updateSlashMatches()
+	selectSlashCommand(t, &m, "/btw ")
+	suggestion, ok := m.selectedSlashSuggestion()
+	if !ok {
+		t.Fatal("expected /btw slash suggestion")
+	}
+	if suggestion.AutoRun {
+		t.Fatal("/btw should not auto-run from suggestions without a question")
+	}
+}
+
+func TestBtwSlashSuggestionEnterCompletesWithSpace(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.input.SetValue("/bt")
+	m.updateSlashMatches()
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if got := m.input.Value(); got != "/btw " {
+		t.Fatalf("expected /btw completion with trailing space, got %q", got)
+	}
+	if m.hasSlashSuggestions() {
+		t.Fatalf("expected suggestions hidden after required-arg completion, got %+v", m.slash.matches)
+	}
+}
+
+func TestBtwExactSlashEnterShowsUsage(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.input.SetValue("/btw")
+	m.updateSlashMatches()
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if len(*intents) != 1 {
+		t.Fatalf("expected /btw usage local submit, got %+v", *intents)
+	}
+	if got := (*intents)[0]; got.Kind != service.IntentSubmitLocal || got.Input != "/btw" {
+		t.Fatalf("unexpected intent: %+v", got)
+	}
+}
+
+func TestBtwSecondSubmitWhileLoadingIsBlocked(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.btwPanel = btwPanelState{visible: true, id: 1, question: "first?", loading: true}
+	m.input.SetValue("/btw second?")
+
+	m.submitLocalNoTurn(appcommands.SubmitClassification{Line: "/btw second?", Class: appcommands.SubmitLocalReadOnly})
+
+	if len(*intents) != 0 {
+		t.Fatalf("expected no second /btw intent while loading, got %+v", *intents)
+	}
+	if got := m.input.Value(); got != "/btw second?" {
+		t.Fatalf("expected input to remain editable, got %q", got)
+	}
+	if m.localSubmitPending != 0 {
+		t.Fatalf("expected no pending local submit, got %d", m.localSubmitPending)
+	}
+	if m.status != "/btw is already answering" {
+		t.Fatalf("unexpected status: %q", m.status)
+	}
+}
+
+func TestBtwDeltaEventsAreNotBatchableAcrossRequests(t *testing.T) {
+	first := service.Event{Kind: service.EventBtwDelta, Text: "first", Count: 1}
+	second := service.Event{Kind: service.EventBtwDelta, Text: "second", Count: 2}
+	if shouldBatchServiceEvent(first) {
+		t.Fatal("btw deltas should not be batched because request ids can differ")
+	}
+	events := appendBatchedServiceEvent(nil, first)
+	events = appendBatchedServiceEvent(events, second)
+	if len(events) != 2 {
+		t.Fatalf("expected separate btw delta events, got %d: %+v", len(events), events)
+	}
+	if events[0].Text != "first" || events[0].Count != 1 || events[1].Text != "second" || events[1].Count != 2 {
+		t.Fatalf("unexpected btw delta events: %+v", events)
+	}
+}
+
+func TestBtwPanelRendersAndDoesNotAppendTranscript(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.width = 80
+	m.height = 24
+	before := len(m.transcript)
+	m, _ = updateTestModel(t, m, svcMsg(service.Event{Kind: service.EventBtwStarted, Text: "quick?", Count: 1}))
+	if !m.btwPanel.visible || !m.btwPanel.loading {
+		t.Fatalf("expected loading btw panel: %+v", m.btwPanel)
+	}
+	view := m.View()
+	if !strings.Contains(view, "/btw") || !strings.Contains(view, "Answering...") {
+		t.Fatalf("expected btw loading panel in view:\n%s", view)
+	}
+	m, _ = updateTestModel(t, m, svcMsg(service.Event{Kind: service.EventBtwDone, Text: "**answer**", Count: 1}))
+	view = m.View()
+	if !strings.Contains(view, "answer") || !strings.Contains(view, "Ctrl+P/Ctrl+N") {
+		t.Fatalf("expected btw answer panel in view:\n%s", view)
+	}
+	if len(m.transcript) != before {
+		t.Fatalf("btw answer should not append transcript, before=%d after=%d", before, len(m.transcript))
+	}
+}
+
+func TestBtwPanelKeysDismissBeforeBusyInterrupt(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.busy = true
+	m.btwPanel = btwPanelState{visible: true, id: 1, question: "quick?", response: "answer"}
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	if m.btwPanel.visible {
+		t.Fatal("expected ctrl+c to dismiss btw panel")
+	}
+	if len(*intents) != 0 {
+		t.Fatalf("ctrl+c with btw panel should not interrupt busy turn, got %+v", *intents)
+	}
+}
+
+func TestBtwPanelDoesNotConsumeChatInputKeys(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.btwPanel = btwPanelState{visible: true, id: 1, question: "quick?", response: "answer"}
+	m.input.SetValue("hello")
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" ")})
+	if got := m.input.Value(); got != "hello " {
+		t.Fatalf("expected space to reach composer, got %q", got)
+	}
+
+	m.input.SetValue("follow up")
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if len(*intents) != 1 {
+		t.Fatalf("expected enter to submit prompt, got %+v", *intents)
+	}
+	if got := (*intents)[0]; got.Kind != service.IntentSubmit || got.Input != "follow up" {
+		t.Fatalf("unexpected submit intent: %+v", got)
+	}
+	if !m.btwPanel.visible {
+		t.Fatal("btw panel should remain visible after chat input submit")
+	}
+}
+
+func TestBtwPanelScrollKeys(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.height = 9
+	m.width = 80
+	m.btwPanel = btwPanelState{
+		visible:  true,
+		id:       1,
+		question: "quick?",
+		response: strings.Repeat("line\n\n", 20),
+	}
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlN})
+	if m.btwPanel.scroll == 0 {
+		t.Fatal("expected ctrl+n to scroll btw panel")
+	}
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlP})
+	if m.btwPanel.scroll != 0 {
+		t.Fatalf("expected ctrl+p to scroll back to top, got %d", m.btwPanel.scroll)
 	}
 }
 
@@ -6600,8 +7901,8 @@ func TestToolDeniedDoesNotAddNoFinalAnswerNotice(t *testing.T) {
 	m = next.(model)
 	snap := m.assembler.Snapshot()
 	for _, entry := range snap {
-		if strings.Contains(entry.Text, "No final answer was produced") {
-			t.Fatalf("unexpected no-final-answer notice after tool denial: %+v", snap)
+		if strings.Contains(entry.Text, "did not produce a visible answer") {
+			t.Fatalf("unexpected reasoning-only status after tool denial: %+v", snap)
 		}
 	}
 }
@@ -6926,7 +8227,7 @@ func TestClearScreenResetsStateAndShowsHeader(t *testing.T) {
 	if len(m2.diffs) != 0 {
 		t.Fatalf("expected diffs cleared, got %d", len(m2.diffs))
 	}
-	// The transcript is cleared; the header is rendered as chat chrome.
+	// The transcript is cleared; the header is rendered as the first chat item.
 	snap := m2.assembler.Snapshot()
 	if len(snap) != 0 {
 		t.Fatalf("expected empty live assembler, got %+v", snap)
@@ -6936,7 +8237,10 @@ func TestClearScreenResetsStateAndShowsHeader(t *testing.T) {
 	}
 	view := m2.View()
 	if !strings.Contains(view, "WHALE") && !strings.Contains(view, "██╗") {
-		t.Fatalf("expected header banner in view after clear:\n%s", view)
+		t.Fatalf("expected startup header in chat viewport after clear:\n%s", view)
+	}
+	if !m2.startupHeaderPrinted {
+		t.Fatal("expected clear screen to schedule startup header print")
 	}
 	if m2.nativeScrollbackPrinted != len(m2.transcript) {
 		t.Fatalf("expected clear screen to reset native scrollback cursor, got cursor %d for %d transcript items", m2.nativeScrollbackPrinted, len(m2.transcript))
@@ -6959,7 +8263,10 @@ func TestClearScreenInvalidatesRenderedChatCache(t *testing.T) {
 		t.Fatalf("expected first clear to remove cached content:\n%s", view)
 	}
 	if !strings.Contains(view, "WHALE") && !strings.Contains(view, "██╗") {
-		t.Fatalf("expected header after first clear:\n%s", view)
+		t.Fatalf("expected startup header in chat viewport after first clear:\n%s", view)
+	}
+	if !m.startupHeaderPrinted {
+		t.Fatal("expected first clear to schedule startup header print")
 	}
 }
 

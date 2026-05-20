@@ -47,6 +47,11 @@ func metadataInt64(v any) (int64, bool) {
 	}
 }
 
+func metadataBool(v any) bool {
+	b, ok := v.(bool)
+	return ok && b
+}
+
 func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 	var eventCmd tea.Cmd
 	switch ev.Kind {
@@ -96,12 +101,19 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		}
 		m.addLog(logEntry{Kind: "plan_update", Source: "plan", Summary: truncateLine(ev.Text, 120), Raw: ev.Text})
 	case service.EventProviderRetry:
+		if ev.Metadata != nil && metadataBool(ev.Metadata["stream_reset"]) {
+			m.resetLiveAttemptForProviderRetry()
+		}
 		m.setProviderRetryStatus(ev)
 		m.addLog(logEntry{Kind: "api_retry", Source: "provider", Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Metadata)})
 	case service.EventInfo:
 		m.clearProviderRetryStatus()
 		if !isEnvironmentInventoryBlock(ev.Text) {
-			m.append("info", ev.Text)
+			if isSessionNotice(ev.Text) {
+				m.appendTranscript("notice", tuirender.KindNotice, ev.Text)
+			} else {
+				m.append("info", ev.Text)
+			}
 		} else {
 			m.addLog(logEntry{
 				Kind:    "env_summary",
@@ -113,6 +125,7 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		m.addLog(logEntry{Kind: "info", Source: "system", Summary: ev.Text, Raw: ev.Text})
 		m.status = "ready"
 		m.syncModelEffortFromInfo(ev.Text)
+		m.refreshViewportContentFollow(true)
 	case service.EventError:
 		m.clearProviderRetryStatus()
 		m.append("error", ev.Text)
@@ -141,7 +154,24 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		}
 		if role == "info" {
 			m.syncModelEffortFromInfo(ev.Text)
+			m.refreshViewportContentFollow(true)
 		}
+	case service.EventBtwStarted:
+		m.clearProviderRetryStatus()
+		m.startBtwPanel(ev.Count, ev.Text)
+		m.refreshViewportContent()
+	case service.EventBtwDelta:
+		m.clearProviderRetryStatus()
+		m.appendBtwDelta(ev.Count, ev.Text)
+		m.refreshViewportContent()
+	case service.EventBtwDone:
+		m.clearProviderRetryStatus()
+		m.finishBtwPanel(ev.Count, ev.Text)
+		m.refreshViewportContent()
+	case service.EventBtwError:
+		m.clearProviderRetryStatus()
+		m.failBtwPanel(ev.Count, ev.Text)
+		m.refreshViewportContent()
 	case service.EventToolCall:
 		m.clearProviderRetryStatus()
 		if ev.ToolName != "update_plan" {
@@ -170,6 +200,9 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		m.captureDiff(ev.ToolName, ev.Text)
 		if !m.hasPendingToolCalls() {
 			m.commitLiveTranscript(false)
+		}
+		if toolResultMayChangeGitBranch(ev.ToolName) {
+			eventCmd = tea.Batch(eventCmd, detectGitBranchCmd(m.cwdPath))
 		}
 	case service.EventTaskStarted:
 		m.clearProviderRetryStatus()
@@ -302,6 +335,7 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		m.skillsMenu.selected = 0
 		m.slash.matches = nil
 		m.slash.selected = 0
+		m.slash.argumentHint = ""
 		m.skills.matches = nil
 		m.skills.selected = 0
 		m.status = "skills"
@@ -312,6 +346,7 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		m.mode = modeSkillsManager
 		m.slash.matches = nil
 		m.slash.selected = 0
+		m.slash.argumentHint = ""
 		m.skills.matches = nil
 		m.skills.selected = 0
 		m.setSkillsManagerItems(ev.Skills)
@@ -323,10 +358,24 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		m.mode = modePluginsManager
 		m.slash.matches = nil
 		m.slash.selected = 0
+		m.slash.argumentHint = ""
 		m.skills.matches = nil
 		m.skills.selected = 0
 		m.setPluginsManagerItems(ev.Plugins)
 		m.status = "plugins"
+	case service.EventReviewMenu:
+		m.clearProviderRetryStatus()
+		m.stopBusy()
+		m.stopping = false
+		m.mode = modeReviewMenu
+		m.reviewMenu.selected = 0
+		m.reviewTargetPicker = reviewTargetPickerState{}
+		m.slash.matches = nil
+		m.slash.selected = 0
+		m.slash.argumentHint = ""
+		m.skills.matches = nil
+		m.skills.selected = 0
+		m.status = "review"
 	case service.EventViewModeChanged:
 		m.clearProviderRetryStatus()
 		mode := strings.TrimSpace(ev.ViewMode)
@@ -362,8 +411,14 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		m.logs = nil
 		m.diffs = nil
 		m.status = "terminal cleared"
-		return tea.Sequence(clearScreenCmd(), waitEventCmd(m.svc)), false, true
+		return tea.Sequence(clearScreenCmd(), m.startupHeaderPrintCmd(), waitEventCmd(m.svc)), false, true
 	case service.EventSessionHydrated:
+		prevSessionID := m.sessionID
+		if strings.TrimSpace(ev.SessionID) != "" {
+			m.sessionID = strings.TrimSpace(ev.SessionID)
+		}
+		sessionChanged := prevSessionID != "" && m.sessionID != "" && m.sessionID != prevSessionID
+		hadStartupHeaderPrinted := m.startupHeaderPrinted || (m.startupHeaderOnce != nil && *m.startupHeaderOnce)
 		m.clearProviderRetryStatus()
 		m.assembler.Reset()
 		m.clearPendingToolCalls()
@@ -375,6 +430,17 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		m.hydrateSessionMessages(ev.Messages)
 		m.commitLiveTranscript(true)
 		m.trimHydratedTranscriptForDisplay(maxHydratedTranscriptLines)
+		if sessionChanged {
+			hadStartupHeaderPrinted = false
+			eventCmd = clearScreenCmd()
+		}
+		if len(m.transcript) > 0 || hadStartupHeaderPrinted {
+			m.startupHeaderPrinted = true
+			if m.startupHeaderOnce == nil {
+				m.startupHeaderOnce = new(bool)
+			}
+			*m.startupHeaderOnce = true
+		}
 		m.status = "ready"
 	case service.EventExitRequested:
 		m.clearProviderRetryStatus()
@@ -504,6 +570,14 @@ func (m *model) resetTurnVisibility() {
 	m.sawTerminalToolOutcomeThisTurn = false
 	m.visibleAssistantThisTurn = ""
 	m.turnTranscriptStart = len(m.transcript)
+}
+
+func (m *model) resetLiveAttemptForProviderRetry() {
+	if m.assembler != nil {
+		m.assembler.Reset()
+	}
+	m.resetTurnVisibility()
+	m.refreshLiveViewportContent()
 }
 
 func isAgentTurnDone(ev service.Event) bool {

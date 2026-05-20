@@ -40,11 +40,56 @@ func TestApprovalKeysExtractApplyPatchFiles(t *testing.T) {
 func TestApprovalKeysKeepShellCommandScope(t *testing.T) {
 	call := core.ToolCall{ID: "shell-1", Name: "shell_run", Input: `{"command":"go test ./..."}`}
 
-	if got, want := ApprovalKeys(call), []string{"shell_run|cmd:go test ./..."}; !reflect.DeepEqual(got, want) {
+	if got, want := ApprovalKeys(call), []string{"shell:bounded:go:test"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("shell keys = %v, want %v", got, want)
+	}
+	if got := ApprovalSessionScope(call); got != "this bounded shell command family" {
+		t.Fatalf("session scope = %q", got)
+	}
+}
+
+func TestApprovalKeysKeepExactScopeForUnclassifiedShellCommand(t *testing.T) {
+	call := core.ToolCall{ID: "shell-1", Name: "shell_run", Input: `{"command":"npm install lodash"}`}
+
+	if got, want := ApprovalKeys(call), []string{"shell_run|cmd:npm install lodash"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("shell keys = %v, want %v", got, want)
 	}
 	if got := ApprovalSessionScope(call); got != "this shell command" {
 		t.Fatalf("session scope = %q", got)
+	}
+}
+
+func TestApprovalKeysKeepExactScopeForGoBinaryOutputs(t *testing.T) {
+	tests := map[string][]string{
+		"go test -c ./pkg":               {"shell_run|cmd:go test -c ./pkg"},
+		"go test -exec ./wrapper ./pkg":  {"shell_run|cmd:go test -exec ./wrapper ./pkg"},
+		"go test -toolexec ./wrap ./pkg": {"shell_run|cmd:go test -toolexec ./wrap ./pkg"},
+		"go build ./cmd/app":             {"shell_run|cmd:go build ./cmd/app"},
+	}
+	for command, want := range tests {
+		call := core.ToolCall{ID: "shell-1", Name: "shell_run", Input: `{"command":"` + command + `"}`}
+		if got := ApprovalKeys(call); !reflect.DeepEqual(got, want) {
+			t.Fatalf("ApprovalKeys(%q) = %v, want %v", command, got, want)
+		}
+	}
+}
+
+func TestApprovalMetadataIncludesShellRisk(t *testing.T) {
+	call := core.ToolCall{ID: "shell-1", Name: "shell_run", Input: `{"command":"go test ./..."}`}
+
+	got := ApprovalMetadata(call, ApprovalKeys(call), nil)
+	if got["shell_risk_code"] != "bounded_write" {
+		t.Fatalf("shell_risk_code = %v, metadata=%+v", got["shell_risk_code"], got)
+	}
+	if got["shell_risk_level"] != "bounded_write" {
+		t.Fatalf("shell_risk_level = %v, metadata=%+v", got["shell_risk_level"], got)
+	}
+	if got["shell_approval_family"] != true {
+		t.Fatalf("shell_approval_family = %v, metadata=%+v", got["shell_approval_family"], got)
+	}
+	scopes, ok := got["shell_write_scopes"].([]string)
+	if !ok || len(scopes) == 0 {
+		t.Fatalf("shell_write_scopes missing: %+v", got)
 	}
 }
 

@@ -143,6 +143,88 @@ func TestApprovalRequiredAndDenied(t *testing.T) {
 	assertApprovalDeniedMarker(t, store, "s-approval-deny", "write")
 }
 
+func TestRunOptionsScopedShellAllowPrefixesDoNotLeak(t *testing.T) {
+	store := NewInMemoryStore()
+	prov := &oneToolProvider{tool: "shell_run", input: `{"command":"gh pr diff 123"}`}
+	asked := 0
+	a := NewAgentWithRegistry(
+		prov,
+		store,
+		NewToolRegistry([]Tool{namedNoopTool("shell_run")}),
+		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
+			asked++
+			return ApprovalDeny
+		}),
+	)
+
+	events, err := a.RunStreamWithTurnOptions(context.Background(), "s-scoped-allow", "go", RunOptions{
+		ShellAllowPrefixes: []string{"gh pr diff"},
+	})
+	if err != nil {
+		t.Fatalf("run stream with scoped allow failed: %v", err)
+	}
+	for ev := range events {
+		if ev.Type == AgentEventTypeToolApprovalRequired {
+			t.Fatalf("did not expect approval with scoped shell allow")
+		}
+	}
+	if asked != 0 {
+		t.Fatalf("approval callback called with scoped shell allow: %d", asked)
+	}
+
+	prov.calls = 0
+	events, err = a.RunStreamWithOptions(context.Background(), "s-no-scoped-allow", "go", false)
+	if err != nil {
+		t.Fatalf("run stream without scoped allow failed: %v", err)
+	}
+	var sawApproval bool
+	for ev := range events {
+		if ev.Type == AgentEventTypeToolApprovalRequired {
+			sawApproval = true
+		}
+	}
+	if !sawApproval || asked != 1 {
+		t.Fatalf("expected approval without scoped allow, sawApproval=%v asked=%d", sawApproval, asked)
+	}
+}
+
+func TestRunOptionsReadOnlyDeniesMutatingToolWithoutApproval(t *testing.T) {
+	store := NewInMemoryStore()
+	prov := &approvalProvider{}
+	asked := 0
+	a := NewAgentWithRegistry(
+		prov,
+		store,
+		NewToolRegistry([]Tool{writeLikeTool{}}),
+		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
+			asked++
+			return ApprovalDeny
+		}),
+	)
+
+	events, err := a.RunStreamWithTurnOptions(context.Background(), "s-read-only-turn", "review", RunOptions{
+		ReadOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("run stream with read-only turn failed: %v", err)
+	}
+	var sawPolicyDeny bool
+	for ev := range events {
+		if ev.Type == AgentEventTypeToolApprovalRequired {
+			t.Fatalf("read-only turn should deny mutating tools without approval")
+		}
+		if ev.Type == AgentEventTypeToolPolicyDecision && ev.Policy != nil && ev.Policy.Code == "read_only_turn_denied" && !ev.Policy.Allow {
+			sawPolicyDeny = true
+		}
+	}
+	if !sawPolicyDeny {
+		t.Fatal("expected read-only policy denial result")
+	}
+	if asked != 0 {
+		t.Fatalf("approval callback should not be called, got %d", asked)
+	}
+}
+
 func TestApprovalCancelDoesNotPersistDeniedMarker(t *testing.T) {
 	store := NewInMemoryStore()
 	prov := &approvalProvider{}
@@ -375,6 +457,52 @@ func TestApprovalAllowForSessionCachesBySessionKey(t *testing.T) {
 	}
 	if asked != 1 {
 		t.Fatalf("expected asked once due to approval cache, got %d", asked)
+	}
+}
+
+type semanticShellApprovalProvider struct {
+	calls int
+}
+
+func (p *semanticShellApprovalProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	p.calls++
+	switch p.calls {
+	case 1:
+		return eventStream(toolUseEvent(toolCall("tc-shell-1", "shell_run", `{"command":"go test ./internal/policy"}`)))
+	case 2:
+		return eventStream(toolUseEvent(toolCall("tc-shell-2", "shell_run", `{"command":"go test ./internal/tools"}`)))
+	default:
+		return eventStream(endTurnEvent("done"))
+	}
+}
+
+func TestApprovalAllowForSessionCachesSemanticShellFamily(t *testing.T) {
+	store := NewInMemoryStore()
+	prov := &semanticShellApprovalProvider{}
+	asked := 0
+	var keys [][]string
+	a := NewAgentWithRegistry(
+		prov,
+		store,
+		NewToolRegistry([]Tool{namedNoopTool("shell_run")}),
+		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
+			asked++
+			keys = append(keys, append([]string(nil), req.Keys...))
+			return ApprovalAllowForSession
+		}),
+	)
+
+	if _, err := a.Run(context.Background(), "s-semantic-shell-cache", "t1"); err != nil {
+		t.Fatalf("run1 failed: %v", err)
+	}
+	if _, err := a.Run(context.Background(), "s-semantic-shell-cache", "t2"); err != nil {
+		t.Fatalf("run2 failed: %v", err)
+	}
+	if asked != 1 {
+		t.Fatalf("expected asked once due to semantic shell approval cache, got %d", asked)
+	}
+	if !reflect.DeepEqual(keys, [][]string{{"shell:bounded:go:test"}}) {
+		t.Fatalf("approval keys = %v, want shell:bounded:go:test", keys)
 	}
 }
 

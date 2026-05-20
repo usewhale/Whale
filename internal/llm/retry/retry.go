@@ -29,6 +29,8 @@ type Info struct {
 	Delay       time.Duration
 	StatusCode  int
 	Reason      string
+	Stage       string
+	StreamReset bool
 }
 
 type HTTPError struct {

@@ -6,10 +6,12 @@ import "github.com/charmbracelet/lipgloss"
 // It centralizes the current color choices without introducing user-facing
 // theme configuration yet.
 type Palette struct {
+	Text       lipgloss.Color
 	Accent     lipgloss.Color
 	Assistant  lipgloss.Color
 	Border     lipgloss.Color
 	Muted      lipgloss.Color
+	Subtle     lipgloss.Color
 	Info       lipgloss.Color
 	InfoSoft   lipgloss.Color
 	Success    lipgloss.Color
@@ -17,6 +19,10 @@ type Palette struct {
 	Error      lipgloss.Color
 	Palette    lipgloss.Color
 	StatusIdle lipgloss.Color
+	Selection  lipgloss.Color
+
+	UserAccent     lipgloss.Color
+	UserBackground lipgloss.Color
 
 	Plan          lipgloss.Color
 	Tool          lipgloss.Color
@@ -28,24 +34,54 @@ type Palette struct {
 }
 
 var Default = Palette{
-	Accent:        lipgloss.Color("63"),
-	Assistant:     lipgloss.Color("39"),
-	Border:        lipgloss.Color("240"),
-	Muted:         lipgloss.Color("245"),
-	Info:          lipgloss.Color("111"),
-	InfoSoft:      lipgloss.Color("86"),
-	Success:       lipgloss.Color("42"),
-	Warn:          lipgloss.Color("220"),
-	Error:         lipgloss.Color("203"),
-	Palette:       lipgloss.Color("212"),
-	StatusIdle:    lipgloss.Color("86"),
-	Plan:          lipgloss.Color("45"),
-	Tool:          lipgloss.Color("220"),
-	Result:        lipgloss.Color("81"),
-	ResultDenied:  lipgloss.Color("214"),
-	ResultTimeout: lipgloss.Color("215"),
-	ResultError:   lipgloss.Color("197"),
-	ResultRunning: lipgloss.Color("117"),
+	Text:           lipgloss.Color(""),
+	Accent:         lipgloss.Color("63"),
+	Assistant:      lipgloss.Color("39"),
+	Border:         lipgloss.Color("240"),
+	Muted:          lipgloss.Color("245"),
+	Subtle:         lipgloss.Color("240"),
+	Info:           lipgloss.Color("111"),
+	InfoSoft:       lipgloss.Color("86"),
+	Success:        lipgloss.Color("78"),
+	Warn:           lipgloss.Color("220"),
+	Error:          lipgloss.Color("203"),
+	Palette:        lipgloss.Color("212"),
+	StatusIdle:     lipgloss.Color("86"),
+	Selection:      lipgloss.Color("238"),
+	UserAccent:     lipgloss.Color("63"),
+	UserBackground: lipgloss.Color("236"),
+	Plan:           lipgloss.Color("45"),
+	Tool:           lipgloss.Color("220"),
+	Result:         lipgloss.Color("81"),
+	ResultDenied:   lipgloss.Color("214"),
+	ResultTimeout:  lipgloss.Color("215"),
+	ResultError:    lipgloss.Color("197"),
+	ResultRunning:  lipgloss.Color("117"),
+}
+
+func UserPromptStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Background(Default.UserBackground)
+}
+
+func UserPromptGlyphStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(Default.UserAccent).Bold(true)
+}
+
+func MutedStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(Default.Muted)
+}
+
+func StatusStyle(kind string) lipgloss.Style {
+	switch kind {
+	case "success":
+		return lipgloss.NewStyle().Foreground(Default.Success)
+	case "warning", "warn":
+		return lipgloss.NewStyle().Foreground(Default.Warn)
+	case "error":
+		return lipgloss.NewStyle().Foreground(Default.Error)
+	default:
+		return MutedStyle()
+	}
 }
 
 func RoleBorder(role string) lipgloss.Color {
@@ -58,6 +94,8 @@ func RoleBorder(role string) lipgloss.Color {
 		return Default.Border
 	case "notice", "info", "result_canceled":
 		return Default.Muted
+	case "status":
+		return Default.Info
 	case "plan":
 		return Default.Plan
 	case "tool":

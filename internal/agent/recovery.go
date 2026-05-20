@@ -101,7 +101,7 @@ func classifyToolFailure(res core.ToolResult, dispatchErr error) FailureClass {
 			return FailureClassParseFailed
 		case "not_found", "read_failed", "permission_denied":
 			return ""
-		case "policy_denied":
+		case "policy_denied", "read_only_turn_denied":
 			return FailureClassPolicyDenied
 		case "approval_denied":
 			return FailureClassApprovalDenied

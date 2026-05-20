@@ -1,11 +1,11 @@
 # Whale
 
 <p align="center">
-  <img src="docs/logo.svg" alt="Whale — 面向 DeepSeek 的终端 AI 编程 Agent" width="640">
+  <img src="docs/logo.svg" alt="Whale — DeepSeek-native coding agent for the terminal" width="640">
 </p>
 
 <p align="center">
-  <strong>简体中文</strong> · <a href="./README.en.md">English</a>
+  <a href="./README.zh.md">简体中文</a> · <strong>English</strong>
 </p>
 
 <p align="center">
@@ -16,41 +16,47 @@
 </p>
 
 <p align="center">
-  <strong>Whale 是一个非官方的 DeepSeek CLI / DeepSeek 编程 Agent。</strong><br>
-  运行在终端里，支持读代码、改代码、运行命令、MCP 和 Skills。
+  <strong>Whale is an unofficial DeepSeek CLI / DeepSeek coding agent for the terminal.</strong><br>
+  It can read code, edit files, run commands, and extend the agent with MCP and Skills.
 </p>
 
 <p align="center">
   <strong>90% live prefix-cache hit</strong> · <strong>~30x cheaper per task vs Claude Code</strong> · terminal-first · open source
 </p>
 
-<p align="center"><a href="./ROADMAP.md">📋 开发路线图 · 查看当前方向和可认领任务</a></p>
+<p align="center"><a href="./ROADMAP.md">📋 Roadmap · View current direction and available tasks</a></p>
 
 ---
 
-## 快速开始
+## Quick Start
 
-使用脚本安装：
+Install with the script:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/usewhale/DeepSeek-Code-Whale/main/scripts/install.sh | sh
 ```
 
-使用 Homebrew 安装：
+Install with Homebrew:
 
 ```bash
 brew install usewhale/tap/whale
 ```
 
-Windows:
+**Windows PowerShell:**
 
 ```powershell
 irm https://raw.githubusercontent.com/usewhale/DeepSeek-Code-Whale/main/scripts/install.ps1 | iex
 ```
 
-安装脚本会优先按系统架构选择 Windows x64 或 ARM64 包，并把 `whale.exe` 加入当前用户的 `PATH`。如果旧版本没有 ARM64 包，会回退到 x64 emulation。也可以从 [GitHub Releases](https://github.com/usewhale/DeepSeek-Code-Whale/releases) 手动下载对应的 Windows zip。
+**Windows CMD (Command Prompt):**
 
-首次运行：
+```cmd
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/usewhale/DeepSeek-Code-Whale/main/scripts/install.ps1 | iex"
+```
+
+The installer prefers the Windows x64 or ARM64 package for your system and adds `whale.exe` to the current user's `PATH`. If an older release does not include an ARM64 package, it falls back to x64 emulation. You can also download the matching Windows zip manually from [GitHub Releases](https://github.com/usewhale/DeepSeek-Code-Whale/releases).
+
+First run:
 
 ```bash
 whale setup
@@ -58,152 +64,176 @@ whale doctor
 whale
 ```
 
-升级：
+Upgrade:
 
 ```bash
 brew upgrade usewhale/tap/whale
-# 或重新运行安装脚本
+# or rerun the install script
 ```
 
-Whale 当前使用 DeepSeek API。运行前请先在 [DeepSeek Platform](https://platform.deepseek.com/) 创建 API key。API 细节见 [DeepSeek API docs](https://api-docs.deepseek.com/)。
+Whale currently uses the DeepSeek API. Before running Whale, create an API key in the [DeepSeek Platform](https://platform.deepseek.com/). See the [DeepSeek API docs](https://api-docs.deepseek.com/) for API details.
 
-> **平台支持：** Whale 当前支持 **macOS**、**Linux** 和 **Windows**。
+> **Platform support:** Whale currently supports **macOS**, **Linux**, and **Windows**.
 
 <p align="center">
-  <img src="docs/screenshot-02.png" alt="Whale TUI 截图" width="860">
+  <img src="docs/screenshot-01.png" alt="Whale TUI screenshot" width="860">
 </p>
 
-也可以直接运行一次性任务：
+You can also run a one-shot prompt:
 
 ```bash
-whale exec "解释这个仓库是做什么的"
-printf '总结当前目录\n' | whale exec
+whale exec "Explain what this repository does"
+printf 'Summarize the current directory\n' | whale exec
 ```
 
 ---
 
-## 和其他工具有什么区别
+## How It Compares
 
 |                          | Whale | Claude Code | Codex CLI | Cursor | Aider |
 |--------------------------|-------|-------------|-----------|--------|-------|
-| 主要形态                 | 终端 TUI/CLI | 终端 Agent | 终端 Agent | IDE | CLI |
-| 默认后端                 | DeepSeek | Anthropic | OpenAI | 多模型 | 多模型 |
-| DeepSeek 优化            | 是 | 否 | 否 | 否 | 有限 |
-| Prefix-cache 友好        | 是 | n/a | n/a | 取决于模型 | 有限 |
-| 本地读写代码             | 是 | 是 | 是 | 是 | 是 |
-| 运行 shell / test        | 是 | 是 | 是 | 部分 | 是 |
-| `/ask` 只读模式          | 是 | 部分 | 部分 | n/a | 部分 |
-| `/plan` 规划模式         | 是 | 是 | 是 | n/a | 部分 |
-| MCP                      | 是 | 是 | 取决于版本 | 部分 | 部分 |
-| Skills / 工作流复用      | 是 | 是 | 是 | 部分 | 有限 |
-| 开源                     | 是 | 否 | 是 | 否 | 是 |
+| Primary interface        | Terminal TUI/CLI | Terminal agent | Terminal agent | IDE | CLI |
+| Default backend          | DeepSeek | Anthropic | OpenAI | Multi-model | Multi-model |
+| DeepSeek optimized       | yes | no | no | no | limited |
+| Prefix-cache friendly    | yes | n/a | n/a | model-dependent | limited |
+| Local code read/write    | yes | yes | yes | yes | yes |
+| Shell / test execution   | yes | yes | yes | partial | yes |
+| `/ask` read-only mode    | yes | partial | partial | n/a | partial |
+| `/plan` planning mode    | yes | yes | yes | n/a | partial |
+| MCP                      | yes | yes | version-dependent | partial | partial |
+| Skills / reusable workflows | yes | yes | yes | partial | limited |
+| Open source              | yes | no | yes | no | yes |
 
-Whale 的重点不是“支持最多模型”，而是把 DeepSeek API 变成一个更稳定、便宜、适合长时间打开的本地编程 Agent。
+Whale is not trying to support every model. Its focus is turning the DeepSeek API into a stable, low-cost local coding agent that can stay open for long development sessions.
 
 <details>
-<summary><strong>为什么 DeepSeek-only？</strong></summary>
+<summary><strong>Why DeepSeek-only?</strong></summary>
 
-DeepSeek 的低价只是第一层优势。真正适合做长会话编程 Agent 的关键，是 prefix cache。
+DeepSeek's low token price is only part of the story. The real advantage for long-running coding agents is prefix caching.
 
-DeepSeek 的 prefix cache 对字节稳定很敏感。Whale 的工具循环围绕这个特点设计：尽量保持追加式 turn、稳定的上下文顺序和可恢复的会话记录，让长任务能持续吃到缓存收益。
+DeepSeek's prefix cache is sensitive to byte stability. Whale's loop is designed around that constraint: append-only turns, stable context ordering, and recoverable session records help long tasks keep benefiting from cached prefixes.
 
-这也是 Whale 不急着做通用 provider 抽象的原因。Claude、OpenAI、DeepSeek 的缓存机制、tool-call 形态和 reasoning 行为并不一样。强行套一层通用接口，通常会牺牲 DeepSeek 最有价值的部分。
+That is why Whale is not rushing toward a generic provider abstraction. Claude, OpenAI, and DeepSeek differ in cache mechanics, tool-call behavior, and reasoning controls. A generic wrapper usually hides the DeepSeek-specific parts that matter most.
 
-Whale 针对 DeepSeek 做了这些适配：
+Whale includes DeepSeek-specific handling for:
 
-| 通用 Agent 常见假设 | DeepSeek 实际会发生 | Whale 的处理 |
-|---------------------|---------------------|--------------|
-| tool-call JSON 总是稳定 | payload 可能 malformed、被转义或混进 reasoning | schema-guided repair / scavenge 路径 |
-| 深层 tool schema 能稳定保留 | 部分深层嵌套参数可能丢失 | 工具参数尽量扁平化 |
-| 失败工具需要统一 replan | 有些失败应该原样反馈给模型 | 更细的失败分类和 recovery 策略 |
-| 用户取消就是普通工具失败 | 取消后不应该继续恢复或补计划 | 中断路径单独处理 |
-| reasoning 深度只靠 prompt | DeepSeek 暴露 `reasoning_effort` | runtime 里保留 effort 控制 |
+| Generic agent assumption | What DeepSeek can do | Whale's handling |
+|--------------------------|----------------------|------------------|
+| Tool-call JSON is stable | Payloads can be malformed, escaped, or mixed into reasoning | schema-guided repair / scavenge paths |
+| Deep tool schemas survive intact | Some nested parameters may be dropped | flatter tool parameters |
+| Failed tools should always trigger replan | Some failures should pass through to the model | finer failure classification and recovery |
+| User cancellation is just another tool failure | Cancellation should not continue recovery or replanning | dedicated interrupt path |
+| Reasoning depth is prompt-only | DeepSeek exposes `reasoning_effort` | runtime effort control |
 
-Whale 会先按 schema 校验工具参数，再只在失败路径上修复常见可恢复形状错误，比如 optional 字段传 `null`、数组被字符串化、数组字段传裸字符串、路径被模型写成 Markdown 链接，以及 `read_file` 只给 offset/limit 的情况。修复和无效输入统计可以在 `/stats` 里查看。
+Whale validates tool inputs against the schema first, then repairs common recoverable shape errors only on failing paths: `null` optional fields, stringified arrays, bare strings for array fields, markdown-autolink paths, and `read_file` calls that provide only offset or limit. Repair and invalid-input counts are visible in `/stats`.
 
-Whale 的目标是让 DeepSeek 的价格优势、缓存优势和编码能力真正落到终端工作流里。
+Whale's goal is to make DeepSeek's pricing, cache behavior, and coding capability usable in a real terminal workflow.
 
 </details>
 
 ---
 
-## Whale 能做什么
+## What Whale Can Do
 
-- **理解代码库**：读取文件、搜索代码、总结项目结构和关键模块。
-- **修改代码**：生成 patch、编辑文件、补测试、修 bug、重构局部模块。
-- **运行命令**：执行 shell 命令、测试、构建、诊断脚本，并把结果带回对话。
-- **交互式工作流**：在本地 TUI 里连续对话，支持会话保存和 `whale resume` 恢复。
-- **只读提问**：用 `/ask` 进入只读问答模式，适合先理解代码，不让 Agent 修改文件。
-- **先规划再执行**：用 `/plan` 先产出计划，再决定是否让 Agent 实施。
-- **扩展工具能力**：通过 MCP 接入外部工具，通过 Skills 复用固定工作流。
-- **无头执行**：用 `whale exec` 在脚本、CI 或一次性任务里运行单条 prompt。
-- **1M context window**：DeepSeek V4 模型自动启用 1M token 上下文，无需手动配置。
+- **Understand codebases**: read files, search code, and summarize project structure.
+- **Modify code**: generate patches, edit files, add tests, fix bugs, and handle local refactors.
+- **Run commands**: execute shell commands, tests, builds, and diagnostic scripts, then bring results back into the conversation.
+- **Work interactively**: use the local TUI, persist sessions, and resume with `whale resume`.
+- **Ask read-only questions**: use `/ask` when you want analysis without file edits.
+- **Plan before execution**: use `/plan` to review a plan before letting the agent implement it.
+- **Extend tools**: connect external tools with MCP and reuse workflows with Skills.
+- **Run headlessly**: use `whale exec` from scripts, CI, or one-shot tasks.
+- **1M context window**: DeepSeek V4 models automatically use 1M token context with no manual config.
 
-## 常用命令
+## Common Commands
 
-| 命令 | 作用 |
-|------|------|
-| `whale` | 启动交互式 TUI |
-| `whale setup` | 保存 DeepSeek API key |
-| `whale doctor` | 运行健康检查 |
-| `whale exec "prompt"` | 非交互运行单条 prompt |
-| `whale --dangerously-skip-permissions` | 本次运行跳过工具审批提示，适合外部 sandbox 或完全可信仓库 |
-| `whale migrate-config` | 迁移 Whale v0.1.8 及以前的旧配置到 `config.toml` |
-| `whale resume` | 打开会话选择器 |
-| `whale resume --last` | 直接恢复最近会话 |
-| `whale resume <id>` | 恢复指定会话 |
-| `/model` | 切换模型、reasoning effort 和 thinking |
-| `/permissions` | 调整工具审批模式 |
-| `/focus` | 切换专注视图，隐藏 thinking 和工具细节 |
-| `/ask [prompt]` | 只读提问模式 |
-| `/plan [prompt]` | 先规划，再决定是否执行 |
-| `/status` | 查看当前 session、模式、模型和配置状态 |
-| `/compact` | 压缩当前会话上下文 |
-| `/init` | 为当前仓库生成 AGENTS.md |
-| `/skills` | 打开 Skills 菜单，列出、插入或启用/禁用本地 skills |
-| `/plugins` | 打开内置插件管理器，启用或禁用官方插件 |
-| `/memory` | 查看或管理官方 memory 插件保存的长期记忆 |
-| `/mcp` | 查看 MCP server 状态 |
+| Command | Purpose |
+|---------|---------|
+| `whale` | Start the interactive TUI |
+| `whale setup` | Save a DeepSeek API key |
+| `whale doctor` | Run health checks |
+| `whale exec "prompt"` | Run one prompt non-interactively |
+| `whale --worktree [name]` | Create or reuse an isolated git worktree for this interactive session |
+| `whale exec --worktree [name] "prompt"` | Run one prompt inside an isolated git worktree |
+| `whale worktree list` | List Whale-managed worktrees |
+| `whale worktree remove <name> [--force]` | Remove a Whale-managed worktree |
+| `whale --dangerously-skip-permissions` | Skip tool approval prompts for this run; suitable for external sandboxes or fully trusted repos |
+| `whale migrate-config` | Migrate Whale v0.1.8-or-earlier config files to `config.toml` |
+| `whale resume` | Open the session picker |
+| `whale resume --last` | Resume the most recent session |
+| `whale resume <id>` | Resume a specific session |
+| `/model` | Change model, reasoning effort, and thinking |
+| `/permissions` | Adjust tool approval mode |
+| `/focus` | Toggle focused view to hide thinking and tool details |
+| `/ask [prompt]` | Read-only question mode |
+| `/plan [prompt]` | Plan first, then decide whether to execute |
+| `/review [target]` | Build a code-review prompt for local changes, branches, PRs, or commits |
+| `/status` | Show current session, mode, model, and config status |
+| `/worktree` | Show or manage the current worktree |
+| `/compact` | Compact the current conversation context |
+| `/init` | Generate AGENTS.md for the current repository |
+| `/skills` | Open the Skills menu to list, insert, or enable/disable local skills |
+| `/plugins` | Open the built-in plugin manager to enable or disable official plugins |
+| `/memory` | View or manage long-term memory saved by the official memory plugin |
+| `/mcp` | Show MCP server status |
 
 ## MCP
 
-Whale 支持从 MCP server 加载外部工具。
+Whale can load external tools from MCP servers.
 
-配置和支持范围见 [docs/mcp.md](docs/mcp.md)。
+See [docs/mcp.md](docs/mcp.md) for setup and supported features.
 
 ## Skills
 
-Whale 支持本地 Agent Skills，用于复用固定工作流、团队规范或特定工具用法。
+Whale supports local Agent Skills for reusable workflows, team conventions, or tool-specific guidance.
 
-在 TUI 里输入 `$` 可以搜索并插入 `$skill-name`。也可以运行 `/skills` 打开菜单：`List skills` 会进入同一个 `$` picker，选中后把 `$skill-name` 放进输入框；`Enable/Disable Skills` 会打开可搜索的开关面板。
+In the TUI, type `$` to search and insert a `$skill-name`. You can also run `/skills`: `List skills` opens the same `$` picker and inserts the selected skill into the composer, while `Enable/Disable Skills` opens a searchable toggle manager.
 
-更多说明见 [docs/skills.md](docs/skills.md)。
+See [docs/skills.md](docs/skills.md) for details.
 
 ## Plugins / Memory
 
-Whale 当前内置官方 memory 插件，用于保存和回忆长期记忆。使用 `/memory` 查看或管理记忆，使用 `/plugins` 打开插件管理器并按 Space 启用或禁用插件。
+Whale currently ships with the official memory plugin for saving and recalling long-term memory. Use `/memory` to view or manage memories, and `/plugins` to open the plugin manager and press Space to enable or disable plugins.
 
-更多说明见 [docs/plugins.md](docs/plugins.md)。
+See [docs/plugins.md](docs/plugins.md) for details.
 
-## 配置
+## Configuration
 
-Whale 使用 `~/.whale/config.toml` 作为全局配置，使用 `./.whale/config.toml` 作为项目配置。
+Whale uses `~/.whale/config.toml` for global settings, `./.whale/config.toml` for shared project settings, and `./.whale/config.local.toml` for private project-local overrides. Config loads in this order:
 
-只有在你使用过 Whale v0.1.8 及以前版本，并且本地存在 `preferences.json` 或 `settings.json` 时，才需要运行一次：
+```text
+defaults < global < project shared < project local < CLI flags/env
+```
+
+Run this only if you used Whale v0.1.8 or earlier and have local
+`preferences.json` or `settings.json` files:
 
 ```bash
 whale migrate-config
 ```
 
-如果你从 Whale v0.1.9 或更新版本开始使用，不需要运行这个命令。
+If you started with Whale v0.1.9 or newer, you do not need this command.
 
-更多说明见 [docs/configuration.md](docs/configuration.md)。
+See [docs/configuration.md](docs/configuration.md) for details.
 
-## 是否支持 Coding Plan？
+## Worktrees
 
-支持。Whale 可以通过自定义 API endpoint 连接兼容 `/chat/completions` 的 Coding Plan / 第三方 DeepSeek 接口。
+In a git repository, use `--worktree` to create or reuse an isolated worktree for the current run:
 
-以阿里云百炼为例，在 `~/.whale/config.toml` 中配置：
+```bash
+whale --worktree feature-x
+whale exec --worktree feature-x "implement and test this change"
+```
+
+Whale stores managed worktrees under `./.whale/worktrees/<name>` and uses branches named `worktree-<name>`. If you omit the name, Whale generates a `session-*` name. On creation, Whale best-effort copies only `./.whale/config.local.toml`; it does not copy session logs, API keys, private MCP config, or the whole `./.whale` directory.
+
+Use `whale worktree list`, `whale worktree status [name]`, and `whale worktree remove <name> [--force]` to manage these worktrees. Removal refuses dirty worktrees by default; `--force` discards changes. `whale resume <id>` uses session metadata to return to the matching worktree. If that worktree was deleted, Whale asks you to inspect with `whale worktree list`. This version does not yet include tmux, automatic exit cleanup, or stale sweeping.
+
+## Coding Plan Support
+
+Yes. Whale connects to Coding Plan / third-party DeepSeek-compatible endpoints via a custom API endpoint that supports `/chat/completions`.
+
+For Alibaba Cloud Bailian, configure `~/.whale/config.toml`:
 
 ```toml
 model = "deepseek-v4-flash"
@@ -214,43 +244,43 @@ thinking_enabled = true
 base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 ```
 
-然后配置对应的 API key：
+Then set the corresponding API key:
 
 ```bash
 DEEPSEEK_API_KEY=sk-... whale
 ```
 
-也可以运行：
+Or run:
 
 ```bash
 whale setup
 ```
 
-注意：
+Notes:
 
-- `base_url` 填接口根地址，不要包含 `/chat/completions`，Whale 会自动拼接。
-- `DEEPSEEK_BASE_URL` 环境变量会覆盖 `~/.whale/config.toml` 里的 `[api].base_url`。
-- Whale 当前仍然优先适配 DeepSeek 风格的模型、流式输出、thinking、tool calls 和 prefix-cache 工作流。第三方 endpoint 是否完整可用，取决于服务端兼容程度。
+- `base_url` should be the root endpoint — do not include `/chat/completions`. Whale appends it automatically.
+- The `DEEPSEEK_BASE_URL` environment variable overrides `[api].base_url` in `~/.whale/config.toml`.
+- Whale still prioritizes DeepSeek-native models, streaming, thinking, tool calls, and prefix-cache workflows. Full compatibility with third-party endpoints depends on server-side support.
 
 ---
 
 ## Non-goals
 
-- **不做通用多模型外壳。** Whale 当前就是 DeepSeek-only，优先把 DeepSeek 的缓存、工具调用和成本优势做好。
-- **不做 IDE。** Whale 是 terminal-first，和你的 shell、git、测试命令一起工作，不替代 Cursor 这类 IDE。
+- **Not a generic multi-model wrapper.** Whale is DeepSeek-only for now and prioritizes DeepSeek's cache, tool-call, and cost advantages.
+- **Not an IDE.** Whale is terminal-first and works with your shell, git, and test commands instead of replacing IDEs like Cursor.
 
-## 项目状态
+## Project Status
 
-Whale 仍在快速迭代中，建议先用于个人项目、实验仓库或可回滚的开发流程。功能和交互可能会继续变化。
+Whale is moving quickly. It is best used first on personal projects, experimental repositories, or workflows where changes can be reviewed and rolled back.
 
-> **免责声明：** 本项目与 DeepSeek Inc. 无关，系独立开源社区项目。
+> **Disclaimer:** This project is not affiliated with DeepSeek Inc. It is an independent open-source community project.
 
-## 参与贡献
+## Contributing
 
-关于克隆、开发、测试、issues 和 pull requests，请查看 [CONTRIBUTING.md](CONTRIBUTING.md)。
+See [CONTRIBUTING.md](CONTRIBUTING.md) for cloning, local development, testing, issues, and pull requests.
 
-当前开发方向和可认领任务见 [ROADMAP.md](ROADMAP.md)。
+Current development direction and available tasks are listed in [ROADMAP.md](ROADMAP.md).
 
-## 安全
+## Security
 
-如果是安全相关问题，请查看 [SECURITY.md](SECURITY.md)。
+For security-sensitive issues, see [SECURITY.md](SECURITY.md).

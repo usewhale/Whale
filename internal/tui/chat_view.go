@@ -22,6 +22,14 @@ func (m *model) appendNotice(text string) {
 	m.refreshLiveViewportContent()
 }
 
+func (m *model) appendStatus(text string) {
+	if m.assembler == nil {
+		m.assembler = tuirender.NewAssembler()
+	}
+	m.assembler.AddStatus(text)
+	m.refreshLiveViewportContent()
+}
+
 func (m *model) setEphemeralInfo(text string) {
 	t := strings.TrimSpace(strings.TrimRight(text, "\n"))
 	if t == "" {
@@ -146,9 +154,9 @@ func (m *model) markNoFinalAnswerIfNeeded() bool {
 		return false
 	}
 	if m.chatMode == "plan" {
-		m.appendNotice("No plan was produced. Ask the model to propose the plan again.")
+		m.appendStatus("The model returned reasoning only and did not produce a visible plan. Ask it to propose the plan again.")
 	} else {
-		m.appendNotice("No final answer was produced. Ask the model to answer directly or retry the last step.")
+		m.appendStatus("The model returned reasoning only and did not produce a visible answer. Ask it to answer directly or retry the last step.")
 	}
 	m.addLog(logEntry{
 		Kind:    "no_final_answer",

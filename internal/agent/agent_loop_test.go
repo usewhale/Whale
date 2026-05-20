@@ -3,6 +3,9 @@ package agent
 import (
 	"context"
 	"testing"
+
+	"github.com/usewhale/whale/internal/llm"
+	llmretry "github.com/usewhale/whale/internal/llm/retry"
 )
 
 type mockProvider struct {
@@ -73,6 +76,57 @@ func TestStreamFallthroughPersistsPartialAssistant(t *testing.T) {
 	}
 	if asst.Text != "partial-answer" {
 		t.Fatalf("expected persisted partial text %q, got %q", "partial-answer", asst.Text)
+	}
+}
+
+type streamRetryProvider struct{}
+
+func (p *streamRetryProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	return eventStream(
+		ProviderEvent{Type: EventReasoningDelta, ReasoningDelta: "old-thought"},
+		ProviderEvent{Type: EventContentDelta, Content: "old-answer"},
+		ProviderEvent{Type: EventToolUseStart, ToolCall: &ToolCall{ID: "tc-old", Name: "echo"}},
+		ProviderEvent{Type: llm.EventRetryScheduled, Retry: &llmretry.Info{Attempt: 1, MaxAttempts: 2, Reason: "API stream disconnected", Stage: "stream", StreamReset: true}},
+		ProviderEvent{Type: EventReasoningDelta, ReasoningDelta: "new-thought"},
+		ProviderEvent{Type: EventContentDelta, Content: "new-answer"},
+		ProviderEvent{Type: EventComplete, Response: &ProviderResponse{FinishReason: FinishReasonEndTurn, Content: "new-answer", Reasoning: "new-thought"}},
+	)
+}
+
+func TestStreamRetryResetClearsPartialAssistant(t *testing.T) {
+	store := NewInMemoryStore()
+	a := NewAgent(&streamRetryProvider{}, store, []Tool{echoTool{}})
+
+	events, err := a.RunStream(context.Background(), "s-retry-reset", "go")
+	if err != nil {
+		t.Fatalf("run stream failed: %v", err)
+	}
+	var sawRetry bool
+	for ev := range events {
+		if ev.Type == AgentEventTypeProviderRetryScheduled {
+			sawRetry = true
+			if ev.ProviderRetry == nil || !ev.ProviderRetry.StreamReset {
+				t.Fatalf("provider retry should request stream reset: %+v", ev.ProviderRetry)
+			}
+		}
+		if ev.Type == AgentEventTypeError {
+			t.Fatalf("unexpected error: %v", ev.Err)
+		}
+	}
+	if !sawRetry {
+		t.Fatal("missing provider retry event")
+	}
+
+	all, err := store.List(context.Background(), "s-retry-reset")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected user+assistant, got %d: %+v", len(all), all)
+	}
+	asst := all[1]
+	if asst.Text != "new-answer" || asst.Reasoning != "new-thought" || len(asst.ToolCalls) != 0 {
+		t.Fatalf("assistant retained stale stream state: %+v", asst)
 	}
 }
 

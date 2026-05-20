@@ -31,10 +31,19 @@ Do not commit these files.
 Whale reads user-editable configuration from:
 
 - global: `~/.whale/config.toml`
-- project: `./.whale/config.toml`
+- project shared: `./.whale/config.toml`
+- project local: `./.whale/config.local.toml`
 
-Project config overrides global config. The `--model` CLI flag can override
-the configured model for one run.
+Configuration is merged in this order:
+
+```text
+defaults < global < project shared < project local < CLI flags/env
+```
+
+Use `./.whale/config.toml` for settings that are safe to share with the repo.
+Use `./.whale/config.local.toml` for personal overrides in this project, and do
+not commit it. The `--model` CLI flag can override the configured model for one
+run.
 
 Whale also supports one-time CLI overrides for reasoning settings:
 
@@ -45,8 +54,9 @@ whale resume <session-id> --thinking=true --effort=high
 ```
 
 `--thinking`, `--effort`, and `--dangerously-skip-permissions` are runtime-only
-overrides. Whale applies them after merging default, global, and project config
-for the current process, and it does not write them back to `config.toml`.
+overrides. Whale applies them after merging default, global, project shared, and
+project local config for the current process, and it does not write them back to
+config files.
 
 `--dangerously-skip-permissions` sets the current process to `permissions.mode =
 "never"`. It skips tool approval prompts for writes, patches, shell commands,
@@ -71,6 +81,7 @@ base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 [retry]
 max_attempts = 4
+stream_max_attempts = 6
 max_delay = "60s"
 
 [budget]
@@ -126,18 +137,22 @@ If you started with Whale v0.1.9 or newer, you do not need this command.
   long-term defaults when `--effort` or `--thinking` are not passed.
 - `DEEPSEEK_BASE_URL` overrides `[api].base_url`; if neither is set, Whale uses
   `https://api.deepseek.com`.
-- `[retry]` controls transient API retries before streaming starts. Whale
-  retries 429, 500, 502, 503, 504, and network errors with an internal 1s
-  exponential backoff, 10% jitter, and `Retry-After` support. `max_attempts`
-  counts the initial request.
+- `[retry]` controls transient API retries. Whale retries 429, 500, 502, 503,
+  504, and network errors with an internal 1s exponential backoff, 10% jitter,
+  and `Retry-After` support. `max_attempts` counts request attempts before
+  streaming starts; `stream_max_attempts` counts full stream attempts when the
+  provider disconnects after streaming has started.
 - `[ui].view_mode = "focus"` starts the TUI in focus view. `/focus` toggles this
   global preference and hides thinking/tool detail while keeping prompts, tool
   summaries, and final responses visible.
-- Skill enable/disable choices are stored in project config under
-  `[skills].disabled`.
-- Official plugin enable/disable choices are stored under `[plugins].disabled`.
-  The current built-in plugin ID is `"memory"`. Use `/plugins` in the TUI to
-  inspect installed plugins and press Space to enable or disable them.
+- Skill enable/disable choices are stored in project local config under
+  `[skills].enabled` and `[skills].disabled`. A project local enabled entry
+  overrides a shared project disabled entry.
+- Official plugin enable/disable choices are stored in project local config
+  under `[plugins].enabled` and `[plugins].disabled`. A project local enabled
+  entry overrides a shared project disabled entry. The current built-in plugin
+  ID is `"memory"`. Use `/plugins` in the TUI to inspect installed plugins and
+  press Space to enable or disable them.
 
 ## Shell behavior
 
@@ -153,6 +168,49 @@ Plan mode, and read-only subagents still block commands that can write caches or
 artifacts. Other shell commands ask for approval unless they match
 `[permissions].allow_shell_prefixes`. Prefix matching is token-boundary aware:
 `git status --short` matches `git status`, but `git statusfoo` does not.
+
+## Worktrees
+
+`--worktree` creates or reuses an isolated git worktree before Whale loads
+project config, hooks, skills, MCP state, or tools:
+
+```bash
+whale --worktree feature-x
+whale exec --worktree feature-x "run this task in isolation"
+whale --worktree
+```
+
+Worktrees live under `./.whale/worktrees/<name>`, with branches named
+`worktree-<name>`. Names may contain `/`; Whale stores those paths and branches
+with `/` flattened to `+`. If no name is passed, Whale generates
+`session-YYYYMMDD-HHMMSS`.
+
+When Whale creates a worktree, it best-effort copies only
+`./.whale/config.local.toml` into the new checkout. It does not copy
+`settings.json`, credentials, MCP private config, session logs, usage logs, or
+the whole `./.whale` directory.
+
+Worktree startup is supported for `whale --worktree` and
+`whale exec --worktree`. `doctor`, `setup`, and `migrate-config` reject
+`--worktree`.
+
+Manage worktrees with:
+
+```bash
+whale worktree list
+whale worktree status feature-x
+whale worktree remove feature-x
+whale worktree remove feature-x --force
+```
+
+Removal refuses dirty worktrees by default; `--force` discards changes. `whale
+resume <session-id>` and `whale resume --last` automatically enter the
+worktree recorded in session metadata before loading project config. If the
+recorded worktree no longer exists, Whale reports the missing path and suggests
+`whale worktree list`.
+
+The current worktree implementation still does not include tmux, automatic
+exit-time cleanup prompts, stale sweeps, or sparse checkout.
 
 On macOS and Linux, `shell_run` runs commands through `/bin/sh`. On Windows,
 Whale first tries `pwsh`; if it is not available, it falls back to `ComSpec`

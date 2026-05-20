@@ -34,7 +34,7 @@ func (c SubmitClassification) LocalNoTurn() bool {
 }
 
 func (c SubmitClassification) BusyImmediate() bool {
-	return c.Class == SubmitLocalReadOnly || c.Class == SubmitExit || c.Line == "/focus"
+	return c.Class == SubmitLocalReadOnly || c.Class == SubmitExit || c.Line == "/focus" || strings.HasPrefix(c.Line, "/btw ")
 }
 
 func (c SubmitClassification) SubmitBarrier() bool {
@@ -62,9 +62,19 @@ func ClassifySubmit(line, help string, localCommands ...string) SubmitClassifica
 
 func classifySlashFields(head string, fields []string, line string) SubmitClass {
 	switch head {
-	case "/status", "/mcp":
+	case "/status", "/mcp", "/feedback", "/help":
 		if len(fields) == 1 {
 			return SubmitLocalReadOnly
+		}
+		return SubmitUsageError
+	case "/worktree":
+		if len(fields) == 1 || (len(fields) == 2 && fields[1] == "list") || (len(fields) == 2 && fields[1] == "status") || (len(fields) == 3 && fields[1] == "status") {
+			return SubmitLocalReadOnly
+		}
+		if len(fields) >= 3 && fields[1] == "remove" {
+			if len(fields) == 3 || (len(fields) == 4 && fields[3] == "--force") {
+				return SubmitLocalMutating
+			}
 		}
 		return SubmitUsageError
 	case "/memory":
@@ -85,6 +95,16 @@ func classifySlashFields(head string, fields []string, line string) SubmitClass 
 			return SubmitLocalUI
 		}
 		return SubmitUsageError
+	case "/review":
+		if len(fields) == 1 {
+			return SubmitLocalUI
+		}
+		return SubmitTurnStarting
+	case "/btw":
+		if strings.TrimSpace(strings.TrimPrefix(line, "/btw")) == "" {
+			return SubmitUsageError
+		}
+		return SubmitLocalReadOnly
 	case "/focus":
 		if len(fields) == 1 {
 			return SubmitLocalUI
@@ -110,6 +130,11 @@ func classifySlashFields(head string, fields []string, line string) SubmitClass 
 		}
 		return SubmitTurnStarting
 	case "/new":
+		if len(fields) <= 2 {
+			return SubmitLocalMutating
+		}
+		return SubmitUsageError
+	case "/fork":
 		if len(fields) <= 2 {
 			return SubmitLocalMutating
 		}

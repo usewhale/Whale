@@ -49,6 +49,7 @@ func (m *model) submitPromptWithBinding(value string, binding *app.SkillBinding)
 	m.resetWindowsPasteFallbackInputState()
 	m.slash.matches = nil
 	m.slash.selected = 0
+	m.slash.argumentHint = ""
 	m.startBusy()
 	m.status = "running"
 	m.dispatchIntent(service.Intent{Kind: service.IntentSubmit, Input: value, SkillBinding: binding})
@@ -125,6 +126,14 @@ func busySlashBlockedMessage(line string, stopping bool) string {
 
 func (m *model) submitLocalNoTurn(submit appcommands.SubmitClassification) {
 	cmd := submit.Line
+	if strings.TrimSpace(cmd) == "/help" {
+		m.openHelp()
+		return
+	}
+	if m.btwPanel.loading && isBtwCommand(cmd) {
+		m.status = "/btw is already answering"
+		return
+	}
 	m.clearEphemeralMessages()
 	m.recordPromptHistory(cmd)
 	m.resetHistoryNavigation()
@@ -133,6 +142,7 @@ func (m *model) submitLocalNoTurn(submit appcommands.SubmitClassification) {
 	m.resetWindowsPasteFallbackInputState()
 	m.slash.matches = nil
 	m.slash.selected = 0
+	m.slash.argumentHint = ""
 	m.localSubmitPending++
 	m.localSubmitCommands = append(m.localSubmitCommands, cmd)
 	if !m.busy || submit.SubmitBarrier() {
@@ -140,6 +150,11 @@ func (m *model) submitLocalNoTurn(submit appcommands.SubmitClassification) {
 	}
 	m.dispatchIntent(service.Intent{Kind: service.IntentSubmitLocal, Input: cmd})
 	m.refreshViewportContent()
+}
+
+func isBtwCommand(line string) bool {
+	fields := strings.Fields(strings.TrimSpace(line))
+	return len(fields) > 0 && fields[0] == "/btw"
 }
 
 func (m *model) enqueuePrompt(value string) bool {
@@ -154,6 +169,7 @@ func (m *model) enqueuePrompt(value string) bool {
 	m.resetHistoryNavigation()
 	m.slash.matches = nil
 	m.slash.selected = 0
+	m.slash.argumentHint = ""
 	m.status = fmt.Sprintf("queued (%d)", len(m.queuedPrompts))
 	m.refreshViewportContent()
 	return true

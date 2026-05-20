@@ -80,3 +80,10 @@ func (r *SessionRuntime) SaveMeta(sessionID string, st session.SessionMeta) erro
 	}
 	return session.SaveSessionMeta(r.sessionsDir, sessionID, st)
 }
+
+func (r *SessionRuntime) UpdateMeta(sessionID string, mutate func(*session.SessionMeta)) (session.SessionMeta, error) {
+	if !r.Enabled() {
+		return session.SessionMeta{}, nil
+	}
+	return session.UpdateSessionMeta(r.sessionsDir, sessionID, mutate)
+}

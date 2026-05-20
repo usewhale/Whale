@@ -5,6 +5,7 @@ import (
 
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/shell"
+	"github.com/usewhale/whale/internal/shellsafe"
 )
 
 func (b *Toolset) shellTools() []core.Tool {
@@ -59,7 +60,6 @@ func shellRunDescriptionFor(rt shell.RuntimeDescription) string {
 
 var shellReadOnlyAllowPrefixes = []string{
 	"ls", "pwd", "echo", "cat", "head", "tail", "wc", "file", "tree", "find", "grep", "rg",
-	"git status", "git diff", "git log", "git show", "git branch", "git remote", "git rev-parse", "git config --get",
 	"go version",
 	"rustc --version",
 	"python --version", "python3 --version", "node --version", "npm --version", "npx --version", "cargo --version", "deno --version", "bun --version",
@@ -84,13 +84,35 @@ func shellReadOnlyCheckWithRuntime(rt shell.RuntimeDescription, args map[string]
 	if cmd == "" {
 		return false
 	}
+	if parts, ok := shellsafe.SplitAndList(cmd); ok {
+		for _, part := range parts {
+			if !shellReadOnlyCheckWithRuntime(rt, map[string]any{"command": part}) {
+				return false
+			}
+		}
+		return true
+	}
+	if parts, ok := shellsafe.SplitPipeline(cmd); ok {
+		for _, part := range parts {
+			if !shellReadOnlyCheckWithRuntime(rt, map[string]any{"command": part}) {
+				return false
+			}
+		}
+		return true
+	}
 	argv, ok := parsePOSIXReadOnlyShellCommand(cmd)
 	if !ok || len(argv) == 0 {
 		return false
 	}
+	if argv[0] == "git" {
+		return shellsafe.GitCommandReadOnly(argv)
+	}
 	lowerArgv := lowerShellArgv(argv)
 	if shellReadOnlyCommandHasUnsafeArgs(lowerArgv) {
 		return false
+	}
+	if lowerArgv[0] == "sed" {
+		return sedPrintRangeReadOnly(argv)
 	}
 	for _, prefix := range shellReadOnlyAllowPrefixes {
 		if shellArgvHasPrefix(lowerArgv, prefix) {
@@ -109,12 +131,6 @@ func shellReadOnlyCommandHasUnsafeArgs(argv []string) bool {
 				return true
 			}
 			if strings.HasPrefix(field, "-fprint") {
-				return true
-			}
-		}
-	case shellArgvHasPrefix(argv, "git diff"), shellArgvHasPrefix(argv, "git show"), shellArgvHasPrefix(argv, "git log"):
-		for _, field := range argv {
-			if field == "--output" || strings.HasPrefix(field, "--output=") || field == "--ext-diff" || field == "--external-diff" || field == "--textconv" {
 				return true
 			}
 		}
@@ -214,4 +230,61 @@ func posixReadOnlyRejectedRune(r rune) bool {
 	default:
 		return false
 	}
+}
+
+func sedPrintRangeReadOnly(argv []string) bool {
+	if len(argv) < 3 || argv[0] != "sed" {
+		return false
+	}
+	i := 1
+	sawQuiet := false
+	for i < len(argv) {
+		switch argv[i] {
+		case "-n", "--quiet", "--silent":
+			sawQuiet = true
+			i++
+		case "--":
+			i++
+			goto script
+		default:
+			goto script
+		}
+	}
+
+script:
+	if !sawQuiet || i >= len(argv) || !sedRangePrintScript(argv[i]) {
+		return false
+	}
+	i++
+	for ; i < len(argv); i++ {
+		if strings.HasPrefix(argv[i], "-") {
+			return false
+		}
+	}
+	return true
+}
+
+func sedRangePrintScript(script string) bool {
+	if script == "" || !strings.HasSuffix(script, "p") {
+		return false
+	}
+	addr := strings.TrimSuffix(script, "p")
+	parts := strings.Split(addr, ",")
+	if len(parts) > 2 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "$" {
+			continue
+		}
+		if part == "" {
+			return false
+		}
+		for _, r := range part {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }

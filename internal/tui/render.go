@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/usewhale/whale/internal/app/service"
+	tuirender "github.com/usewhale/whale/internal/tui/render"
 	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
 
@@ -24,33 +25,62 @@ func (m model) renderBody(mainWidth, bodyHeight int) string {
 			BorderForeground(tuitheme.Default.Border).
 			Render(m.viewport.View())
 	}
-	header, headerHeight := m.chatHeaderForLayout(mainWidth, bodyHeight)
-	chatHeight := max(0, bodyHeight-headerHeight)
-	m.ensureViewportContentForSize(mainWidth, chatHeight)
-	if chatHeight <= 0 {
-		return lipgloss.NewStyle().Width(mainWidth).Render(header)
-	}
-	chat := lipgloss.NewStyle().Width(mainWidth).Render(m.chat.View())
-	if header == "" {
-		return chat
-	}
-	return lipgloss.JoinVertical(lipgloss.Left, header, chat)
+	m.ensureViewportContentForSize(mainWidth, bodyHeight)
+	return lipgloss.NewStyle().Width(mainWidth).Render(m.chat.View())
 }
 
 func (m model) View() string {
 	mainWidth, _ := m.layoutDims()
 	bottom := m.renderBottom(mainWidth)
-	bodyHeight := m.height - countVisibleLines(bottom)
+	bottomHeight := countVisibleLines(bottom)
+	bodyHeight := m.height - bottomHeight
 	if m.height <= 0 {
 		bodyHeight = 0
 	}
 	bodyHeight = max(0, bodyHeight)
+	if m.page == pageChat {
+		bodyHeight = m.chatBodyHeightForView(mainWidth, bodyHeight)
+	}
 	body := m.renderBody(mainWidth, bodyHeight)
-	body = padVisibleLines(body, bodyHeight, mainWidth)
+	if m.page != pageChat {
+		body = padVisibleLines(body, bodyHeight, mainWidth)
+	}
 	if body == "" {
 		return bottom
 	}
-	return body + "\n" + bottom
+	separator := "\n"
+	if m.chatViewNeedsBottomGap(body, bottom) {
+		separator = "\n\n"
+	}
+	return body + separator + bottom
+}
+
+func (m model) chatViewNeedsBottomGap(body, bottom string) bool {
+	if m.page != pageChat {
+		return false
+	}
+	if m.height > 0 && countVisibleLines(body)+countVisibleLines(bottom)+1 > m.height {
+		return false
+	}
+	liveLen := 0
+	if m.assembler != nil {
+		liveLen = len(m.assembler.Snapshot())
+	}
+	return m.startupHeaderMessage() != nil &&
+		len(m.transcript) == 0 &&
+		liveLen == 0 &&
+		len(m.ephemeralMessages) == 0
+}
+
+func (m model) chatBodyHeightForView(mainWidth, maxBodyHeight int) int {
+	if maxBodyHeight <= 0 {
+		return 0
+	}
+	lines := tuirender.ChatLines(m.chatViewportMessages(), max(20, mainWidth-2))
+	if len(lines) == 0 {
+		return 0
+	}
+	return min(len(lines), maxBodyHeight)
 }
 
 func (m model) viewportBodyHeight(mainWidth int) int {
@@ -60,40 +90,31 @@ func (m model) viewportBodyHeight(mainWidth int) int {
 	return max(0, m.height-countVisibleLines(m.renderBottom(mainWidth)))
 }
 
-func (m model) chatHeaderForLayout(mainWidth, bodyHeight int) (string, int) {
-	if bodyHeight <= 0 {
-		return "", 0
-	}
-	header := buildHeaderBanner(m.model, m.effort, m.thinking, m.cwd, m.version, max(20, mainWidth), bodyHeight)
-	return header, countVisibleLines(header)
-}
-
 func (m model) chatViewportBodyHeight(mainWidth, bodyHeight int) int {
-	if m.page != pageChat {
-		return bodyHeight
-	}
-	_, headerHeight := m.chatHeaderForLayout(mainWidth, bodyHeight)
-	return max(0, bodyHeight-headerHeight)
+	return max(0, bodyHeight)
 }
 
 func (m model) renderBottom(mainWidth int) string {
-	footerText := "model: " + m.model + "  effort: " + m.effort + "  thinking: " + m.thinking
+	footerText := footerField("model:", m.model, tuitheme.Default.InfoSoft) +
+		"  " + footerField("effort:", m.effort, tuitheme.Default.InfoSoft) +
+		"  " + footerField("thinking:", m.thinking, thinkingFooterColor(m.thinking))
 	if m.chatMode == "ask" || m.chatMode == "plan" {
-		footerText += "  mode: " + m.chatMode + " (Shift+Tab to switch)"
+		footerText += "  " + footerField("mode:", m.chatMode, tuitheme.Default.Plan) +
+			" " + footerHint("(Shift+Tab to switch)")
 	}
 	viewIndicator := ""
 	if m.focusEnabled() {
 		viewIndicator = "focus"
 	}
-	dirReserve := 0
-	if m.cwd != "" {
-		dirReserve = footerDirReserve(m.cwd)
-	}
 	viewReserve := footerViewIndicatorReserve(viewIndicator)
-	footerText = appendFooterHint(footerText, mainWidth, dirReserve+viewReserve)
+	branchReserve := footerBranchReserveForWidth(footerText, m.gitBranch, mainWidth, viewReserve)
 	if m.cwd != "" {
-		footerText = appendFooterDir(footerText, m.cwd, mainWidth, viewReserve)
+		footerText = appendFooterDir(footerText, m.cwd, mainWidth, branchReserve+viewReserve)
 	}
+	if m.gitBranch != "" {
+		footerText = appendFooterBranch(footerText, m.gitBranch, mainWidth, viewReserve)
+	}
+	footerText = appendFooterHint(footerText, mainWidth, viewReserve)
 	if viewIndicator != "" {
 		footerText = appendFooterViewIndicator(footerText, viewIndicator, mainWidth)
 	}
@@ -108,10 +129,13 @@ func (m model) bottomPartsBeforeInput(mainWidth int) []string {
 	if statusLine := m.renderBusyStatusLine(mainWidth); statusLine != "" {
 		bottomParts = append(bottomParts, statusLine)
 	}
-	if m.mode == modeChat && m.hasSlashSuggestions() {
+	if btw := m.renderBtwPanel(mainWidth); btw != "" {
+		bottomParts = append(bottomParts, btw)
+	}
+	if m.mode == modeChat && m.hasSlashPanel() {
 		bottomParts = append(bottomParts, m.renderSlashSuggestions())
 	}
-	if m.mode == modeChat && !m.hasSlashSuggestions() && m.hasSkillSuggestions() {
+	if m.mode == modeChat && !m.hasSlashPanel() && m.hasSkillSuggestions() {
 		bottomParts = append(bottomParts, m.renderSkillSuggestions())
 	}
 	if m.mode == modeApproval {
@@ -131,6 +155,15 @@ func (m model) bottomPartsBeforeInput(mainWidth int) []string {
 	}
 	if m.mode == modePluginsManager {
 		bottomParts = append(bottomParts, m.renderPluginsManager())
+	}
+	if m.mode == modeReviewMenu {
+		bottomParts = append(bottomParts, m.renderReviewMenu())
+	}
+	if m.mode == modeReviewBranchPicker || m.mode == modeReviewCommitPicker || m.mode == modeReviewPRPicker {
+		bottomParts = append(bottomParts, m.renderReviewTargetPicker())
+	}
+	if m.mode == modeHelp {
+		bottomParts = append(bottomParts, m.renderHelp())
 	}
 	if m.mode == modeSessionPicker {
 		rows := []string{"sessions (↑/↓ select, enter confirm, esc cancel):"}
@@ -210,13 +243,10 @@ func (m model) renderApprovalPrompt() string {
 		}
 	}
 	if detail := approvalDisplayBody(m.approval.toolName, m.approval.reason); detail != "" {
-		bodyParts = append(bodyParts, detail)
-	}
-	if scope := approvalSessionScope(m.approval.metadata); scope != "" {
-		bodyParts = append(bodyParts, "Allow for session = "+scope)
+		bodyParts = append(bodyParts, renderApprovalDetail(m.approval.toolName, detail))
 	}
 	approvalBody := body.Render(indentApprovalBody(strings.Join(bodyParts, "\n")))
-	if diff := renderApprovalDiffMetadata(m.approval.metadata, 80); diff != "" {
+	if diff := renderApprovalDiffMetadata(m.approval.metadata, approvalFileDiffPreviewMaxLines); diff != "" {
 		if isReadableApprovalDiff(diff) {
 			if approvalBody != "" {
 				approvalBody += "\n\n" + diff
@@ -230,10 +260,11 @@ func (m model) renderApprovalPrompt() string {
 		}
 	}
 
+	scope := approvalOptionScopeDescription(approvalSessionScope(m.approval.metadata))
 	opts := []string{
-		renderApprovalOption("Allow once", "a", m.approval.selected == 0, false),
-		renderApprovalOption("Allow for session", "s", m.approval.selected == 1, false),
-		renderApprovalOption("Deny", "d", m.approval.selected == 2, true),
+		renderApprovalOption("Allow once", "a", "", m.approval.selected == 0, false),
+		renderApprovalOption(approvalSessionOptionLabel(m.approval.metadata), "s", scope, m.approval.selected == 1, false),
+		renderApprovalOption("Deny", "d", "", m.approval.selected == 2, true),
 	}
 
 	return lipgloss.JoinVertical(
@@ -244,7 +275,7 @@ func (m model) renderApprovalPrompt() string {
 		"",
 		"  "+strings.Join(opts, "   "),
 		"",
-		hint.Render("Enter confirm · Esc deny · ←/→/tab switch"),
+		hint.Render("Enter confirm · Esc cancel · ←/→/tab switch"),
 	)
 }
 
@@ -275,6 +306,22 @@ func approvalSessionScope(metadata map[string]any) string {
 	return strings.TrimSpace(asString(metadata["approval_session_scope"]))
 }
 
+func approvalSessionOptionLabel(metadata map[string]any) string {
+	if asBool(metadata["shell_approval_family"]) {
+		return "Allow similar commands"
+	}
+	return "Allow session"
+}
+
+func approvalOptionScopeDescription(scope string) string {
+	switch strings.TrimSpace(scope) {
+	case "this shell command":
+		return "same command"
+	default:
+		return ""
+	}
+}
+
 func approvalToolDisplayName(toolName string) string {
 	switch toolName {
 	case "shell_run":
@@ -292,6 +339,17 @@ func approvalDisplayBody(toolName, summary string) string {
 		}
 	}
 	return strings.TrimSpace(summary)
+}
+
+func renderApprovalDetail(toolName, detail string) string {
+	detail = strings.TrimSpace(detail)
+	if detail == "" {
+		return ""
+	}
+	if toolName == "shell_run" {
+		return "$ " + tuirender.RenderCommandLike(detail)
+	}
+	return detail
 }
 
 func renderApprovalMemoryMetadata(metadata map[string]any) string {
@@ -354,7 +412,7 @@ func indentApprovalBody(body string) string {
 	return strings.Join(lines, "\n")
 }
 
-func renderApprovalOption(label, shortcut string, selected, destructive bool) string {
+func renderApprovalOption(label, shortcut, description string, selected, destructive bool) string {
 	prefix := mutedSelectionPrefix(selected)
 	key := lipgloss.NewStyle().Foreground(tuitheme.Default.Muted).Render("(" + shortcut + ")")
 	style := lipgloss.NewStyle().Foreground(tuitheme.Default.Muted)
@@ -365,7 +423,11 @@ func renderApprovalOption(label, shortcut string, selected, destructive bool) st
 		}
 		style = lipgloss.NewStyle().Foreground(color).Bold(true)
 	}
-	return prefix + style.Render(label) + " " + key
+	out := prefix + style.Render(label) + " " + key
+	if description = strings.TrimSpace(description); description != "" {
+		out += " " + lipgloss.NewStyle().Foreground(tuitheme.Default.Muted).Render(description)
+	}
+	return out
 }
 
 func mutedSelectionPrefix(selected bool) string {
@@ -411,7 +473,19 @@ func appendFooterDir(base, cwd string, width, reserve int) string {
 	if available <= 0 {
 		return base
 	}
-	return base + segment + fitTail(cwd, available)
+	return base + segment + footerPath(fitTail(cwd, available))
+}
+
+func appendFooterBranch(base, branch string, width, reserve int) string {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return base
+	}
+	segment := "  " + branch
+	if lipgloss.Width(base)+lipgloss.Width(segment)+reserve > width {
+		return base
+	}
+	return base + segment
 }
 
 func appendFooterViewIndicator(base, indicator string, width int) string {
@@ -419,21 +493,72 @@ func appendFooterViewIndicator(base, indicator string, width int) string {
 	if indicator == "" {
 		return base
 	}
-	segment := "  " + indicator
+	segment := "  " + footerFocus(indicator)
 	if lipgloss.Width(base)+lipgloss.Width(segment) > width {
 		return base
 	}
 	return base + segment
 }
 
+func footerBranchCanRenderWithDir(base, cwd, branch string, width, reserve int) bool {
+	if strings.TrimSpace(branch) == "" {
+		return false
+	}
+	required := lipgloss.Width(base) + footerBranchReserve(branch) + reserve
+	if cwd != "" {
+		required += footerDirReserve(cwd)
+	}
+	return required <= width
+}
+
+func footerBranchReserveForWidth(base, branch string, width, reserve int) int {
+	branchReserve := footerBranchReserve(branch)
+	if branchReserve == 0 {
+		return 0
+	}
+	if lipgloss.Width(base)+branchReserve+reserve > width {
+		return 0
+	}
+	return branchReserve
+}
+
 func appendFooterHint(base string, width, reserve int) string {
 	for _, hint := range []string{"PgUp/PgDn scroll"} {
-		segment := "  " + hint
+		segment := "  " + footerHint(hint)
 		if lipgloss.Width(base)+lipgloss.Width(segment)+reserve <= width {
 			return base + segment
 		}
 	}
 	return base
+}
+
+func footerField(label, value string, valueColor lipgloss.Color) string {
+	return lipgloss.NewStyle().Foreground(tuitheme.Default.Muted).Render(label) +
+		" " +
+		lipgloss.NewStyle().Foreground(valueColor).Render(value)
+}
+
+func footerHint(text string) string {
+	return lipgloss.NewStyle().Foreground(tuitheme.Default.Muted).Render(text)
+}
+
+func footerPath(text string) string {
+	return lipgloss.NewStyle().Foreground(tuitheme.Default.Subtle).Render(text)
+}
+
+func footerFocus(text string) string {
+	return lipgloss.NewStyle().Foreground(tuitheme.Default.Accent).Bold(true).Render(text)
+}
+
+func thinkingFooterColor(thinking string) lipgloss.Color {
+	switch strings.ToLower(strings.TrimSpace(thinking)) {
+	case "on", "enabled", "true":
+		return tuitheme.Default.Success
+	case "off", "disabled", "false":
+		return tuitheme.Default.Muted
+	default:
+		return tuitheme.Default.InfoSoft
+	}
 }
 
 func footerDirReserve(cwd string) int {
@@ -449,6 +574,14 @@ func footerDirReserve(cwd string) int {
 		return 0
 	}
 	return lipgloss.Width("  ") + lipgloss.Width(tail)
+}
+
+func footerBranchReserve(branch string) int {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return 0
+	}
+	return lipgloss.Width("  ") + lipgloss.Width(branch)
 }
 
 func footerViewIndicatorReserve(indicator string) int {
@@ -483,6 +616,9 @@ func fitTail(s string, width int) string {
 
 func (m model) renderBusyStatusLine(width int) string {
 	if !m.busy {
+		return ""
+	}
+	if m.mode == modeApproval {
 		return ""
 	}
 	label := "Working"
@@ -646,8 +782,8 @@ func (m model) renderPermissionsPicker() string {
 	descriptions := map[string]string{
 		service.ApprovalChoiceAskFirst:           "Prompt before write, patch, shell, or MCP tools run.",
 		service.ApprovalChoiceAutoApproveSession: "No approval prompts until Whale exits.",
-		service.ApprovalChoiceTrustProject:       "Auto-approve by default in this workspace.",
-		service.ApprovalChoiceClearProject:       "Remove permissions.mode from ./.whale/config.toml.",
+		service.ApprovalChoiceTrustProject:       "Auto-approve by default in this workspace for you.",
+		service.ApprovalChoiceClearProject:       "Remove permissions.mode from ./.whale/config.local.toml.",
 	}
 	projectSectionRendered := false
 	for i, item := range m.permissionsPicker.choices {
@@ -681,8 +817,8 @@ func (m model) renderPermissionsProjectTrustConfirm() string {
 		"Trust this project?",
 		[]string{
 			"Auto-approve write, patch, shell, and MCP tools by default in this workspace.",
-			"This affects future sessions in this workspace.",
-			"Config: ./.whale/config.toml",
+			"This affects your future sessions in this workspace.",
+			"Config: ./.whale/config.local.toml",
 		},
 		"Trust this project",
 	)
@@ -692,8 +828,8 @@ func (m model) renderPermissionsProjectClearConfirm() string {
 	return m.renderPermissionsProjectConfirm(
 		"Clear project default?",
 		[]string{
-			"Remove permissions.mode from ./.whale/config.toml.",
-			"Future sessions will use the global/default approval setting.",
+			"Remove permissions.mode from ./.whale/config.local.toml.",
+			"Future sessions will fall back to shared project, global, or default approval settings.",
 		},
 		"Clear project default",
 	)

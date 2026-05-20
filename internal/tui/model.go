@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/usewhale/whale/internal/app"
+	appcommands "github.com/usewhale/whale/internal/app/commands"
 	"github.com/usewhale/whale/internal/app/service"
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/defaults"
@@ -34,6 +35,11 @@ const (
 	modeSkillsMenu
 	modeSkillsManager
 	modePluginsManager
+	modeReviewMenu
+	modeReviewBranchPicker
+	modeReviewCommitPicker
+	modeReviewPRPicker
+	modeHelp
 )
 
 type page int
@@ -53,6 +59,9 @@ type model struct {
 	assembler            *tuirender.Assembler
 	pendingToolCalls     map[string]struct{}
 	transcript           []tuirender.UIMessage
+	sessionID            string
+	startupHeaderPrinted bool
+	startupHeaderOnce    *bool
 	ephemeralMessages    []tuirender.UIMessage
 	logs                 []logEntry
 	diffs                []diffEntry
@@ -74,8 +83,8 @@ type model struct {
 	providerRetryUntil   time.Time
 	localSubmitPending   int
 	localSubmitCommands  []string
+	btwPanel             btwPanelState
 	deferredPlanPicker   bool
-	mouseCapture         bool
 	stopping             bool
 	sidebar              bool
 	model                string
@@ -86,6 +95,8 @@ type model struct {
 	product              string
 	version              string
 	cwd                  string
+	cwdPath              string
+	gitBranch            string
 	approval             struct {
 		toolCallID string
 		toolName   string
@@ -110,10 +121,10 @@ type model struct {
 	logFilterInput textinput.Model
 	logFilter      string
 	slash          struct {
-		all      []string
-		autoRun  map[string]bool
-		matches  []string
-		selected int
+		all          []appcommands.SlashCommandSpec
+		matches      []slashSuggestion
+		selected     int
+		argumentHint string
 	}
 	skills struct {
 		all      []skillSuggestion
@@ -134,6 +145,14 @@ type model struct {
 		all      []pluginManagerItem
 		matches  []int
 		selected int
+	}
+	reviewMenu struct {
+		selected int
+	}
+	reviewTargetPicker reviewTargetPickerState
+	help               struct {
+		selected int
+		offset   int
 	}
 	modelPicker struct {
 		stage     int // 0 model, 1 effort, 2 thinking
@@ -244,32 +263,35 @@ func newModel(svc *service.Service, modelName, effort, thinking string) model {
 		viewMode = svc.ViewMode()
 	}
 	m := model{
-		svc:              svc,
-		input:            composer.New(),
-		viewport:         vp,
-		chat:             newChatList(),
-		assembler:        tuirender.NewAssembler(),
-		pendingToolCalls: map[string]struct{}{},
-		status:           "ready",
-		followTail:       true,
-		page:             pageChat,
-		sidebar:          false,
-		logFilterInput:   filter,
-		model:            modelName,
-		effort:           effort,
-		thinking:         thinking,
-		viewMode:         viewMode,
-		chatMode:         "agent",
-		product:          "Whale",
-		version:          resolveVersion(),
-		cwd:              resolveWorkingDirectory(),
-		historyIndex:     -1,
+		svc:               svc,
+		input:             composer.New(),
+		viewport:          vp,
+		chat:              newChatList(),
+		assembler:         tuirender.NewAssembler(),
+		pendingToolCalls:  map[string]struct{}{},
+		startupHeaderOnce: new(bool),
+		status:            "ready",
+		followTail:        true,
+		page:              pageChat,
+		sidebar:           false,
+		logFilterInput:    filter,
+		width:             80,
+		height:            24,
+		model:             modelName,
+		effort:            effort,
+		thinking:          thinking,
+		viewMode:          viewMode,
+		chatMode:          "agent",
+		product:           "Whale",
+		version:           resolveVersion(),
+		cwd:               resolveWorkingDirectory(),
+		cwdPath:           resolveWorkingDirectoryPath(),
+		historyIndex:      -1,
 	}
 	if svc != nil {
 		m.dispatch = svc.Dispatch
 	}
-	m.slash.all = parseSlashCommands(app.CommandsHelp)
-	m.slash.autoRun = buildSlashAutoRunMap(app.CommandsHelp)
+	m.slash.all = appcommands.DefaultSlashCommands()
 	m.resetTranscript()
 	return m
 }
@@ -349,7 +371,9 @@ func clearScreenCmdForOS(goos string, out io.Writer) tea.Cmd {
 	}
 }
 
-func (m model) Init() tea.Cmd { return waitEventCmd(m.svc) }
+func (m model) Init() tea.Cmd {
+	return tea.Batch(waitEventCmd(m.svc), detectGitBranchCmd(m.cwdPath))
+}
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -357,32 +381,37 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.input.SetWidth(max(20, m.width-4))
+		headerCmd := m.startupHeaderPrintCmd()
 		m.refreshViewportContent()
-		return m, m.withMouseCaptureCmd()
+		return m, m.sequenceCmds(headerCmd)
 	case svcMsg:
 		eventCmd, quit, direct := m.handleServiceEvents([]service.Event{service.Event(msg)})
 		if quit {
-			return m, m.withMouseCaptureCmd(tea.Quit)
+			return m, m.sequenceCmds(tea.Quit)
 		}
 		if direct {
-			return m, m.withMouseCaptureCmd(eventCmd)
+			return m, m.sequenceCmds(eventCmd)
 		}
-		return m, m.withMouseCaptureCmd(eventCmd, m.flushNativeScrollbackCmd(), waitEventCmd(m.svc))
+		headerCmd := m.startupHeaderPrintCmd()
+		scrollbackCmd := m.flushNativeScrollbackCmd()
+		return m, m.sequenceCmds(eventCmd, headerCmd, scrollbackCmd, waitEventCmd(m.svc))
 	case svcBatchMsg:
 		eventCmd, quit, direct := m.handleServiceEvents([]service.Event(msg))
 		if quit {
-			return m, m.withMouseCaptureCmd(tea.Quit)
+			return m, m.sequenceCmds(tea.Quit)
 		}
 		if direct {
-			return m, m.withMouseCaptureCmd(eventCmd)
+			return m, m.sequenceCmds(eventCmd)
 		}
-		return m, m.withMouseCaptureCmd(eventCmd, m.flushNativeScrollbackCmd(), waitEventCmd(m.svc))
+		headerCmd := m.startupHeaderPrintCmd()
+		scrollbackCmd := m.flushNativeScrollbackCmd()
+		return m, m.sequenceCmds(eventCmd, headerCmd, scrollbackCmd, waitEventCmd(m.svc))
 	case windowsDeferredEnterMsg:
-		return m, m.withMouseCaptureCmd(m.handleWindowsDeferredEnter(msg))
+		return m, m.sequenceCmds(m.handleWindowsDeferredEnter(msg))
 	case windowsPendingEnterTailMsg:
-		return m, m.withMouseCaptureCmd(m.handleWindowsPendingEnterTail(msg))
+		return m, m.sequenceCmds(m.handleWindowsPendingEnterTail(msg))
 	case windowsPasteBurstFlushMsg:
-		return m, m.withMouseCaptureCmd(m.handleWindowsPasteBurstFlush(msg))
+		return m, m.sequenceCmds(m.handleWindowsPasteBurstFlush(msg))
 	case quitTimeoutMsg:
 		if !m.quitArmedUntil.IsZero() && time.Now().After(m.quitArmedUntil) {
 			m.quitArmedUntil = time.Time{}
@@ -390,30 +419,40 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "ready"
 			}
 		}
-		return m, m.withMouseCaptureCmd()
+		return m, m.sequenceCmds()
 	case busyTickMsg:
 		if m.busy {
-			return m, m.withMouseCaptureCmd(busyTickCmd())
+			return m, m.sequenceCmds(busyTickCmd())
 		}
-		return m, m.withMouseCaptureCmd()
+		return m, m.sequenceCmds()
+	case gitBranchUpdatedMsg:
+		if msg.cwd == m.cwdPath {
+			m.gitBranch = msg.branch
+		}
+		return m, m.sequenceCmds()
+	case reviewCommitsLoadedMsg:
+		m.handleReviewCommitsLoaded(msg)
+		return m, m.sequenceCmds()
+	case reviewBranchesLoadedMsg:
+		m.handleReviewBranchesLoaded(msg)
+		return m, m.sequenceCmds()
+	case reviewPRsLoadedMsg:
+		m.handleReviewPRsLoaded(msg)
+		return m, m.sequenceCmds()
 	case tea.KeyMsg:
 		prevMainWidth, _ := m.layoutDims()
 		prevBodyHeight := m.viewportBodyHeight(prevMainWidth)
 		if !msg.Paste && m.consumeMouseCSIFragment(msg) {
 			m.refreshViewportContent()
-			return m, m.withMouseCaptureCmd()
+			return m, m.sequenceCmds()
 		}
 		cmd, quit, handled := m.handleKeyMsg(msg)
 		if quit {
-			return m, m.withMouseCaptureCmd(tea.Quit)
+			return m, m.sequenceCmds(tea.Quit)
 		}
 		if handled {
 			m.refreshViewportContentIfBodyHeightChanged(prevMainWidth, prevBodyHeight)
-			return m, m.withMouseCaptureCmd(cmd)
-		}
-	case tea.MouseMsg:
-		if cmd, handled := m.handleMouseMsg(msg); handled {
-			return m, m.withMouseCaptureCmd(cmd)
+			return m, m.sequenceCmds(cmd)
 		}
 	}
 	prevMainWidth, _ := m.layoutDims()
@@ -429,12 +468,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resetHistoryNavigation()
 	}
 	m.refreshViewportContentIfBodyHeightChanged(prevMainWidth, prevBodyHeight)
-	return m, m.withMouseCaptureCmd(cmd)
+	return m, m.sequenceCmds(cmd)
 }
 
-func (m *model) withMouseCaptureCmd(cmds ...tea.Cmd) tea.Cmd {
+func (m *model) sequenceCmds(cmds ...tea.Cmd) tea.Cmd {
 	out := make([]tea.Cmd, 0, len(cmds))
-	m.mouseCapture = false
 	for _, cmd := range cmds {
 		if cmd != nil {
 			out = append(out, cmd)

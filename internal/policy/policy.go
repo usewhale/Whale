@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/policy/shellrisk"
 )
 
 type ApprovalMode string
@@ -37,6 +38,66 @@ type PolicyDecision struct {
 
 type ToolPolicy interface {
 	Decide(spec core.ToolSpec, call core.ToolCall) PolicyDecision
+}
+
+type ScopedAllowPolicy struct {
+	Base               ToolPolicy
+	ShellAllowPrefixes []string
+}
+
+func (p ScopedAllowPolicy) Decide(spec core.ToolSpec, call core.ToolCall) PolicyDecision {
+	base := p.Base
+	if base == nil {
+		base = DefaultToolPolicy{Mode: ApprovalModeOnRequest}
+	}
+	decision := base.Decide(spec, call)
+	if !decision.Allow {
+		return decision
+	}
+	if spec.Name == "shell_run" {
+		cmd := shellCommandFromInput(call.Input)
+		if shellCommandEligibleForScopedAllow(cmd) {
+			for _, allow := range p.ShellAllowPrefixes {
+				if hasAllowCommandPrefix(cmd, allow) && scopedAllowCommandAllowed(cmd, allow) {
+					return PolicyDecision{
+						Allow:            true,
+						RequiresApproval: false,
+						Code:             "scoped_allow_prefix",
+						Phase:            "allowed",
+						MatchedRule:      allow,
+					}
+				}
+			}
+		}
+	}
+	return decision
+}
+
+type ReadOnlyTurnPolicy struct {
+	Base ToolPolicy
+}
+
+func (p ReadOnlyTurnPolicy) Decide(spec core.ToolSpec, call core.ToolCall) PolicyDecision {
+	base := p.Base
+	if base == nil {
+		base = DefaultToolPolicy{Mode: ApprovalModeOnRequest}
+	}
+	decision := base.Decide(spec, call)
+	if !decision.Allow {
+		return decision
+	}
+	if core.IsReadOnlyToolCall(spec, call) {
+		return decision
+	}
+	if spec.Name == "shell_run" && decision.Code == "scoped_allow_prefix" && !decision.RequiresApproval {
+		return decision
+	}
+	return PolicyDecision{
+		Allow:  false,
+		Reason: "review turns are read-only",
+		Code:   "read_only_turn_denied",
+		Phase:  "denied",
+	}
 }
 
 type DefaultToolPolicy struct {
@@ -83,8 +144,18 @@ func (p DefaultToolPolicy) Decide(spec core.ToolSpec, call core.ToolCall) Policy
 	}
 	if spec.Name == "shell_run" {
 		cmd := shellCommandFromInput(call.Input)
-		if defaultShellAutoAllow(cmd) {
+		decision := shellrisk.Classify(cmd)
+		if decision.Allow {
 			return PolicyDecision{Allow: true, Code: "shell_auto_allow", Phase: "allowed"}
+		}
+		if decision.Level == shellrisk.LevelBoundedWrite {
+			return PolicyDecision{
+				Allow:            true,
+				RequiresApproval: true,
+				Reason:           decision.Reason,
+				Code:             shellrisk.CodeBoundedWrite,
+				Phase:            "needs_approval",
+			}
 		}
 	}
 	if hasCapability(spec, "mutates_state") {
@@ -141,6 +212,101 @@ func shellCommandFromInput(input string) string {
 	return strings.TrimSpace(cmd)
 }
 
+func shellCommandEligibleForScopedAllow(command string) bool {
+	if command == "" {
+		return false
+	}
+	return !strings.ContainsAny(command, "\n\r;&|<>$`(){}#")
+}
+
+// The gh pr * argv whitelist below is intentionally narrow and assumes the
+// exact command shapes emitted by the /review pr prompt in
+// internal/app/commands/review.go. If that prompt changes (different flags,
+// different field lists, additional args), update the corresponding
+// ghPR*ScopedAllowArgs helper so legitimate review calls keep auto-allowing.
+func scopedAllowCommandAllowed(command, rule string) bool {
+	rule = normalizeCommandPrefix(rule)
+	if !strings.HasPrefix(rule, "gh pr ") {
+		return true
+	}
+	return ghPRScopedAllowCommandAllowed(command, rule)
+}
+
+func ghPRScopedAllowCommandAllowed(command, rule string) bool {
+	argv := strings.Fields(command)
+	if len(argv) < 3 || strings.ToLower(argv[0]) != "gh" || strings.ToLower(argv[1]) != "pr" {
+		return false
+	}
+	for _, arg := range argv[3:] {
+		if arg == "--web" || arg == "-w" {
+			return false
+		}
+	}
+	switch rule {
+	case "gh pr view":
+		return ghPRViewScopedAllowArgs(argv[3:])
+	case "gh pr list":
+		return ghPRListScopedAllowArgs(argv[3:])
+	case "gh pr diff":
+		return ghPRDiffScopedAllowArgs(argv[3:])
+	default:
+		return false
+	}
+}
+
+func ghPRViewScopedAllowArgs(args []string) bool {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") || strings.TrimSpace(args[0]) == "" {
+		return false
+	}
+	for i := 1; i < len(args); i++ {
+		switch args[i] {
+		case "--comments":
+			continue
+		case "--json":
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") || strings.TrimSpace(args[i+1]) == "" {
+				return false
+			}
+			i++
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func ghPRListScopedAllowArgs(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--limit", "--json", "--state", "--author", "--base", "--head", "--label", "--search":
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") || strings.TrimSpace(args[i+1]) == "" {
+				return false
+			}
+			i++
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func ghPRDiffScopedAllowArgs(args []string) bool {
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") || strings.TrimSpace(args[0]) == "" {
+		return false
+	}
+	for _, arg := range args[1:] {
+		switch arg {
+		case "--patch", "--name-only":
+			continue
+		default:
+			if strings.HasPrefix(arg, "--color=") {
+				continue
+			}
+			return false
+		}
+	}
+	return true
+}
+
 func hasAllowCommandPrefix(command, rule string) bool {
 	if strings.ContainsAny(command, "\n\r") || strings.ContainsAny(rule, "\n\r") {
 		return false
@@ -173,195 +339,4 @@ func hasSingleLineCommandPrefix(command, rule string) bool {
 
 func normalizeCommandPrefix(v string) string {
 	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(v))), " ")
-}
-
-var defaultShellAutoAllowPrefixes = []string{
-	"ls", "pwd", "echo", "cat", "head", "tail", "wc", "file", "tree", "find", "grep", "rg",
-	"git status", "git diff", "git log", "git show", "git branch", "git remote", "git rev-parse", "git config --get",
-	"go version",
-	"rustc --version",
-	"python --version", "python3 --version", "node --version", "npm --version", "npx --version", "cargo --version", "deno --version", "bun --version",
-	"go test", "go vet",
-	"make test", "make test-tui", "make test-evals", "make test-windows", "make fmt-check", "make vet", "make build",
-	"cargo test", "cargo check", "cargo clippy",
-	"npm test", "npm run test", "npm run lint", "npm run typecheck",
-	"npx vitest run", "npx vitest", "npx jest", "npx tsc --noEmit",
-	"pytest", "python -m pytest",
-	"deno test", "bun test",
-}
-
-func defaultShellAutoAllow(command string) bool {
-	argv, ok := parseSimpleShellCommand(command)
-	if !ok || len(argv) == 0 {
-		return false
-	}
-	argv = lowerArgv(argv)
-	if autoAllowShellCommandHasUnsafeArgs(argv) {
-		return false
-	}
-	if autoAllowMakeHasExtraArgs(argv) {
-		return false
-	}
-	for _, prefix := range defaultShellAutoAllowPrefixes {
-		if argvHasPrefix(argv, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func autoAllowShellCommandHasUnsafeArgs(argv []string) bool {
-	switch {
-	case argvHasPrefix(argv, "find"):
-		for _, field := range argv {
-			switch field {
-			case "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fls":
-				return true
-			}
-			if strings.HasPrefix(field, "-fprint") {
-				return true
-			}
-		}
-	case argvHasPrefix(argv, "git diff"), argvHasPrefix(argv, "git show"), argvHasPrefix(argv, "git log"):
-		for _, field := range argv {
-			if field == "--output" || strings.HasPrefix(field, "--output=") || field == "--ext-diff" || field == "--external-diff" || field == "--textconv" {
-				return true
-			}
-		}
-	case argvHasPrefix(argv, "rg"):
-		for _, field := range argv {
-			if field == "--pre" || strings.HasPrefix(field, "--pre=") {
-				return true
-			}
-		}
-	}
-	for _, field := range argv {
-		switch field {
-		case "--fix", "--write", "--update", "--update-snapshot", "--updatesnapshot":
-			return true
-		}
-		if strings.HasPrefix(field, "--fix=") ||
-			strings.HasPrefix(field, "--write=") ||
-			strings.HasPrefix(field, "--update=") ||
-			strings.HasPrefix(field, "--update-snapshot=") ||
-			strings.HasPrefix(field, "--updatesnapshot=") {
-			return true
-		}
-	}
-	if (argvHasPrefix(argv, "npx jest") || argvHasPrefix(argv, "npx vitest") || argvHasPrefix(argv, "npx vitest run")) && containsArg(argv, "-u") {
-		return true
-	}
-	return false
-}
-
-func autoAllowMakeHasExtraArgs(argv []string) bool {
-	if len(argv) == 0 || argv[0] != "make" {
-		return false
-	}
-	switch {
-	case argvHasPrefix(argv, "make test"),
-		argvHasPrefix(argv, "make test-tui"),
-		argvHasPrefix(argv, "make test-evals"),
-		argvHasPrefix(argv, "make test-windows"),
-		argvHasPrefix(argv, "make fmt-check"),
-		argvHasPrefix(argv, "make vet"),
-		argvHasPrefix(argv, "make build"):
-		return len(argv) != 2
-	default:
-		return false
-	}
-}
-
-func parseSimpleShellCommand(command string) ([]string, bool) {
-	var argv []string
-	var word strings.Builder
-	var quote rune
-	inWord := false
-
-	flush := func() {
-		if inWord {
-			argv = append(argv, word.String())
-			word.Reset()
-			inWord = false
-		}
-	}
-
-	for _, r := range strings.TrimSpace(command) {
-		switch quote {
-		case '\'':
-			if r == '\'' {
-				quote = 0
-				continue
-			}
-			word.WriteRune(r)
-			continue
-		case '"':
-			switch r {
-			case '"':
-				quote = 0
-				continue
-			case '\\', '$', '`':
-				return nil, false
-			}
-			word.WriteRune(r)
-			continue
-		}
-
-		switch {
-		case r == ' ' || r == '\t':
-			flush()
-		case r == '\'' || r == '"':
-			quote = r
-			inWord = true
-		case rejectedAutoAllowShellRune(r):
-			return nil, false
-		default:
-			inWord = true
-			word.WriteRune(r)
-		}
-	}
-	if quote != 0 {
-		return nil, false
-	}
-	flush()
-	return argv, len(argv) > 0
-}
-
-func rejectedAutoAllowShellRune(r rune) bool {
-	switch r {
-	case '\\', '$', '`', ';', '|', '&', '<', '>', '\n', '\r', '(', ')', '{', '}', '#', '*', '?', '[', ']':
-		return true
-	default:
-		return false
-	}
-}
-
-func lowerArgv(argv []string) []string {
-	lower := make([]string, 0, len(argv))
-	for _, arg := range argv {
-		lower = append(lower, strings.ToLower(arg))
-	}
-	return lower
-}
-
-func argvHasPrefix(argv []string, prefix string) bool {
-	prefixArgv := strings.Fields(strings.ToLower(strings.TrimSpace(prefix)))
-	if len(argv) < len(prefixArgv) {
-		return false
-	}
-	for i, want := range prefixArgv {
-		if argv[i] != want {
-			return false
-		}
-	}
-	return true
-}
-
-func containsArg(argv []string, want string) bool {
-	for _, got := range argv {
-		if got == want {
-			return true
-		}
-	}
-	return false
 }

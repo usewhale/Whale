@@ -12,6 +12,11 @@ import (
 
 var diffHunkHeaderRe = regexp.MustCompile(`^@@ -([0-9]+)(?:,[0-9]+)? \+([0-9]+)(?:,[0-9]+)? @@`)
 
+const (
+	fileDiffPreviewMaxLines         = 400
+	approvalFileDiffPreviewMaxLines = 80
+)
+
 func renderFileDiffMetadataMarkdown(metadata map[string]any, maxLines int) string {
 	plain := renderFileDiffMetadataPlain(metadata, maxLines)
 	if strings.TrimSpace(plain) == "" {

@@ -1,9 +1,13 @@
 package cmd
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -13,16 +17,20 @@ import (
 	"github.com/usewhale/whale/internal/defaults"
 	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/tui"
+	whaleworktree "github.com/usewhale/whale/internal/worktree"
 )
 
 type cliOptions struct {
 	cfg                        app.Config
 	dangerouslySkipPermissions bool
+	worktreeName               string
+	worktreeSession            app.WorktreeSession
 }
 
 func Execute() error {
 	opts := &cliOptions{cfg: app.DefaultConfig()}
 	root := newRootCmd(opts)
+	root.SetArgs(normalizeWorktreeArgs(os.Args[1:], stdinIsTerminal()))
 	return root.Execute()
 }
 
@@ -31,11 +39,155 @@ func bindPersistentFlags(c *cobra.Command, opts *cliOptions) {
 	c.PersistentFlags().BoolVar(&opts.cfg.ThinkingEnabled, "thinking", opts.cfg.ThinkingEnabled, "Override thinking for this run only")
 	c.PersistentFlags().StringVar(&opts.cfg.ReasoningEffort, "effort", opts.cfg.ReasoningEffort, "Override reasoning effort for this run only (high|max)")
 	c.PersistentFlags().BoolVar(&opts.dangerouslySkipPermissions, "dangerously-skip-permissions", false, "Skip tool approval prompts for this run; extremely dangerous")
+	c.PersistentFlags().StringVarP(&opts.worktreeName, "worktree", "w", "", "Create or reuse an isolated git worktree for this run")
+	if f := c.PersistentFlags().Lookup("worktree"); f != nil {
+		f.NoOptDefVal = autoWorktreeName()
+	}
 	c.Flags().BoolP("version", "V", false, "Print version")
 }
 
 func runLoop(opts *cliOptions, start app.StartOptions) error {
+	start.Worktree = opts.worktreeSession
 	return tui.Run(opts.cfg, start)
+}
+
+func prepareWorktree(cmd *cobra.Command, opts *cliOptions) error {
+	if !worktreeFlagChanged(cmd) {
+		return nil
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get workspace: %w", err)
+	}
+	checkoutRoot, err := whaleworktree.CheckoutRoot(cwd)
+	if err != nil {
+		return err
+	}
+	workspaceRel, err := filepath.Rel(checkoutRoot, cwd)
+	if err != nil {
+		return fmt.Errorf("resolve workspace relative path: %w", err)
+	}
+	sess, err := whaleworktree.Start(cwd, opts.worktreeName)
+	if err != nil {
+		return err
+	}
+	targetWorkspace := filepath.Join(sess.Path, workspaceRel)
+	if _, err := os.Stat(targetWorkspace); err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("stat worktree workspace: %w", err)
+		}
+		targetWorkspace = sess.Path
+	}
+	if err := os.Chdir(targetWorkspace); err != nil {
+		return fmt.Errorf("enter worktree: %w", err)
+	}
+	opts.worktreeSession = app.WorktreeSession{
+		Name:               sess.Name,
+		Workspace:          targetWorkspace,
+		Path:               sess.Path,
+		Branch:             sess.Branch,
+		OriginalWorkspace:  sess.OriginalWorkspace,
+		OriginalBranch:     sess.OriginalBranch,
+		OriginalHeadCommit: sess.OriginalHeadCommit,
+	}
+	return nil
+}
+
+func rejectWorktreeFlag(cmd *cobra.Command) error {
+	if worktreeFlagChanged(cmd) {
+		return fmt.Errorf("--worktree is only supported for whale and whale exec")
+	}
+	return nil
+}
+
+func worktreeFlagChanged(cmd *cobra.Command) bool {
+	return flagChanged(cmd, "worktree")
+}
+
+func autoWorktreeName() string {
+	var b [4]byte
+	if _, err := rand.Read(b[:]); err == nil {
+		return "session-" + time.Now().Format("20060102-150405.000000000") + "-" + hex.EncodeToString(b[:])
+	}
+	return fmt.Sprintf("session-%s-%d", time.Now().Format("20060102-150405.000000000"), os.Getpid())
+}
+
+func stdinIsTerminal() bool {
+	info, err := os.Stdin.Stat()
+	return err == nil && (info.Mode()&os.ModeCharDevice) != 0
+}
+
+func normalizeWorktreeArgs(args []string, stdinTerminal bool) []string {
+	if len(args) == 0 {
+		return args
+	}
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if (arg == "--worktree" || arg == "-w") && i+1 < len(args) && shouldConsumeWorktreeValue(args, i, stdinTerminal) {
+			if arg == "-w" {
+				out = append(out, "-w="+args[i+1])
+			} else {
+				out = append(out, "--worktree="+args[i+1])
+			}
+			i++
+			continue
+		}
+		out = append(out, arg)
+	}
+	return out
+}
+
+func shouldConsumeWorktreeValue(args []string, index int, stdinTerminal bool) bool {
+	next := args[index+1]
+	if next == "" || strings.HasPrefix(next, "-") {
+		return false
+	}
+	if worktreeFlagIsAfterExec(args, index) {
+		// `exec --worktree NAME PROMPT` always consumes NAME.
+		if hasExecPromptAfterWorktreeName(args, index+2) {
+			return true
+		}
+		// No separate prompt follows. On a TTY the single arg is the
+		// positional prompt (worktree gets an auto name). With non-TTY
+		// stdin (pipe / CI / </dev/null) stdin supplies the prompt, so
+		// the arg is the worktree name — but only when it actually
+		// parses as one; otherwise it is a quoted prompt like "fix bug".
+		return !stdinTerminal && whaleworktree.ValidateName(next) == nil
+	}
+	switch next {
+	case "exec", "resume", "doctor", "setup", "migrate-config", "worktree", "help", "completion":
+		return false
+	default:
+		return true
+	}
+}
+
+func hasExecPromptAfterWorktreeName(args []string, start int) bool {
+	for i := start; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			return i+1 < len(args)
+		}
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func worktreeFlagIsAfterExec(args []string, index int) bool {
+	for i := 0; i < index; i++ {
+		arg := args[i]
+		if arg == "--" {
+			return false
+		}
+		if arg == "exec" {
+			return true
+		}
+	}
+	return false
 }
 
 func prepareCLIConfig(cmd *cobra.Command, opts *cliOptions) error {
@@ -109,6 +261,9 @@ func newRootCmd(opts *cliOptions) *cobra.Command {
 			if len(args) > 0 {
 				return fmt.Errorf("unknown command: %s", args[0])
 			}
+			if err := prepareWorktree(cmd, opts); err != nil {
+				return err
+			}
 			if err := prepareCLIConfig(cmd, opts); err != nil {
 				return err
 			}
@@ -122,5 +277,6 @@ func newRootCmd(opts *cliOptions) *cobra.Command {
 	root.AddCommand(newMigrateConfigCmd(opts))
 	root.AddCommand(newSetupCmd(opts))
 	root.AddCommand(newResumeCmd(opts))
+	root.AddCommand(newWorktreeCmd(opts))
 	return root
 }

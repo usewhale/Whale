@@ -4,37 +4,53 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-
-	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
+func (m *model) startupHeaderPrintCmd() tea.Cmd {
+	if m.startupHeaderOnce == nil {
+		m.startupHeaderOnce = new(bool)
+	}
+	if *m.startupHeaderOnce || m.page != pageChat || m.width <= 0 || m.height <= 0 {
+		return nil
+	}
+	header := m.startupHeaderText()
+	if header == "" {
+		return nil
+	}
+	m.startupHeaderPrinted = true
+	*m.startupHeaderOnce = true
+	m.viewportLayoutReady = false
+	return nil
+}
+
+func (m model) startupHeaderText() string {
+	mainWidth, _ := m.layoutDims()
+	bodyHeight := m.viewportBodyHeight(mainWidth)
+	if bodyHeight <= 0 {
+		return ""
+	}
+	header := strings.TrimRight(buildHeaderBanner(m.model, m.effort, m.thinking, m.cwd, m.version, max(20, mainWidth), bodyHeight), "\n")
+	if strings.TrimSpace(header) == "" {
+		return ""
+	}
+	return header
+}
+
 func (m *model) flushNativeScrollbackCmd() tea.Cmd {
-	if m.nativeScrollbackPrinted < 0 || m.nativeScrollbackPrinted > len(m.transcript) {
-		m.nativeScrollbackPrinted = len(m.transcript)
+	if m.page != pageChat || m.viewportFrozen || !m.followTail {
 		return nil
 	}
-	if m.nativeScrollbackPrinted == len(m.transcript) {
+	start := min(max(m.nativeScrollbackPrinted, 0), len(m.transcript))
+	if start >= len(m.transcript) {
 		return nil
 	}
-	if !m.shouldFlushNativeScrollback() {
-		return nil
+	text := m.scrollbackText(m.transcript[start:])
+	if start == 0 {
+		if header := strings.TrimSpace(m.startupHeaderText()); header != "" {
+			text = header + "\n\n" + text
+		}
 	}
-	messages := append([]tuirender.UIMessage(nil), m.transcript[m.nativeScrollbackPrinted:]...)
 	m.nativeScrollbackPrinted = len(m.transcript)
-	messages = m.focusMessages(messages)
-	return nativeScrollbackPrintCmd(messages, m.chatRenderWidth())
-}
-
-func (m *model) shouldFlushNativeScrollback() bool {
-	if m.page == pageChat && (m.viewportFrozen || !m.followTail) {
-		return false
-	}
-	return true
-}
-
-func nativeScrollbackPrintCmd(messages []tuirender.UIMessage, width int) tea.Cmd {
-	lines := tuirender.ChatLines(messages, max(20, width))
-	text := strings.TrimRight(strings.Join(lines, "\n"), "\n")
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}

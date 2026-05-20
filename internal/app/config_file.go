@@ -14,7 +14,10 @@ import (
 	"github.com/usewhale/whale/internal/store"
 )
 
-const ConfigFileName = "config.toml"
+const (
+	ConfigFileName      = "config.toml"
+	LocalConfigFileName = "config.local.toml"
+)
 
 type FileConfig struct {
 	Model           string `toml:"model,omitempty"`
@@ -35,7 +38,8 @@ type FileConfig struct {
 }
 
 type FileUIConfig struct {
-	ViewMode string `toml:"view_mode,omitempty"`
+	ViewMode                string `toml:"view_mode,omitempty"`
+	CheckForUpdateOnStartup *bool  `toml:"check_for_update_on_startup,omitempty"`
 }
 
 type FilePermissionsConfig struct {
@@ -49,8 +53,9 @@ type FileAPIConfig struct {
 }
 
 type FileRetryConfig struct {
-	MaxAttempts *int   `toml:"max_attempts,omitempty"`
-	MaxDelay    string `toml:"max_delay,omitempty"`
+	MaxAttempts       *int   `toml:"max_attempts,omitempty"`
+	StreamMaxAttempts *int   `toml:"stream_max_attempts,omitempty"`
+	MaxDelay          string `toml:"max_delay,omitempty"`
 }
 
 type FileBudgetConfig struct {
@@ -73,20 +78,25 @@ type FileProjectDocConfig struct {
 }
 
 type FileSkillsConfig struct {
+	Enabled  []string `toml:"enabled,omitempty"`
 	Disabled []string `toml:"disabled,omitempty"`
 }
 
 type FilePluginsConfig struct {
+	Enabled  []string `toml:"enabled,omitempty"`
 	Disabled []string `toml:"disabled,omitempty"`
 }
 
 type LoadedConfig struct {
-	Global        FileConfig
-	GlobalLoaded  bool
-	GlobalPath    string
-	Project       FileConfig
-	ProjectLoaded bool
-	ProjectPath   string
+	Global             FileConfig
+	GlobalLoaded       bool
+	GlobalPath         string
+	Project            FileConfig
+	ProjectLoaded      bool
+	ProjectPath        string
+	ProjectLocal       FileConfig
+	ProjectLocalLoaded bool
+	ProjectLocalPath   string
 }
 
 func GlobalConfigPath(dataDir string) string {
@@ -100,6 +110,10 @@ func ProjectConfigPath(workspaceRoot string) string {
 	return filepath.Join(workspaceRoot, ".whale", ConfigFileName)
 }
 
+func ProjectLocalConfigPath(workspaceRoot string) string {
+	return filepath.Join(workspaceRoot, ".whale", LocalConfigFileName)
+}
+
 func LoadConfigFiles(dataDir, workspaceRoot string) (LoadedConfig, error) {
 	globalPath := GlobalConfigPath(dataDir)
 	global, globalLoaded, err := LoadConfigFile(globalPath)
@@ -111,13 +125,21 @@ func LoadConfigFiles(dataDir, workspaceRoot string) (LoadedConfig, error) {
 	if err != nil {
 		return LoadedConfig{}, err
 	}
+	projectLocalPath := ProjectLocalConfigPath(workspaceRoot)
+	projectLocal, projectLocalLoaded, err := LoadConfigFile(projectLocalPath)
+	if err != nil {
+		return LoadedConfig{}, err
+	}
 	return LoadedConfig{
-		Global:        global,
-		GlobalLoaded:  globalLoaded,
-		GlobalPath:    globalPath,
-		Project:       project,
-		ProjectLoaded: projectLoaded,
-		ProjectPath:   projectPath,
+		Global:             global,
+		GlobalLoaded:       globalLoaded,
+		GlobalPath:         globalPath,
+		Project:            project,
+		ProjectLoaded:      projectLoaded,
+		ProjectPath:        projectPath,
+		ProjectLocal:       projectLocal,
+		ProjectLocalLoaded: projectLocalLoaded,
+		ProjectLocalPath:   projectLocalPath,
 	}, nil
 }
 
@@ -157,6 +179,9 @@ func ApplyLoadedConfig(cfg *Config, loaded LoadedConfig) error {
 	if err := ApplyFileConfig(cfg, loaded.Project); err != nil {
 		return err
 	}
+	if err := ApplyFileConfig(cfg, loaded.ProjectLocal); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -176,6 +201,9 @@ func ApplyFileConfig(cfg *Config, file FileConfig) error {
 			return err
 		}
 		cfg.ViewMode = mode
+	}
+	if file.UI.CheckForUpdateOnStartup != nil {
+		cfg.CheckForUpdateOnStartup = *file.UI.CheckForUpdateOnStartup
 	}
 	if strings.TrimSpace(file.Permissions.Mode) != "" {
 		cfg.ApprovalMode = strings.TrimSpace(file.Permissions.Mode)
@@ -200,6 +228,12 @@ func ApplyFileConfig(cfg *Config, file FileConfig) error {
 			return fmt.Errorf("invalid retry.max_attempts: must be greater than 0")
 		}
 		cfg.RetryMaxAttempts = *file.Retry.MaxAttempts
+	}
+	if file.Retry.StreamMaxAttempts != nil {
+		if *file.Retry.StreamMaxAttempts <= 0 {
+			return fmt.Errorf("invalid retry.stream_max_attempts: must be greater than 0")
+		}
+		cfg.RetryStreamMaxAttempts = *file.Retry.StreamMaxAttempts
 	}
 	if strings.TrimSpace(file.Retry.MaxDelay) != "" {
 		d, err := time.ParseDuration(strings.TrimSpace(file.Retry.MaxDelay))
@@ -227,10 +261,16 @@ func ApplyFileConfig(cfg *Config, file FileConfig) error {
 		cfg.MemoryFileOrder = strings.Join(trimList(file.ProjectDoc.FallbackFilenames), ",")
 	}
 	if len(file.Skills.Disabled) > 0 {
-		cfg.SkillsDisabled = trimList(file.Skills.Disabled)
+		cfg.SkillsDisabled = mergeNames(cfg.SkillsDisabled, file.Skills.Disabled)
+	}
+	if len(file.Skills.Enabled) > 0 {
+		cfg.SkillsDisabled = removeNames(cfg.SkillsDisabled, file.Skills.Enabled)
 	}
 	if len(file.Plugins.Disabled) > 0 {
-		cfg.PluginsDisabled = trimList(file.Plugins.Disabled)
+		cfg.PluginsDisabled = mergeNames(cfg.PluginsDisabled, file.Plugins.Disabled)
+	}
+	if len(file.Plugins.Enabled) > 0 {
+		cfg.PluginsDisabled = removeNames(cfg.PluginsDisabled, file.Plugins.Enabled)
 	}
 	return nil
 }
@@ -291,11 +331,17 @@ func overlayExplicitConfig(dst *Config, src Config) {
 	if src.ThinkingEnabled != def.ThinkingEnabled {
 		dst.ThinkingEnabled = src.ThinkingEnabled
 	}
+	if src.CheckForUpdateOnStartup != def.CheckForUpdateOnStartup {
+		dst.CheckForUpdateOnStartup = src.CheckForUpdateOnStartup
+	}
 	if strings.TrimSpace(src.ViewMode) != "" && src.ViewMode != def.ViewMode {
 		dst.ViewMode = src.ViewMode
 	}
 	if src.RetryMaxAttempts != 0 && src.RetryMaxAttempts != def.RetryMaxAttempts {
 		dst.RetryMaxAttempts = src.RetryMaxAttempts
+	}
+	if src.RetryStreamMaxAttempts != 0 && src.RetryStreamMaxAttempts != def.RetryStreamMaxAttempts {
+		dst.RetryStreamMaxAttempts = src.RetryStreamMaxAttempts
 	}
 	if src.RetryMaxDelay != 0 && src.RetryMaxDelay != def.RetryMaxDelay {
 		dst.RetryMaxDelay = src.RetryMaxDelay
@@ -352,7 +398,10 @@ func NormalizeViewMode(mode string) (string, error) {
 }
 
 func ConfigSources(loaded LoadedConfig) []string {
-	out := make([]string, 0, 2)
+	out := make([]string, 0, 3)
+	if loaded.ProjectLocalLoaded {
+		out = append(out, loaded.ProjectLocalPath)
+	}
 	if loaded.ProjectLoaded {
 		out = append(out, loaded.ProjectPath)
 	}

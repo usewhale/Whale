@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/usewhale/whale/internal/app"
+	whaleworktree "github.com/usewhale/whale/internal/worktree"
 )
 
 func newExecCmd(opts *cliOptions) *cobra.Command {
@@ -24,6 +25,9 @@ func newExecCmd(opts *cliOptions) *cobra.Command {
 		Short: "Run a single prompt non-interactively",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := prepareWorktree(cmd, opts); err != nil {
+				return err
+			}
 			if err := prepareCLIConfig(cmd, opts); err != nil {
 				return err
 			}
@@ -42,6 +46,12 @@ func newResumeCmd(opts *cliOptions) *cobra.Command {
 		Short: "Resume a session (open picker, use --last, or pass an id)",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := rejectWorktreeFlag(cmd); err != nil {
+				return err
+			}
+			if err := prepareResumeWorktree(args, last, opts); err != nil {
+				return err
+			}
 			if err := prepareCLIConfig(cmd, opts); err != nil {
 				return err
 			}
@@ -53,6 +63,57 @@ func newResumeCmd(opts *cliOptions) *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&last, "last", false, "Resume the most recent session without opening the picker")
+	return c
+}
+
+func newWorktreeCmd(opts *cliOptions) *cobra.Command {
+	c := &cobra.Command{
+		Use:   "worktree",
+		Short: "Manage Whale worktrees",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := rejectWorktreeFlag(cmd); err != nil {
+				return err
+			}
+			return runWorktreeList(cmd.OutOrStdout())
+		},
+	}
+	c.AddCommand(&cobra.Command{
+		Use:   "list",
+		Short: "List Whale worktrees",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := rejectWorktreeFlag(cmd); err != nil {
+				return err
+			}
+			return runWorktreeList(cmd.OutOrStdout())
+		},
+	})
+	c.AddCommand(&cobra.Command{
+		Use:   "status [name]",
+		Short: "Show Whale worktree status",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := rejectWorktreeFlag(cmd); err != nil {
+				return err
+			}
+			return runWorktreeStatus(cmd.OutOrStdout(), args)
+		},
+	})
+	var force bool
+	remove := &cobra.Command{
+		Use:   "remove <name>",
+		Short: "Remove a Whale worktree",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := rejectWorktreeFlag(cmd); err != nil {
+				return err
+			}
+			return runWorktreeRemove(cmd.OutOrStdout(), args[0], force)
+		},
+	}
+	remove.Flags().BoolVar(&force, "force", false, "Discard changes in the worktree")
+	c.AddCommand(remove)
 	return c
 }
 
@@ -73,12 +134,55 @@ func resumeStartOptions(args []string, last bool) (app.StartOptions, error) {
 	return app.StartOptions{ResumeMenu: true}, nil
 }
 
+func prepareResumeWorktree(args []string, last bool, opts *cliOptions) error {
+	if len(args) == 0 && !last {
+		return nil
+	}
+	workspaceRoot, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get workspace: %w", err)
+	}
+	start, err := resumeStartOptions(args, last)
+	if err != nil {
+		return err
+	}
+	sess, err := app.ResolveResumeWorktree(opts.cfg, start, workspaceRoot)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(sess.Path) == "" {
+		return nil
+	}
+	targetWorkspace := sess.Path
+	if workspace := strings.TrimSpace(sess.Workspace); workspace != "" && pathInside(workspace, sess.Path) {
+		targetWorkspace = workspace
+	}
+	if err := os.Chdir(targetWorkspace); err != nil {
+		return fmt.Errorf("enter resume worktree: %w", err)
+	}
+	opts.worktreeSession = sess
+	return nil
+}
+
+func pathInside(path, root string) bool {
+	path = filepath.Clean(path)
+	root = filepath.Clean(root)
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)))
+}
+
 func newDoctorCmd(opts *cliOptions) *cobra.Command {
 	return &cobra.Command{
 		Use:   "doctor",
 		Short: "Run Whale health checks",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := rejectWorktreeFlag(cmd); err != nil {
+				return err
+			}
 			return runDoctor(cmd.OutOrStdout(), opts.cfg)
 		},
 	}
@@ -90,6 +194,9 @@ func newSetupCmd(opts *cliOptions) *cobra.Command {
 		Short: "Save your DeepSeek API key for future Whale sessions",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := rejectWorktreeFlag(cmd); err != nil {
+				return err
+			}
 			return runSetup(cmd.OutOrStdout(), cmd.InOrStdin(), opts.cfg.DataDir)
 		},
 	}
@@ -106,6 +213,9 @@ preferences.json or settings.json files. If you started with Whale v0.1.9 or
 newer, you do not need to run this command.`),
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := rejectWorktreeFlag(cmd); err != nil {
+				return err
+			}
 			workspaceRoot, err := os.Getwd()
 			if err != nil {
 				return fmt.Errorf("get workspace: %w", err)
@@ -194,6 +304,88 @@ func runDoctor(out io.Writer, cfg app.Config) error {
 	return nil
 }
 
+func runWorktreeList(out io.Writer) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get workspace: %w", err)
+	}
+	items, err := whaleworktree.List(cwd)
+	if err != nil {
+		return err
+	}
+	if len(items) == 0 {
+		fmt.Fprintln(out, "no Whale worktrees")
+		return nil
+	}
+	fmt.Fprintln(out, "NAME\tBRANCH\tHEAD\tSTATUS\tPATH")
+	for _, item := range items {
+		fmt.Fprintf(out, "%s\t%s\t%s\t%s\t%s\n", item.Name, item.Branch, valueOrDash(item.Head), worktreeStatus(item), item.Path)
+	}
+	return nil
+}
+
+func runWorktreeStatus(out io.Writer, args []string) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get workspace: %w", err)
+	}
+	if len(args) == 0 {
+		items, err := whaleworktree.List(cwd)
+		if err != nil {
+			return err
+		}
+		if len(items) == 0 {
+			fmt.Fprintln(out, "no Whale worktrees")
+			return nil
+		}
+		for _, item := range items {
+			fmt.Fprintf(out, "%s: %s (%s)\n", item.Name, worktreeStatus(item), item.Path)
+		}
+		return nil
+	}
+	item, err := whaleworktree.Status(cwd, args[0])
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "name: %s\nbranch: %s\nhead: %s\nstatus: %s\npath: %s\n", item.Name, item.Branch, valueOrDash(item.Head), worktreeStatus(item), item.Path)
+	return nil
+}
+
+func runWorktreeRemove(out io.Writer, name string, force bool) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get workspace: %w", err)
+	}
+	res, err := whaleworktree.Remove(cwd, name, force)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "removed worktree: %s\npath: %s\n", res.Entry.Name, res.Entry.Path)
+	if res.BranchDeleted {
+		fmt.Fprintf(out, "deleted branch: %s\n", whaleworktree.BranchName(name))
+	} else if strings.TrimSpace(res.BranchWarning) != "" {
+		fmt.Fprintf(out, "branch warning: %s\n", res.BranchWarning)
+	}
+	return nil
+}
+
+func worktreeStatus(item whaleworktree.Entry) string {
+	if item.Missing {
+		return "missing"
+	}
+	if item.Dirty {
+		return "dirty"
+	}
+	return "clean"
+}
+
+func valueOrDash(v string) string {
+	if strings.TrimSpace(v) == "" {
+		return "-"
+	}
+	return strings.TrimSpace(v)
+}
+
 func doctorBadge(level app.DoctorLevel) string {
 	switch level {
 	case app.DoctorOK:
@@ -210,7 +402,7 @@ func runExec(out io.Writer, errOut io.Writer, in io.Reader, opts *cliOptions, ar
 	if err != nil {
 		return err
 	}
-	start := app.StartOptions{NewSession: true}
+	start := app.StartOptions{NewSession: true, Worktree: opts.worktreeSession}
 
 	ctx := context.Background()
 	if timeoutSec > 0 {

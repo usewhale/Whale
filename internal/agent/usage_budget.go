@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/usewhale/whale/internal/llm"
+	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/telemetry"
 )
 
@@ -37,11 +38,9 @@ func (a *Agent) recordTurnCost(sessionID string, usage llm.Usage, modelName, pre
 	}
 
 	if a.sessionRuntime != nil && a.sessionRuntime.Enabled() {
-		meta, err := a.sessionRuntime.LoadMeta(sessionID)
-		if err == nil {
+		_, _ = a.sessionRuntime.UpdateMeta(sessionID, func(meta *session.SessionMeta) {
 			meta.TotalCostUSD += cost
-			_ = a.sessionRuntime.SaveMeta(sessionID, meta)
-		}
+		})
 	}
 	_ = telemetry.AppendUsage(a.usageLogPath, sessionID, modelName, prefixFingerprint, usage, cost, time.Now())
 	return cost

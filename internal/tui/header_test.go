@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
 )
 
 func TestHeaderBannerUsesLargeLogoWhenWide(t *testing.T) {
@@ -53,6 +55,27 @@ func TestHeaderBannerFallsBackWhenNarrow(t *testing.T) {
 	}
 }
 
+func TestHeaderBannerUsesSemanticColorSegments(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	got := buildHeaderBanner("deepseek-chat", "medium", "on", "~/work/whale", "v0.1.0", 80, 24)
+	if !strings.Contains(got, "\x1b[") {
+		t.Fatalf("expected styled header segments, got:\n%s", got)
+	}
+	plain := xansi.Strip(got)
+	for _, want := range []string{
+		"model:     deepseek-chat   /model to change",
+		"thinking:  on   /model to change",
+		"directory: ~/work/whale",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected stripped header to contain %q:\n%s", want, plain)
+		}
+	}
+}
+
 func TestHeaderBannerConstrainedToRequestedWidth(t *testing.T) {
 	got := buildHeaderBanner(
 		"deepseek-reasoner-with-a-very-long-model-name",
@@ -66,6 +89,30 @@ func TestHeaderBannerConstrainedToRequestedWidth(t *testing.T) {
 	for _, line := range strings.Split(got, "\n") {
 		if width := lipgloss.Width(line); width > 40 {
 			t.Fatalf("expected line width <= 40, got %d for %q\n%s", width, line, got)
+		}
+	}
+}
+
+func TestHeaderBannerTruncatesStyledLinesSafely(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	got := buildHeaderBanner(
+		"deepseek-reasoner-with-a-very-long-model-name-that-forces-truncation",
+		"extraordinarily-high-effort-that-forces-truncation",
+		"enabled-with-a-long-status-that-forces-truncation",
+		"~/Engineer/ai/dsk/whale-header-support/internal/tui/with/a/very/long/path",
+		"v2026.05.19-long-version-that-forces-truncation",
+		28,
+		24,
+	)
+	if strings.Contains(xansi.Strip(got), "\x1b") {
+		t.Fatalf("header leaked malformed ANSI after stripping:\n%q", got)
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if width := lipgloss.Width(line); width > 28 {
+			t.Fatalf("expected line width <= 28, got %d for %q\n%s", width, line, got)
 		}
 	}
 }

@@ -85,6 +85,11 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 		m.updateSlashMatches()
 		return nil, false, true
 	}
+	if m.btwPanel.visible {
+		if handled := m.handleBtwPanelKey(msg); handled {
+			return nil, false, true
+		}
+	}
 	if msg.String() == "ctrl+c" && m.busy {
 		return m.interruptBusyTurn(), false, true
 	}
@@ -121,6 +126,12 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 		return m.handleSkillsManagerKey(msg), false, true
 	case modePluginsManager:
 		return m.handlePluginsManagerKey(msg), false, true
+	case modeReviewMenu:
+		return m.handleReviewMenuKey(msg), false, true
+	case modeReviewBranchPicker, modeReviewCommitPicker, modeReviewPRPicker:
+		return m.handleReviewTargetPickerKey(msg), false, true
+	case modeHelp:
+		return m.handleHelpKey(msg), false, true
 	}
 	cmd, quit, handled := m.handleGlobalKey(msg)
 	if handled {
@@ -209,8 +220,8 @@ func (m *model) handleChatModeKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		}
 	case "tab":
 		if m.hasSlashSuggestions() {
-			if cmd := safeChoice(m.slash.matches, m.slash.selected); cmd != "" {
-				m.input.SetValue(cmd)
+			if suggestion, ok := m.selectedSlashSuggestion(); ok {
+				m.input.SetValue(suggestion.InsertText)
 				m.skillBinding = nil
 				m.updateSlashMatches()
 			}
@@ -223,9 +234,10 @@ func (m *model) handleChatModeKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		if m.busy {
 			return m.interruptBusyTurn(), true
 		}
-		if m.hasSlashSuggestions() {
+		if m.hasSlashPanel() {
 			m.slash.matches = nil
 			m.slash.selected = 0
+			m.slash.argumentHint = ""
 			return nil, true
 		}
 		if m.hasSkillSuggestions() {
@@ -260,19 +272,33 @@ func (m *model) handleApprovalKey(msg tea.KeyMsg) tea.Cmd {
 		return m.submitApprovalDecision(service.IntentAllowTool, "approval_allow", "allow", "approved", "allow")
 	case "s":
 		return m.submitApprovalDecision(service.IntentAllowToolForSession, "approval_allow_session", "allow for session", "approved for session", "allow_session")
-	case "d", "esc", "ctrl+c":
+	case "d":
 		return m.submitApprovalDecision(service.IntentDenyTool, "approval_deny", "deny", "rejected", "deny")
+	case "esc", "ctrl+c":
+		return m.submitApprovalDecision(service.IntentCancelToolApproval, "approval_cancel", "cancel", "canceled", "cancel")
 	}
 	return nil
 }
 
 func (m *model) submitApprovalDecision(kind service.IntentKind, logKind, summary, status, notice string) tea.Cmd {
+	toolCallID := m.approval.toolCallID
+	if kind == service.IntentCancelToolApproval {
+		m.removePendingApprovalToolCall(toolCallID)
+		m.sawTerminalToolOutcomeThisTurn = true
+	}
 	m.dispatchIntent(service.Intent{Kind: kind, ToolCallID: m.approval.toolCallID})
 	m.addLog(logEntry{Kind: logKind, Source: m.approval.toolName, Summary: summary, Raw: notice})
 	m.mode = modeChat
 	m.status = status
 	m.appendNotice(m.approvalNoticeText(notice))
 	return m.flushNativeScrollbackCmd()
+}
+
+func (m *model) removePendingApprovalToolCall(toolCallID string) {
+	if m.assembler != nil {
+		m.assembler.RemoveToolCall(toolCallID)
+	}
+	m.markToolCallResolved(toolCallID)
 }
 
 func (m *model) handleSessionPickerKey(msg tea.KeyMsg) tea.Cmd {
@@ -508,13 +534,13 @@ func (m *model) handleGlobalKey(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 			m.refreshViewportContent()
 			return m.flushNativeScrollbackCmd(), false, true
 		}
-		if m.hasSlashSuggestions() {
-			if cmd := safeChoice(m.slash.matches, m.slash.selected); cmd != "" {
-				m.input.SetValue(cmd)
+		if m.hasSlashSuggestions() && !m.slashSelectionAlreadyTyped() {
+			if suggestion, ok := m.selectedSlashSuggestion(); ok {
+				m.input.SetValue(suggestion.InsertText)
 				m.skillBinding = nil
 				m.updateSlashMatches()
-				if m.shouldAutoRunSlash(cmd) {
-					return tea.Sequence(m.flushNativeScrollbackCmd(), m.submitPrompt(cmd)), false, true
+				if suggestion.AutoRun {
+					return tea.Sequence(m.flushNativeScrollbackCmd(), m.submitPrompt(suggestion.InsertText)), false, true
 				}
 			}
 			return nil, false, true

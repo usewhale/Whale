@@ -378,7 +378,7 @@ func LoadProjectHooks(workspaceRoot string) ([]ResolvedHook, error) {
 
 func LoadHooks(workspaceRoot, dataDir string) ([]ResolvedHook, []string, error) {
 	out := make([]ResolvedHook, 0)
-	loaded := make([]string, 0, 2)
+	loaded := make([]string, 0, 3)
 	projectPath := filepath.Join(workspaceRoot, ".whale", "config.toml")
 	projectHooks, projectLoaded, err := loadHooksFile(projectPath)
 	if err != nil {
@@ -387,6 +387,15 @@ func LoadHooks(workspaceRoot, dataDir string) ([]ResolvedHook, []string, error) 
 	if projectLoaded && len(projectHooks) > 0 {
 		out = append(out, projectHooks...)
 		loaded = append(loaded, projectPath)
+	}
+	projectLocalPath := filepath.Join(workspaceRoot, ".whale", "config.local.toml")
+	projectLocalHooks, projectLocalLoaded, err := loadHooksFile(projectLocalPath)
+	if err != nil {
+		return nil, loaded, err
+	}
+	if projectLocalLoaded && len(projectLocalHooks) > 0 {
+		out = append(out, projectLocalHooks...)
+		loaded = append(loaded, projectLocalPath)
 	}
 	globalDir := strings.TrimSpace(dataDir)
 	if globalDir == "" {

@@ -9,13 +9,14 @@ import (
 )
 
 type providerOptions struct {
-	APIKey          string
-	BaseURL         string
-	Model           string
-	ReasoningEffort string
-	ThinkingEnabled bool
-	MaxTokens       int
-	RetryPolicy     llmretry.Policy
+	APIKey            string
+	BaseURL           string
+	Model             string
+	ReasoningEffort   string
+	ThinkingEnabled   bool
+	MaxTokens         int
+	RetryPolicy       llmretry.Policy
+	StreamMaxAttempts int
 }
 
 func newDeepSeekProvider(opts providerOptions) (llm.Provider, error) {
@@ -35,6 +36,9 @@ func newDeepSeekProvider(opts providerOptions) (llm.Provider, error) {
 	)
 	if hasRetryPolicy(opts.RetryPolicy) {
 		dsOpts = append(dsOpts, deepseek.WithRetryPolicy(opts.RetryPolicy))
+	}
+	if opts.StreamMaxAttempts > 0 {
+		dsOpts = append(dsOpts, deepseek.WithStreamMaxAttempts(opts.StreamMaxAttempts))
 	}
 	if opts.MaxTokens > 0 {
 		dsOpts = append(dsOpts, deepseek.WithMaxTokens(opts.MaxTokens))

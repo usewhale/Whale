@@ -17,16 +17,28 @@ func boolPtr(v bool) *bool       { return &v }
 func stringPtr(v string) *string { return &v }
 func uintPtr(v uint) *uint       { return &v }
 
-const markdownRendererPriority = 1000
+const (
+	markdownRendererPriority = 1000
+	markdownSpecialChars     = "\\`*_{}[]<>()#+-.!"
+)
+
+type autolinkEscaping bool
+
+const (
+	escapeAutolinksForRenderer autolinkEscaping = true
+	stripAutolinkBracketsOnly  autolinkEscaping = false
+)
 
 func Markdown(input string, width int, quiet bool) string {
 	if strings.TrimSpace(input) == "" {
 		return ""
 	}
-	input = normalizeMarkdownLinks(input)
 	if width < 20 {
+		// Narrow fallback skips goldmark, so only strip autolink brackets for direct terminal output.
+		input = normalizeMarkdownLinks(input, stripAutolinkBracketsOnly)
 		return strings.TrimRight(input, "\n")
 	}
+	input = normalizeMarkdownLinks(input, escapeAutolinksForRenderer)
 	key := markdownCacheKey{input: input, width: width, quiet: quiet}
 	if cached, ok := markdownCacheGet(key); ok {
 		return cached
@@ -76,7 +88,7 @@ func renderMarkdown(input string, width int, style ansi.StyleConfig) (string, er
 	return buf.String(), nil
 }
 
-func normalizeMarkdownLinks(input string) string {
+func normalizeMarkdownLinks(input string, escaping autolinkEscaping) string {
 	var out strings.Builder
 	for i := 0; i < len(input); {
 		if inFence, fenceChar, fenceLen, _ := detectFence(input, i); inFence {
@@ -94,6 +106,11 @@ func normalizeMarkdownLinks(input string) string {
 			end := findInlineCodeEnd(input, i)
 			out.WriteString(input[i:end])
 			i = end
+			continue
+		}
+		if repl, next, ok := parseMarkdownAutolink(input, i, escaping); ok {
+			out.WriteString(repl)
+			i = next
 			continue
 		}
 		if repl, next, ok := parseMarkdownLink(input, i); ok {
@@ -183,6 +200,43 @@ func findInlineCodeEnd(input string, start int) int {
 		i++
 	}
 	return len(input)
+}
+
+func parseMarkdownAutolink(input string, start int, escaping autolinkEscaping) (string, int, bool) {
+	if start >= len(input) || input[start] != '<' {
+		return "", start, false
+	}
+	end := strings.IndexByte(input[start+1:], '>')
+	if end < 0 {
+		return "", start, false
+	}
+	end += start + 1
+	target := input[start+1 : end]
+	if target == "" || strings.ContainsAny(target, " \t\r\n") || !isMarkdownAutolinkTarget(target) {
+		return "", start, false
+	}
+	if escaping == stripAutolinkBracketsOnly {
+		return target, end + 1, true
+	}
+	return escapeMarkdownLiteral(target), end + 1, true
+}
+
+func isMarkdownAutolinkTarget(target string) bool {
+	lower := strings.ToLower(target)
+	return strings.HasPrefix(lower, "http://") ||
+		strings.HasPrefix(lower, "https://") ||
+		strings.HasPrefix(lower, "mailto:")
+}
+
+func escapeMarkdownLiteral(input string) string {
+	var out strings.Builder
+	for i := 0; i < len(input); i++ {
+		if strings.ContainsRune(markdownSpecialChars, rune(input[i])) {
+			out.WriteByte('\\')
+		}
+		out.WriteByte(input[i])
+	}
+	return out.String()
 }
 
 func parseMarkdownLink(input string, start int) (string, int, bool) {

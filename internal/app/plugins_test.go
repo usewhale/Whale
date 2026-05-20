@@ -131,7 +131,7 @@ func TestPluginStatusesListOfficialPlugins(t *testing.T) {
 	}
 }
 
-func TestSetPluginEnabledUpdatesProjectConfigAndRuntime(t *testing.T) {
+func TestSetPluginEnabledUpdatesProjectLocalConfigAndRuntime(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
 	cfg := DefaultConfig()
 	cfg.DataDir = t.TempDir()
@@ -172,12 +172,15 @@ func TestSetPluginEnabledUpdatesProjectConfigAndRuntime(t *testing.T) {
 		t.Fatalf("expected memory disabled after toggle, got:\n%s", out)
 	}
 
-	cfgFile, loaded, err := LoadConfigFile(ProjectConfigPath(app.workspaceRoot))
+	cfgFile, loaded, err := LoadConfigFile(ProjectLocalConfigPath(app.workspaceRoot))
 	if err != nil || !loaded {
-		t.Fatalf("load project config loaded=%v err=%v", loaded, err)
+		t.Fatalf("load project local config loaded=%v err=%v", loaded, err)
 	}
 	if len(cfgFile.Plugins.Disabled) != 1 || cfgFile.Plugins.Disabled[0] != "memory" {
 		t.Fatalf("expected memory in disabled plugins config, got %+v", cfgFile.Plugins.Disabled)
+	}
+	if _, loaded, err := LoadConfigFile(ProjectConfigPath(app.workspaceRoot)); err != nil || loaded {
+		t.Fatalf("shared project config should not be written by plugin toggle, loaded=%v err=%v", loaded, err)
 	}
 
 	out, err = app.SetPluginEnabled("memory", true)
@@ -190,12 +193,66 @@ func TestSetPluginEnabledUpdatesProjectConfigAndRuntime(t *testing.T) {
 	if app.toolRegistry.Get("remember") == nil {
 		t.Fatal("memory tool should be registered after enabling plugin")
 	}
-	cfgFile, _, err = LoadConfigFile(ProjectConfigPath(app.workspaceRoot))
+	cfgFile, _, err = LoadConfigFile(ProjectLocalConfigPath(app.workspaceRoot))
 	if err != nil {
-		t.Fatalf("load project config: %v", err)
+		t.Fatalf("load project local config: %v", err)
 	}
 	if len(cfgFile.Plugins.Disabled) != 0 {
 		t.Fatalf("expected disabled plugin config cleared, got %+v", cfgFile.Plugins.Disabled)
+	}
+}
+
+func TestSetPluginEnabledLocalEnableOverridesSharedDisabled(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	workspace := t.TempDir()
+	if err := SaveConfigFile(ProjectConfigPath(workspace), FileConfig{
+		Plugins: FilePluginsConfig{Disabled: []string{"memory"}},
+	}); err != nil {
+		t.Fatalf("save shared project config: %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	app, err := New(t.Context(), cfg, StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer app.Close()
+	if app.toolRegistry.Get("remember") != nil {
+		t.Fatal("memory tool should start disabled from shared project config")
+	}
+
+	out, err := app.SetPluginEnabled("memory", true)
+	if err != nil {
+		t.Fatalf("SetPluginEnabled(true): %v", err)
+	}
+	if !strings.Contains(out, "enabled plugin: memory") {
+		t.Fatalf("unexpected enable output: %q", out)
+	}
+	if app.toolRegistry.Get("remember") == nil {
+		t.Fatal("memory tool should be registered after local enable")
+	}
+	cfgFile, loaded, err := LoadConfigFile(ProjectLocalConfigPath(app.workspaceRoot))
+	if err != nil || !loaded {
+		t.Fatalf("load project local config loaded=%v err=%v", loaded, err)
+	}
+	if !containsString(cfgFile.Plugins.Enabled, "memory") {
+		t.Fatalf("expected memory in enabled plugins config, got %+v", cfgFile.Plugins.Enabled)
+	}
+	reloaded, err := LoadAndApplyConfig(Config{DataDir: cfg.DataDir}, app.workspaceRoot)
+	if err != nil {
+		t.Fatalf("LoadAndApplyConfig: %v", err)
+	}
+	if containsString(reloaded.PluginsDisabled, "memory") {
+		t.Fatalf("expected local enable to override shared disabled on reload, got %+v", reloaded.PluginsDisabled)
 	}
 }
 

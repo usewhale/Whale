@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,6 +17,9 @@ import (
 
 	"github.com/usewhale/whale/internal/app"
 	"github.com/usewhale/whale/internal/policy"
+	"github.com/usewhale/whale/internal/session"
+	"github.com/usewhale/whale/internal/store"
+	whaleworktree "github.com/usewhale/whale/internal/worktree"
 )
 
 func TestRunSetupSavesCredentials(t *testing.T) {
@@ -365,6 +369,174 @@ func TestPrepareCLIConfigDangerouslySkipPermissionsAppliesToSubcommands(t *testi
 	}
 }
 
+func TestPrepareWorktreeRunsBeforeConfigLoad(t *testing.T) {
+	repo := newCLIGitRepo(t)
+	writeCLIFile(t, filepath.Join(repo, ".whale", app.LocalConfigFileName), []byte("model = \"deepseek-v4-pro\"\n"))
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	opts := &cliOptions{cfg: app.DefaultConfig()}
+	opts.cfg.DataDir = t.TempDir()
+	root := newRootCmd(opts)
+	if err := root.PersistentFlags().Set("worktree", "feature/test"); err != nil {
+		t.Fatalf("set worktree: %v", err)
+	}
+	if err := prepareWorktree(root, opts); err != nil {
+		t.Fatalf("prepareWorktree: %v", err)
+	}
+	if got, want := opts.worktreeSession.Path, filepath.Join(repo, ".whale", "worktrees", "feature+test"); got != want {
+		t.Fatalf("worktree path: got %s want %s", got, want)
+	}
+	if cwd, _ := os.Getwd(); cwd != opts.worktreeSession.Path {
+		t.Fatalf("cwd: got %s want %s", cwd, opts.worktreeSession.Path)
+	}
+	if err := prepareCLIConfig(root, opts); err != nil {
+		t.Fatalf("prepareCLIConfig: %v", err)
+	}
+	if opts.cfg.Model != "deepseek-v4-pro" {
+		t.Fatalf("model should be loaded from copied worktree local config, got %s", opts.cfg.Model)
+	}
+}
+
+func TestPrepareWorktreePreservesSubdirectoryWorkspace(t *testing.T) {
+	repo := newCLIGitRepo(t)
+	subdir := filepath.Join(repo, "packages", "api")
+	writeCLIFile(t, filepath.Join(subdir, "api.txt"), []byte("api\n"))
+	runCLI(t, repo, "git", "add", "packages/api/api.txt")
+	runCLI(t, repo, "git", "commit", "-m", "add api package")
+	writeCLIFile(t, filepath.Join(repo, ".whale", app.LocalConfigFileName), []byte("model = \"deepseek-v4-pro\"\n"))
+	writeCLIFile(t, filepath.Join(subdir, ".whale", app.LocalConfigFileName), []byte("model = \"deepseek-v4-flash\"\n"))
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(subdir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	opts := &cliOptions{cfg: app.DefaultConfig()}
+	opts.cfg.DataDir = t.TempDir()
+	root := newRootCmd(opts)
+	if err := root.PersistentFlags().Set("worktree", "subdir"); err != nil {
+		t.Fatalf("set worktree: %v", err)
+	}
+	if err := prepareWorktree(root, opts); err != nil {
+		t.Fatalf("prepareWorktree: %v", err)
+	}
+	wantCWD := filepath.Join(opts.worktreeSession.Path, "packages", "api")
+	if cwd, _ := os.Getwd(); cwd != wantCWD {
+		t.Fatalf("cwd: got %s want %s", cwd, wantCWD)
+	}
+	if err := prepareCLIConfig(root, opts); err != nil {
+		t.Fatalf("prepareCLIConfig: %v", err)
+	}
+	if opts.cfg.Model != "deepseek-v4-flash" {
+		t.Fatalf("model should be loaded from copied subdir local config, got %s", opts.cfg.Model)
+	}
+	if got := strings.TrimSpace(gitCLIOut(t, opts.worktreeSession.Path, "status", "--porcelain")); got != "" {
+		t.Fatalf("worktree should stay clean after copying subdir local config, status:\n%s", got)
+	}
+}
+
+func TestUnsupportedSubcommandsRejectWorktree(t *testing.T) {
+	for _, args := range [][]string{
+		{"doctor", "--worktree=x"},
+		{"resume", "--worktree=x"},
+		{"setup", "--worktree=x"},
+		{"migrate-config", "--worktree=x"},
+		{"worktree", "list", "--worktree=x"},
+		normalizeWorktreeArgs([]string{"--worktree", "feature-x", "worktree", "list"}, true),
+	} {
+		opts := &cliOptions{cfg: app.DefaultConfig()}
+		root := newRootCmd(opts)
+		var out bytes.Buffer
+		root.SetOut(&out)
+		root.SetErr(&out)
+		root.SetArgs(args)
+		err := root.Execute()
+		if err == nil || !strings.Contains(err.Error(), "--worktree is only supported") {
+			t.Fatalf("%v: expected unsupported worktree error, got %v", args, err)
+		}
+	}
+}
+
+func TestWorktreeCommandsListStatusAndRemove(t *testing.T) {
+	repo := newCLIGitRepo(t)
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	opts := &cliOptions{cfg: app.DefaultConfig()}
+	root := newRootCmd(opts)
+	if err := root.PersistentFlags().Set("worktree", "cli-test"); err != nil {
+		t.Fatalf("set worktree: %v", err)
+	}
+	if err := prepareWorktree(root, opts); err != nil {
+		t.Fatalf("prepareWorktree: %v", err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatalf("Chdir repo: %v", err)
+	}
+
+	var out bytes.Buffer
+	root = newRootCmd(&cliOptions{cfg: app.DefaultConfig()})
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"worktree", "list"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("worktree list: %v", err)
+	}
+	if !strings.Contains(out.String(), "cli-test") || !strings.Contains(out.String(), "worktree-cli-test") {
+		t.Fatalf("unexpected list output:\n%s", out.String())
+	}
+
+	out.Reset()
+	root = newRootCmd(&cliOptions{cfg: app.DefaultConfig()})
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"worktree", "status", "cli-test"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("worktree status: %v", err)
+	}
+	if !strings.Contains(out.String(), "status: clean") {
+		t.Fatalf("unexpected status output:\n%s", out.String())
+	}
+
+	writeCLIFile(t, filepath.Join(repo, ".whale", "worktrees", "cli-test", "dirty.txt"), []byte("dirty\n"))
+	root = newRootCmd(&cliOptions{cfg: app.DefaultConfig()})
+	root.SetArgs([]string{"worktree", "remove", "cli-test"})
+	err = root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "has changes") {
+		t.Fatalf("expected dirty remove guard, got %v", err)
+	}
+
+	out.Reset()
+	root = newRootCmd(&cliOptions{cfg: app.DefaultConfig()})
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"worktree", "remove", "cli-test", "--force"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("worktree remove --force: %v", err)
+	}
+	if !strings.Contains(out.String(), "removed worktree: cli-test") {
+		t.Fatalf("unexpected remove output:\n%s", out.String())
+	}
+}
+
 func TestPrepareCLIConfigRejectsUnsupportedEffortAlias(t *testing.T) {
 	workspace := t.TempDir()
 	oldwd, err := os.Getwd()
@@ -629,7 +801,7 @@ func TestRootHelpOnlyShowsPublicRootFlags(t *testing.T) {
 			t.Fatalf("removed flag should not appear in help: %s\n%s", removed, help)
 		}
 	}
-	for _, expected := range []string{"--model", "--thinking", "--effort", "--dangerously-skip-permissions", "--version"} {
+	for _, expected := range []string{"--model", "--thinking", "--effort", "--dangerously-skip-permissions", "--worktree", "--version"} {
 		if !helpHasFlag(help, expected) {
 			t.Fatalf("expected public flag %s in help, got:\n%s", expected, help)
 		}
@@ -700,6 +872,303 @@ func TestThinkingAndEffortFlagsArePersistent(t *testing.T) {
 	}
 }
 
+func TestWorktreeFlagIsOptionalValuePersistentFlag(t *testing.T) {
+	opts := &cliOptions{cfg: app.DefaultConfig()}
+	root := newRootCmd(opts)
+	flag := root.PersistentFlags().Lookup("worktree")
+	if flag == nil {
+		t.Fatal("expected worktree flag")
+	}
+	if flag.NoOptDefVal == "" || !strings.HasPrefix(flag.NoOptDefVal, "session-") {
+		t.Fatalf("unexpected worktree NoOptDefVal: %q", flag.NoOptDefVal)
+	}
+}
+
+func TestAutoWorktreeNameHasCollisionResistantSuffix(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 100; i++ {
+		name := autoWorktreeName()
+		if err := whaleworktree.ValidateName(name); err != nil {
+			t.Fatalf("auto worktree name should be valid, got %q: %v", name, err)
+		}
+		if seen[name] {
+			t.Fatalf("auto worktree name collided: %s", name)
+		}
+		seen[name] = true
+	}
+}
+
+func TestNormalizeWorktreeArgsConsumesSeparatedNameButNotCommand(t *testing.T) {
+	tests := []struct {
+		name          string
+		in            []string
+		stdinTerminal bool
+		want          []string
+	}{
+		{
+			name:          "root named worktree",
+			in:            []string{"--worktree", "feature-x"},
+			stdinTerminal: true,
+			want:          []string{"--worktree=feature-x"},
+		},
+		{
+			name:          "root auto before exec",
+			in:            []string{"--worktree", "exec", "hi"},
+			stdinTerminal: true,
+			want:          []string{"--worktree", "exec", "hi"},
+		},
+		{
+			name:          "root auto before worktree command",
+			in:            []string{"--worktree", "worktree", "list"},
+			stdinTerminal: true,
+			want:          []string{"--worktree", "worktree", "list"},
+		},
+		{
+			name:          "exec named worktree",
+			in:            []string{"exec", "--worktree", "feature-x", "hi"},
+			stdinTerminal: true,
+			want:          []string{"exec", "--worktree=feature-x", "hi"},
+		},
+		{
+			name:          "short named worktree",
+			in:            []string{"exec", "-w", "feature-x", "hi"},
+			stdinTerminal: true,
+			want:          []string{"exec", "-w=feature-x", "hi"},
+		},
+		{
+			name:          "exec auto worktree preserves only prompt on terminal stdin",
+			in:            []string{"exec", "--worktree", "fix bug"},
+			stdinTerminal: true,
+			want:          []string{"exec", "--worktree", "fix bug"},
+		},
+		{
+			name:          "exec bare worktree preserves valid-name single arg as prompt on tty",
+			in:            []string{"exec", "--worktree", "test"},
+			stdinTerminal: true,
+			want:          []string{"exec", "--worktree", "test"},
+		},
+		{
+			name:          "exec bare worktree with invalid-name arg treats arg as prompt on non-tty stdin",
+			in:            []string{"exec", "--worktree", "fix bug"},
+			stdinTerminal: false,
+			want:          []string{"exec", "--worktree", "fix bug"},
+		},
+		{
+			name:          "exec named worktree consumes name on non-tty stdin with stdin prompt",
+			in:            []string{"exec", "--worktree", "feature-x"},
+			stdinTerminal: false,
+			want:          []string{"exec", "--worktree=feature-x"},
+		},
+		{
+			name:          "exec named worktree consumes name with trailing flag on non-tty stdin",
+			in:            []string{"exec", "--worktree", "feature-x", "--json"},
+			stdinTerminal: false,
+			want:          []string{"exec", "--worktree=feature-x", "--json"},
+		},
+		{
+			name:          "exec named worktree consumes name with separate prompt on non-tty stdin",
+			in:            []string{"exec", "--worktree", "feature-x", "hi"},
+			stdinTerminal: false,
+			want:          []string{"exec", "--worktree=feature-x", "hi"},
+		},
+		{
+			name:          "exec named worktree with equals",
+			in:            []string{"exec", "--worktree=feature-x", "hi"},
+			stdinTerminal: true,
+			want:          []string{"exec", "--worktree=feature-x", "hi"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := normalizeWorktreeArgs(tc.in, tc.stdinTerminal)
+			if strings.Join(got, "\x00") != strings.Join(tc.want, "\x00") {
+				t.Fatalf("normalizeWorktreeArgs = %#v, want %#v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRootExecuteSupportsSeparatedWorktreeName(t *testing.T) {
+	repo := newCLIGitRepo(t)
+	writeCLIFile(t, filepath.Join(repo, ".whale", app.LocalConfigFileName), []byte("model = \"deepseek-v4-pro\"\n"))
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	opts := &cliOptions{cfg: app.DefaultConfig()}
+	opts.cfg.DataDir = t.TempDir()
+	root := newRootCmd(opts)
+	root.SetArgs(normalizeWorktreeArgs([]string{"exec", "--worktree", "feature-x", "--effort=low", "hi"}, true))
+	err = root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "unsupported effort: low") {
+		t.Fatalf("expected effort validation after worktree preparation, got %v", err)
+	}
+	if opts.worktreeSession.Name != "feature-x" {
+		t.Fatalf("worktree session = %+v", opts.worktreeSession)
+	}
+}
+
+func TestRootExecBareWorktreePreservesPrompt(t *testing.T) {
+	repo := newCLIGitRepo(t)
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	opts := &cliOptions{cfg: app.DefaultConfig()}
+	opts.cfg.DataDir = t.TempDir()
+	root := newRootCmd(opts)
+	root.SetArgs(normalizeWorktreeArgs([]string{"exec", "--worktree", "--effort=low", "fix bug"}, true))
+	err = root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "unsupported effort: low") {
+		t.Fatalf("expected effort validation after preserving prompt, got %v", err)
+	}
+	if !strings.HasPrefix(opts.worktreeSession.Name, "session-") {
+		t.Fatalf("expected auto-named worktree, got %+v", opts.worktreeSession)
+	}
+}
+
+func TestPrepareResumeWorktreeChdirsBeforeConfigLoad(t *testing.T) {
+	repo := newCLIGitRepo(t)
+	dataDir := t.TempDir()
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	opts := &cliOptions{cfg: app.DefaultConfig()}
+	opts.cfg.DataDir = dataDir
+	root := newRootCmd(opts)
+	if err := root.PersistentFlags().Set("worktree", "resume-test"); err != nil {
+		t.Fatalf("set worktree: %v", err)
+	}
+	if err := prepareWorktree(root, opts); err != nil {
+		t.Fatalf("prepareWorktree: %v", err)
+	}
+	worktreePath := opts.worktreeSession.Path
+	if err := app.SaveConfigFile(filepath.Join(worktreePath, ".whale", app.LocalConfigFileName), app.FileConfig{Model: "deepseek-v4-pro"}); err != nil {
+		t.Fatalf("save worktree config: %v", err)
+	}
+	if err := session.SaveSessionMeta(store.DefaultSessionsDir(dataDir), "resume-session", session.SessionMeta{
+		Workspace:      worktreePath,
+		Branch:         "worktree-resume-test",
+		WorktreeName:   "resume-test",
+		WorktreePath:   worktreePath,
+		WorktreeBranch: "worktree-resume-test",
+	}); err != nil {
+		t.Fatalf("save session meta: %v", err)
+	}
+
+	if err := os.Chdir(repo); err != nil {
+		t.Fatalf("Chdir repo: %v", err)
+	}
+	opts = &cliOptions{cfg: app.DefaultConfig()}
+	opts.cfg.DataDir = dataDir
+	if err := prepareResumeWorktree([]string{"resume-session"}, false, opts); err != nil {
+		t.Fatalf("prepareResumeWorktree: %v", err)
+	}
+	if cwd, _ := os.Getwd(); cwd != worktreePath {
+		t.Fatalf("cwd: got %s want %s", cwd, worktreePath)
+	}
+	if err := prepareCLIConfig(newRootCmd(opts), opts); err != nil {
+		t.Fatalf("prepareCLIConfig: %v", err)
+	}
+	if opts.cfg.Model != "deepseek-v4-pro" {
+		t.Fatalf("model should come from resume worktree config, got %s", opts.cfg.Model)
+	}
+}
+
+func TestPrepareResumeWorktreeUsesRecordedSubdirectoryWorkspace(t *testing.T) {
+	repo := newCLIGitRepo(t)
+	dataDir := t.TempDir()
+	subdir := filepath.Join(repo, "packages", "api")
+	writeCLIFile(t, filepath.Join(subdir, "api.txt"), []byte("api\n"))
+	runCLI(t, repo, "git", "add", "packages/api/api.txt")
+	runCLI(t, repo, "git", "commit", "-m", "add api package")
+	writeCLIFile(t, filepath.Join(subdir, ".whale", app.LocalConfigFileName), []byte("model = \"deepseek-v4-flash\"\n"))
+
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(subdir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	opts := &cliOptions{cfg: app.DefaultConfig()}
+	opts.cfg.DataDir = dataDir
+	root := newRootCmd(opts)
+	if err := root.PersistentFlags().Set("worktree", "resume-subdir"); err != nil {
+		t.Fatalf("set worktree: %v", err)
+	}
+	if err := prepareWorktree(root, opts); err != nil {
+		t.Fatalf("prepareWorktree: %v", err)
+	}
+	worktreePath := opts.worktreeSession.Path
+	worktreeWorkspace := filepath.Join(worktreePath, "packages", "api")
+	if err := session.SaveSessionMeta(store.DefaultSessionsDir(dataDir), "resume-subdir-session", session.SessionMeta{
+		Workspace:      worktreeWorkspace,
+		Branch:         "worktree-resume-subdir",
+		WorktreeName:   "resume-subdir",
+		WorktreePath:   worktreePath,
+		WorktreeBranch: "worktree-resume-subdir",
+	}); err != nil {
+		t.Fatalf("save session meta: %v", err)
+	}
+
+	if err := os.Chdir(repo); err != nil {
+		t.Fatalf("Chdir repo: %v", err)
+	}
+	opts = &cliOptions{cfg: app.DefaultConfig()}
+	opts.cfg.DataDir = dataDir
+	if err := prepareResumeWorktree([]string{"resume-subdir-session"}, false, opts); err != nil {
+		t.Fatalf("prepareResumeWorktree: %v", err)
+	}
+	if cwd, _ := os.Getwd(); cwd != worktreeWorkspace {
+		t.Fatalf("cwd: got %s want %s", cwd, worktreeWorkspace)
+	}
+	if err := prepareCLIConfig(newRootCmd(opts), opts); err != nil {
+		t.Fatalf("prepareCLIConfig: %v", err)
+	}
+	if opts.cfg.Model != "deepseek-v4-flash" {
+		t.Fatalf("model should come from resume subdir worktree config, got %s", opts.cfg.Model)
+	}
+}
+
+func TestPrepareResumeWorktreeMissingPathErrors(t *testing.T) {
+	dataDir := t.TempDir()
+	missing := filepath.Join(t.TempDir(), "missing")
+	if err := session.SaveSessionMeta(store.DefaultSessionsDir(dataDir), "resume-session", session.SessionMeta{
+		Workspace:    missing,
+		WorktreeName: "missing",
+		WorktreePath: missing,
+	}); err != nil {
+		t.Fatalf("save session meta: %v", err)
+	}
+	opts := &cliOptions{cfg: app.DefaultConfig()}
+	opts.cfg.DataDir = dataDir
+	err := prepareResumeWorktree([]string{"resume-session"}, false, opts)
+	if err == nil || !strings.Contains(err.Error(), "worktree missing") {
+		t.Fatalf("expected missing worktree error, got %v", err)
+	}
+}
+
 func helpHasFlag(help, flag string) bool {
 	for _, field := range strings.Fields(help) {
 		field = strings.TrimRight(field, ",")
@@ -747,4 +1216,55 @@ func newExecTestServer(t *testing.T, content string) *httptest.Server {
 		_, _ = fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n", content)
 		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
+}
+
+func newCLIGitRepo(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	dir := t.TempDir()
+	runCLI(t, dir, "git", "init", "-b", "main")
+	runCLI(t, dir, "git", "config", "user.email", "test@example.com")
+	runCLI(t, dir, "git", "config", "user.name", "Test User")
+	writeCLIFile(t, filepath.Join(dir, ".gitignore"), []byte(".whale/worktrees/\n"))
+	writeCLIFile(t, filepath.Join(dir, "README.md"), []byte("test\n"))
+	runCLI(t, dir, "git", "add", ".gitignore", "README.md")
+	runCLI(t, dir, "git", "commit", "-m", "initial")
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("resolve temp repo: %v", err)
+	}
+	return resolved
+}
+
+func runCLI(t *testing.T, cwd, name string, args ...string) {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Dir = cwd
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, string(out))
+	}
+}
+
+func gitCLIOut(t *testing.T, cwd string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = cwd
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, string(out))
+	}
+	return string(out)
+}
+
+func writeCLIFile(t *testing.T, path string, b []byte) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, b, 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
 }

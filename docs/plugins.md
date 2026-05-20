@@ -9,7 +9,8 @@ filesystem plugin runtime or marketplace.
 The current plugin platform supports:
 
 - plugin manifests with explicit capabilities and permissions;
-- global/project enablement through `[plugins].disabled`;
+- global/project enablement through `[plugins].enabled` and
+  `[plugins].disabled`;
 - plugin-owned tools, slash commands, startup context, skills, hooks, storage
   paths, service status, and diagnostics;
 - `/plugins` installed-plugin management in the TUI;

@@ -130,8 +130,10 @@ type CommandResult struct {
 type CommandTurn struct {
 	Input               string
 	Hidden              bool
+	ReadOnly            bool
 	SkipUserPromptHooks bool
 	SkipSkillInjection  bool
+	ShellAllowPrefixes  []string
 }
 
 type ServiceStatus struct {

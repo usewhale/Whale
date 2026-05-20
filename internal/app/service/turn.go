@@ -13,15 +13,51 @@ import (
 )
 
 func (s *Service) runTurn(line string, hiddenInput bool) {
+	s.runTurnWithOptions(line, agent.RunOptions{HiddenInput: hiddenInput})
+}
+
+func (s *Service) runTurnWithOptions(line string, opts agent.RunOptions) {
 	s.runTurnWith(func(ctx context.Context) (<-chan agent.AgentEvent, error) {
-		return s.app.RunTurn(ctx, line, hiddenInput)
+		return s.app.RunTurnWithOptions(ctx, line, opts)
 	})
 }
 
 func (s *Service) runInjectedTurn(visibleInput, hiddenInput string) {
+	s.runInjectedTurnWithOptions(visibleInput, hiddenInput, agent.RunOptions{})
+}
+
+func (s *Service) runInjectedTurnWithOptions(visibleInput, hiddenInput string, opts agent.RunOptions) {
 	s.runTurnWith(func(ctx context.Context) (<-chan agent.AgentEvent, error) {
-		return s.app.RunTurnWithInjectedInput(ctx, visibleInput, hiddenInput)
+		return s.app.RunTurnWithInjectedInputOptions(ctx, visibleInput, hiddenInput, opts)
 	})
+}
+
+func (s *Service) runSideQuestion(question string) {
+	id := int(s.btwNextID.Add(1))
+	s.emit(Event{Kind: EventBtwStarted, Text: question, Count: id})
+	go func() {
+		events, err := s.app.RunSideQuestion(s.ctx, question)
+		if err != nil {
+			s.emit(Event{Kind: EventBtwError, Text: err.Error(), Count: id})
+			return
+		}
+		for ev := range events {
+			switch ev.Type {
+			case agent.SideQuestionEventDelta:
+				if ev.Content != "" {
+					s.emit(Event{Kind: EventBtwDelta, Text: ev.Content, Count: id})
+				}
+			case agent.SideQuestionEventDone:
+				s.emit(Event{Kind: EventBtwDone, Text: ev.Content, Count: id})
+			case agent.SideQuestionEventError:
+				if ev.Content != "" {
+					s.emit(Event{Kind: EventBtwError, Text: ev.Content, Count: id})
+				} else if ev.Err != nil {
+					s.emit(Event{Kind: EventBtwError, Text: ev.Err.Error(), Count: id})
+				}
+			}
+		}
+	}()
 }
 
 func (s *Service) runTurnWith(start func(context.Context) (<-chan agent.AgentEvent, error)) {
@@ -81,6 +117,9 @@ func (s *Service) runTurnWith(start func(context.Context) (<-chan agent.AgentEve
 		case agent.AgentEventTypeProviderRetryScheduled:
 			if ev.ProviderRetry != nil {
 				deltas.flushReliable()
+				if ev.ProviderRetry.StreamReset {
+					last = ""
+				}
 				s.emit(providerRetryEvent(ev.ProviderRetry))
 			}
 		case agent.AgentEventTypeToolCall:
@@ -159,6 +198,12 @@ func providerRetryEvent(info *llmretry.Info) Event {
 	}
 	if info.Reason != "" {
 		meta["reason"] = info.Reason
+	}
+	if info.Stage != "" {
+		meta["stage"] = info.Stage
+	}
+	if info.StreamReset {
+		meta["stream_reset"] = true
 	}
 	return Event{Kind: EventProviderRetry, Text: llmretry.FormatInfo(*info), Metadata: meta}
 }

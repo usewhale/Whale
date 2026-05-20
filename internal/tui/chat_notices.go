@@ -24,6 +24,10 @@ func (m model) approvalNoticeText(decision string) string {
 		return lipgloss.NewStyle().
 			Foreground(tuitheme.Default.Success).
 			Render(fmt.Sprintf("✔ You approved %s to %s for this session", product, action))
+	case "cancel":
+		return lipgloss.NewStyle().
+			Foreground(tuitheme.Default.Muted).
+			Render(fmt.Sprintf("• You canceled the request to %s", action))
 	default:
 		return lipgloss.NewStyle().
 			Foreground(tuitheme.Default.Error).

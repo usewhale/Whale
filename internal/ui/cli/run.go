@@ -13,6 +13,7 @@ import (
 	"github.com/usewhale/whale/internal/agent"
 	"github.com/usewhale/whale/internal/app"
 	llmretry "github.com/usewhale/whale/internal/llm/retry"
+	"github.com/usewhale/whale/internal/plugins"
 )
 
 func Run(cfg app.Config, start app.StartOptions) error {
@@ -57,6 +58,7 @@ func Run(cfg app.Config, start app.StartOptions) error {
 		}
 		hiddenInput := false
 		skipHooks := false
+		turnOptions := agent.RunOptions{HiddenInput: hiddenInput}
 		if coreApp.IsResumeMenu(line) {
 			choices, err := coreApp.ListResumeChoices(20)
 			if err != nil {
@@ -102,7 +104,8 @@ func Run(cfg app.Config, start app.StartOptions) error {
 				continue
 			}
 			line = cmd.Turn.Input
-			hiddenInput = cmd.Turn.Hidden
+			turnOptions = cliRunOptionsFromCommandTurn(cmd.Turn, hiddenInput)
+			hiddenInput = turnOptions.HiddenInput
 			skipHooks = cmd.Turn.SkipUserPromptHooks
 		}
 		cmd, err = coreApp.ExecuteLocalCommand(line)
@@ -118,7 +121,8 @@ func Run(cfg app.Config, start app.StartOptions) error {
 				continue
 			}
 			line = cmd.Turn.Input
-			hiddenInput = cmd.Turn.Hidden
+			turnOptions = cliRunOptionsFromCommandTurn(cmd.Turn, hiddenInput)
+			hiddenInput = turnOptions.HiddenInput
 			skipHooks = cmd.Turn.SkipUserPromptHooks
 		}
 		if strings.HasPrefix(line, "/") {
@@ -156,7 +160,7 @@ func Run(cfg app.Config, start app.StartOptions) error {
 				}
 			}
 		}()
-		events, runErr := coreApp.RunTurn(turnCtx, line, hiddenInput)
+		events, runErr := coreApp.RunTurnWithOptions(turnCtx, line, turnOptions)
 		if runErr != nil {
 			cancelTurn()
 			turnCancelMu.Lock()
@@ -187,6 +191,17 @@ func Run(cfg app.Config, start app.StartOptions) error {
 		}
 	}
 	return scanner.Err()
+}
+
+func cliRunOptionsFromCommandTurn(turn *plugins.CommandTurn, fallbackHidden bool) agent.RunOptions {
+	opts := agent.RunOptions{HiddenInput: fallbackHidden}
+	if turn == nil {
+		return opts
+	}
+	opts.HiddenInput = turn.Hidden
+	opts.ReadOnly = turn.ReadOnly
+	opts.ShellAllowPrefixes = append([]string(nil), turn.ShellAllowPrefixes...)
+	return opts
 }
 
 func clearCLIOutput(out io.Writer) {

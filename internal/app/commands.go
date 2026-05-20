@@ -16,6 +16,7 @@ import (
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/skills"
 	"github.com/usewhale/whale/internal/store"
+	whaleworktree "github.com/usewhale/whale/internal/worktree"
 )
 
 func resolveInitialSessionID(sessionsDir string) (string, error) {
@@ -63,9 +64,119 @@ func (a *App) buildStatus() string {
 		fmt.Sprintf("- thinking: %s", onOff(a.thinkingEnabled)),
 		fmt.Sprintf("- view: %s", a.ViewMode()),
 	}
+	if strings.TrimSpace(a.worktree.Name) != "" {
+		parts = append(parts, fmt.Sprintf("- worktree: %s (%s)", a.worktree.Name, a.worktree.Path))
+	}
 	parts = append(parts, formatContextWindowStatus(a))
 	parts = append(parts, a.formatBudgetStatusLine())
 	return strings.Join(parts, "\n")
+}
+
+func (a *App) buildWorktreeStatus(args []string) (string, error) {
+	if len(args) == 0 {
+		if strings.TrimSpace(a.worktree.Name) == "" {
+			return "Worktree\n\ncurrent: none", nil
+		}
+		return strings.Join([]string{
+			"Worktree",
+			"",
+			"current: " + a.worktree.Name,
+			"branch: " + valueOrDash(a.worktree.Branch),
+			"path: " + a.worktree.Path,
+			"original workspace: " + valueOrDash(a.worktree.OriginalWorkspace),
+		}, "\n"), nil
+	}
+	switch args[0] {
+	case "list":
+		items, err := whaleworktree.List(a.workspaceRoot)
+		if err != nil {
+			return "", err
+		}
+		return formatWorktreeList(items), nil
+	case "status":
+		if len(args) == 1 {
+			return a.buildWorktreeStatus(nil)
+		}
+		item, err := whaleworktree.Status(a.workspaceRoot, args[1])
+		if err != nil {
+			return "", err
+		}
+		return formatWorktreeDetail(item), nil
+	default:
+		return "", fmt.Errorf("usage: /worktree [list|status [name]|remove <name> [--force]]")
+	}
+}
+
+func (a *App) removeWorktree(args []string) (string, error) {
+	if len(args) != 2 && len(args) != 3 {
+		return "", fmt.Errorf("usage: /worktree remove <name> [--force]")
+	}
+	if args[0] != "remove" {
+		return "", fmt.Errorf("usage: /worktree remove <name> [--force]")
+	}
+	force := false
+	if len(args) == 3 {
+		if args[2] != "--force" {
+			return "", fmt.Errorf("usage: /worktree remove <name> [--force]")
+		}
+		force = true
+	}
+	res, err := whaleworktree.Remove(a.workspaceRoot, args[1], force)
+	if err != nil {
+		return "", err
+	}
+	lines := []string{
+		"Removed worktree",
+		"",
+		"name: " + res.Entry.Name,
+		"path: " + res.Entry.Path,
+	}
+	if res.BranchDeleted {
+		lines = append(lines, "deleted branch: "+whaleworktree.BranchName(args[1]))
+	} else if strings.TrimSpace(res.BranchWarning) != "" {
+		lines = append(lines, "branch warning: "+res.BranchWarning)
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+func formatWorktreeList(items []whaleworktree.Entry) string {
+	if len(items) == 0 {
+		return "Worktrees\n\nnone"
+	}
+	lines := []string{"Worktrees", ""}
+	for _, item := range items {
+		lines = append(lines, fmt.Sprintf("- %s: %s %s %s", item.Name, worktreeStatusLabel(item), valueOrDash(item.Head), item.Path))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatWorktreeDetail(item whaleworktree.Entry) string {
+	return strings.Join([]string{
+		"Worktree",
+		"",
+		"name: " + item.Name,
+		"branch: " + item.Branch,
+		"head: " + valueOrDash(item.Head),
+		"status: " + worktreeStatusLabel(item),
+		"path: " + item.Path,
+	}, "\n")
+}
+
+func worktreeStatusLabel(item whaleworktree.Entry) string {
+	if item.Missing {
+		return "missing"
+	}
+	if item.Dirty {
+		return "dirty"
+	}
+	return "clean"
+}
+
+func valueOrDash(v string) string {
+	if strings.TrimSpace(v) == "" {
+		return "-"
+	}
+	return strings.TrimSpace(v)
 }
 
 func (a *App) formatBudgetStatusLine() string {
@@ -512,18 +623,22 @@ func (a *App) setSkillDisabled(name string, disabled bool) (string, error) {
 		return "", fmt.Errorf("%s", msg)
 	}
 
-	path := ProjectConfigPath(a.workspaceRoot)
+	path := ProjectLocalConfigPath(a.workspaceRoot)
 	cfg, _, err := LoadConfigFile(path)
 	if err != nil {
 		return "", err
 	}
 	before := disabledNameSet(cfg.Skills.Disabled)
+	enabledSet := disabledNameSet(cfg.Skills.Enabled)
 	if disabled {
 		before[strings.ToLower(name)] = name
+		delete(enabledSet, strings.ToLower(name))
 	} else {
 		delete(before, strings.ToLower(name))
+		enabledSet[strings.ToLower(name)] = name
 	}
 	cfg.Skills.Disabled = sortedSkillNames(before)
+	cfg.Skills.Enabled = sortedSkillNames(enabledSet)
 	if err := SaveConfigFile(path, cfg); err != nil {
 		return "", err
 	}
@@ -554,18 +669,22 @@ func (a *App) SetPluginEnabled(id string, enabled bool) (string, error) {
 	}
 	id = st.Manifest.ID
 
-	path := ProjectConfigPath(a.workspaceRoot)
+	path := ProjectLocalConfigPath(a.workspaceRoot)
 	cfg, _, err := LoadConfigFile(path)
 	if err != nil {
 		return "", err
 	}
 	disabled := disabledNameSet(cfg.Plugins.Disabled)
+	enabledSet := disabledNameSet(cfg.Plugins.Enabled)
 	if enabled {
 		delete(disabled, strings.ToLower(id))
+		enabledSet[strings.ToLower(id)] = id
 	} else {
 		disabled[strings.ToLower(id)] = id
+		delete(enabledSet, strings.ToLower(id))
 	}
 	cfg.Plugins.Disabled = sortedSkillNames(disabled)
+	cfg.Plugins.Enabled = sortedSkillNames(enabledSet)
 	if err := SaveConfigFile(path, cfg); err != nil {
 		return "", err
 	}
@@ -685,6 +804,58 @@ func sortedSkillNames(names map[string]string) []string {
 		out = append(out, name)
 	}
 	sort.Strings(out)
+	return out
+}
+
+func mergeNames(existing, add []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(existing)+len(add))
+	for _, name := range existing {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, trimmed)
+	}
+	for _, name := range add {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func removeNames(names, remove []string) []string {
+	removeSet := disabledNameSet(remove)
+	if len(removeSet) == 0 {
+		return trimList(names)
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, name := range names {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := removeSet[key]; ok || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, trimmed)
+	}
 	return out
 }
 

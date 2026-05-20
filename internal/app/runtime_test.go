@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/usewhale/whale/internal/agent"
+	"github.com/usewhale/whale/internal/session"
+	"github.com/usewhale/whale/internal/store"
 )
 
 func TestHandleLocalCommandCompactUsageError(t *testing.T) {
@@ -124,5 +126,44 @@ func TestOfficialPluginNoopStopHooksDoNotRenderOutput(t *testing.T) {
 	out := app.RunStopHook("final answer", 1)
 	if out != "" {
 		t.Fatalf("expected plugin pass hooks to render no output, got %q", out)
+	}
+}
+
+func TestNewSessionStoresWorktreeMeta(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
+	workspace := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	app, err := New(t.Context(), cfg, StartOptions{
+		NewSession: true,
+		Worktree: WorktreeSession{
+			Name:               "feature",
+			Path:               workspace,
+			Branch:             "worktree-feature",
+			OriginalWorkspace:  "/tmp/original",
+			OriginalBranch:     "main",
+			OriginalHeadCommit: "abc123",
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer app.Close()
+
+	meta, err := session.LoadSessionMeta(store.DefaultSessionsDir(cfg.DataDir), app.SessionID())
+	if err != nil {
+		t.Fatalf("LoadSessionMeta: %v", err)
+	}
+	if meta.WorktreeName != "feature" || meta.WorktreePath != workspace || meta.WorktreeBranch != "worktree-feature" || meta.OriginalWorkspace != "/tmp/original" || meta.OriginalBranch != "main" || meta.OriginalHeadCommit != "abc123" {
+		t.Fatalf("unexpected worktree meta: %+v", meta)
 	}
 }

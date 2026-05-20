@@ -14,7 +14,17 @@ dist/
 tmp/
 
 # --- Local Settings, Secrets & Session State ---
-.whale/
+.whale/*
+!.whale/config.toml
+!.whale/skills/
+!.whale/skills/**
+.whale/config.local.toml
+.whale/settings.json
+.whale/credentials.json
+.whale/mcp.json
+.whale/worktrees/
+.whale/sessions/
+.whale/usage.jsonl
 session.json
 .env
 .env.*

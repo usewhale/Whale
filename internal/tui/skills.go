@@ -215,6 +215,7 @@ func (m *model) openSkillsListFromMenu() {
 	m.skillBinding = nil
 	m.slash.matches = nil
 	m.slash.selected = 0
+	m.slash.argumentHint = ""
 	m.skills.matches = nil
 	m.skills.selected = 0
 	m.resetHistoryNavigation()
