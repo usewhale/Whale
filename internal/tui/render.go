@@ -74,7 +74,7 @@ func (m model) chatViewportBodyHeight(mainWidth, bodyHeight int) int {
 }
 
 func (m model) renderBottom(mainWidth int) string {
-	footerText := "model: " + m.model + "  effort: " + m.effort + "  thinking: " + m.thinking
+	footerText := m.model + " · " + m.effort + "  thinking: " + m.thinking
 	if m.chatMode == "ask" || m.chatMode == "plan" {
 		footerText += "  mode: " + m.chatMode + " (Shift+Tab to switch)"
 	}
@@ -82,14 +82,16 @@ func (m model) renderBottom(mainWidth int) string {
 	if m.focusEnabled() {
 		viewIndicator = "focus"
 	}
-	dirReserve := 0
-	if m.cwd != "" {
-		dirReserve = footerDirReserve(m.cwd)
-	}
 	viewReserve := footerViewIndicatorReserve(viewIndicator)
-	footerText = appendFooterHint(footerText, mainWidth, dirReserve+viewReserve)
+	branchReserve := 0
+	if footerBranchCanRenderWithDir(footerText, m.cwd, m.gitBranch, mainWidth, viewReserve) {
+		branchReserve = footerBranchReserve(m.gitBranch)
+	}
 	if m.cwd != "" {
-		footerText = appendFooterDir(footerText, m.cwd, mainWidth, viewReserve)
+		footerText = appendFooterDir(footerText, m.cwd, mainWidth, branchReserve+viewReserve)
+	}
+	if m.gitBranch != "" {
+		footerText = appendFooterBranch(footerText, m.gitBranch, mainWidth, viewReserve)
 	}
 	if viewIndicator != "" {
 		footerText = appendFooterViewIndicator(footerText, viewIndicator, mainWidth)
@@ -414,6 +416,18 @@ func appendFooterDir(base, cwd string, width, reserve int) string {
 	return base + segment + fitTail(cwd, available)
 }
 
+func appendFooterBranch(base, branch string, width, reserve int) string {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return base
+	}
+	segment := "  " + branch
+	if lipgloss.Width(base)+lipgloss.Width(segment)+reserve > width {
+		return base
+	}
+	return base + segment
+}
+
 func appendFooterViewIndicator(base, indicator string, width int) string {
 	indicator = strings.TrimSpace(indicator)
 	if indicator == "" {
@@ -426,14 +440,15 @@ func appendFooterViewIndicator(base, indicator string, width int) string {
 	return base + segment
 }
 
-func appendFooterHint(base string, width, reserve int) string {
-	for _, hint := range []string{"PgUp/PgDn scroll"} {
-		segment := "  " + hint
-		if lipgloss.Width(base)+lipgloss.Width(segment)+reserve <= width {
-			return base + segment
-		}
+func footerBranchCanRenderWithDir(base, cwd, branch string, width, reserve int) bool {
+	if strings.TrimSpace(branch) == "" {
+		return false
 	}
-	return base
+	required := lipgloss.Width(base) + footerBranchReserve(branch) + reserve
+	if cwd != "" {
+		required += footerDirReserve(cwd)
+	}
+	return required <= width
 }
 
 func footerDirReserve(cwd string) int {
@@ -449,6 +464,14 @@ func footerDirReserve(cwd string) int {
 		return 0
 	}
 	return lipgloss.Width("  ") + lipgloss.Width(tail)
+}
+
+func footerBranchReserve(branch string) int {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		return 0
+	}
+	return lipgloss.Width("  ") + lipgloss.Width(branch)
 }
 
 func footerViewIndicatorReserve(indicator string) int {

@@ -3,6 +3,9 @@ package tui
 import (
 	"bytes"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +26,23 @@ func newFakeClock() *fakeClock { return &fakeClock{t: time.Unix(1700000000, 0)} 
 
 func (c *fakeClock) now() time.Time          { return c.t }
 func (c *fakeClock) advance(d time.Duration) { c.t = c.t.Add(d) }
+
+func requireGit(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
+	}
+}
 
 func newModelWithDispatchSpy() (model, *[]service.Intent) {
 	m := newModel(nil, "", "", "")
@@ -4504,7 +4524,7 @@ func TestChatFooterFollowsContentAfterSlashSuggestionsClose(t *testing.T) {
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
 	m = next.(model)
 	withSlash := m.View()
-	assertFooterLastLine(t, withSlash, "model: deepseek-v4-pro")
+	assertFooterLastLine(t, withSlash, "deepseek-v4-pro · normal")
 	assertFooterLastLine(t, withSlash, "whale")
 	assertFooterLastLineNotContains(t, withSlash, "dir:")
 	if !strings.Contains(withSlash, "Tab/Enter pick") {
@@ -4514,7 +4534,7 @@ func TestChatFooterFollowsContentAfterSlashSuggestionsClose(t *testing.T) {
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
 	m = next.(model)
 	afterDelete := m.View()
-	assertFooterLastLine(t, afterDelete, "model: deepseek-v4-pro")
+	assertFooterLastLine(t, afterDelete, "deepseek-v4-pro · normal")
 	assertFooterLastLine(t, afterDelete, "whale")
 	assertFooterLastLineNotContains(t, afterDelete, "dir:")
 	if strings.Contains(afterDelete, "Tab/Enter pick") {
@@ -4534,6 +4554,140 @@ func TestChatFooterShowsWindowsDirectoryTail(t *testing.T) {
 	view := m.View()
 	assertFooterLastLine(t, view, `goranka`)
 	assertFooterLastLineNotContains(t, view, ` ~`)
+}
+
+func TestChatFooterShowsGitBranchInsteadOfScrollHint(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-pro", "high", "on")
+	m.width = 100
+	m.height = 24
+	m.cwd = "~/Engineer/ai/dsk/whale-footer-branch-display"
+	m.gitBranch = "feat/footer-branch"
+
+	view := m.View()
+	assertFooterLastLine(t, view, "footer-branch-display")
+	assertFooterLastLine(t, view, "feat/footer-branch")
+	assertFooterLastLineNotContains(t, view, "PgUp/PgDn scroll")
+}
+
+func TestChatFooterOmitsEmptyGitBranch(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-pro", "high", "on")
+	m.width = 100
+	m.height = 24
+	m.cwd = "~/Engineer/ai/dsk/whale-footer-branch-display"
+
+	view := m.View()
+	assertFooterLastLine(t, view, "whale-footer-branch-display")
+	assertFooterLastLineNotContains(t, view, "PgUp/PgDn scroll")
+}
+
+func TestChatFooterLongGitBranchDoesNotHideDirectory(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-pro", "high", "on")
+	m.width = 80
+	m.height = 24
+	m.cwd = "~/Engineer/ai/dsk/whale-footer-branch-display"
+	m.gitBranch = "feat/this-is-an-extremely-long-branch-name-that-cannot-fit-in-the-footer"
+
+	view := m.View()
+	assertFooterLastLine(t, view, "footer-branch-display")
+	assertFooterLastLineNotContains(t, view, m.gitBranch)
+	assertFooterLastLineNotContains(t, view, "PgUp/PgDn scroll")
+}
+
+func TestChatFooterKeepsFocusIndicatorWithGitBranch(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-pro", "high", "on")
+	m.width = 100
+	m.height = 24
+	m.viewMode = app.ViewModeFocus
+	m.cwd = "/Users/goranka/Engineer/ai/dsk/whale-output-mouse-copy"
+	m.gitBranch = "feat/footer-branch"
+
+	view := m.View()
+	assertFooterLastLine(t, view, "focus")
+	assertFooterLastLine(t, view, "feat/footer-branch")
+	assertFooterLastLineNotContains(t, view, "PgUp/PgDn scroll")
+}
+
+func TestGitBranchUpdatedIgnoresStaleCwd(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.cwdPath = "/tmp/current"
+	next, _ := m.Update(gitBranchUpdatedMsg{cwd: "/tmp/old", branch: "old"})
+	m = next.(model)
+	if m.gitBranch != "" {
+		t.Fatalf("expected stale branch update to be ignored, got %q", m.gitBranch)
+	}
+
+	next, _ = m.Update(gitBranchUpdatedMsg{cwd: "/tmp/current", branch: "current"})
+	m = next.(model)
+	if m.gitBranch != "current" {
+		t.Fatalf("expected current branch update, got %q", m.gitBranch)
+	}
+}
+
+func TestDetectGitBranch(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	runGit(t, dir, "checkout", "-b", "feat/footer-branch")
+
+	if got := detectGitBranch(dir); got != "feat/footer-branch" {
+		t.Fatalf("expected branch %q, got %q", "feat/footer-branch", got)
+	}
+}
+
+func TestShellToolResultRefreshesGitBranch(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	runGit(t, dir, "checkout", "-B", "whale-test-base")
+	runGit(t, dir, "checkout", "-b", "feat/after-shell")
+
+	m := newModel(nil, "", "", "")
+	m.cwdPath = dir
+	cmd, _, _ := m.handleServiceEvent(service.Event{
+		Kind:       service.EventToolResult,
+		ToolCallID: "tc-shell",
+		ToolName:   "shell_run",
+		Text:       `{"success":true,"code":"ok","data":{"status":"ok","metrics":{"exit_code":0},"payload":{"command":"git checkout -b feat/after-shell","stdout":"","stderr":""}}}`,
+	})
+	if cmd == nil {
+		t.Fatal("expected shell tool result to schedule git branch refresh")
+	}
+	msg, ok := cmd().(gitBranchUpdatedMsg)
+	if !ok {
+		t.Fatalf("expected gitBranchUpdatedMsg, got %T", msg)
+	}
+	if msg.cwd != dir {
+		t.Fatalf("expected cwd %q, got %q", dir, msg.cwd)
+	}
+	if msg.branch != "feat/after-shell" {
+		t.Fatalf("expected refreshed branch %q, got %q", "feat/after-shell", msg.branch)
+	}
+}
+
+func TestDetectGitBranchNonGitDirectory(t *testing.T) {
+	requireGit(t)
+	if got := detectGitBranch(t.TempDir()); got != "" {
+		t.Fatalf("expected no branch outside git repo, got %q", got)
+	}
+}
+
+func TestDetectGitBranchDetachedHead(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	runGit(t, dir, "checkout", "-B", "whale-test-base")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	runGit(t, dir, "add", "README.md")
+	runGit(t, dir, "commit", "-m", "initial")
+	runGit(t, dir, "checkout", "--detach", "HEAD")
+
+	if got := detectGitBranch(dir); got != "" {
+		t.Fatalf("expected no branch in detached HEAD, got %q", got)
+	}
 }
 
 func TestChatTranscriptRetainsLocalCommandResultsAcrossSubmits(t *testing.T) {
@@ -5124,7 +5278,7 @@ func TestChatViewPinsBottomAfterContentExceedsScreen(t *testing.T) {
 	if got := countVisibleLines(view); got != m.height {
 		t.Fatalf("expected overflowing chat view to occupy terminal height %d, got %d:\n%s", m.height, got, view)
 	}
-	assertFooterLastLine(t, view, "model: deepseek-v4-flash")
+	assertFooterLastLine(t, view, "deepseek-v4-flash · max")
 	if !strings.Contains(view, "entry-39") {
 		t.Fatalf("expected overflowing chat view to follow latest content:\n%s", view)
 	}
@@ -6347,8 +6501,7 @@ func TestChatFooterShowsEffectiveThinkingAndEffort(t *testing.T) {
 	m.height = 24
 
 	view := m.View()
-	assertFooterLastLine(t, view, "model: deepseek-v4-pro")
-	assertFooterLastLine(t, view, "effort: max")
+	assertFooterLastLine(t, view, "deepseek-v4-pro · max")
 	assertFooterLastLine(t, view, "thinking: off")
 }
 
@@ -6381,8 +6534,7 @@ func TestModelSetRefreshesHeaderCache(t *testing.T) {
 	if strings.Contains(view, "model set: newer-model") {
 		t.Fatalf("expected printed model set result not to repeat in tail viewport:\n%s", view)
 	}
-	assertFooterLastLine(t, view, "model: newer-model")
-	assertFooterLastLine(t, view, "effort: low")
+	assertFooterLastLine(t, view, "newer-model · low")
 	assertFooterLastLine(t, view, "thinking: off")
 }
 

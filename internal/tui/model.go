@@ -90,6 +90,8 @@ type model struct {
 	product              string
 	version              string
 	cwd                  string
+	cwdPath              string
+	gitBranch            string
 	approval             struct {
 		toolCallID string
 		toolName   string
@@ -273,6 +275,7 @@ func newModel(svc *service.Service, modelName, effort, thinking string) model {
 		product:           "Whale",
 		version:           resolveVersion(),
 		cwd:               resolveWorkingDirectory(),
+		cwdPath:           resolveWorkingDirectoryPath(),
 		historyIndex:      -1,
 	}
 	if svc != nil {
@@ -359,7 +362,9 @@ func clearScreenCmdForOS(goos string, out io.Writer) tea.Cmd {
 	}
 }
 
-func (m model) Init() tea.Cmd { return waitEventCmd(m.svc) }
+func (m model) Init() tea.Cmd {
+	return tea.Batch(waitEventCmd(m.svc), detectGitBranchCmd(m.cwdPath))
+}
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -409,6 +414,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case busyTickMsg:
 		if m.busy {
 			return m, m.withMouseCaptureCmd(busyTickCmd())
+		}
+		return m, m.withMouseCaptureCmd()
+	case gitBranchUpdatedMsg:
+		if msg.cwd == m.cwdPath {
+			m.gitBranch = msg.branch
 		}
 		return m, m.withMouseCaptureCmd()
 	case tea.KeyMsg:

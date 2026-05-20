@@ -220,12 +220,17 @@ func resolveVersion() string {
 }
 
 func resolveWorkingDirectory() string {
+	wd := resolveWorkingDirectoryPath()
+	home, _ := os.UserHomeDir()
+	return displayWorkingDirectory(wd, home, runtime.GOOS)
+}
+
+func resolveWorkingDirectoryPath() string {
 	wd, err := os.Getwd()
 	if err != nil {
 		return "."
 	}
-	home, _ := os.UserHomeDir()
-	return displayWorkingDirectory(wd, home, runtime.GOOS)
+	return wd
 }
 
 func displayWorkingDirectory(wd, home, goos string) string {

@@ -177,6 +177,9 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		if !m.hasPendingToolCalls() {
 			m.commitLiveTranscript(false)
 		}
+		if toolResultMayChangeGitBranch(ev.ToolName) {
+			eventCmd = tea.Batch(eventCmd, detectGitBranchCmd(m.cwdPath))
+		}
 	case service.EventTaskStarted:
 		m.clearProviderRetryStatus()
 		m.status = ev.Text
