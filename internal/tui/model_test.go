@@ -2928,7 +2928,7 @@ func TestHelpCommandOpensInteractiveHelp(t *testing.T) {
 	}
 }
 
-func TestHelpCommandKeyboardAndMouseNavigation(t *testing.T) {
+func TestHelpCommandKeyboardNavigationIgnoresMouse(t *testing.T) {
 	m, _ := newModelWithDispatchSpy()
 	m.width = 100
 	m.height = 18
@@ -2942,8 +2942,11 @@ func TestHelpCommandKeyboardAndMouseNavigation(t *testing.T) {
 
 	next, _ = m.Update(tea.MouseMsg{Button: tea.MouseButtonWheelDown, Action: tea.MouseActionPress})
 	m = next.(model)
-	if m.help.selected != 2 {
-		t.Fatalf("expected mouse wheel to move help selection, got %d", m.help.selected)
+	if m.help.selected != 1 {
+		t.Fatalf("expected mouse wheel to be ignored in help, got selection %d", m.help.selected)
+	}
+	if m.mouseCapture {
+		t.Fatal("expected help mode not to enable terminal mouse capture")
 	}
 
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -6029,6 +6032,9 @@ func TestBusyMouseWheelFreezesLiveOutputAndScrollsChat(t *testing.T) {
 	m = next.(model)
 	if !m.viewportFrozen {
 		t.Fatal("expected wheel up during busy output to freeze chat viewport")
+	}
+	if m.mouseCapture {
+		t.Fatal("expected busy chat mode not to enable terminal mouse capture")
 	}
 	if m.followTail {
 		t.Fatal("expected wheel up to disable tail following")

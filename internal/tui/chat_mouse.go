@@ -4,8 +4,6 @@ import (
 	"regexp"
 
 	tea "github.com/charmbracelet/bubbletea"
-
-	"github.com/usewhale/whale/internal/app"
 )
 
 const mouseWheelScrollLines = 3
@@ -16,24 +14,6 @@ var (
 )
 
 func (m *model) handleMouseMsg(msg tea.MouseMsg) (tea.Cmd, bool) {
-	if m.mode == modeHelp {
-		switch msg.Button {
-		case tea.MouseButtonWheelUp:
-			if m.help.selected > 0 {
-				m.help.selected--
-			}
-			m.ensureHelpSelectionVisible()
-			return nil, true
-		case tea.MouseButtonWheelDown:
-			if m.help.selected < len(app.HelpCommands())-1 {
-				m.help.selected++
-			}
-			m.ensureHelpSelectionVisible()
-			return nil, true
-		default:
-			return nil, false
-		}
-	}
 	if m.mode != modeChat || m.page != pageChat || !m.busy {
 		return nil, false
 	}
