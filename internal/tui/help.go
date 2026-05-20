@@ -22,6 +22,7 @@ func (m *model) openHelp() {
 	m.resetWindowsPasteFallbackInputState()
 	m.slash.matches = nil
 	m.slash.selected = 0
+	m.slash.argumentHint = ""
 	m.help.selected = 0
 	m.help.offset = 0
 	m.mode = modeHelp

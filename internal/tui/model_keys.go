@@ -218,8 +218,8 @@ func (m *model) handleChatModeKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		}
 	case "tab":
 		if m.hasSlashSuggestions() {
-			if cmd := safeChoice(m.slash.matches, m.slash.selected); cmd != "" {
-				m.input.SetValue(cmd)
+			if suggestion, ok := m.selectedSlashSuggestion(); ok {
+				m.input.SetValue(suggestion.InsertText)
 				m.skillBinding = nil
 				m.updateSlashMatches()
 			}
@@ -232,9 +232,10 @@ func (m *model) handleChatModeKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		if m.busy {
 			return m.interruptBusyTurn(), true
 		}
-		if m.hasSlashSuggestions() {
+		if m.hasSlashPanel() {
 			m.slash.matches = nil
 			m.slash.selected = 0
+			m.slash.argumentHint = ""
 			return nil, true
 		}
 		if m.hasSkillSuggestions() {
@@ -531,20 +532,13 @@ func (m *model) handleGlobalKey(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 			m.refreshViewportContent()
 			return m.flushNativeScrollbackCmd(), false, true
 		}
-		if m.hasSlashSuggestions() {
-			if cmd := safeChoice(m.slash.matches, m.slash.selected); cmd != "" {
-				current := strings.TrimSpace(m.input.Value())
-				if current == cmd && !m.shouldAutoRunSlash(cmd) {
-					return tea.Sequence(m.flushNativeScrollbackCmd(), m.submitPrompt(cmd)), false, true
-				}
-				m.input.SetValue(cmd)
-				if !m.shouldAutoRunSlash(cmd) {
-					m.input.SetValue(cmd + " ")
-				}
+		if m.hasSlashSuggestions() && !m.slashSelectionAlreadyTyped() {
+			if suggestion, ok := m.selectedSlashSuggestion(); ok {
+				m.input.SetValue(suggestion.InsertText)
 				m.skillBinding = nil
 				m.updateSlashMatches()
-				if m.shouldAutoRunSlash(cmd) {
-					return tea.Sequence(m.flushNativeScrollbackCmd(), m.submitPrompt(cmd)), false, true
+				if suggestion.AutoRun {
+					return tea.Sequence(m.flushNativeScrollbackCmd(), m.submitPrompt(suggestion.InsertText)), false, true
 				}
 			}
 			return nil, false, true

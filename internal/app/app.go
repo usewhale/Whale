@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/usewhale/whale/internal/agent"
+	appcommands "github.com/usewhale/whale/internal/app/commands"
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/defaults"
 	"github.com/usewhale/whale/internal/llm"
@@ -23,7 +24,7 @@ import (
 	"github.com/usewhale/whale/internal/tools"
 )
 
-const CommandsHelp = "/help, /model, /permissions, /agent, /ask [prompt], /plan [prompt], /btw <question>, /focus, /review [target], /skills, /plugins, /memory, /feedback, /new [id], /fork [name], /resume, /worktree, /clear, /status, /stats, /mcp, /compact, /init, /exit"
+var CommandsHelp = appcommands.CommandsHelp()
 
 const (
 	ViewModeDefault = "default"

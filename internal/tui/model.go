@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/usewhale/whale/internal/app"
+	appcommands "github.com/usewhale/whale/internal/app/commands"
 	"github.com/usewhale/whale/internal/app/service"
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/defaults"
@@ -118,10 +119,10 @@ type model struct {
 	logFilterInput textinput.Model
 	logFilter      string
 	slash          struct {
-		all      []string
-		autoRun  map[string]bool
-		matches  []string
-		selected int
+		all          []appcommands.SlashCommandSpec
+		matches      []slashSuggestion
+		selected     int
+		argumentHint string
 	}
 	skills struct {
 		all      []skillSuggestion
@@ -287,8 +288,7 @@ func newModel(svc *service.Service, modelName, effort, thinking string) model {
 	if svc != nil {
 		m.dispatch = svc.Dispatch
 	}
-	m.slash.all = parseSlashCommands(app.CommandsHelp)
-	m.slash.autoRun = buildSlashAutoRunMap(app.CommandsHelp)
+	m.slash.all = appcommands.DefaultSlashCommands()
 	m.resetTranscript()
 	return m
 }

@@ -335,6 +335,7 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		m.skillsMenu.selected = 0
 		m.slash.matches = nil
 		m.slash.selected = 0
+		m.slash.argumentHint = ""
 		m.skills.matches = nil
 		m.skills.selected = 0
 		m.status = "skills"
@@ -345,6 +346,7 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		m.mode = modeSkillsManager
 		m.slash.matches = nil
 		m.slash.selected = 0
+		m.slash.argumentHint = ""
 		m.skills.matches = nil
 		m.skills.selected = 0
 		m.setSkillsManagerItems(ev.Skills)
@@ -356,6 +358,7 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		m.mode = modePluginsManager
 		m.slash.matches = nil
 		m.slash.selected = 0
+		m.slash.argumentHint = ""
 		m.skills.matches = nil
 		m.skills.selected = 0
 		m.setPluginsManagerItems(ev.Plugins)
@@ -368,6 +371,7 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		m.reviewMenu.selected = 0
 		m.slash.matches = nil
 		m.slash.selected = 0
+		m.slash.argumentHint = ""
 		m.skills.matches = nil
 		m.skills.selected = 0
 		m.status = "review"

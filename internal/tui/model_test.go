@@ -1994,7 +1994,7 @@ func agentTurnMetadata() map[string]any {
 func selectSlashCommand(t *testing.T, m *model, want string) {
 	t.Helper()
 	for i, cmd := range m.slash.matches {
-		if cmd == want {
+		if cmd.InsertText == want || cmd.Display == want {
 			m.slash.selected = i
 			return
 		}
@@ -2718,6 +2718,149 @@ func TestSlashSuggestionsShownForSingleLineSlash(t *testing.T) {
 	}
 }
 
+func TestSlashSuggestionsRenderDescriptions(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.input.SetValue("/")
+	m.updateSlashMatches()
+	rendered := m.renderSlashSuggestions()
+	for _, want := range []string{"/model", "Choose model, effort, and thinking settings"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected slash suggestions to contain %q:\n%s", want, rendered)
+		}
+	}
+}
+
+func TestSlashArgumentHintShownForCommandSpace(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.input.SetValue("/model ")
+	m.updateSlashMatches()
+	if !m.hasSlashPanel() {
+		t.Fatal("expected slash argument hint panel")
+	}
+	if len(m.slash.matches) != 0 {
+		t.Fatalf("did not expect /model option matches, got %+v", m.slash.matches)
+	}
+	if rendered := m.renderSlashSuggestions(); !strings.Contains(rendered, "Arguments [model]") {
+		t.Fatalf("expected /model argument hint, got:\n%s", rendered)
+	}
+}
+
+func TestSlashArgumentHintEscClearsPanelWithoutMutatingInput(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.input.SetValue("/model ")
+	m.updateSlashMatches()
+	if !m.hasSlashPanel() {
+		t.Fatal("expected slash argument hint panel")
+	}
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(model)
+	if got := m.input.Value(); got != "/model " {
+		t.Fatalf("expected esc to preserve input, got %q", got)
+	}
+	if m.hasSlashPanel() || m.slash.argumentHint != "" || len(m.slash.matches) != 0 {
+		t.Fatalf("expected esc to clear hint-only slash panel, hint=%q matches=%+v", m.slash.argumentHint, m.slash.matches)
+	}
+}
+
+func TestSlashOptionSuggestionsInsertSubcommand(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.input.SetValue("/stats ")
+	m.updateSlashMatches()
+	if len(m.slash.matches) == 0 {
+		t.Fatal("expected /stats option suggestions")
+	}
+	selectSlashCommand(t, &m, "/stats usage")
+	if rendered := m.renderSlashSuggestions(); !strings.Contains(rendered, "usage") || !strings.Contains(rendered, "Show token and cost usage") {
+		t.Fatalf("expected /stats option description, got:\n%s", rendered)
+	}
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if len(*intents) != 1 {
+		t.Fatalf("expected /stats usage option to dispatch, got intents %+v", *intents)
+	}
+	if (*intents)[0].Kind != service.IntentSubmitLocal || (*intents)[0].Input != "/stats usage" {
+		t.Fatalf("unexpected dispatched intent: %+v", (*intents)[0])
+	}
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected input cleared after /stats usage option, got %q", got)
+	}
+}
+
+func TestSlashCommandWithOptionsDrillsDownWhenSelected(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.input.SetValue("/mem")
+	m.updateSlashMatches()
+	selectSlashCommand(t, &m, "/memory ")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if len(*intents) != 0 {
+		t.Fatalf("selecting /memory should only show options, got intents %+v", *intents)
+	}
+	if got := m.input.Value(); got != "/memory " {
+		t.Fatalf("expected /memory selection to add trailing space, got %q", got)
+	}
+	if len(m.slash.matches) == 0 {
+		t.Fatal("expected /memory option suggestions after selection")
+	}
+	if rendered := m.renderSlashSuggestions(); !strings.Contains(rendered, "list") || !strings.Contains(rendered, "List remembered entries") {
+		t.Fatalf("expected /memory option list after selection, got:\n%s", rendered)
+	}
+}
+
+func TestSlashCommandWithOptionsAndAutoRunStillExecutesBareCommand(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.input.SetValue("/rev")
+	m.updateSlashMatches()
+	selectSlashCommand(t, &m, "/review")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if len(*intents) != 1 {
+		t.Fatalf("expected selected /review to dispatch, got %+v", *intents)
+	}
+	if (*intents)[0].Kind != service.IntentSubmitLocal || (*intents)[0].Input != "/review" {
+		t.Fatalf("unexpected dispatched intent: %+v", (*intents)[0])
+	}
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected input cleared after /review autorun, got %q", got)
+	}
+}
+
+func TestSlashOptionSuggestionsFilterByTypedPrefix(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.input.SetValue("/review p")
+	m.updateSlashMatches()
+	if len(m.slash.matches) != 1 {
+		t.Fatalf("expected one /review option match, got %+v", m.slash.matches)
+	}
+	if got := m.slash.matches[0].InsertText; got != "/review pr " {
+		t.Fatalf("expected /review pr option, got %q", got)
+	}
+}
+
+func TestSlashOptionNeedingArgumentOnlyFillsInput(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.input.SetValue("/review p")
+	m.updateSlashMatches()
+	selectSlashCommand(t, &m, "/review pr ")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if len(*intents) != 0 {
+		t.Fatalf("/review pr option should wait for argument, got intents %+v", *intents)
+	}
+	if got := m.input.Value(); got != "/review pr " {
+		t.Fatalf("expected /review pr option to keep trailing space, got %q", got)
+	}
+}
+
+func TestSlashExactOptionDoesNotShowNestedSuggestions(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.input.SetValue("/review branch")
+	m.updateSlashMatches()
+	if m.hasSlashPanel() {
+		t.Fatalf("expected no nested slash panel for exact option, got hint=%q matches=%+v", m.slash.argumentHint, m.slash.matches)
+	}
+}
+
 func TestSlashSuggestionsHiddenForAbsolutePathInput(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.input.SetValue("/Users/goranka/Engineer/ai/dsk 里有好几个go项目的，你看看它们怎么做的")
@@ -2773,7 +2916,7 @@ func TestHelpCommandOpensInteractiveHelp(t *testing.T) {
 		t.Fatalf("expected input cleared, got %q", got)
 	}
 	view := m.View()
-	for _, want := range []string{"Whale help", "Browse default commands:", "/feedback", "For more help:", helpDocsURL, "Esc to cancel"} {
+	for _, want := range []string{"Whale help", "Browse default commands:", "/review", "For more help:", helpDocsURL, "Esc to cancel"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected help view to contain %q:\n%s", want, view)
 		}
@@ -7349,7 +7492,14 @@ func TestBtwBusySubmitDispatchesLocalSubmit(t *testing.T) {
 
 func TestBtwSlashSuggestionDoesNotAutoRunWithoutQuestion(t *testing.T) {
 	m, _ := newModelWithDispatchSpy()
-	if m.shouldAutoRunSlash("/btw") {
+	m.input.SetValue("/bt")
+	m.updateSlashMatches()
+	selectSlashCommand(t, &m, "/btw ")
+	suggestion, ok := m.selectedSlashSuggestion()
+	if !ok {
+		t.Fatal("expected /btw slash suggestion")
+	}
+	if suggestion.AutoRun {
 		t.Fatal("/btw should not auto-run from suggestions without a question")
 	}
 }

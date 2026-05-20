@@ -49,6 +49,7 @@ func (m *model) submitPromptWithBinding(value string, binding *app.SkillBinding)
 	m.resetWindowsPasteFallbackInputState()
 	m.slash.matches = nil
 	m.slash.selected = 0
+	m.slash.argumentHint = ""
 	m.startBusy()
 	m.status = "running"
 	m.dispatchIntent(service.Intent{Kind: service.IntentSubmit, Input: value, SkillBinding: binding})
@@ -141,6 +142,7 @@ func (m *model) submitLocalNoTurn(submit appcommands.SubmitClassification) {
 	m.resetWindowsPasteFallbackInputState()
 	m.slash.matches = nil
 	m.slash.selected = 0
+	m.slash.argumentHint = ""
 	m.localSubmitPending++
 	m.localSubmitCommands = append(m.localSubmitCommands, cmd)
 	if !m.busy || submit.SubmitBarrier() {
@@ -167,6 +169,7 @@ func (m *model) enqueuePrompt(value string) bool {
 	m.resetHistoryNavigation()
 	m.slash.matches = nil
 	m.slash.selected = 0
+	m.slash.argumentHint = ""
 	m.status = fmt.Sprintf("queued (%d)", len(m.queuedPrompts))
 	m.refreshViewportContent()
 	return true

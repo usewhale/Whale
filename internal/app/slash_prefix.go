@@ -7,5 +7,5 @@ func expandUniqueSlashPrefix(line string) string {
 }
 
 func parseSlashCommands(help string) []string {
-	return appcommands.ParseSlashCommands(help)
+	return appcommands.SlashCommandNames("/mcp")
 }

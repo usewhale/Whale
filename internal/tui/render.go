@@ -132,10 +132,10 @@ func (m model) bottomPartsBeforeInput(mainWidth int) []string {
 	if btw := m.renderBtwPanel(mainWidth); btw != "" {
 		bottomParts = append(bottomParts, btw)
 	}
-	if m.mode == modeChat && m.hasSlashSuggestions() {
+	if m.mode == modeChat && m.hasSlashPanel() {
 		bottomParts = append(bottomParts, m.renderSlashSuggestions())
 	}
-	if m.mode == modeChat && !m.hasSlashSuggestions() && m.hasSkillSuggestions() {
+	if m.mode == modeChat && !m.hasSlashPanel() && m.hasSkillSuggestions() {
 		bottomParts = append(bottomParts, m.renderSkillSuggestions())
 	}
 	if m.mode == modeApproval {
