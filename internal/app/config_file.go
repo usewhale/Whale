@@ -35,7 +35,8 @@ type FileConfig struct {
 }
 
 type FileUIConfig struct {
-	ViewMode string `toml:"view_mode,omitempty"`
+	ViewMode                string `toml:"view_mode,omitempty"`
+	CheckForUpdateOnStartup *bool  `toml:"check_for_update_on_startup,omitempty"`
 }
 
 type FilePermissionsConfig struct {
@@ -177,6 +178,9 @@ func ApplyFileConfig(cfg *Config, file FileConfig) error {
 		}
 		cfg.ViewMode = mode
 	}
+	if file.UI.CheckForUpdateOnStartup != nil {
+		cfg.CheckForUpdateOnStartup = *file.UI.CheckForUpdateOnStartup
+	}
 	if strings.TrimSpace(file.Permissions.Mode) != "" {
 		cfg.ApprovalMode = strings.TrimSpace(file.Permissions.Mode)
 	}
@@ -290,6 +294,9 @@ func overlayExplicitConfig(dst *Config, src Config) {
 	}
 	if src.ThinkingEnabled != def.ThinkingEnabled {
 		dst.ThinkingEnabled = src.ThinkingEnabled
+	}
+	if src.CheckForUpdateOnStartup != def.CheckForUpdateOnStartup {
+		dst.CheckForUpdateOnStartup = src.CheckForUpdateOnStartup
 	}
 	if strings.TrimSpace(src.ViewMode) != "" && src.ViewMode != def.ViewMode {
 		dst.ViewMode = src.ViewMode

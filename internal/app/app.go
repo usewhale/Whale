@@ -31,28 +31,29 @@ const (
 )
 
 type Config struct {
-	DataDir              string
-	ConfigLoaded         bool
-	ApprovalMode         string
-	AllowPrefixes        string
-	DenyPrefixes         string
-	AutoCompact          bool
-	AutoCompactThreshold float64
-	MemoryEnabled        bool
-	MemoryMaxChars       int
-	MemoryFileOrder      string
-	BudgetWarningUSD     float64
-	Model                string
-	ModelExplicit        bool
-	ReasoningEffort      string
-	ThinkingEnabled      bool
-	ViewMode             string
-	RetryMaxAttempts     int
-	RetryMaxDelay        time.Duration
-	MCPConfigPath        string
-	APIBaseURL           string
-	SkillsDisabled       []string
-	PluginsDisabled      []string
+	DataDir                 string
+	ConfigLoaded            bool
+	ApprovalMode            string
+	AllowPrefixes           string
+	DenyPrefixes            string
+	AutoCompact             bool
+	AutoCompactThreshold    float64
+	MemoryEnabled           bool
+	MemoryMaxChars          int
+	MemoryFileOrder         string
+	BudgetWarningUSD        float64
+	Model                   string
+	ModelExplicit           bool
+	ReasoningEffort         string
+	ThinkingEnabled         bool
+	CheckForUpdateOnStartup bool
+	ViewMode                string
+	RetryMaxAttempts        int
+	RetryMaxDelay           time.Duration
+	MCPConfigPath           string
+	APIBaseURL              string
+	SkillsDisabled          []string
+	PluginsDisabled         []string
 }
 
 type StartOptions struct {
@@ -109,19 +110,20 @@ type App struct {
 
 func DefaultConfig() Config {
 	return Config{
-		DataDir:              store.DefaultDataDir(),
-		ApprovalMode:         string(policy.ApprovalModeOnRequest),
-		AutoCompact:          true,
-		AutoCompactThreshold: defaults.DefaultAutoCompactThreshold,
-		MemoryEnabled:        true,
-		MemoryMaxChars:       defaults.DefaultMemoryMaxChars,
-		MemoryFileOrder:      defaults.DefaultMemoryFileOrderCSV,
-		Model:                defaults.DefaultModel,
-		ReasoningEffort:      defaults.DefaultReasoningEffort,
-		ThinkingEnabled:      defaults.DefaultThinkingEnabled,
-		ViewMode:             ViewModeDefault,
-		RetryMaxAttempts:     llmretry.DefaultPolicy().MaxAttempts,
-		RetryMaxDelay:        llmretry.DefaultPolicy().MaxDelay,
+		DataDir:                 store.DefaultDataDir(),
+		ApprovalMode:            string(policy.ApprovalModeOnRequest),
+		AutoCompact:             true,
+		AutoCompactThreshold:    defaults.DefaultAutoCompactThreshold,
+		MemoryEnabled:           true,
+		MemoryMaxChars:          defaults.DefaultMemoryMaxChars,
+		MemoryFileOrder:         defaults.DefaultMemoryFileOrderCSV,
+		Model:                   defaults.DefaultModel,
+		ReasoningEffort:         defaults.DefaultReasoningEffort,
+		ThinkingEnabled:         defaults.DefaultThinkingEnabled,
+		CheckForUpdateOnStartup: true,
+		ViewMode:                ViewModeDefault,
+		RetryMaxAttempts:        llmretry.DefaultPolicy().MaxAttempts,
+		RetryMaxDelay:           llmretry.DefaultPolicy().MaxDelay,
 	}
 }
 

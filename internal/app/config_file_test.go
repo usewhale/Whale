@@ -16,11 +16,12 @@ func TestConfigFileRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := GlobalConfigPath(dir)
 	enabled := true
+	checkUpdates := false
 	cfg := FileConfig{
 		Model:           "deepseek-v4-pro",
 		ReasoningEffort: "max",
 		ThinkingEnabled: &enabled,
-		UI:              FileUIConfig{ViewMode: ViewModeFocus},
+		UI:              FileUIConfig{ViewMode: ViewModeFocus, CheckForUpdateOnStartup: &checkUpdates},
 		API:             FileAPIConfig{BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1/"},
 		Permissions: FilePermissionsConfig{
 			Mode:               "never",
@@ -61,6 +62,9 @@ func TestConfigFileRoundTrip(t *testing.T) {
 	if loaded.UI.ViewMode != ViewModeFocus {
 		t.Fatalf("ui.view_mode: want focus, got %+v", loaded.UI)
 	}
+	if loaded.UI.CheckForUpdateOnStartup == nil || *loaded.UI.CheckForUpdateOnStartup {
+		t.Fatalf("ui.check_for_update_on_startup: want false, got %+v", loaded.UI.CheckForUpdateOnStartup)
+	}
 	if loaded.Permissions.Mode != "never" || len(loaded.Permissions.AllowShellPrefixes) != 2 {
 		t.Fatalf("permissions config: %+v", loaded.Permissions)
 	}
@@ -76,6 +80,27 @@ func TestApplyFileConfigSupportsViewMode(t *testing.T) {
 	}
 	if err := ApplyFileConfig(&cfg, FileConfig{UI: FileUIConfig{ViewMode: "verbose"}}); err == nil {
 		t.Fatal("expected invalid view mode error")
+	}
+}
+
+func TestApplyFileConfigSupportsUpdateCheckSetting(t *testing.T) {
+	cfg := DefaultConfig()
+	if !cfg.CheckForUpdateOnStartup {
+		t.Fatal("default update check should be enabled")
+	}
+	disabled := false
+	if err := ApplyFileConfig(&cfg, FileConfig{UI: FileUIConfig{CheckForUpdateOnStartup: &disabled}}); err != nil {
+		t.Fatalf("ApplyFileConfig: %v", err)
+	}
+	if cfg.CheckForUpdateOnStartup {
+		t.Fatal("expected update check to be disabled")
+	}
+	enabled := true
+	if err := ApplyFileConfig(&cfg, FileConfig{UI: FileUIConfig{CheckForUpdateOnStartup: &enabled}}); err != nil {
+		t.Fatalf("ApplyFileConfig: %v", err)
+	}
+	if !cfg.CheckForUpdateOnStartup {
+		t.Fatal("expected update check to be enabled")
 	}
 }
 
@@ -242,6 +267,28 @@ func TestConfigExplicitModelOverridesFileConfig(t *testing.T) {
 	}
 	if app.Model() != "deepseek-v4-flash" {
 		t.Fatalf("model: want explicit deepseek-v4-flash, got %s", app.Model())
+	}
+}
+
+func TestConfigExplicitUpdateCheckDisableOverridesFileConfig(t *testing.T) {
+	dir := t.TempDir()
+	workspace := t.TempDir()
+	enabled := true
+	if err := SaveConfigFile(GlobalConfigPath(dir), FileConfig{
+		UI: FileUIConfig{CheckForUpdateOnStartup: &enabled},
+	}); err != nil {
+		t.Fatalf("SaveConfigFile: %v", err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.DataDir = dir
+	cfg.CheckForUpdateOnStartup = false
+	loaded, err := LoadAndApplyConfig(cfg, workspace)
+	if err != nil {
+		t.Fatalf("LoadAndApplyConfig: %v", err)
+	}
+	if loaded.CheckForUpdateOnStartup {
+		t.Fatal("check_for_update_on_startup: want explicit programmatic false to be preserved")
 	}
 }
 
