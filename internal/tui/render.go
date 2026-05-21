@@ -120,8 +120,15 @@ func (m model) renderBottom(mainWidth int) string {
 	}
 	footer := lipgloss.NewStyle().Width(mainWidth).MaxWidth(mainWidth).Render(lipgloss.JoinHorizontal(lipgloss.Left, footerText))
 	bottomParts := m.bottomPartsBeforeInput(mainWidth)
-	bottomParts = append(bottomParts, m.input.View(), footer)
+	if m.shouldRenderComposer() {
+		bottomParts = append(bottomParts, m.input.View())
+	}
+	bottomParts = append(bottomParts, footer)
 	return strings.Join(bottomParts, "\n")
+}
+
+func (m model) shouldRenderComposer() bool {
+	return m.mode == modeChat
 }
 
 func (m model) bottomPartsBeforeInput(mainWidth int) []string {

@@ -3673,6 +3673,162 @@ func TestReviewMenuEscCloses(t *testing.T) {
 	}
 }
 
+func TestPickerAndModalViewsHideComposer(t *testing.T) {
+	const draft = "composer draft should stay hidden"
+	base := func() model {
+		m := newModel(nil, "deepseek-chat", "medium", "on")
+		m.width = 100
+		m.height = 30
+		m.input.SetValue(draft)
+		return m
+	}
+
+	chat := base()
+	chat.mode = modeChat
+	if view := chat.renderBottom(100); !strings.Contains(view, draft) {
+		t.Fatalf("chat mode should render composer draft:\n%s", view)
+	}
+
+	cases := []struct {
+		name  string
+		setup func(*model)
+		want  string
+	}{
+		{
+			name: "review menu",
+			setup: func(m *model) {
+				m.mode = modeReviewMenu
+			},
+			want: "Choose what to review",
+		},
+		{
+			name: "review target picker",
+			setup: func(m *model) {
+				m.mode = modeReviewBranchPicker
+				m.reviewTargetPicker.branches = []reviewBranchItem{{Name: "main"}}
+			},
+			want: "Type to search branches",
+		},
+		{
+			name: "review commit picker",
+			setup: func(m *model) {
+				m.mode = modeReviewCommitPicker
+				m.reviewTargetPicker.commits = []reviewCommitItem{{SHA: "abc1234", Subject: "fix picker"}}
+			},
+			want: "Choose commit",
+		},
+		{
+			name: "review pr picker",
+			setup: func(m *model) {
+				m.mode = modeReviewPRPicker
+				m.reviewTargetPicker.prs = []reviewPRItem{{Number: 12, Title: "Fix picker"}}
+			},
+			want: "Choose pull request",
+		},
+		{
+			name: "approval",
+			setup: func(m *model) {
+				m.mode = modeApproval
+				m.approval.toolCallID = "tool-1"
+				m.approval.toolName = "shell_run"
+				m.approval.reason = "ls"
+			},
+			want: "Approval required",
+		},
+		{
+			name: "user input",
+			setup: func(m *model) {
+				m.mode = modeUserInput
+				m.userInput.questions = []core.UserInputQuestion{{
+					ID:       "continue",
+					Question: "Continue?",
+					Options:  []core.UserInputOption{{Label: "Yes", Description: "Continue now."}},
+				}}
+			},
+			want: "Continue?",
+		},
+		{
+			name: "model picker",
+			setup: func(m *model) {
+				m.mode = modeModelPicker
+				m.modelPicker.models = []string{"deepseek-chat"}
+				m.modelPicker.efforts = []string{"medium"}
+				m.modelPicker.thinkings = []string{"on"}
+			},
+			want: "Select Model and Effort",
+		},
+		{
+			name: "session picker",
+			setup: func(m *model) {
+				m.mode = modeSessionPicker
+				m.sessionChoices = []string{"session-1"}
+			},
+			want: "sessions",
+		},
+		{
+			name: "permissions picker",
+			setup: func(m *model) {
+				m.mode = modePermissionsPicker
+				m.permissionsPicker.choices = []string{service.ApprovalChoiceAskFirst}
+			},
+			want: "Permissions",
+		},
+		{
+			name: "plan implementation picker",
+			setup: func(m *model) {
+				m.mode = modePlanImplementation
+			},
+			want: "Implement this plan?",
+		},
+		{
+			name: "skills menu",
+			setup: func(m *model) {
+				m.mode = modeSkillsMenu
+			},
+			want: "Skills",
+		},
+		{
+			name: "skills manager",
+			setup: func(m *model) {
+				m.mode = modeSkillsManager
+				m.skillsManager.all = []skillManagerItem{{Name: "code-review", Enabled: true, Toggleable: true}}
+				m.skillsManager.matches = []int{0}
+			},
+			want: "Enable/Disable Skills",
+		},
+		{
+			name: "plugins manager",
+			setup: func(m *model) {
+				m.mode = modePluginsManager
+				m.pluginsManager.all = []pluginManagerItem{{ID: "memory", Name: "Memory", Enabled: true}}
+				m.pluginsManager.matches = []int{0}
+			},
+			want: "Plugins",
+		},
+		{
+			name: "help",
+			setup: func(m *model) {
+				m.mode = modeHelp
+			},
+			want: "Whale help",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := base()
+			tc.setup(&m)
+			view := m.renderBottom(100)
+			if strings.Contains(view, draft) || strings.Contains(view, "Type message or command") {
+				t.Fatalf("composer should be hidden while %s is active:\n%s", tc.name, view)
+			}
+			if !strings.Contains(view, tc.want) {
+				t.Fatalf("expected %s view to contain %q:\n%s", tc.name, tc.want, view)
+			}
+		})
+	}
+}
+
 func TestSkillLoadedEventUpdatesStatusAndLogOnly(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.handleServiceEvent(service.Event{Kind: service.EventSkillLoaded, Text: "loaded skill: code-review"})
