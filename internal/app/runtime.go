@@ -58,7 +58,7 @@ func (a *App) ensureAgent() (*agent.Agent, error) {
 			agent.WithBudgetWarningUSD(a.budgetWarningUSD),
 			agent.WithUsageLogPath(filepath.Join(a.cfg.DataDir, "usage.jsonl")),
 			agent.WithAutoCompact(a.cfg.AutoCompact, a.cfg.AutoCompactThreshold, a.contextWindow),
-			agent.WithToolPolicy(policy.DefaultToolPolicy{Mode: a.approvalMode, AllowPrefixes: a.allowPrefixes, DenyPrefixes: a.denyPrefixes}),
+			agent.WithToolPolicy(a.permissionPolicy),
 			agent.WithHookRunner(a.hookRunner),
 			agent.WithExtraSystemBlocks(pluginBlocks...),
 			agent.WithProjectMemory(a.cfg.MemoryEnabled, a.cfg.MemoryMaxChars, parseCSVList(a.cfg.MemoryFileOrder), a.workspaceRoot),
@@ -67,6 +67,9 @@ func (a *App) ensureAgent() (*agent.Agent, error) {
 			agent.WithApprovalFunc(func(req policy.ApprovalRequest) policy.ApprovalDecision {
 				a.approvalMu.Lock()
 				defer a.approvalMu.Unlock()
+				if a.autoAcceptPermissions {
+					return policy.ApprovalAllow
+				}
 				return a.approvalFn(req)
 			}),
 			agent.WithUserInputFunc(a.userInput),

@@ -34,6 +34,8 @@ func (s *Service) Dispatch(in Intent) {
 		s.resolveUserInput(in.ToolCallID, core.UserInputResponse{}, false)
 	case IntentRequestSessions:
 		s.emitSessionChoices()
+	case IntentRequestExit:
+		s.requestExit()
 	case IntentSelectSession:
 		res, err := s.app.ApplyResumeChoice(in.SessionInput)
 		if err != nil {
@@ -51,6 +53,8 @@ func (s *Service) Dispatch(in Intent) {
 		}
 		s.cancelMu.Unlock()
 		s.cancelPendingInteractions()
+	case IntentWorktreeExitChoice:
+		s.handleWorktreeExitChoice(in.WorktreeAction)
 	case IntentSetModelAndEffort:
 		if err := s.app.SetModelAndEffort(in.Model, in.Effort); err != nil {
 			s.emit(Event{Kind: EventError, Text: err.Error()})
@@ -65,34 +69,9 @@ func (s *Service) Dispatch(in Intent) {
 		s.emit(Event{Kind: EventInfo, Text: fmt.Sprintf("model set: %s  effort: %s  thinking: %s", s.app.Model(), s.app.ReasoningEffort(), onOff(s.app.ThinkingEnabled()))})
 		s.emit(Event{Kind: EventTurnDone})
 	case IntentSetApprovalMode:
-		mode, err := policy.ParseApprovalMode(in.ApprovalMode)
-		if err != nil {
-			s.emit(Event{Kind: EventError, Text: err.Error()})
-			return
-		}
-		s.app.SetApprovalMode(mode)
-		s.emit(Event{Kind: EventInfo, Text: fmt.Sprintf("approval set: %s", approvalModeDisplay(s.app.ApprovalMode()))})
-		s.emit(Event{Kind: EventTurnDone})
-	case IntentSetProjectApproval:
-		mode, err := policy.ParseApprovalMode(in.ApprovalMode)
-		if err != nil {
-			s.emit(Event{Kind: EventError, Text: err.Error()})
-			return
-		}
-		path, err := s.app.SetProjectApprovalMode(mode)
-		if err != nil {
-			s.emit(Event{Kind: EventError, Text: err.Error()})
-			return
-		}
-		s.emit(Event{Kind: EventInfo, Text: fmt.Sprintf("project local permissions saved: %s\nconfig: %s", projectApprovalModeDisplay(mode), path)})
-		s.emit(Event{Kind: EventTurnDone})
-	case IntentClearProjectApproval:
-		mode, path, err := s.app.ClearProjectApprovalMode()
-		if err != nil {
-			s.emit(Event{Kind: EventError, Text: err.Error()})
-			return
-		}
-		s.emit(Event{Kind: EventInfo, Text: fmt.Sprintf("project local permissions default cleared\nconfig: %s\ncurrent session: %s", path, approvalModeDisplay(mode))})
+		enabled := in.ApprovalMode == "auto_accept"
+		s.app.SetAutoAcceptPermissions(enabled)
+		s.emit(Event{Kind: EventInfo, Text: autoAcceptMessage(enabled), AutoAccept: enabled, AutoAcceptKnown: true})
 		s.emit(Event{Kind: EventTurnDone})
 	case IntentSetViewMode:
 		if err := s.app.SetViewMode(in.ViewMode); err != nil {
@@ -132,6 +111,61 @@ func (s *Service) Dispatch(in Intent) {
 			return
 		}
 		s.emit(Event{Kind: EventPluginsManager, Plugins: s.PluginsForManager()})
+	}
+}
+
+func (s *Service) requestExit() {
+	summary, ok, err := s.app.BuildWorktreeExitSummary()
+	if !ok {
+		s.emit(Event{Kind: EventExitRequested})
+		return
+	}
+	if err != nil {
+		res, clearErr := s.app.ForgetCurrentWorktree()
+		if clearErr != nil {
+			s.emit(Event{Kind: EventError, Text: err.Error() + "\n" + clearErr.Error()})
+			s.emit(Event{Kind: EventExitRequested})
+			return
+		}
+		s.emit(Event{Kind: EventInfo, Text: res.Message})
+		s.emit(Event{Kind: EventExitRequested})
+		return
+	}
+	if summary.ChangedFiles == 0 && summary.IgnoredFiles == 0 && summary.Commits == 0 {
+		res, err := s.app.RemoveCurrentWorktree(false)
+		if err != nil {
+			s.emit(Event{Kind: EventError, Text: err.Error()})
+			return
+		}
+		s.emit(Event{Kind: EventInfo, Text: res.Message})
+		s.emit(Event{Kind: EventExitRequested})
+		return
+	}
+	s.emit(Event{Kind: EventWorktreeExitPrompt, WorktreeExit: &summary})
+}
+
+func (s *Service) handleWorktreeExitChoice(action string) {
+	switch strings.TrimSpace(action) {
+	case "keep":
+		res, err := s.app.KeepCurrentWorktree()
+		if err != nil {
+			s.emit(Event{Kind: EventError, Text: err.Error()})
+			return
+		}
+		s.emit(Event{Kind: EventInfo, Text: res.Message})
+		s.emit(Event{Kind: EventExitRequested})
+	case "remove":
+		res, err := s.app.RemoveCurrentWorktree(true)
+		if err != nil {
+			s.emit(Event{Kind: EventError, Text: err.Error()})
+			return
+		}
+		s.emit(Event{Kind: EventInfo, Text: res.Message})
+		s.emit(Event{Kind: EventExitRequested})
+	case "cancel":
+		s.emit(Event{Kind: EventInfo, Text: "Exit canceled"})
+	default:
+		s.emit(Event{Kind: EventError, Text: "unknown worktree exit action"})
 	}
 }
 
@@ -190,6 +224,10 @@ func (s *Service) handleLocalSubmit(line string) {
 		s.emit(localSubmitResultEvent("error", "command is not available as a local submit"))
 		return
 	}
+	if line == "/diff" {
+		s.emit(Event{Kind: EventDiffResult, Text: s.app.BuildDiffText(s.ctx), Metadata: map[string]any{EventMetadataLocalSubmit: true}})
+		return
+	}
 	prevSessionID := s.app.SessionID()
 	if line == "/model" {
 		s.emit(Event{
@@ -204,11 +242,7 @@ func (s *Service) handleLocalSubmit(line string) {
 		return
 	}
 	if line == "/permissions" {
-		s.emit(Event{
-			Kind:            EventPermissionsPicker,
-			ApprovalChoices: approvalModeChoices(),
-			CurrentApproval: approvalModeDisplay(s.app.ApprovalMode()),
-		})
+		s.emit(Event{Kind: EventPermissionsMenu, AutoAccept: s.app.AutoAcceptPermissions(), AutoAcceptKnown: true})
 		return
 	}
 	if line == "/focus" {
@@ -262,7 +296,7 @@ func (s *Service) handleLocalSubmit(line string) {
 			s.emit(Event{Kind: EventClearScreen})
 		}
 		if cmd.ShouldExit {
-			s.emit(Event{Kind: EventExitRequested})
+			s.requestExit()
 		}
 		if s.app.SessionID() != prevSessionID {
 			s.emitSessionHydrated()
@@ -315,11 +349,7 @@ func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.
 		return
 	}
 	if line == "/permissions" {
-		s.emit(Event{
-			Kind:            EventPermissionsPicker,
-			ApprovalChoices: approvalModeChoices(),
-			CurrentApproval: approvalModeDisplay(s.app.ApprovalMode()),
-		})
+		s.emit(Event{Kind: EventPermissionsMenu, AutoAccept: s.app.AutoAcceptPermissions(), AutoAcceptKnown: true})
 		return
 	}
 	if line == "/focus" {
@@ -399,7 +429,7 @@ func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.
 			s.emit(Event{Kind: EventClearScreen})
 		}
 		if cmd.ShouldExit {
-			s.emit(Event{Kind: EventExitRequested})
+			s.requestExit()
 		}
 		if s.app.SessionID() != prevSessionID {
 			s.emitSessionHydrated()
@@ -492,7 +522,7 @@ func (s *Service) emitSessionHydrated() {
 		s.emit(Event{Kind: EventError, Text: err.Error()})
 		return
 	}
-	s.emit(Event{Kind: EventSessionHydrated, SessionID: s.app.SessionID(), Messages: msgs})
+	s.emit(Event{Kind: EventSessionHydrated, SessionID: s.app.SessionID(), Messages: msgs, AutoAccept: s.app.AutoAcceptPermissions(), AutoAcceptKnown: true})
 }
 
 func (s *Service) emitSessionChoices() bool {

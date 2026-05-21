@@ -17,6 +17,7 @@ import (
 	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/skills"
+	"github.com/usewhale/whale/internal/store"
 )
 
 func TestCriticalEventsDeliverAfterDeltaBackpressure(t *testing.T) {
@@ -526,6 +527,53 @@ func TestLocalSubmitDoesNotEmitTurnDone(t *testing.T) {
 	}
 }
 
+func TestRequestExitClearsUnreadableWorktreeAndQuits(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	workspace := t.TempDir()
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	missing := filepath.Join(t.TempDir(), "missing-worktree")
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{
+		NewSession: true,
+		Worktree: app.WorktreeSession{
+			Name:              "missing",
+			Path:              missing,
+			Branch:            "worktree-missing",
+			OriginalWorkspace: workspace,
+			OriginalBranch:    "main",
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+
+	svc.Dispatch(Intent{Kind: IntentRequestExit})
+	info := waitForServiceEvent(t, svc, EventInfo)
+	if !strings.Contains(info.Text, "Worktree state cleared: missing") {
+		t.Fatalf("unexpected info event: %+v", info)
+	}
+	waitForServiceEvent(t, svc, EventExitRequested)
+
+	meta, err := session.LoadSessionMeta(store.DefaultSessionsDir(cfg.DataDir), svc.SessionID())
+	if err != nil {
+		t.Fatalf("LoadSessionMeta: %v", err)
+	}
+	if meta.WorktreeName != "" || meta.WorktreePath != "" || meta.WorktreeBranch != "" {
+		t.Fatalf("expected worktree metadata cleared: %+v", meta)
+	}
+}
+
 func TestLocalSubmitDispatchEnqueuesWithoutHandlingInline(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -768,7 +816,7 @@ func TestLocalSubmitBtwWithoutQuestionEmitsUsage(t *testing.T) {
 	waitForServiceEvent(t, svc, EventLocalSubmitDone)
 }
 
-func TestProjectApprovalIntentWritesProjectConfig(t *testing.T) {
+func TestLocalSubmitDiffEmitsDiffResult(t *testing.T) {
 	work := t.TempDir()
 	t.Chdir(work)
 	cfg := app.DefaultConfig()
@@ -780,21 +828,58 @@ func TestProjectApprovalIntentWritesProjectConfig(t *testing.T) {
 	defer svc.Close()
 	waitForServiceEvent(t, svc, EventSessionHydrated)
 
-	svc.Dispatch(Intent{Kind: IntentSetProjectApproval, ApprovalMode: "never-ask"})
+	svc.Dispatch(Intent{Kind: IntentSubmitLocal, Input: "/diff"})
 
+	ev := waitForServiceEvent(t, svc, EventDiffResult)
+	if !strings.Contains(ev.Text, "not inside a git repository") {
+		t.Fatalf("unexpected diff result: %q", ev.Text)
+	}
+	waitForServiceEvent(t, svc, EventLocalSubmitDone)
+}
+
+func TestPermissionsCommandOpensMenuAndSetsSessionAutoAccept(t *testing.T) {
+	work := t.TempDir()
+	t.Chdir(work)
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+
+	svc.Dispatch(Intent{Kind: IntentSubmitLocal, Input: "/permissions"})
+
+	menu := waitForServiceEvent(t, svc, EventPermissionsMenu)
+	if menu.AutoAccept {
+		t.Fatalf("unexpected permissions menu auto accept state: %+v", menu)
+	}
+	waitForServiceEvent(t, svc, EventLocalSubmitDone)
+
+	svc.Dispatch(Intent{Kind: IntentSetApprovalMode, ApprovalMode: "auto_accept"})
 	info := waitForServiceEvent(t, svc, EventInfo)
-	if !strings.Contains(info.Text, "project local permissions saved") ||
-		!strings.Contains(info.Text, "auto-approve by default in this workspace") ||
-		!strings.Contains(info.Text, app.ProjectLocalConfigPath(work)) {
-		t.Fatalf("unexpected project approval info: %q", info.Text)
+	if info.Text != "Session auto-accept enabled" {
+		t.Fatalf("unexpected permissions enable info: %q", info.Text)
 	}
 	waitForServiceEvent(t, svc, EventTurnDone)
-	projectCfg, loaded, err := app.LoadConfigFile(app.ProjectLocalConfigPath(work))
-	if err != nil || !loaded {
-		t.Fatalf("load project local config loaded=%v err=%v", loaded, err)
+
+	svc.Dispatch(Intent{Kind: IntentSubmitLocal, Input: "/permissions"})
+	menu = waitForServiceEvent(t, svc, EventPermissionsMenu)
+	if !menu.AutoAccept {
+		t.Fatalf("unexpected permissions menu auto accept state after enable: %+v", menu)
 	}
-	if projectCfg.Permissions.Mode != "never" {
-		t.Fatalf("project permissions.mode: want never, got %q", projectCfg.Permissions.Mode)
+	waitForServiceEvent(t, svc, EventLocalSubmitDone)
+
+	svc.Dispatch(Intent{Kind: IntentSetApprovalMode, ApprovalMode: "ask"})
+	info = waitForServiceEvent(t, svc, EventInfo)
+	if info.Text != "Session auto-accept disabled" {
+		t.Fatalf("unexpected permissions disable info: %q", info.Text)
+	}
+	waitForServiceEvent(t, svc, EventTurnDone)
+
+	if _, loaded, err := app.LoadConfigFile(app.ProjectLocalConfigPath(work)); err != nil || loaded {
+		t.Fatalf("session auto accept should not write project config loaded=%v err=%v", loaded, err)
 	}
 }
 

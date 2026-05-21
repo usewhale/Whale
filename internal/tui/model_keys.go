@@ -77,6 +77,15 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 		}
 	}
 	m.updateSlashMatches()
+	if m.mode == modeChat && m.page == pageDiff {
+		if msg.String() == "ctrl+c" && m.busy {
+			return m.interruptBusyTurn(), false, true
+		}
+		if msg.String() == "ctrl+c" {
+			return m.handleGlobalKey(msg)
+		}
+		return m.handleDiffPageKey(msg), false, true
+	}
 	if m.mode == modeChat && msg.Paste {
 		m.cancelWindowsDeferredEnter()
 		m.input.HandlePaste(string(msg.Runes))
@@ -112,12 +121,8 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 		return m.handleUserInputKey(msg), false, true
 	case modeModelPicker:
 		return m.handleModelPickerKey(msg), false, true
-	case modePermissionsPicker:
-		return m.handlePermissionsPickerKey(msg), false, true
-	case modePermissionsProjectTrustConfirm:
-		return m.handlePermissionsProjectTrustConfirmKey(msg), false, true
-	case modePermissionsProjectClearConfirm:
-		return m.handlePermissionsProjectClearConfirmKey(msg), false, true
+	case modePermissionsMenu:
+		return m.handlePermissionsMenuKey(msg), false, true
 	case modePlanImplementation:
 		return m.handlePlanImplementationKey(msg), false, true
 	case modeSkillsMenu:
@@ -132,6 +137,8 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 		return m.handleReviewTargetPickerKey(msg), false, true
 	case modeHelp:
 		return m.handleHelpKey(msg), false, true
+	case modeWorktreeExit:
+		return m.handleWorktreeExitKey(msg), false, true
 	}
 	cmd, quit, handled := m.handleGlobalKey(msg)
 	if handled {
@@ -234,6 +241,11 @@ func (m *model) handleChatModeKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		if m.busy {
 			return m.interruptBusyTurn(), true
 		}
+		if m.page != pageChat {
+			m.page = pageChat
+			m.refreshViewportContentFollow(true)
+			return nil, true
+		}
 		if m.hasSlashPanel() {
 			m.slash.matches = nil
 			m.slash.selected = 0
@@ -249,6 +261,29 @@ func (m *model) handleChatModeKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		return m.handleViewportScrollKey(msg.String()), true
 	}
 	return nil, false
+}
+
+func (m *model) handleDiffPageKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "q", "esc":
+		m.page = pageChat
+		m.refreshViewportContentFollow(true)
+	case "up", "k":
+		m.refreshViewportContent()
+		m.viewport.LineUp(1)
+	case "down", "j":
+		m.refreshViewportContent()
+		m.viewport.LineDown(1)
+	case "pgup":
+		m.handleViewportScrollKey("pgup")
+	case "pgdown":
+		m.handleViewportScrollKey("pgdown")
+	case "home":
+		m.handleViewportScrollKey("home")
+	case "end":
+		m.handleViewportScrollKey("end")
+	}
+	return nil
 }
 
 func (m *model) handleApprovalKey(msg tea.KeyMsg) tea.Cmd {
@@ -401,69 +436,27 @@ func (m *model) handleModelPickerKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-func (m *model) handlePermissionsPickerKey(msg tea.KeyMsg) tea.Cmd {
+func (m *model) handlePermissionsMenuKey(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc":
 		m.mode = modeChat
-	case "up", "k":
-		if m.permissionsPicker.index > 0 {
-			m.permissionsPicker.index--
+	case "up", "k", "left", "h":
+		if m.permissionsMenu.selected > 0 {
+			m.permissionsMenu.selected--
 		}
-	case "down", "j":
-		if m.permissionsPicker.index < len(m.permissionsPicker.choices)-1 {
-			m.permissionsPicker.index++
+	case "down", "j", "right", "l", "tab":
+		if m.permissionsMenu.selected < 1 {
+			m.permissionsMenu.selected++
 		}
 	case "enter":
-		choice := safeChoice(m.permissionsPicker.choices, m.permissionsPicker.index)
-		switch choice {
-		case service.ApprovalChoiceTrustProject:
-			m.permissionsProjectConfirm.index = 0
-			m.mode = modePermissionsProjectTrustConfirm
-			return nil
-		case service.ApprovalChoiceClearProject:
-			m.permissionsProjectConfirm.index = 0
-			m.mode = modePermissionsProjectClearConfirm
-			return nil
-		}
-		mode := approvalChoiceMode(choice)
-		if mode != "" {
+		if m.permissionsMenu.selected == 0 {
+			mode := "auto_accept"
+			if m.permissionsMenu.autoAccept {
+				mode = "ask"
+			}
 			m.dispatchIntent(service.Intent{Kind: service.IntentSetApprovalMode, ApprovalMode: mode})
 		}
 		m.mode = modeChat
-	}
-	return nil
-}
-
-func (m *model) handlePermissionsProjectTrustConfirmKey(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
-	case "esc":
-		m.mode = modePermissionsPicker
-	case "up", "k", "down", "j":
-		m.permissionsProjectConfirm.index = 1 - m.permissionsProjectConfirm.index
-	case "enter":
-		if m.permissionsProjectConfirm.index == 0 {
-			m.dispatchIntent(service.Intent{Kind: service.IntentSetProjectApproval, ApprovalMode: "never-ask"})
-			m.mode = modeChat
-		} else {
-			m.mode = modePermissionsPicker
-		}
-	}
-	return nil
-}
-
-func (m *model) handlePermissionsProjectClearConfirmKey(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
-	case "esc":
-		m.mode = modePermissionsPicker
-	case "up", "k", "down", "j":
-		m.permissionsProjectConfirm.index = 1 - m.permissionsProjectConfirm.index
-	case "enter":
-		if m.permissionsProjectConfirm.index == 0 {
-			m.dispatchIntent(service.Intent{Kind: service.IntentClearProjectApproval})
-			m.mode = modeChat
-		} else {
-			m.mode = modePermissionsPicker
-		}
 	}
 	return nil
 }
@@ -518,8 +511,13 @@ func (m *model) handleGlobalKey(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 		}
 		now := time.Now()
 		if !m.quitArmedUntil.IsZero() && now.Before(m.quitArmedUntil) {
-			m.dispatchIntent(service.Intent{Kind: service.IntentShutdown})
-			return nil, true, true
+			if m.dispatch == nil {
+				return nil, true, true
+			}
+			m.dispatchIntent(service.Intent{Kind: service.IntentRequestExit})
+			m.quitArmedUntil = time.Time{}
+			m.status = "exiting"
+			return nil, false, true
 		}
 		m.quitArmedUntil = now.Add(2 * time.Second)
 		m.status = "Press Ctrl+C again to quit"

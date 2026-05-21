@@ -34,9 +34,9 @@ const (
 type Config struct {
 	DataDir                 string
 	ConfigLoaded            bool
-	ApprovalMode            string
-	AllowPrefixes           string
-	DenyPrefixes            string
+	PermissionDefault       policy.PermissionAction
+	PermissionRules         []policy.PermissionRule
+	AutoAcceptPermissions   bool
 	AutoCompact             bool
 	AutoCompactThreshold    float64
 	MemoryEnabled           bool
@@ -78,42 +78,54 @@ type WorktreeSession struct {
 	OriginalHeadCommit string
 }
 
+type WorktreeExitSummary struct {
+	Session      WorktreeSession
+	ChangedFiles int
+	IgnoredFiles int
+	Commits      int
+}
+
+type WorktreeExitResult struct {
+	Action        string
+	Message       string
+	BranchWarning string
+}
+
 type ResumeChoice struct {
 	Index int
 	ID    string
 }
 
 type App struct {
-	ctx              context.Context
-	sessionsDir      string
-	workspaceRoot    string
-	branch           string
-	msgStore         *store.JSONLStore
-	toolRegistry     *core.ToolRegistry
-	baseToolRegistry *core.ToolRegistry
-	toolset          *tools.Toolset
-	baseTools        []core.Tool
-	taskTools        []core.Tool
-	hooks            []agent.ResolvedHook
-	hookRunner       *agent.HookRunner
-	hookSources      []string
-	currentMode      session.Mode
-	sessionID        string
-	approvalMode     policy.ApprovalMode
-	allowPrefixes    []string
-	denyPrefixes     []string
-	budgetWarningUSD float64
-	cfg              Config
-	model            string
-	reasoningEffort  string
-	thinkingEnabled  bool
-	contextWindow    int
-	mcpManager       *whalemcp.Manager
-	pluginManager    *plugins.Manager
-	pluginTools      []core.Tool
-	worktree         WorktreeSession
-	mcpInitMu        sync.Mutex
-	mcpInitStarted   bool
+	ctx                   context.Context
+	sessionsDir           string
+	workspaceRoot         string
+	branch                string
+	msgStore              *store.JSONLStore
+	toolRegistry          *core.ToolRegistry
+	baseToolRegistry      *core.ToolRegistry
+	toolset               *tools.Toolset
+	baseTools             []core.Tool
+	taskTools             []core.Tool
+	hooks                 []agent.ResolvedHook
+	hookRunner            *agent.HookRunner
+	hookSources           []string
+	currentMode           session.Mode
+	sessionID             string
+	permissionPolicy      policy.RulePolicy
+	autoAcceptPermissions bool
+	budgetWarningUSD      float64
+	cfg                   Config
+	model                 string
+	reasoningEffort       string
+	thinkingEnabled       bool
+	contextWindow         int
+	mcpManager            *whalemcp.Manager
+	pluginManager         *plugins.Manager
+	pluginTools           []core.Tool
+	worktree              WorktreeSession
+	mcpInitMu             sync.Mutex
+	mcpInitStarted        bool
 
 	a          *agent.Agent
 	apiKey     string
@@ -125,7 +137,8 @@ type App struct {
 func DefaultConfig() Config {
 	return Config{
 		DataDir:                 store.DefaultDataDir(),
-		ApprovalMode:            string(policy.ApprovalModeOnRequest),
+		PermissionDefault:       policy.PermissionAllow,
+		PermissionRules:         policy.DefaultRules(),
 		AutoCompact:             true,
 		AutoCompactThreshold:    defaults.DefaultAutoCompactThreshold,
 		MemoryEnabled:           true,
@@ -174,10 +187,6 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 		} else if blocked {
 			return nil, &CrossWorkspaceResumeError{Message: msg}
 		}
-	}
-	approvalMode, err := policy.ParseApprovalMode(cfg.ApprovalMode)
-	if err != nil {
-		return nil, fmt.Errorf("invalid permissions.mode: %w", err)
 	}
 	toolset, err := tools.NewToolset(workspaceRoot)
 	if err != nil {
@@ -298,37 +307,36 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 	}
 
 	app := &App{
-		ctx:              ctx,
-		sessionsDir:      sessionsDir,
-		workspaceRoot:    workspaceRoot,
-		branch:           branch,
-		msgStore:         msgStore,
-		toolRegistry:     toolRegistry,
-		baseToolRegistry: baseToolRegistry,
-		toolset:          toolset,
-		baseTools:        append([]core.Tool{}, baseTools...),
-		taskTools:        append([]core.Tool{}, taskTools...),
-		hooks:            hooks,
-		hookRunner:       hookRunner,
-		hookSources:      hookSources,
-		currentMode:      modeState.Mode,
-		sessionID:        sessionID,
-		approvalMode:     approvalMode,
-		allowPrefixes:    parseCSVList(cfg.AllowPrefixes),
-		denyPrefixes:     parseCSVList(cfg.DenyPrefixes),
-		budgetWarningUSD: cfg.BudgetWarningUSD,
-		cfg:              cfg,
-		model:            model,
-		reasoningEffort:  effort,
-		thinkingEnabled:  thinking,
-		contextWindow:    contextWindow,
-		mcpManager:       mcpManager,
-		pluginManager:    pluginManager,
-		pluginTools:      append([]core.Tool{}, pluginTools...),
-		worktree:         start.Worktree,
-		apiKey:           apiKey,
-		approvalFn:       defaultApprovalFunc(start.ApprovalFunc),
-		userInput:        defaultUserInputFunc(start.UserInputFunc),
+		ctx:                   ctx,
+		sessionsDir:           sessionsDir,
+		workspaceRoot:         workspaceRoot,
+		branch:                branch,
+		msgStore:              msgStore,
+		toolRegistry:          toolRegistry,
+		baseToolRegistry:      baseToolRegistry,
+		toolset:               toolset,
+		baseTools:             append([]core.Tool{}, baseTools...),
+		taskTools:             append([]core.Tool{}, taskTools...),
+		hooks:                 hooks,
+		hookRunner:            hookRunner,
+		hookSources:           hookSources,
+		currentMode:           modeState.Mode,
+		sessionID:             sessionID,
+		permissionPolicy:      policy.RulePolicy{Default: cfg.PermissionDefault, Rules: append([]policy.PermissionRule{}, cfg.PermissionRules...), WorkspaceRoot: workspaceRoot},
+		autoAcceptPermissions: cfg.AutoAcceptPermissions,
+		budgetWarningUSD:      cfg.BudgetWarningUSD,
+		cfg:                   cfg,
+		model:                 model,
+		reasoningEffort:       effort,
+		thinkingEnabled:       thinking,
+		contextWindow:         contextWindow,
+		mcpManager:            mcpManager,
+		pluginManager:         pluginManager,
+		pluginTools:           append([]core.Tool{}, pluginTools...),
+		worktree:              start.Worktree,
+		apiKey:                apiKey,
+		approvalFn:            defaultApprovalFunc(start.ApprovalFunc),
+		userInput:             defaultUserInputFunc(start.UserInputFunc),
 	}
 	appRef = app
 	return app, nil
@@ -367,7 +375,7 @@ func (a *App) SetUserInputFunc(fn agent.UserInputFunc) {
 }
 
 func (a *App) StartupLines() []string {
-	lines := []string{"whale repl", fmt.Sprintf("session: %s", a.sessionID), fmt.Sprintf("mode: %s", a.currentMode), fmt.Sprintf("permissions.mode: %s", a.approvalMode)}
+	lines := []string{"whale repl", fmt.Sprintf("session: %s", a.sessionID), fmt.Sprintf("mode: %s", a.currentMode), fmt.Sprintf("permissions.default: %s", a.permissionPolicy.Default)}
 	lines = append(lines, fmt.Sprintf("model: %s", a.model), fmt.Sprintf("effort: %s", a.reasoningEffort), fmt.Sprintf("thinking: %s", onOff(a.thinkingEnabled)), fmt.Sprintf("view: %s", a.ViewMode()))
 	if a.budgetWarningUSD > 0 {
 		lines = append(lines, fmt.Sprintf("budget.session_limit_usd: %.4f", a.budgetWarningUSD))
@@ -415,9 +423,14 @@ func (a *App) baseSessionMeta() session.SessionMeta {
 	return meta
 }
 
-func (a *App) SessionID() string                 { return a.sessionID }
-func (a *App) CurrentMode() session.Mode         { return a.currentMode }
-func (a *App) ApprovalMode() policy.ApprovalMode { return a.approvalMode }
+func (a *App) SessionID() string                          { return a.sessionID }
+func (a *App) CurrentMode() session.Mode                  { return a.currentMode }
+func (a *App) PermissionDefault() policy.PermissionAction { return a.permissionPolicy.Default }
+func (a *App) AutoAcceptPermissions() bool {
+	a.approvalMu.Lock()
+	defer a.approvalMu.Unlock()
+	return a.autoAcceptPermissions
+}
 func (a *App) SetMode(mode session.Mode) (string, error) {
 	if _, err := session.ParseMode(string(mode)); err != nil {
 		return "", err
@@ -439,8 +452,13 @@ func (a *App) ToggleMode() (string, error) {
 		return a.SetMode(session.ModeAgent)
 	}
 }
-func (a *App) SetApprovalMode(mode policy.ApprovalMode) {
-	a.approvalMode = mode
+func (a *App) SetAutoAcceptPermissions(enabled bool) {
+	// The approval callback reads autoAcceptPermissions under approvalMu while
+	// a turn runs, so the write must take the same lock.
+	a.approvalMu.Lock()
+	a.autoAcceptPermissions = enabled
+	a.approvalMu.Unlock()
+	a.cfg.AutoAcceptPermissions = enabled
 	a.a = nil
 }
 func (a *App) WorkspaceRoot() string   { return a.workspaceRoot }

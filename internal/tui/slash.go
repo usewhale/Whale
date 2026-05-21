@@ -6,7 +6,6 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	appcommands "github.com/usewhale/whale/internal/app/commands"
-	"github.com/usewhale/whale/internal/app/service"
 	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
 
@@ -15,17 +14,6 @@ type slashSuggestion struct {
 	Description string
 	InsertText  string
 	AutoRun     bool
-}
-
-func approvalChoiceMode(choice string) string {
-	switch strings.ToLower(strings.TrimSpace(choice)) {
-	case strings.ToLower(service.ApprovalChoiceAskFirst), "ask first":
-		return "on-request"
-	case strings.ToLower(service.ApprovalChoiceAutoApproveSession), "auto approve":
-		return "never-ask"
-	default:
-		return ""
-	}
 }
 
 func indexOf(xs []string, target string) int {

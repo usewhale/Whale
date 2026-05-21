@@ -172,6 +172,54 @@ func TestSpawnSubagentReportsChildToolProgress(t *testing.T) {
 	}
 }
 
+func TestSpawnSubagentAllowsReadOnlyMCPToolsWithoutApprovalPath(t *testing.T) {
+	calls := 0
+	factory := func(_ string, _ int) (llm.Provider, error) {
+		return providerFunc(func(_ context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
+			out := make(chan llm.ProviderEvent, 1)
+			go func() {
+				defer close(out)
+				calls++
+				if calls == 1 {
+					out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
+						FinishReason: core.FinishReasonToolUse,
+						ToolCalls: []core.ToolCall{{
+							ID:    "child-mcp",
+							Name:  "mcp__docs_search",
+							Input: `{"query":"permissions"}`,
+						}},
+					}}
+					return
+				}
+				out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
+					FinishReason: core.FinishReasonEndTurn,
+					Content:      "done",
+				}}
+			}()
+			return out
+		}), nil
+	}
+	ran := 0
+	parent := core.NewToolRegistry([]core.Tool{recordingTool{
+		testTool: testTool{name: "mcp__docs_search", readOnly: true},
+		ran:      &ran,
+	}})
+	r := NewRunner(RunnerConfig{ProviderFactory: factory, ParentTools: parent})
+	res, err := r.SpawnSubagent(context.Background(), SpawnSubagentRequest{Task: "look it up", Role: "explore"})
+	if err != nil {
+		t.Fatalf("SpawnSubagent: %v", err)
+	}
+	// DefaultRules routes mcp "*" through ask; a subagent has no interactive
+	// approval path, so without an auto-approving callback the call would be
+	// denied and the tool would never run.
+	if ran != 1 {
+		t.Fatalf("read-only MCP tool ran %d times, want 1", ran)
+	}
+	if res.Summary != "done" {
+		t.Fatalf("summary = %q", res.Summary)
+	}
+}
+
 func TestSpawnSubagentPersistsDurableChildSessionAndMeta(t *testing.T) {
 	factory := func(_ string, _ int) (llm.Provider, error) {
 		return providerFunc(func(_ context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
@@ -352,6 +400,20 @@ func (t testTool) ReadOnlyCheck(args map[string]any) bool {
 }
 func (t testTool) Run(_ context.Context, call core.ToolCall) (core.ToolResult, error) {
 	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"ok":true}`}, nil
+}
+
+// recordingTool wraps testTool to count how many times it actually executes,
+// so a test can tell a real run apart from a policy denial (which never calls
+// Run). The counter is a pointer so it survives the tool being copied into a
+// registry by value.
+type recordingTool struct {
+	testTool
+	ran *int
+}
+
+func (t recordingTool) Run(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
+	*t.ran++
+	return t.testTool.Run(ctx, call)
 }
 
 func tc(name string, args map[string]any) core.ToolCall {

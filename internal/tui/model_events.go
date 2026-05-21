@@ -54,6 +54,9 @@ func metadataBool(v any) bool {
 
 func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 	var eventCmd tea.Cmd
+	if ev.AutoAcceptKnown {
+		m.autoAccept = ev.AutoAccept
+	}
 	switch ev.Kind {
 	case service.EventAssistantDelta:
 		m.clearProviderRetryStatus()
@@ -156,6 +159,14 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 			m.syncModelEffortFromInfo(ev.Text)
 			m.refreshViewportContentFollow(true)
 		}
+	case service.EventDiffResult:
+		m.clearProviderRetryStatus()
+		m.appendLocalCommandEcho(m.popLocalSubmitCommand())
+		m.setDiffText(ev.Text)
+		m.page = pageDiff
+		m.status = "diff"
+		m.refreshViewportContentFollow(true)
+		m.viewport.GotoTop()
 	case service.EventBtwStarted:
 		m.clearProviderRetryStatus()
 		m.startBtwPanel(ev.Count, ev.Text)
@@ -316,13 +327,19 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		m.modelPicker.modelIx = indexOf(ev.ModelChoices, ev.CurrentModel)
 		m.modelPicker.effIx = indexOf(ev.EffortChoices, ev.CurrentEffort)
 		m.modelPicker.thinkIx = indexOf(ev.ThinkingChoices, ev.CurrentThinking)
-	case service.EventPermissionsPicker:
+	case service.EventPermissionsMenu:
 		m.clearProviderRetryStatus()
 		m.stopBusy()
 		m.stopping = false
-		m.mode = modePermissionsPicker
-		m.permissionsPicker.choices = ev.ApprovalChoices
-		m.permissionsPicker.index = indexOf(ev.ApprovalChoices, ev.CurrentApproval)
+		m.mode = modePermissionsMenu
+		m.permissionsMenu.autoAccept = ev.AutoAccept
+		m.permissionsMenu.selected = 0
+		m.slash.matches = nil
+		m.slash.selected = 0
+		m.slash.argumentHint = ""
+		m.skills.matches = nil
+		m.skills.selected = 0
+		m.status = "permissions"
 	case service.EventSkillLoaded:
 		m.clearProviderRetryStatus()
 		m.addLog(logEntry{Kind: "skill_loaded", Source: "skills", Summary: ev.Text, Raw: ev.Text})
@@ -401,6 +418,14 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 			m.refreshViewportContentFollow(true)
 		}
 		m.status = "ready"
+	case service.EventWorktreeExitPrompt:
+		m.clearProviderRetryStatus()
+		if ev.WorktreeExit != nil {
+			m.worktreeExit.summary = *ev.WorktreeExit
+			m.worktreeExit.selected = 0
+			m.mode = modeWorktreeExit
+			m.status = "worktree exit"
+		}
 	case service.EventClearScreen:
 		m.clearProviderRetryStatus()
 		m.assembler.Reset()
@@ -469,6 +494,7 @@ func (m *model) handleTurnDone(ev service.Event) tea.Cmd {
 	wasStopping := m.stopping
 	wasFrozen := m.viewportFrozen
 	wasBlockingModal := m.mode == modeApproval || m.mode == modeUserInput
+	turnDuration := m.completedTurnDuration(wasBusy)
 	m.stopBusy()
 	m.stopping = false
 	if wasBlockingModal {
@@ -481,6 +507,7 @@ func (m *model) handleTurnDone(ev service.Event) tea.Cmd {
 	m.markMissingProposedPlanIfNeeded(wasBusy)
 	m.markNoFinalAnswerIfNeeded()
 	m.commitLiveTranscript(reconciledAssistant && !wasFrozen)
+	m.appendTurnDurationNotice(wasBusy, wasStopping, turnDuration)
 	if wasFrozen {
 		m.unfreezeChatViewport()
 		m.refreshViewportContentFollow(false)
@@ -511,6 +538,52 @@ func (m *model) handleTurnDone(ev service.Event) tea.Cmd {
 	}
 	m.resetTurnVisibility()
 	return eventCmd
+}
+
+const turnDurationNoticeThreshold = 30 * time.Second
+
+func (m *model) completedTurnDuration(wasBusy bool) time.Duration {
+	if !wasBusy || m.busySince.IsZero() {
+		return 0
+	}
+	return time.Since(m.busySince)
+}
+
+func (m *model) appendTurnDurationNotice(wasBusy, wasStopping bool, duration time.Duration) {
+	if !wasBusy || wasStopping || duration < turnDurationNoticeThreshold {
+		return
+	}
+	m.appendTranscriptMessages([]tuirender.UIMessage{{
+		Role: "notice",
+		Kind: tuirender.KindNotice,
+		Text: "✻ Worked for " + formatTurnDuration(duration),
+	}})
+	if !m.viewportFrozen {
+		m.refreshViewportContentFollow(true)
+	}
+}
+
+func formatTurnDuration(duration time.Duration) string {
+	if duration < 0 {
+		duration = 0
+	}
+	totalSeconds := int(duration / time.Second)
+	if totalSeconds < 60 {
+		return fmt.Sprintf("%ds", totalSeconds)
+	}
+	minutes := totalSeconds / 60
+	seconds := totalSeconds % 60
+	if minutes < 60 {
+		return fmt.Sprintf("%dm %ds", minutes, seconds)
+	}
+	hours := minutes / 60
+	minutes %= 60
+	if hours < 24 {
+		return fmt.Sprintf("%dh %dm %ds", hours, minutes, seconds)
+	}
+	days := hours / 24
+	hours %= 24
+	return fmt.Sprintf("%dd %dh %dm %ds", days, hours, minutes, seconds)
 }
 
 func (m *model) openPlanImplementationPicker() {

@@ -23,12 +23,13 @@ func DefaultSlashCommands() []SlashCommandSpec {
 	return []SlashCommandSpec{
 		{Name: "/help", Description: "Show help and available commands", AutoRun: true},
 		{Name: "/model", Description: "Choose model, effort, and thinking settings", ArgumentHint: "[model]", AutoRun: true},
-		{Name: "/permissions", Description: "Choose tool approval behavior", AutoRun: true},
+		{Name: "/permissions", Description: "Configure permission auto-accept", AutoRun: true},
 		{Name: "/agent", Description: "Switch to agent mode", AutoRun: true},
 		{Name: "/ask", Description: "Switch to ask mode, optionally submit a prompt", ArgumentHint: "[prompt]", AutoRun: true},
 		{Name: "/plan", Description: "Switch to plan mode, optionally submit a prompt", ArgumentHint: "[prompt]", AutoRun: true},
 		{Name: "/btw", Description: "Ask a side question without changing the conversation", ArgumentHint: "<question>"},
 		{Name: "/focus", Description: "Toggle focus view", AutoRun: true},
+		{Name: "/diff", Description: "Show current git diff", AutoRun: true},
 		{Name: "/review", Description: "Open review mode or review a target", ArgumentHint: "[local|branch|pr|commit|<instructions>]", AutoRun: true, Options: []SlashCommandOption{
 			{Token: "local", Description: "Review staged, unstaged, and relevant untracked files", AutoRun: true},
 			{Token: "branch", Description: "Review current branch against default branch or base", AutoRun: true},
@@ -47,11 +48,6 @@ func DefaultSlashCommands() []SlashCommandSpec {
 		{Name: "/new", Description: "Start a new session", ArgumentHint: "[id]", AutoRun: true},
 		{Name: "/fork", Description: "Fork the current session", ArgumentHint: "[name]", AutoRun: true},
 		{Name: "/resume", Description: "Open the resume picker", AutoRun: true},
-		{Name: "/worktree", Description: "Show or manage Whale worktrees", ArgumentHint: "[list|status [name]|remove <name> [--force]]", Options: []SlashCommandOption{
-			{Token: "list", Description: "List worktrees", AutoRun: true},
-			{Token: "status", Description: "Show current or named worktree status", AutoRun: true},
-			{Token: "remove", Description: "Remove a worktree", InsertText: "/worktree remove "},
-		}},
 		{Name: "/clear", Description: "Clear the visible conversation", AutoRun: true},
 		{Name: "/status", Description: "Show session and configuration status", AutoRun: true},
 		{Name: "/stats", Description: "Show usage and tool statistics", ArgumentHint: "[usage|tools|repair|recent|all]", Options: []SlashCommandOption{

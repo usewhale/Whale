@@ -7,10 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/policy"
 )
 
-func intPtr(v int) *int { return &v }
+func intPtr(v int) *int    { return &v }
+func boolPtr(v bool) *bool { return &v }
 
 func TestConfigFileRoundTrip(t *testing.T) {
 	dir := t.TempDir()
@@ -24,8 +26,9 @@ func TestConfigFileRoundTrip(t *testing.T) {
 		UI:              FileUIConfig{ViewMode: ViewModeFocus, CheckForUpdateOnStartup: &checkUpdates},
 		API:             FileAPIConfig{BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1/"},
 		Permissions: FilePermissionsConfig{
-			Mode:               "never",
-			AllowShellPrefixes: []string{"git status", "go test"},
+			Default:    "ask",
+			AutoAccept: &enabled,
+			Shell:      map[string]string{"git push*": "ask"},
 		},
 	}
 	if err := SaveConfigFile(path, cfg); err != nil {
@@ -39,7 +42,7 @@ func TestConfigFileRoundTrip(t *testing.T) {
 	if !strings.Contains(string(raw), `model = "deepseek-v4-pro"`) {
 		t.Fatalf("unexpected config TOML:\n%s", raw)
 	}
-	if !strings.Contains(string(raw), "[permissions]") || strings.Contains(string(raw), "allow_prefixes") {
+	if !strings.Contains(string(raw), "[permissions]") || strings.Contains(string(raw), "allow_shell_prefixes") || strings.Contains(string(raw), "\n  mode =") {
 		t.Fatalf("expected grouped config TOML, got:\n%s", raw)
 	}
 
@@ -65,8 +68,108 @@ func TestConfigFileRoundTrip(t *testing.T) {
 	if loaded.UI.CheckForUpdateOnStartup == nil || *loaded.UI.CheckForUpdateOnStartup {
 		t.Fatalf("ui.check_for_update_on_startup: want false, got %+v", loaded.UI.CheckForUpdateOnStartup)
 	}
-	if loaded.Permissions.Mode != "never" || len(loaded.Permissions.AllowShellPrefixes) != 2 {
+	if loaded.Permissions.Default != "ask" || loaded.Permissions.AutoAccept == nil || !*loaded.Permissions.AutoAccept || loaded.Permissions.Shell["git push*"] != "ask" {
 		t.Fatalf("permissions config: %+v", loaded.Permissions)
+	}
+}
+
+func TestLoadConfigFileMigratesLegacyPermissionKeys(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	raw := strings.TrimSpace(`
+[permissions]
+mode = "never"
+allow_shell_prefixes = ["git status"]
+deny_shell_prefixes = ["rm -rf"]
+`) + "\n"
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, loaded, err := LoadConfigFile(path)
+	if err != nil {
+		t.Fatalf("LoadConfigFile: %v", err)
+	}
+	if !loaded {
+		t.Fatal("expected config to load")
+	}
+	if cfg.Permissions.Default != string(policy.PermissionAllow) {
+		t.Fatalf("legacy mode default = %q, want allow", cfg.Permissions.Default)
+	}
+	if cfg.Permissions.AutoAccept == nil || !*cfg.Permissions.AutoAccept {
+		t.Fatalf("legacy mode auto_accept = %+v, want true", cfg.Permissions.AutoAccept)
+	}
+	if cfg.Permissions.Shell["git status"] != string(policy.PermissionAllow) ||
+		cfg.Permissions.Shell["git status *"] != string(policy.PermissionAllow) ||
+		cfg.Permissions.Shell["rm -rf"] != string(policy.PermissionDeny) ||
+		cfg.Permissions.Shell["rm -rf *"] != string(policy.PermissionDeny) {
+		t.Fatalf("legacy prefixes not migrated: %+v", cfg.Permissions.Shell)
+	}
+	if _, ok := cfg.Permissions.Shell["git status*"]; ok {
+		t.Fatalf("migrated allow prefix should not be an unbounded glob: %+v", cfg.Permissions.Shell)
+	}
+	if _, ok := cfg.Permissions.Shell["rm -rf*"]; ok {
+		t.Fatalf("migrated deny prefix should not be an unbounded glob: %+v", cfg.Permissions.Shell)
+	}
+	if cfg.Permissions.Mode != "" || len(cfg.Permissions.AllowShellPrefixes) != 0 || len(cfg.Permissions.DenyShellPrefixes) != 0 {
+		t.Fatalf("legacy fields should be cleared after migration: %+v", cfg.Permissions)
+	}
+}
+
+// policyFromMigratedConfig writes raw TOML, runs it through the legacy
+// migration path, and builds the RulePolicy the runtime would use.
+func policyFromMigratedConfig(t *testing.T, raw string) policy.RulePolicy {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, _, err := LoadConfigFile(path)
+	if err != nil {
+		t.Fatalf("LoadConfigFile: %v", err)
+	}
+	base := DefaultConfig()
+	if err := ApplyFileConfig(&base, cfg); err != nil {
+		t.Fatalf("ApplyFileConfig: %v", err)
+	}
+	return policy.RulePolicy{Default: base.PermissionDefault, Rules: base.PermissionRules}
+}
+
+func TestMigratedAllowPrefixKeepsTokenBoundary(t *testing.T) {
+	p := policyFromMigratedConfig(t, "[permissions]\nallow_shell_prefixes = [\"git status\"]\n")
+	spec := core.ToolSpec{Name: "shell_run"}
+
+	allowed := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"git status --short"}`})
+	if !allowed.Allow || allowed.RequiresApproval {
+		t.Fatalf("git status should be auto-allowed by migrated prefix: %+v", allowed)
+	}
+
+	sneaky := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"git statusfoo; rm -rf ."}`})
+	if !sneaky.RequiresApproval {
+		t.Fatalf("git statusfoo should not inherit the allow prefix: %+v", sneaky)
+	}
+}
+
+func TestMigratedOnRequestModeDoesNotOverPrompt(t *testing.T) {
+	p := policyFromMigratedConfig(t, "[permissions]\nmode = \"on-request\"\n")
+
+	nonMutating := p.Decide(core.ToolSpec{Name: "request_user_input"}, core.ToolCall{Name: "request_user_input", Input: `{}`})
+	if !nonMutating.Allow || nonMutating.RequiresApproval {
+		t.Fatalf("non-mutating tool should not prompt under migrated on-request mode: %+v", nonMutating)
+	}
+
+	edit := p.Decide(core.ToolSpec{Name: "edit"}, core.ToolCall{Name: "edit", Input: `{"file_path":"main.go"}`})
+	if !edit.Allow || !edit.RequiresApproval {
+		t.Fatalf("edit should still require approval under migrated on-request mode: %+v", edit)
+	}
+}
+
+func TestMigratedDenyPrefixMatchesNormalizedWhitespace(t *testing.T) {
+	p := policyFromMigratedConfig(t, "[permissions]\nmode = \"never\"\ndeny_shell_prefixes = [\"rm -rf\"]\n")
+
+	got := p.Decide(core.ToolSpec{Name: "shell_run"}, core.ToolCall{Name: "shell_run", Input: `{"command":"rm   -rf /tmp/x"}`})
+	if got.Allow || got.Code != "permission_denied" {
+		t.Fatalf("migrated deny prefix should block whitespace-normalized command: %+v", got)
 	}
 }
 
@@ -284,11 +387,6 @@ func TestApplyFileConfigUsesGroupedConfig(t *testing.T) {
 			StreamMaxAttempts: intPtr(7),
 			MaxDelay:          "45s",
 		},
-		Permissions: FilePermissionsConfig{
-			Mode:               "never",
-			AllowShellPrefixes: []string{"git status"},
-			DenyShellPrefixes:  []string{"rm -rf"},
-		},
 		Budget: FileBudgetConfig{SessionLimitUSD: &budgetLimit},
 		MCP:    FileMCPConfig{ConfigPath: "~/custom-mcp.json"},
 		Context: FileContextConfig{
@@ -304,9 +402,6 @@ func TestApplyFileConfigUsesGroupedConfig(t *testing.T) {
 		t.Fatalf("ApplyFileConfig: %v", err)
 	}
 
-	if cfg.ApprovalMode != "never" || cfg.AllowPrefixes != "git status" || cfg.DenyPrefixes != "rm -rf" {
-		t.Fatalf("permissions not applied: %+v", cfg)
-	}
 	if cfg.BudgetWarningUSD != budgetLimit {
 		t.Fatalf("budget not applied: %+v", cfg)
 	}
@@ -325,6 +420,60 @@ func TestApplyFileConfigUsesGroupedConfig(t *testing.T) {
 	if cfg.MemoryEnabled || cfg.MemoryMaxChars != projectDocMaxBytes || cfg.MemoryFileOrder != "AGENTS.md,TEAM.md" {
 		t.Fatalf("project doc not applied: %+v", cfg)
 	}
+}
+
+func TestApplyFileConfigLoadsPermissionRules(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.PermissionRules = nil
+	if err := ApplyFileConfig(&cfg, FileConfig{
+		Permissions: FilePermissionsConfig{
+			Default:    "ask",
+			AutoAccept: boolPtr(true),
+			Read:       map[string]string{"*": "allow", "*.env": "ask"},
+			Shell:      map[string]string{"*": "allow", "git push*": "ask", "rm -rf*": "deny"},
+			MCP:        map[string]string{"*": "ask"},
+		},
+	}); err != nil {
+		t.Fatalf("ApplyFileConfig: %v", err)
+	}
+	if cfg.PermissionDefault != policy.PermissionAsk {
+		t.Fatalf("permission default = %q, want ask", cfg.PermissionDefault)
+	}
+	if !cfg.AutoAcceptPermissions {
+		t.Fatal("auto accept not applied")
+	}
+	if len(cfg.PermissionRules) != 6 {
+		t.Fatalf("permission rules = %d, want 6: %+v", len(cfg.PermissionRules), cfg.PermissionRules)
+	}
+	if got := cfg.PermissionRules[0]; got.Permission != "read" || got.Pattern != "*" || got.Action != policy.PermissionAllow {
+		t.Fatalf("first rule = %+v", got)
+	}
+}
+
+func TestLoadAndApplyConfigKeepsFilePermissionRulesWithDefaultCLIConfig(t *testing.T) {
+	dataDir := t.TempDir()
+	workspace := t.TempDir()
+	if err := SaveConfigFile(ProjectConfigPath(workspace), FileConfig{
+		Permissions: FilePermissionsConfig{
+			Shell: map[string]string{"git push*": "deny"},
+		},
+	}); err != nil {
+		t.Fatalf("save project config: %v", err)
+	}
+
+	input := DefaultConfig()
+	input.DataDir = dataDir
+	cfg, err := LoadAndApplyConfig(input, workspace)
+	if err != nil {
+		t.Fatalf("LoadAndApplyConfig: %v", err)
+	}
+
+	for _, rule := range cfg.PermissionRules {
+		if rule.Permission == "shell" && rule.Pattern == "git push*" && rule.Action == policy.PermissionDeny {
+			return
+		}
+	}
+	t.Fatalf("loaded permission rule was not preserved: %+v", cfg.PermissionRules)
 }
 
 func TestApplyLoadedConfigLocalEnabledOverridesSharedDisabled(t *testing.T) {
@@ -434,113 +583,5 @@ func TestSetModelAndThinkingPersistToConfig(t *testing.T) {
 	}
 	if _, err := os.Stat(preferencesPath(dir)); !os.IsNotExist(err) {
 		t.Fatalf("preferences.json should not be created, err=%v", err)
-	}
-}
-
-func TestSetProjectApprovalModeUpdatesProjectLocalConfig(t *testing.T) {
-	dataDir := t.TempDir()
-	workspace := t.TempDir()
-	if err := SaveConfigFile(ProjectConfigPath(workspace), FileConfig{
-		Model: "deepseek-v4-pro",
-		Skills: FileSkillsConfig{
-			Disabled: []string{"project-skill"},
-		},
-	}); err != nil {
-		t.Fatalf("save project config: %v", err)
-	}
-	app := &App{
-		workspaceRoot: workspace,
-		cfg:           Config{DataDir: dataDir, ApprovalMode: string(policy.ApprovalModeOnRequest)},
-		approvalMode:  policy.ApprovalModeOnRequest,
-	}
-
-	path, err := app.SetProjectApprovalMode(policy.ApprovalModeNever)
-	if err != nil {
-		t.Fatalf("SetProjectApprovalMode: %v", err)
-	}
-	if path != ProjectLocalConfigPath(workspace) {
-		t.Fatalf("project local config path: want %s, got %s", ProjectLocalConfigPath(workspace), path)
-	}
-	if app.ApprovalMode() != policy.ApprovalModeNever || app.cfg.ApprovalMode != string(policy.ApprovalModeNever) {
-		t.Fatalf("approval mode not updated in memory: app=%s cfg=%s", app.ApprovalMode(), app.cfg.ApprovalMode)
-	}
-	local, ok, err := LoadConfigFile(ProjectLocalConfigPath(workspace))
-	if err != nil || !ok {
-		t.Fatalf("load project local config loaded=%v err=%v", ok, err)
-	}
-	if local.Permissions.Mode != string(policy.ApprovalModeNever) {
-		t.Fatalf("project local permissions.mode: want never, got %q", local.Permissions.Mode)
-	}
-	shared, ok, err := LoadConfigFile(ProjectConfigPath(workspace))
-	if err != nil || !ok {
-		t.Fatalf("load shared project config loaded=%v err=%v", ok, err)
-	}
-	if shared.Permissions.Mode != "" {
-		t.Fatalf("shared project permissions.mode should be untouched, got %q", shared.Permissions.Mode)
-	}
-	if shared.Model != "deepseek-v4-pro" || !containsString(shared.Skills.Disabled, "project-skill") {
-		t.Fatalf("expected unrelated shared project config to be preserved, got %+v", shared)
-	}
-}
-
-func TestClearProjectApprovalModeClearsLocalAndFallsBackToProject(t *testing.T) {
-	dataDir := t.TempDir()
-	workspace := t.TempDir()
-	if err := SaveConfigFile(ProjectConfigPath(workspace), FileConfig{
-		Model: "deepseek-v4-pro",
-		Permissions: FilePermissionsConfig{
-			Mode:               string(policy.ApprovalModeOnRequest),
-			AllowShellPrefixes: []string{"git status"},
-		},
-	}); err != nil {
-		t.Fatalf("save project config: %v", err)
-	}
-	if err := SaveConfigFile(ProjectLocalConfigPath(workspace), FileConfig{
-		Permissions: FilePermissionsConfig{
-			Mode:               string(policy.ApprovalModeNever),
-			AllowShellPrefixes: []string{"go test"},
-		},
-	}); err != nil {
-		t.Fatalf("save project local config: %v", err)
-	}
-	app := &App{
-		workspaceRoot: workspace,
-		cfg:           Config{DataDir: dataDir, ApprovalMode: string(policy.ApprovalModeNever)},
-		approvalMode:  policy.ApprovalModeNever,
-	}
-
-	mode, path, err := app.ClearProjectApprovalMode()
-	if err != nil {
-		t.Fatalf("ClearProjectApprovalMode: %v", err)
-	}
-	if path != ProjectLocalConfigPath(workspace) {
-		t.Fatalf("project local config path: want %s, got %s", ProjectLocalConfigPath(workspace), path)
-	}
-	if mode != policy.ApprovalModeOnRequest || app.ApprovalMode() != policy.ApprovalModeOnRequest {
-		t.Fatalf("approval mode after clear: returned=%s app=%s", mode, app.ApprovalMode())
-	}
-	local, ok, err := LoadConfigFile(ProjectLocalConfigPath(workspace))
-	if err != nil || !ok {
-		t.Fatalf("load project local config loaded=%v err=%v", ok, err)
-	}
-	if local.Permissions.Mode != "" {
-		t.Fatalf("project local permissions.mode should be cleared, got %q", local.Permissions.Mode)
-	}
-	if !containsString(local.Permissions.AllowShellPrefixes, "go test") {
-		t.Fatalf("expected unrelated project local config to be preserved, got %+v", local)
-	}
-	shared, ok, err := LoadConfigFile(ProjectConfigPath(workspace))
-	if err != nil || !ok {
-		t.Fatalf("load shared project config loaded=%v err=%v", ok, err)
-	}
-	if shared.Permissions.Mode != string(policy.ApprovalModeOnRequest) || !containsString(shared.Permissions.AllowShellPrefixes, "git status") {
-		t.Fatalf("expected shared project config to be preserved, got %+v", shared)
-	}
-	raw, err := os.ReadFile(ProjectLocalConfigPath(workspace))
-	if err != nil {
-		t.Fatalf("read project local config: %v", err)
-	}
-	if strings.Contains(string(raw), "mode =") {
-		t.Fatalf("project local config should not contain permissions.mode after clear:\n%s", raw)
 	}
 }

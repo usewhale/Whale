@@ -75,10 +75,6 @@ Whale currently uses the DeepSeek API. Before running Whale, create an API key i
 
 > **Platform support:** Whale currently supports **macOS**, **Linux**, and **Windows**.
 
-<p align="center">
-  <img src="docs/screenshot-01.png" alt="Whale TUI screenshot" width="860">
-</p>
-
 You can also run a one-shot prompt:
 
 ```bash
@@ -155,8 +151,6 @@ Whale's goal is to make DeepSeek's pricing, cache behavior, and coding capabilit
 | `whale exec "prompt"` | Run one prompt non-interactively |
 | `whale --worktree [name]` | Create or reuse an isolated git worktree for this interactive session |
 | `whale exec --worktree [name] "prompt"` | Run one prompt inside an isolated git worktree |
-| `whale worktree list` | List Whale-managed worktrees |
-| `whale worktree remove <name> [--force]` | Remove a Whale-managed worktree |
 | `whale --dangerously-skip-permissions` | Skip tool approval prompts for this run; suitable for external sandboxes or fully trusted repos |
 | `whale migrate-config` | Migrate Whale v0.1.8-or-earlier config files to `config.toml` |
 | `whale resume` | Open the session picker |
@@ -169,7 +163,6 @@ Whale's goal is to make DeepSeek's pricing, cache behavior, and coding capabilit
 | `/plan [prompt]` | Plan first, then decide whether to execute |
 | `/review [target]` | Build a code-review prompt for local changes, branches, PRs, or commits |
 | `/status` | Show current session, mode, model, and config status |
-| `/worktree` | Show or manage the current worktree |
 | `/compact` | Compact the current conversation context |
 | `/init` | Generate AGENTS.md for the current repository |
 | `/skills` | Open the Skills menu to list, insert, or enable/disable local skills |
@@ -227,7 +220,9 @@ whale exec --worktree feature-x "implement and test this change"
 
 Whale stores managed worktrees under `./.whale/worktrees/<name>` and uses branches named `worktree-<name>`. If you omit the name, Whale generates a `session-*` name. On creation, Whale best-effort copies only `./.whale/config.local.toml`; it does not copy session logs, API keys, private MCP config, or the whole `./.whale` directory.
 
-Use `whale worktree list`, `whale worktree status [name]`, and `whale worktree remove <name> [--force]` to manage these worktrees. Removal refuses dirty worktrees by default; `--force` discards changes. `whale resume <id>` uses session metadata to return to the matching worktree. If that worktree was deleted, Whale asks you to inspect with `whale worktree list`. This version does not yet include tmux, automatic exit cleanup, or stale sweeping.
+When you exit an interactive worktree session, Whale removes a clean worktree automatically. If the worktree has uncommitted files or commits after the original checkout head, Whale prompts you to keep or remove it. Removing a worktree discards that checkout and its uncommitted changes, but it does not delete the conversation — `whale resume <id>` resumes from the original workspace.
+
+`whale exec --worktree` runs non-interactively and leaves its worktree on disk. To review and clean it up, re-enter it interactively with `whale --worktree <name>` and exit, which runs the same cleanup prompt. This version does not yet include tmux or stale sweeping.
 
 ## Coding Plan Support
 

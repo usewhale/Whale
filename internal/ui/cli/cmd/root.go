@@ -15,7 +15,6 @@ import (
 	"github.com/usewhale/whale/internal/app"
 	"github.com/usewhale/whale/internal/build"
 	"github.com/usewhale/whale/internal/defaults"
-	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/tui"
 	whaleworktree "github.com/usewhale/whale/internal/worktree"
 )
@@ -38,7 +37,7 @@ func bindPersistentFlags(c *cobra.Command, opts *cliOptions) {
 	c.PersistentFlags().StringVarP(&opts.cfg.Model, "model", "m", opts.cfg.Model, "Model to use ("+strings.Join(defaults.SupportedModels(), "|")+")")
 	c.PersistentFlags().BoolVar(&opts.cfg.ThinkingEnabled, "thinking", opts.cfg.ThinkingEnabled, "Override thinking for this run only")
 	c.PersistentFlags().StringVar(&opts.cfg.ReasoningEffort, "effort", opts.cfg.ReasoningEffort, "Override reasoning effort for this run only (high|max)")
-	c.PersistentFlags().BoolVar(&opts.dangerouslySkipPermissions, "dangerously-skip-permissions", false, "Skip tool approval prompts for this run; extremely dangerous")
+	c.PersistentFlags().BoolVar(&opts.dangerouslySkipPermissions, "dangerously-skip-permissions", false, "Auto-accept permission prompts for this run; extremely dangerous")
 	c.PersistentFlags().StringVarP(&opts.worktreeName, "worktree", "w", "", "Create or reuse an isolated git worktree for this run")
 	if f := c.PersistentFlags().Lookup("worktree"); f != nil {
 		f.NoOptDefVal = autoWorktreeName()
@@ -156,7 +155,7 @@ func shouldConsumeWorktreeValue(args []string, index int, stdinTerminal bool) bo
 		return !stdinTerminal && whaleworktree.ValidateName(next) == nil
 	}
 	switch next {
-	case "exec", "resume", "doctor", "setup", "migrate-config", "worktree", "help", "completion":
+	case "exec", "resume", "doctor", "setup", "migrate-config", "help", "completion":
 		return false
 	default:
 		return true
@@ -215,7 +214,8 @@ func prepareCLIConfig(cmd *cobra.Command, opts *cliOptions) error {
 		cfg.ReasoningEffort = effort
 	}
 	if flagChanged(cmd, "dangerously-skip-permissions") && opts.dangerouslySkipPermissions {
-		cfg.ApprovalMode = string(policy.ApprovalModeNever)
+		cfg.PermissionDefault = "allow"
+		cfg.AutoAcceptPermissions = true
 	}
 	opts.cfg = cfg
 	return validateModel(opts.cfg.Model)
@@ -277,6 +277,5 @@ func newRootCmd(opts *cliOptions) *cobra.Command {
 	root.AddCommand(newMigrateConfigCmd(opts))
 	root.AddCommand(newSetupCmd(opts))
 	root.AddCommand(newResumeCmd(opts))
-	root.AddCommand(newWorktreeCmd(opts))
 	return root
 }

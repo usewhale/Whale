@@ -21,7 +21,6 @@ import (
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/store"
 	"github.com/usewhale/whale/internal/telemetry"
-	whaleworktree "github.com/usewhale/whale/internal/worktree"
 )
 
 func TestResolveInitialSessionID(t *testing.T) {
@@ -146,12 +145,6 @@ func TestClassifySubmitSlashCommands(t *testing.T) {
 		{line: "/mcp", want: appcommands.SubmitLocalReadOnly},
 		{line: "/feedback", want: appcommands.SubmitLocalReadOnly},
 		{line: "/help", want: appcommands.SubmitLocalReadOnly},
-		{line: "/worktree", want: appcommands.SubmitLocalReadOnly},
-		{line: "/worktree list", want: appcommands.SubmitLocalReadOnly},
-		{line: "/worktree status", want: appcommands.SubmitLocalReadOnly},
-		{line: "/worktree status feature", want: appcommands.SubmitLocalReadOnly},
-		{line: "/worktree remove feature", want: appcommands.SubmitLocalMutating},
-		{line: "/worktree remove feature --force", want: appcommands.SubmitLocalMutating},
 		{line: "/model", want: appcommands.SubmitLocalUI},
 		{line: "/permissions", want: appcommands.SubmitLocalUI},
 		{line: "/focus", want: appcommands.SubmitLocalUI},
@@ -200,8 +193,8 @@ func TestClassifySubmitSlashCommands(t *testing.T) {
 		{line: "/stats bad", want: appcommands.SubmitUsageError},
 		{line: "/feedback now", want: appcommands.SubmitUsageError},
 		{line: "/help now", want: appcommands.SubmitUsageError},
-		{line: "/worktree remove feature --bad", want: appcommands.SubmitUsageError},
-		{line: "/worktree remove", want: appcommands.SubmitUsageError},
+		{line: "/worktree", want: appcommands.SubmitUsageError},
+		{line: "/worktree list", want: appcommands.SubmitUsageError},
 		{line: "/compact bad", want: appcommands.SubmitUsageError},
 		{line: "/plan show", want: appcommands.SubmitUsageError},
 		{line: "/unknown", want: appcommands.SubmitUsageError},
@@ -213,63 +206,6 @@ func TestClassifySubmitSlashCommands(t *testing.T) {
 				t.Fatalf("ClassifySubmit(%q) = %v, want %v", tc.line, got.Class, tc.want)
 			}
 		})
-	}
-}
-
-func TestHandleLocalCommandWorktreeStatusAndList(t *testing.T) {
-	repo := newAppGitRepo(t)
-	sess, err := whaleworktree.Start(repo, "feature")
-	if err != nil {
-		t.Fatalf("Start worktree: %v", err)
-	}
-	app := &App{
-		workspaceRoot: repo,
-		worktree: WorktreeSession{
-			Name:   "feature",
-			Path:   sess.Path,
-			Branch: sess.Branch,
-		},
-	}
-
-	handled, out, _, err := app.HandleLocalCommand("/worktree")
-	if err != nil {
-		t.Fatalf("/worktree: %v", err)
-	}
-	if !handled || !strings.Contains(out, "current: feature") || !strings.Contains(out, sess.Path) {
-		t.Fatalf("unexpected /worktree output:\n%s", out)
-	}
-
-	handled, out, _, err = app.HandleLocalCommand("/worktree list")
-	if err != nil {
-		t.Fatalf("/worktree list: %v", err)
-	}
-	if !handled || !strings.Contains(out, "feature") || !strings.Contains(out, "clean") {
-		t.Fatalf("unexpected /worktree list output:\n%s", out)
-	}
-}
-
-func TestHandleLocalCommandWorktreeRemoveDirtyGuard(t *testing.T) {
-	repo := newAppGitRepo(t)
-	sess, err := whaleworktree.Start(repo, "dirty")
-	if err != nil {
-		t.Fatalf("Start worktree: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(sess.Path, "dirty.txt"), []byte("dirty\n"), 0o600); err != nil {
-		t.Fatalf("write dirty: %v", err)
-	}
-	app := &App{workspaceRoot: repo}
-
-	handled, _, _, err := app.HandleLocalCommand("/worktree remove dirty")
-	if !handled || err == nil || !strings.Contains(err.Error(), "has changes") {
-		t.Fatalf("expected dirty guard, handled=%v err=%v", handled, err)
-	}
-
-	handled, out, _, err := app.HandleLocalCommand("/worktree remove dirty --force")
-	if err != nil {
-		t.Fatalf("/worktree remove --force: %v", err)
-	}
-	if !handled || !strings.Contains(out, "Removed worktree") {
-		t.Fatalf("unexpected remove output:\n%s", out)
 	}
 }
 
@@ -824,7 +760,6 @@ func TestStartupLinesIncludeEffectiveThinkingAndEffort(t *testing.T) {
 	app := &App{
 		sessionID:        "sess-1",
 		currentMode:      "agent",
-		approvalMode:     "never",
 		model:            "deepseek-v4-pro",
 		reasoningEffort:  "max",
 		thinkingEnabled:  false,
@@ -846,9 +781,8 @@ func TestStartupLinesIncludeEffectiveThinkingAndEffort(t *testing.T) {
 
 func TestStartupLinesIncludeWorktree(t *testing.T) {
 	app := &App{
-		sessionID:    "sess-1",
-		currentMode:  "agent",
-		approvalMode: "never",
+		sessionID:   "sess-1",
+		currentMode: "agent",
 		worktree: WorktreeSession{
 			Name: "feature",
 			Path: "/tmp/repo/.whale/worktrees/feature",
@@ -876,7 +810,6 @@ func TestBuildStatusIncludesEffectiveThinkingAndEffort(t *testing.T) {
 		msgStore:         msgStore,
 		contextWindow:    1000,
 		currentMode:      "agent",
-		approvalMode:     "never",
 		model:            "deepseek-v4-pro",
 		reasoningEffort:  "max",
 		thinkingEnabled:  false,
@@ -892,6 +825,61 @@ func TestBuildStatusIncludesEffectiveThinkingAndEffort(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected status to contain %q, got:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "- view:") {
+		t.Fatalf("expected status not to expose view mode, got:\n%s", out)
+	}
+}
+
+func TestBuildStatusIncludesWorktreeDetails(t *testing.T) {
+	dir := t.TempDir()
+	sessionsDir := filepath.Join(dir, "sessions")
+	msgStore, err := store.NewJSONLStore(sessionsDir)
+	if err != nil {
+		t.Fatalf("store init: %v", err)
+	}
+	app := &App{
+		ctx:              context.Background(),
+		workspaceRoot:    dir,
+		sessionID:        "sess-1",
+		msgStore:         msgStore,
+		contextWindow:    1000,
+		currentMode:      "agent",
+		model:            "deepseek-v4-pro",
+		reasoningEffort:  "max",
+		thinkingEnabled:  true,
+		budgetWarningUSD: 0,
+		cfg:              DefaultConfig(),
+		worktree: WorktreeSession{
+			Name:               "feature",
+			Workspace:          "/tmp/repo/.whale/worktrees/feature/packages/api",
+			Path:               "/tmp/repo/.whale/worktrees/feature",
+			Branch:             "worktree-feature",
+			OriginalWorkspace:  "/tmp/repo/packages/api",
+			OriginalBranch:     "main",
+			OriginalHeadCommit: "abc123",
+		},
+	}
+
+	out := app.buildStatus()
+	for _, want := range []string{
+		"- worktree: feature",
+		"- worktree.branch: worktree-feature",
+		"- worktree.path: /tmp/repo/.whale/worktrees/feature",
+		"- worktree.original_workspace: /tmp/repo/packages/api",
+		"- worktree.original_branch: main",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected status to contain %q, got:\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{
+		"- worktree.workspace:",
+		"- worktree.original_head:",
+	} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("expected status not to contain %q, got:\n%s", unwanted, out)
 		}
 	}
 }

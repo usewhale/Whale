@@ -117,7 +117,16 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 	})
 	child := agent.NewAgentWithRegistry(provider, childStore, childTools,
 		agent.WithSessionMode(session.ModeAsk),
-		agent.WithToolPolicy(policy.DefaultToolPolicy{Mode: policy.ApprovalModeNever}),
+		agent.WithToolPolicy(policy.RulePolicy{Default: policy.PermissionAllow, Rules: policy.DefaultRules(), WorkspaceRoot: r.workspaceRoot}),
+		// The child registry is already restricted to read-only tools
+		// (BuildReadOnlyRegistry) and a subagent has no interactive approval
+		// path, so auto-approve "ask" decisions instead of defaulting them to
+		// denied. This keeps read-only MCP/memory tools usable, matching the
+		// pre-RulePolicy behavior; "deny" rules still produce a non-Allow
+		// decision and are enforced before the approval callback runs.
+		agent.WithApprovalFunc(func(policy.ApprovalRequest) policy.ApprovalDecision {
+			return policy.ApprovalAllow
+		}),
 		agent.WithSessionsDir(r.sessionsDir),
 		agent.WithProjectMemory(r.memoryEnabled, r.memoryMaxChars, r.memoryFileOrder, r.workspaceRoot),
 		agent.WithUsageLogPath(""),

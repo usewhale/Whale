@@ -305,7 +305,7 @@ func TestPrepareCLIConfigDangerouslySkipPermissionsOverridesConfig(t *testing.T)
 		t.Fatalf("mkdir .whale: %v", err)
 	}
 	if err := app.SaveConfigFile(filepath.Join(workspace, ".whale", app.ConfigFileName), app.FileConfig{
-		Permissions: app.FilePermissionsConfig{Mode: string(policy.ApprovalModeOnRequest)},
+		Permissions: app.FilePermissionsConfig{Default: "ask"},
 	}); err != nil {
 		t.Fatalf("save project config: %v", err)
 	}
@@ -328,16 +328,16 @@ func TestPrepareCLIConfigDangerouslySkipPermissionsOverridesConfig(t *testing.T)
 	if err := prepareCLIConfig(root, opts); err != nil {
 		t.Fatalf("prepareCLIConfig: %v", err)
 	}
-	if opts.cfg.ApprovalMode != string(policy.ApprovalModeNever) {
-		t.Fatalf("approval mode: want never, got %s", opts.cfg.ApprovalMode)
+	if opts.cfg.PermissionDefault != policy.PermissionAllow || !opts.cfg.AutoAcceptPermissions {
+		t.Fatalf("dangerously skip permissions not applied: default=%s auto_accept=%v", opts.cfg.PermissionDefault, opts.cfg.AutoAcceptPermissions)
 	}
 
 	loaded, _, err := app.LoadConfigFile(filepath.Join(workspace, ".whale", app.ConfigFileName))
 	if err != nil {
 		t.Fatalf("LoadConfigFile: %v", err)
 	}
-	if loaded.Permissions.Mode != string(policy.ApprovalModeOnRequest) {
-		t.Fatalf("project config should remain on-request, got %q", loaded.Permissions.Mode)
+	if loaded.Permissions.Default != "ask" {
+		t.Fatalf("project config should remain ask, got %q", loaded.Permissions.Default)
 	}
 }
 
@@ -364,8 +364,8 @@ func TestPrepareCLIConfigDangerouslySkipPermissionsAppliesToSubcommands(t *testi
 	if err := prepareCLIConfig(execCmd, opts); err != nil {
 		t.Fatalf("prepareCLIConfig: %v", err)
 	}
-	if opts.cfg.ApprovalMode != string(policy.ApprovalModeNever) {
-		t.Fatalf("approval mode: want never, got %s", opts.cfg.ApprovalMode)
+	if opts.cfg.PermissionDefault != policy.PermissionAllow || !opts.cfg.AutoAcceptPermissions {
+		t.Fatalf("dangerously skip permissions not applied: default=%s auto_accept=%v", opts.cfg.PermissionDefault, opts.cfg.AutoAcceptPermissions)
 	}
 }
 
@@ -453,8 +453,6 @@ func TestUnsupportedSubcommandsRejectWorktree(t *testing.T) {
 		{"resume", "--worktree=x"},
 		{"setup", "--worktree=x"},
 		{"migrate-config", "--worktree=x"},
-		{"worktree", "list", "--worktree=x"},
-		normalizeWorktreeArgs([]string{"--worktree", "feature-x", "worktree", "list"}, true),
 	} {
 		opts := &cliOptions{cfg: app.DefaultConfig()}
 		root := newRootCmd(opts)
@@ -466,74 +464,6 @@ func TestUnsupportedSubcommandsRejectWorktree(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "--worktree is only supported") {
 			t.Fatalf("%v: expected unsupported worktree error, got %v", args, err)
 		}
-	}
-}
-
-func TestWorktreeCommandsListStatusAndRemove(t *testing.T) {
-	repo := newCLIGitRepo(t)
-	oldwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd: %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir: %v", err)
-	}
-	defer func() { _ = os.Chdir(oldwd) }()
-
-	opts := &cliOptions{cfg: app.DefaultConfig()}
-	root := newRootCmd(opts)
-	if err := root.PersistentFlags().Set("worktree", "cli-test"); err != nil {
-		t.Fatalf("set worktree: %v", err)
-	}
-	if err := prepareWorktree(root, opts); err != nil {
-		t.Fatalf("prepareWorktree: %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir repo: %v", err)
-	}
-
-	var out bytes.Buffer
-	root = newRootCmd(&cliOptions{cfg: app.DefaultConfig()})
-	root.SetOut(&out)
-	root.SetErr(&out)
-	root.SetArgs([]string{"worktree", "list"})
-	if err := root.Execute(); err != nil {
-		t.Fatalf("worktree list: %v", err)
-	}
-	if !strings.Contains(out.String(), "cli-test") || !strings.Contains(out.String(), "worktree-cli-test") {
-		t.Fatalf("unexpected list output:\n%s", out.String())
-	}
-
-	out.Reset()
-	root = newRootCmd(&cliOptions{cfg: app.DefaultConfig()})
-	root.SetOut(&out)
-	root.SetErr(&out)
-	root.SetArgs([]string{"worktree", "status", "cli-test"})
-	if err := root.Execute(); err != nil {
-		t.Fatalf("worktree status: %v", err)
-	}
-	if !strings.Contains(out.String(), "status: clean") {
-		t.Fatalf("unexpected status output:\n%s", out.String())
-	}
-
-	writeCLIFile(t, filepath.Join(repo, ".whale", "worktrees", "cli-test", "dirty.txt"), []byte("dirty\n"))
-	root = newRootCmd(&cliOptions{cfg: app.DefaultConfig()})
-	root.SetArgs([]string{"worktree", "remove", "cli-test"})
-	err = root.Execute()
-	if err == nil || !strings.Contains(err.Error(), "has changes") {
-		t.Fatalf("expected dirty remove guard, got %v", err)
-	}
-
-	out.Reset()
-	root = newRootCmd(&cliOptions{cfg: app.DefaultConfig()})
-	root.SetOut(&out)
-	root.SetErr(&out)
-	root.SetArgs([]string{"worktree", "remove", "cli-test", "--force"})
-	if err := root.Execute(); err != nil {
-		t.Fatalf("worktree remove --force: %v", err)
-	}
-	if !strings.Contains(out.String(), "removed worktree: cli-test") {
-		t.Fatalf("unexpected remove output:\n%s", out.String())
 	}
 }
 
@@ -918,12 +848,6 @@ func TestNormalizeWorktreeArgsConsumesSeparatedNameButNotCommand(t *testing.T) {
 			want:          []string{"--worktree", "exec", "hi"},
 		},
 		{
-			name:          "root auto before worktree command",
-			in:            []string{"--worktree", "worktree", "list"},
-			stdinTerminal: true,
-			want:          []string{"--worktree", "worktree", "list"},
-		},
-		{
 			name:          "exec named worktree",
 			in:            []string{"exec", "--worktree", "feature-x", "hi"},
 			stdinTerminal: true,
@@ -1151,21 +1075,39 @@ func TestPrepareResumeWorktreeUsesRecordedSubdirectoryWorkspace(t *testing.T) {
 	}
 }
 
-func TestPrepareResumeWorktreeMissingPathErrors(t *testing.T) {
+func TestPrepareResumeWorktreeMissingPathFallsBack(t *testing.T) {
 	dataDir := t.TempDir()
+	original := t.TempDir()
 	missing := filepath.Join(t.TempDir(), "missing")
 	if err := session.SaveSessionMeta(store.DefaultSessionsDir(dataDir), "resume-session", session.SessionMeta{
-		Workspace:    missing,
-		WorktreeName: "missing",
-		WorktreePath: missing,
+		Workspace:          missing,
+		Branch:             "worktree-missing",
+		WorktreeName:       "missing",
+		WorktreePath:       missing,
+		WorktreeBranch:     "worktree-missing",
+		OriginalWorkspace:  original,
+		OriginalBranch:     "main",
+		OriginalHeadCommit: "abc123",
 	}); err != nil {
 		t.Fatalf("save session meta: %v", err)
 	}
 	opts := &cliOptions{cfg: app.DefaultConfig()}
 	opts.cfg.DataDir = dataDir
-	err := prepareResumeWorktree([]string{"resume-session"}, false, opts)
-	if err == nil || !strings.Contains(err.Error(), "worktree missing") {
-		t.Fatalf("expected missing worktree error, got %v", err)
+	if err := prepareResumeWorktree([]string{"resume-session"}, false, opts); err != nil {
+		t.Fatalf("prepareResumeWorktree: %v", err)
+	}
+	if opts.worktreeSession.Path != "" {
+		t.Fatalf("expected no resume worktree, got %+v", opts.worktreeSession)
+	}
+	meta, err := session.LoadSessionMeta(store.DefaultSessionsDir(dataDir), "resume-session")
+	if err != nil {
+		t.Fatalf("load session meta: %v", err)
+	}
+	if meta.Workspace != original || meta.Branch != "main" {
+		t.Fatalf("unexpected fallback meta: %+v", meta)
+	}
+	if meta.WorktreeName != "" || meta.WorktreePath != "" || meta.WorktreeBranch != "" || meta.OriginalWorkspace != "" || meta.OriginalBranch != "" || meta.OriginalHeadCommit != "" {
+		t.Fatalf("expected worktree metadata to be cleared: %+v", meta)
 	}
 }
 

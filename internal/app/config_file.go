@@ -11,6 +11,7 @@ import (
 	"github.com/BurntSushi/toml"
 
 	"github.com/usewhale/whale/internal/agent"
+	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/store"
 )
 
@@ -43,6 +44,16 @@ type FileUIConfig struct {
 }
 
 type FilePermissionsConfig struct {
+	Default           string            `toml:"default,omitempty"`
+	AutoAccept        *bool             `toml:"auto_accept,omitempty"`
+	Read              map[string]string `toml:"read,omitempty"`
+	Edit              map[string]string `toml:"edit,omitempty"`
+	Shell             map[string]string `toml:"shell,omitempty"`
+	ExternalDirectory map[string]string `toml:"external_directory,omitempty"`
+	MCP               map[string]string `toml:"mcp,omitempty"`
+	Memory            map[string]string `toml:"memory,omitempty"`
+	Task              map[string]string `toml:"task,omitempty"`
+
 	Mode               string   `toml:"mode,omitempty"`
 	AllowShellPrefixes []string `toml:"allow_shell_prefixes,omitempty"`
 	DenyShellPrefixes  []string `toml:"deny_shell_prefixes,omitempty"`
@@ -152,10 +163,74 @@ func LoadConfigFile(path string) (FileConfig, bool, error) {
 		return FileConfig{}, false, fmt.Errorf("read config %s: %w", path, err)
 	}
 	var cfg FileConfig
-	if err := toml.Unmarshal(b, &cfg); err != nil {
-		return FileConfig{}, true, fmt.Errorf("parse config %s: %w", path, err)
+	md, err := toml.Decode(string(b), &cfg)
+	if err != nil {
+		return FileConfig{}, false, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	if err := migrateLegacyPermissionKeys(md, &cfg); err != nil {
+		return FileConfig{}, false, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	return cfg, true, nil
+}
+
+func migrateLegacyPermissionKeys(md toml.MetaData, cfg *FileConfig) error {
+	perms := &cfg.Permissions
+	if md.IsDefined("permissions", "mode") {
+		mode, err := policy.ParseApprovalMode(perms.Mode)
+		if err != nil {
+			return fmt.Errorf("invalid legacy permissions.mode: %w", err)
+		}
+		switch mode {
+		case policy.ApprovalModeNever:
+			if strings.TrimSpace(perms.Default) == "" {
+				perms.Default = string(policy.PermissionAllow)
+			}
+			if perms.AutoAccept == nil {
+				enabled := true
+				perms.AutoAccept = &enabled
+			}
+		case policy.ApprovalModeOnRequest:
+			if strings.TrimSpace(perms.Default) == "" {
+				// Legacy on-request auto-allowed read-only/non-mutating tools
+				// and only prompted for writes, shell, and MCP. Keeping the
+				// global default at allow reproduces that: DefaultRules routes
+				// edit/shell/MCP/memory through ask while leaving unrelated
+				// tools (web search, todos, request_user_input) un-prompted.
+				perms.Default = string(policy.PermissionAllow)
+			}
+		}
+		perms.Mode = ""
+	}
+	if md.IsDefined("permissions", "allow_shell_prefixes") {
+		if perms.Shell == nil {
+			perms.Shell = map[string]string{}
+		}
+		for _, prefix := range trimList(perms.AllowShellPrefixes) {
+			// Legacy allow_shell_prefixes matched on command-token
+			// boundaries: the prefix "git status" allowed "git status" and
+			// "git status ..." but never "git statusfoo". A bare "<prefix>*"
+			// glob would lose that boundary and auto-allow "git statusfoo;
+			// rm -rf .", so emit the exact command plus a space-delimited
+			// glob to preserve the original semantics.
+			perms.Shell[prefix] = string(policy.PermissionAllow)
+			perms.Shell[prefix+" *"] = string(policy.PermissionAllow)
+		}
+		perms.AllowShellPrefixes = nil
+	}
+	if md.IsDefined("permissions", "deny_shell_prefixes") {
+		if perms.Shell == nil {
+			perms.Shell = map[string]string{}
+		}
+		for _, prefix := range trimList(perms.DenyShellPrefixes) {
+			// Mirror the allow-prefix migration above: emit the exact command
+			// plus a space-delimited glob so the original token-boundary
+			// semantics are preserved ("rm -rf" never blocks "rm -rfoo").
+			perms.Shell[prefix] = string(policy.PermissionDeny)
+			perms.Shell[prefix+" *"] = string(policy.PermissionDeny)
+		}
+		perms.DenyShellPrefixes = nil
+	}
+	return nil
 }
 
 func SaveConfigFile(path string, cfg FileConfig) error {
@@ -205,14 +280,8 @@ func ApplyFileConfig(cfg *Config, file FileConfig) error {
 	if file.UI.CheckForUpdateOnStartup != nil {
 		cfg.CheckForUpdateOnStartup = *file.UI.CheckForUpdateOnStartup
 	}
-	if strings.TrimSpace(file.Permissions.Mode) != "" {
-		cfg.ApprovalMode = strings.TrimSpace(file.Permissions.Mode)
-	}
-	if len(file.Permissions.AllowShellPrefixes) > 0 {
-		cfg.AllowPrefixes = strings.Join(trimList(file.Permissions.AllowShellPrefixes), ",")
-	}
-	if len(file.Permissions.DenyShellPrefixes) > 0 {
-		cfg.DenyPrefixes = strings.Join(trimList(file.Permissions.DenyShellPrefixes), ",")
+	if err := applyPermissionsConfig(cfg, file.Permissions); err != nil {
+		return err
 	}
 	if file.Budget.SessionLimitUSD != nil {
 		cfg.BudgetWarningUSD = *file.Budget.SessionLimitUSD
@@ -298,14 +367,14 @@ func overlayExplicitConfig(dst *Config, src Config) {
 		dst.Model = src.Model
 		dst.ModelExplicit = src.ModelExplicit
 	}
-	if strings.TrimSpace(src.ApprovalMode) != "" && src.ApprovalMode != def.ApprovalMode {
-		dst.ApprovalMode = src.ApprovalMode
+	if src.PermissionDefault != "" && src.PermissionDefault != def.PermissionDefault {
+		dst.PermissionDefault = src.PermissionDefault
 	}
-	if strings.TrimSpace(src.AllowPrefixes) != "" {
-		dst.AllowPrefixes = src.AllowPrefixes
+	if len(src.PermissionRules) > 0 && !permissionRulesEqual(src.PermissionRules, def.PermissionRules) {
+		dst.PermissionRules = append([]policy.PermissionRule{}, src.PermissionRules...)
 	}
-	if strings.TrimSpace(src.DenyPrefixes) != "" {
-		dst.DenyPrefixes = src.DenyPrefixes
+	if src.AutoAcceptPermissions != def.AutoAcceptPermissions {
+		dst.AutoAcceptPermissions = src.AutoAcceptPermissions
 	}
 	if src.AutoCompact != def.AutoCompact {
 		dst.AutoCompact = src.AutoCompact
@@ -358,6 +427,51 @@ func overlayExplicitConfig(dst *Config, src Config) {
 	if len(src.PluginsDisabled) > 0 {
 		dst.PluginsDisabled = trimList(src.PluginsDisabled)
 	}
+}
+
+func permissionRulesEqual(a, b []policy.PermissionRule) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func applyPermissionsConfig(cfg *Config, file FilePermissionsConfig) error {
+	if strings.TrimSpace(file.Default) != "" {
+		action, err := policy.ParsePermissionAction(file.Default)
+		if err != nil {
+			return fmt.Errorf("invalid permissions.default: %w", err)
+		}
+		cfg.PermissionDefault = action
+	}
+	if file.AutoAccept != nil {
+		cfg.AutoAcceptPermissions = *file.AutoAccept
+	}
+	tables := []struct {
+		name  string
+		rules map[string]string
+	}{
+		{name: "read", rules: file.Read},
+		{name: "edit", rules: file.Edit},
+		{name: "shell", rules: file.Shell},
+		{name: "external_directory", rules: file.ExternalDirectory},
+		{name: "mcp", rules: file.MCP},
+		{name: "memory", rules: file.Memory},
+		{name: "task", rules: file.Task},
+	}
+	for _, table := range tables {
+		rules, err := policy.RulesFromMap(table.name, table.rules)
+		if err != nil {
+			return fmt.Errorf("invalid permissions.%s: %w", table.name, err)
+		}
+		cfg.PermissionRules = append(cfg.PermissionRules, rules...)
+	}
+	return nil
 }
 
 func SaveGlobalPreferences(dataDir, model, effort string, thinking bool) error {

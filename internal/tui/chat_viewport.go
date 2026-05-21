@@ -62,7 +62,13 @@ func (m *model) syncViewportLayoutForBodyHeight(mainWidth, bodyHeight int) {
 		}
 		m.syncViewportFromChat()
 	} else {
-		m.viewport.Height = max(1, bodyHeight-2)
+		if m.page == pageDiff {
+			m.viewport.Width = max(10, mainWidth)
+			m.viewport.Height = max(1, bodyHeight)
+		} else {
+			m.viewport.Width = max(10, mainWidth-2)
+			m.viewport.Height = max(1, bodyHeight-2)
+		}
 	}
 	m.viewportLayoutReady = true
 	m.viewportLayoutPage = m.page
@@ -97,7 +103,12 @@ func (m *model) refreshViewportContentForSize(mainWidth, bodyHeight int, forceBo
 		return
 	}
 	m.viewport.Width = max(10, mainWidth-2)
-	m.viewport.Height = max(1, bodyHeight-2)
+	if m.page == pageDiff {
+		m.viewport.Width = max(10, mainWidth)
+		m.viewport.Height = max(1, bodyHeight)
+	} else {
+		m.viewport.Height = max(1, bodyHeight-2)
+	}
 	if m.page == pageLogs {
 		content = strings.Join(m.filteredLogs(), "\n")
 	}

@@ -2215,6 +2215,9 @@ func TestSlashCommandsShowSupportedCommandsAndOmitRemovedCommands(t *testing.T) 
 	if !containsString(cmds, "/ask") {
 		t.Fatalf("expected /ask in slash commands: %+v", cmds)
 	}
+	if !containsString(cmds, "/diff") {
+		t.Fatalf("expected /diff in slash commands: %+v", cmds)
+	}
 	if containsString(cmds, "/approval") {
 		t.Fatalf("removed command /approval should not appear in slash commands: %+v", cmds)
 	}
@@ -2249,13 +2252,12 @@ func TestPickerEventsClearBusyState(t *testing.T) {
 			mode: modeModelPicker,
 		},
 		{
-			name: "permissions picker",
+			name: "permissions menu",
 			ev: service.Event{
-				Kind:            service.EventPermissionsPicker,
-				ApprovalChoices: []string{service.ApprovalChoiceAskFirst, service.ApprovalChoiceAutoApproveSession},
-				CurrentApproval: service.ApprovalChoiceAskFirst,
+				Kind:       service.EventPermissionsMenu,
+				AutoAccept: true,
 			},
-			mode: modePermissionsPicker,
+			mode: modePermissionsMenu,
 		},
 	}
 	for _, tt := range tests {
@@ -2274,128 +2276,49 @@ func TestPickerEventsClearBusyState(t *testing.T) {
 	}
 }
 
-func TestPermissionsPickerCopyClarifiesAutoApproveScope(t *testing.T) {
-	m := newModel(nil, "", "", "")
-	m.permissionsPicker.choices = []string{
-		service.ApprovalChoiceAskFirst,
-		service.ApprovalChoiceAutoApproveSession,
-		service.ApprovalChoiceTrustProject,
-		service.ApprovalChoiceClearProject,
-	}
-
-	view := m.renderPermissionsPicker()
-	for _, want := range []string{
-		"Session",
-		"Ask before tools run",
-		"Prompt before write, patch, shell, or MCP tools run.",
-		"Auto approve all tools for this session",
-		"No approval prompts until Whale exits.",
-		"Project default",
-		"Trust this project...",
-		"Auto-approve by default in this workspace for you.",
-		"Clear project default",
-		"Remove permissions.mode from ./.whale/config.local.toml.",
-	} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("expected permissions picker to contain %q:\n%s", want, view)
-		}
-	}
-	if strings.Contains(view, "Never ask; auto-approve tool calls.") {
-		t.Fatalf("permissions picker should not use ambiguous auto-approve copy:\n%s", view)
-	}
-}
-
-func TestPermissionsProjectTrustConfirmCopy(t *testing.T) {
-	m := newModel(nil, "", "", "")
-
-	view := m.renderPermissionsProjectTrustConfirm()
-	for _, want := range []string{
-		"Trust this project?",
-		"Auto-approve write, patch, shell, and MCP tools by default in this workspace.",
-		"This affects your future sessions in this workspace.",
-		"Config: ./.whale/config.local.toml",
-		"Trust this project",
-		"Cancel",
-	} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("expected trust confirmation to contain %q:\n%s", want, view)
-		}
-	}
-	if strings.Contains(view, "Whale will") {
-		t.Fatalf("trust confirmation should state facts without product-name narration:\n%s", view)
-	}
-}
-
-func TestPermissionsProjectClearConfirmCopy(t *testing.T) {
-	m := newModel(nil, "", "", "")
-
-	view := m.renderPermissionsProjectClearConfirm()
-	for _, want := range []string{
-		"Clear project default?",
-		"Remove permissions.mode from ./.whale/config.local.toml.",
-		"Future sessions will fall back to shared project, global, or default approval settings.",
-		"Clear project default",
-		"Cancel",
-	} {
-		if !strings.Contains(view, want) {
-			t.Fatalf("expected clear confirmation to contain %q:\n%s", want, view)
-		}
-	}
-	if strings.Contains(view, "will use the global/default approval setting") {
-		t.Fatalf("clear confirmation should not skip shared project fallback:\n%s", view)
-	}
-}
-
-func TestPermissionsPickerTrustProjectDispatchesProjectApprovalIntent(t *testing.T) {
+func TestPermissionsMenuRendersStateAndDispatchesExplicitMode(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
-	m.mode = modePermissionsPicker
-	m.permissionsPicker.choices = []string{
-		service.ApprovalChoiceAskFirst,
-		service.ApprovalChoiceAutoApproveSession,
-		service.ApprovalChoiceTrustProject,
-		service.ApprovalChoiceClearProject,
-	}
-	m.permissionsPicker.index = 2
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventPermissionsMenu, AutoAccept: false}))
 	m = next.(model)
-	if m.mode != modePermissionsProjectTrustConfirm {
-		t.Fatalf("expected trust confirmation mode, got %v", m.mode)
+	if m.mode != modePermissionsMenu {
+		t.Fatalf("expected permissions menu mode, got %v", m.mode)
 	}
-	if len(*intents) != 0 {
-		t.Fatalf("expected no intent before confirmation, got %+v", *intents)
+	rendered := m.renderPermissionsMenu()
+	if !strings.Contains(rendered, "Session auto-accept: off") || !strings.Contains(rendered, "Enable session auto-accept") {
+		t.Fatalf("unexpected permissions menu:\n%s", rendered)
 	}
 
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(model)
-	if len(*intents) != 1 {
-		t.Fatalf("expected one intent after confirmation, got %+v", *intents)
-	}
-	if got := (*intents)[0]; got.Kind != service.IntentSetProjectApproval || got.ApprovalMode != "never-ask" {
-		t.Fatalf("unexpected project approval intent: %+v", got)
-	}
 	if m.mode != modeChat {
-		t.Fatalf("expected mode chat after confirmation, got %v", m.mode)
+		t.Fatalf("expected chat mode after selection, got %v", m.mode)
 	}
-}
+	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSetApprovalMode || (*intents)[0].ApprovalMode != "auto_accept" {
+		t.Fatalf("unexpected dispatched intent: %+v", *intents)
+	}
 
-func TestPermissionsPickerAutoApproveDispatchesNeverAsk(t *testing.T) {
-	m, intents := newModelWithDispatchSpy()
-	m.mode = modePermissionsPicker
-	m.permissionsPicker.choices = []string{service.ApprovalChoiceAskFirst, service.ApprovalChoiceAutoApproveSession}
-	m.permissionsPicker.index = 1
-
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m, intents = newModelWithDispatchSpy()
+	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventPermissionsMenu, AutoAccept: true}))
 	m = next.(model)
+	rendered = m.renderPermissionsMenu()
+	if !strings.Contains(rendered, "Session auto-accept: on") || !strings.Contains(rendered, "Disable session auto-accept") {
+		t.Fatalf("unexpected enabled permissions menu:\n%s", rendered)
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSetApprovalMode || (*intents)[0].ApprovalMode != "ask" {
+		t.Fatalf("unexpected dispatched intent: %+v", *intents)
+	}
 
-	if len(*intents) != 1 {
-		t.Fatalf("expected one intent, got %+v", *intents)
-	}
-	if got := (*intents)[0]; got.Kind != service.IntentSetApprovalMode || got.ApprovalMode != "never-ask" {
-		t.Fatalf("unexpected approval intent: %+v", got)
-	}
-	if m.mode != modeChat {
-		t.Fatalf("expected permissions picker to close, got mode %v", m.mode)
+	m, intents = newModelWithDispatchSpy()
+	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventPermissionsMenu, AutoAccept: false}))
+	m = next.(model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if len(*intents) != 0 || m.mode != modeChat {
+		t.Fatalf("cancel should not dispatch and should return to chat, intents=%+v mode=%v", *intents, m.mode)
 	}
 }
 
@@ -2544,6 +2467,102 @@ func TestTurnDoneRecoversAssistantWhenAllDeltasDropped(t *testing.T) {
 	}
 	if strings.Contains(got, "did not produce a visible answer") {
 		t.Fatalf("did not expect reasoning-only fallback after LastResponse recovery:\n%s", got)
+	}
+}
+
+func TestTurnDoneAddsDurationNoticeForLongTurn(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 80, height: 24, busy: true}
+	m.busySince = time.Now().Add(-(3*time.Minute + 5*time.Second))
+
+	next, _ := m.Update(svcMsg(service.Event{
+		Kind:         service.EventTurnDone,
+		LastResponse: "done",
+		Metadata:     agentTurnMetadata(),
+	}))
+	m = next.(model)
+
+	got := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
+	if !strings.Contains(got, "done") {
+		t.Fatalf("expected final assistant response in transcript:\n%s", got)
+	}
+	if !strings.Contains(got, "✻ Worked for 3m ") {
+		t.Fatalf("expected turn duration notice in transcript:\n%s", got)
+	}
+}
+
+func TestTurnDoneSkipsDurationNoticeForShortTurn(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 80, height: 24, busy: true}
+	m.busySince = time.Now().Add(-29 * time.Second)
+
+	next, _ := m.Update(svcMsg(service.Event{
+		Kind:         service.EventTurnDone,
+		LastResponse: "done",
+		Metadata:     agentTurnMetadata(),
+	}))
+	m = next.(model)
+
+	got := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
+	if strings.Contains(got, "Worked for") {
+		t.Fatalf("did not expect turn duration notice for short turn:\n%s", got)
+	}
+}
+
+func TestTurnDoneSkipsDurationNoticeWhileStopping(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 80, height: 24, busy: true, stopping: true}
+	m.busySince = time.Now().Add(-2 * time.Minute)
+
+	next, _ := m.Update(svcMsg(service.Event{
+		Kind:         service.EventTurnDone,
+		LastResponse: "done",
+		Metadata:     agentTurnMetadata(),
+	}))
+	m = next.(model)
+
+	got := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
+	if strings.Contains(got, "Worked for") {
+		t.Fatalf("did not expect turn duration notice for stopped turn:\n%s", got)
+	}
+}
+
+func TestAppendTurnDurationNoticeThresholdAndBusyState(t *testing.T) {
+	m := model{width: 80, height: 24, viewportFrozen: true}
+	m.appendTurnDurationNotice(true, false, 30*time.Second)
+	got := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
+	if !strings.Contains(got, "✻ Worked for 30s") {
+		t.Fatalf("expected duration notice at threshold:\n%s", got)
+	}
+
+	m = model{width: 80, height: 24, viewportFrozen: true}
+	m.appendTurnDurationNotice(true, false, 29*time.Second)
+	if len(m.transcript) != 0 {
+		t.Fatalf("did not expect duration notice below threshold, got %+v", m.transcript)
+	}
+
+	m = model{width: 80, height: 24, viewportFrozen: true}
+	m.appendTurnDurationNotice(false, false, 2*time.Minute)
+	if len(m.transcript) != 0 {
+		t.Fatalf("did not expect duration notice when turn was not busy, got %+v", m.transcript)
+	}
+}
+
+func TestFormatTurnDuration(t *testing.T) {
+	tests := []struct {
+		name     string
+		duration time.Duration
+		want     string
+	}{
+		{name: "negative", duration: -time.Second, want: "0s"},
+		{name: "seconds", duration: 45 * time.Second, want: "45s"},
+		{name: "minutes", duration: 2*time.Minute + 9*time.Second, want: "2m 9s"},
+		{name: "hours", duration: time.Hour + 2*time.Minute + 3*time.Second, want: "1h 2m 3s"},
+		{name: "days", duration: 24*24*time.Hour + time.Minute + 2*time.Second, want: "24d 0h 1m 2s"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatTurnDuration(tt.duration); got != tt.want {
+				t.Fatalf("formatTurnDuration(%s) = %q, want %q", tt.duration, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -2916,7 +2935,7 @@ func TestHelpCommandOpensInteractiveHelp(t *testing.T) {
 		t.Fatalf("expected input cleared, got %q", got)
 	}
 	view := m.View()
-	for _, want := range []string{"Whale help", "Browse default commands:", "/review", "For more help:", helpDocsURL, "Esc to cancel"} {
+	for _, want := range []string{"Whale help", "Browse default commands:", "/diff", "For more help:", helpDocsURL, "Esc to cancel"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected help view to contain %q:\n%s", want, view)
 		}
@@ -3673,6 +3692,173 @@ func TestReviewMenuEscCloses(t *testing.T) {
 	}
 }
 
+func TestPickerAndModalViewsHideComposer(t *testing.T) {
+	const draft = "composer draft should stay hidden"
+	base := func() model {
+		m := newModel(nil, "deepseek-chat", "medium", "on")
+		m.width = 100
+		m.height = 30
+		m.input.SetValue(draft)
+		return m
+	}
+
+	chat := base()
+	chat.mode = modeChat
+	if view := chat.renderBottom(100); !strings.Contains(view, draft) {
+		t.Fatalf("chat mode should render composer draft:\n%s", view)
+	}
+
+	cases := []struct {
+		name  string
+		setup func(*model)
+		want  string
+	}{
+		{
+			name: "review menu",
+			setup: func(m *model) {
+				m.mode = modeReviewMenu
+			},
+			want: "Choose what to review",
+		},
+		{
+			name: "review target picker",
+			setup: func(m *model) {
+				m.mode = modeReviewBranchPicker
+				m.reviewTargetPicker.branches = []reviewBranchItem{{Name: "main"}}
+			},
+			want: "Type to search branches",
+		},
+		{
+			name: "review commit picker",
+			setup: func(m *model) {
+				m.mode = modeReviewCommitPicker
+				m.reviewTargetPicker.commits = []reviewCommitItem{{SHA: "abc1234", Subject: "fix picker"}}
+			},
+			want: "Choose commit",
+		},
+		{
+			name: "review pr picker",
+			setup: func(m *model) {
+				m.mode = modeReviewPRPicker
+				m.reviewTargetPicker.prs = []reviewPRItem{{Number: 12, Title: "Fix picker"}}
+			},
+			want: "Choose pull request",
+		},
+		{
+			name: "approval",
+			setup: func(m *model) {
+				m.mode = modeApproval
+				m.approval.toolCallID = "tool-1"
+				m.approval.toolName = "shell_run"
+				m.approval.reason = "ls"
+			},
+			want: "Approval required",
+		},
+		{
+			name: "user input",
+			setup: func(m *model) {
+				m.mode = modeUserInput
+				m.userInput.questions = []core.UserInputQuestion{{
+					ID:       "continue",
+					Question: "Continue?",
+					Options:  []core.UserInputOption{{Label: "Yes", Description: "Continue now."}},
+				}}
+			},
+			want: "Continue?",
+		},
+		{
+			name: "model picker",
+			setup: func(m *model) {
+				m.mode = modeModelPicker
+				m.modelPicker.models = []string{"deepseek-chat"}
+				m.modelPicker.efforts = []string{"medium"}
+				m.modelPicker.thinkings = []string{"on"}
+			},
+			want: "Select Model and Effort",
+		},
+		{
+			name: "session picker",
+			setup: func(m *model) {
+				m.mode = modeSessionPicker
+				m.sessionChoices = []string{"session-1"}
+			},
+			want: "sessions",
+		},
+		{
+			name: "permissions menu",
+			setup: func(m *model) {
+				m.mode = modePermissionsMenu
+			},
+			want: "Session auto-accept:",
+		},
+		{
+			name: "plan implementation picker",
+			setup: func(m *model) {
+				m.mode = modePlanImplementation
+			},
+			want: "Implement this plan?",
+		},
+		{
+			name: "worktree exit",
+			setup: func(m *model) {
+				m.mode = modeWorktreeExit
+				m.worktreeExit.summary = app.WorktreeExitSummary{
+					Session:      app.WorktreeSession{Name: "feature", Path: "/tmp/repo/.whale/worktrees/feature", Branch: "worktree-feature"},
+					ChangedFiles: 2,
+					Commits:      1,
+				}
+			},
+			want: "Exiting worktree session",
+		},
+		{
+			name: "skills menu",
+			setup: func(m *model) {
+				m.mode = modeSkillsMenu
+			},
+			want: "Skills",
+		},
+		{
+			name: "skills manager",
+			setup: func(m *model) {
+				m.mode = modeSkillsManager
+				m.skillsManager.all = []skillManagerItem{{Name: "code-review", Enabled: true, Toggleable: true}}
+				m.skillsManager.matches = []int{0}
+			},
+			want: "Enable/Disable Skills",
+		},
+		{
+			name: "plugins manager",
+			setup: func(m *model) {
+				m.mode = modePluginsManager
+				m.pluginsManager.all = []pluginManagerItem{{ID: "memory", Name: "Memory", Enabled: true}}
+				m.pluginsManager.matches = []int{0}
+			},
+			want: "Plugins",
+		},
+		{
+			name: "help",
+			setup: func(m *model) {
+				m.mode = modeHelp
+			},
+			want: "Whale help",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := base()
+			tc.setup(&m)
+			view := m.renderBottom(100)
+			if strings.Contains(view, draft) || strings.Contains(view, "Type message or command") {
+				t.Fatalf("composer should be hidden while %s is active:\n%s", tc.name, view)
+			}
+			if !strings.Contains(view, tc.want) {
+				t.Fatalf("expected %s view to contain %q:\n%s", tc.name, tc.want, view)
+			}
+		})
+	}
+}
+
 func TestSkillLoadedEventUpdatesStatusAndLogOnly(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.handleServiceEvent(service.Event{Kind: service.EventSkillLoaded, Text: "loaded skill: code-review"})
@@ -3776,6 +3962,24 @@ func TestCtrlCClearsNonEmptyInputWithoutArmingQuit(t *testing.T) {
 	}
 }
 
+func TestSecondIdleCtrlCRequestsExitFlow(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.quitArmedUntil = time.Now().Add(time.Second)
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = next.(model)
+
+	if len(*intents) != 1 {
+		t.Fatalf("expected one intent, got %+v", *intents)
+	}
+	if (*intents)[0].Kind != service.IntentRequestExit {
+		t.Fatalf("expected exit request intent, got %+v", (*intents)[0])
+	}
+	if !m.quitArmedUntil.IsZero() || m.status != "exiting" {
+		t.Fatalf("unexpected quit state/status: %v %q", m.quitArmedUntil, m.status)
+	}
+}
+
 func TestEnterWhileBusyQueuesInputWithoutSubmitting(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.busy = true
@@ -3805,7 +4009,7 @@ func TestEnterWhileBusyQueuesInputWithoutSubmitting(t *testing.T) {
 }
 
 func TestEnterWhileBusyExecutesReadOnlySlashAndExitImmediately(t *testing.T) {
-	for _, cmd := range []string{"/status", "/stats usage", "/stats repair", "/mcp", "/exit"} {
+	for _, cmd := range []string{"/status", "/stats usage", "/stats repair", "/mcp", "/diff", "/exit"} {
 		t.Run(cmd, func(t *testing.T) {
 			m, intents := newModelWithDispatchSpy()
 			m.busy = true
@@ -3834,6 +4038,216 @@ func TestEnterWhileBusyExecutesReadOnlySlashAndExitImmediately(t *testing.T) {
 				t.Fatalf("expected pending local submit count to be 1, got %d", m.localSubmitPending)
 			}
 		})
+	}
+}
+
+func TestDiffResultOpensDiffPageAndEscReturnsToChat(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.width = 80
+	m.height = 20
+	m.input.SetValue("draft")
+	m.localSubmitCommands = []string{"/diff"}
+
+	next, _ := m.Update(svcMsg(service.Event{
+		Kind: service.EventDiffResult,
+		Text: "diff --git a/README.md b/README.md\n@@ -1 +1 @@\n-old\n+new\n",
+	}))
+	m = next.(model)
+
+	if m.page != pageDiff {
+		t.Fatalf("expected diff page, got %v", m.page)
+	}
+	if m.shouldRenderComposer() {
+		t.Fatal("diff page should hide the composer")
+	}
+	if view := m.View(); strings.Contains(view, "draft") || !strings.Contains(view, "q/Esc close") || strings.Contains(view, "Ctrl+C") || strings.Contains(view, "Space") || strings.Contains(view, "-old\n\n+new") {
+		t.Fatalf("diff page should render pager hints without composer:\n%s", view)
+	}
+	if got := strings.Join(m.renderDiffs(), "\n"); !strings.Contains(got, "+new") || strings.Contains(got, "[") {
+		t.Fatalf("unexpected diff page content:\n%s", got)
+	}
+	rendered := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
+	if !strings.Contains(rendered, "/diff") || strings.Contains(rendered, "+new") {
+		t.Fatalf("expected transcript to contain only command echo, got:\n%s", rendered)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	m = next.(model)
+	if got := m.input.Value(); got != "draft" {
+		t.Fatalf("diff page should ignore text input, got %q", got)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(model)
+	if m.page != pageChat {
+		t.Fatalf("expected esc to return to chat, got %v", m.page)
+	}
+}
+
+func TestDiffPageUsesPagerKeys(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.width = 80
+	m.height = 12
+	lines := make([]string, 0, 40)
+	for i := 0; i < 40; i++ {
+		lines = append(lines, fmt.Sprintf("+line %02d", i))
+	}
+	m.setDiffText(strings.Join(lines, "\n"))
+	m.page = pageDiff
+	m.refreshViewportContent()
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m = next.(model)
+	if m.viewport.YOffset == 0 {
+		t.Fatal("expected j to scroll diff down")
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	m = next.(model)
+	if m.viewport.YOffset != 0 {
+		t.Fatalf("expected k to scroll diff up, offset=%d", m.viewport.YOffset)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+	m = next.(model)
+	if m.viewport.YOffset == 0 {
+		t.Fatal("expected pgdown to page diff down")
+	}
+	pagedOffset := m.viewport.YOffset
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = next.(model)
+	if m.viewport.YOffset != pagedOffset {
+		t.Fatalf("space should not page diff, offset=%d want %d", m.viewport.YOffset, pagedOffset)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	m = next.(model)
+	if m.viewport.YOffset != pagedOffset {
+		t.Fatalf("ctrl+d should not half-page diff, offset=%d want %d", m.viewport.YOffset, pagedOffset)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyHome})
+	m = next.(model)
+	if m.viewport.YOffset != 0 {
+		t.Fatalf("expected home to jump to top, offset=%d", m.viewport.YOffset)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	m = next.(model)
+	if m.page != pageChat {
+		t.Fatalf("expected q to close diff page, got %v", m.page)
+	}
+
+	m.page = pageDiff
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = next.(model)
+	if m.page != pageDiff {
+		t.Fatalf("ctrl+c should not close diff page, got %v", m.page)
+	}
+	if m.status != "Press Ctrl+C again to quit" {
+		t.Fatalf("ctrl+c on idle diff page should arm global quit, got status %q", m.status)
+	}
+}
+
+func TestDiffResultResetsPagerToTop(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.width = 80
+	m.height = 12
+
+	lines := make([]string, 0, 60)
+	for i := 0; i < 60; i++ {
+		lines = append(lines, fmt.Sprintf("+line %02d", i))
+	}
+	next, _ := m.Update(svcMsg(service.Event{
+		Kind: service.EventDiffResult,
+		Text: strings.Join(lines, "\n"),
+	}))
+	m = next.(model)
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	m = next.(model)
+	if m.viewport.YOffset == 0 {
+		t.Fatal("expected End to scroll the diff away from the top")
+	}
+
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind: service.EventDiffResult,
+		Text: strings.Join(lines, "\n"),
+	}))
+	m = next.(model)
+	if m.viewport.YOffset != 0 {
+		t.Fatalf("expected a fresh diff to reset the pager to the top, offset=%d", m.viewport.YOffset)
+	}
+}
+
+func TestDiffPageCtrlCInterruptsBusyTurn(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.svc = &service.Service{}
+	m.width = 80
+	m.height = 24
+	m.busy = true
+	m.page = pageDiff
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = next.(model)
+	if m.page != pageDiff {
+		t.Fatalf("ctrl+c interrupt should not close diff page, got %v", m.page)
+	}
+	if !m.busy || !m.stopping || m.status != "stopping" {
+		t.Fatalf("expected busy diff page ctrl+c to interrupt, busy=%v stopping=%v status=%q", m.busy, m.stopping, m.status)
+	}
+	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentShutdown {
+		t.Fatalf("expected shutdown intent from diff page ctrl+c, got %+v", *intents)
+	}
+}
+
+func TestWorktreeExitPromptEnterDispatchesSelectedAction(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.mode = modeWorktreeExit
+	m.worktreeExit.summary = app.WorktreeExitSummary{
+		Session:      app.WorktreeSession{Name: "feature", Path: "/tmp/repo/.whale/worktrees/feature", Branch: "worktree-feature"},
+		ChangedFiles: 1,
+	}
+	m.worktreeExit.selected = 1
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+
+	if len(*intents) != 1 {
+		t.Fatalf("expected one intent, got %+v", *intents)
+	}
+	if (*intents)[0].Kind != service.IntentWorktreeExitChoice || (*intents)[0].WorktreeAction != "remove" {
+		t.Fatalf("unexpected intent: %+v", (*intents)[0])
+	}
+	if m.mode != modeChat || m.status != "removing worktree" {
+		t.Fatalf("unexpected mode/status: %v %q", m.mode, m.status)
+	}
+}
+
+func TestWorktreeExitSummaryIncludesIgnoredFiles(t *testing.T) {
+	got := worktreeExitSummaryText(0, 1, 0)
+	if !strings.Contains(got, "1 ignored file") {
+		t.Fatalf("expected ignored file warning, got %q", got)
+	}
+}
+
+func TestWorktreeExitPromptEscCancelsExit(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.mode = modeWorktreeExit
+	m.worktreeExit.summary = app.WorktreeExitSummary{Session: app.WorktreeSession{Name: "feature"}}
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(model)
+
+	if len(*intents) != 1 {
+		t.Fatalf("expected one intent, got %+v", *intents)
+	}
+	if (*intents)[0].Kind != service.IntentWorktreeExitChoice || (*intents)[0].WorktreeAction != "cancel" {
+		t.Fatalf("unexpected intent: %+v", (*intents)[0])
+	}
+	if m.mode != modeChat || m.status != "exit canceled" {
+		t.Fatalf("unexpected mode/status: %v %q", m.mode, m.status)
 	}
 }
 
@@ -5065,6 +5479,32 @@ func TestChatFooterShowsWindowsDirectoryTail(t *testing.T) {
 	view := m.View()
 	assertFooterLastLine(t, view, `goranka`)
 	assertFooterLastLineNotContains(t, view, ` ~`)
+}
+
+func TestChatFooterShowsAutoAcceptOnlyWhenEnabled(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-pro", "high", "on")
+	m.width = 100
+	m.height = 24
+	m.cwd = "~/Engineer/ai/dsk/whale"
+
+	view := m.View()
+	assertFooterLastLineNotContains(t, view, "auto-accept on")
+
+	m.autoAccept = true
+	view = m.View()
+	assertFooterLastLine(t, view, "auto-accept on")
+}
+
+func TestSessionHydratedUpdatesAutoAcceptFooterState(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-pro", "high", "on")
+	m.width = 100
+	m.height = 24
+	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventSessionHydrated, AutoAccept: true, AutoAcceptKnown: true}))
+	m = next.(model)
+	if !m.autoAccept {
+		t.Fatal("expected hydrated auto-accept state")
+	}
+	assertFooterLastLine(t, m.View(), "auto-accept on")
 }
 
 func TestChatFooterShowsGitBranchInsteadOfScrollHint(t *testing.T) {
@@ -6350,6 +6790,54 @@ func TestTurnDoneWhileScrolledDefersNativeScrollbackUntilTail(t *testing.T) {
 	}
 	if got := fmt.Sprintf("%#v", cmd()); !strings.Contains(got, "tail while scrolled") {
 		t.Fatalf("expected deferred native scrollback to include turn tail, got %s", got)
+	}
+}
+
+func TestLongTurnDoneWhileScrolledPreservesViewportAndDefersDurationNotice(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 80
+	m.height = 10
+	m.transcript = nil
+	for i := 0; i < 40; i++ {
+		m.appendTranscript("info", tuirender.KindText, fmt.Sprintf("entry-%02d", i))
+	}
+	m.nativeScrollbackPrinted = len(m.transcript)
+	m.beginTurnTranscript()
+	m.startBusy()
+	m.busySince = time.Now().Add(-(3*time.Minute + 5*time.Second))
+	m.append("assistant", "live-head\n")
+	m.refreshViewportContentFollow(true)
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m = next.(model)
+	m.append("assistant", "tail while scrolled\n")
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind:         service.EventTurnDone,
+		LastResponse: "done",
+		Metadata:     agentTurnMetadata(),
+	}))
+	m = next.(model)
+
+	if m.followTail {
+		t.Fatal("expected long turn completion to preserve user-scrolled position")
+	}
+	if m.nativeScrollbackPrinted == len(m.transcript) {
+		t.Fatal("expected long turn completion while scrolled to defer native scrollback")
+	}
+	rendered := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
+	if !strings.Contains(rendered, "✻ Worked for 3m ") {
+		t.Fatalf("expected duration notice to be appended to transcript:\n%s", rendered)
+	}
+	if view := m.View(); strings.Contains(view, "✻ Worked for 3m ") {
+		t.Fatalf("duration notice should not force scrolled viewport to tail:\n%s", view)
+	}
+
+	cmd := m.resumeChatTail()
+	if cmd == nil {
+		t.Fatal("expected returning to tail to flush deferred long-turn output")
+	}
+	if got := fmt.Sprintf("%#v", cmd()); !strings.Contains(got, "✻ Worked for 3m ") {
+		t.Fatalf("expected deferred native scrollback to include duration notice, got %s", got)
 	}
 }
 

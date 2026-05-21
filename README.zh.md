@@ -75,10 +75,6 @@ Whale 当前使用 DeepSeek API。运行前请先在 [DeepSeek Platform](https:/
 
 > **平台支持：** Whale 当前支持 **macOS**、**Linux** 和 **Windows**。
 
-<p align="center">
-  <img src="docs/screenshot-02.png" alt="Whale TUI 截图" width="860">
-</p>
-
 也可以直接运行一次性任务：
 
 ```bash

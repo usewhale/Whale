@@ -1,6 +1,7 @@
 package worktree
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -49,6 +50,12 @@ type RemoveResult struct {
 	Entry         Entry
 	BranchDeleted bool
 	BranchWarning string
+}
+
+type ChangeSummary struct {
+	ChangedFiles int
+	IgnoredFiles int
+	Commits      int
 }
 
 func Start(cwd, name string) (Session, error) {
@@ -220,6 +227,61 @@ func Status(cwd, name string) (Entry, error) {
 	entry.Head = gitOutput(path, "rev-parse", "--short", "HEAD")
 	entry.Dirty = strings.TrimSpace(gitOutput(path, "status", "--porcelain")) != ""
 	return entry, nil
+}
+
+func CountChanges(path, originalWorkspace, originalHeadCommit string) (ChangeSummary, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ChangeSummary{}, fmt.Errorf("worktree path is required")
+	}
+	// --untracked-files=all expands fully-ignored directories into their
+	// individual files. Without it git collapses a directory whose entire
+	// contents are ignored (e.g. a repo that ignores all of `.whale/`) into a
+	// single `!! .whale/` entry, which would hide Whale's managed
+	// config.local.toml copy from the path match below.
+	status, err := gitOutputErr(path, "status", "--porcelain", "--ignored", "--untracked-files=all")
+	if err != nil {
+		return ChangeSummary{}, fmt.Errorf("read worktree status: %w", err)
+	}
+	changed := 0
+	ignored := 0
+	for _, line := range strings.Split(status, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "!!") {
+			// Whale copies the invoking workspace's config.local.toml into the
+			// worktree and adds it to git's exclude list, so git reports it as an
+			// ignored file. Skip Whale's own managed copy only while it still
+			// matches the source it was copied from; once the user edits it
+			// during the session, count it so exit does not silently discard
+			// those edits.
+			if rel := managedLocalConfigRelPath(line); rel != "" {
+				if managedLocalConfigUnchanged(path, rel, originalWorkspace) {
+					continue
+				}
+			}
+			ignored++
+		} else {
+			changed++
+		}
+	}
+	if strings.TrimSpace(originalHeadCommit) == "" {
+		return ChangeSummary{ChangedFiles: changed, IgnoredFiles: ignored}, nil
+	}
+	commitsOut, err := gitOutputErr(path, "rev-list", "--count", strings.TrimSpace(originalHeadCommit)+"..HEAD")
+	if err != nil {
+		return ChangeSummary{}, fmt.Errorf("count worktree commits: %w", err)
+	}
+	commitsOut = strings.TrimSpace(commitsOut)
+	commits := 0
+	if commitsOut != "" {
+		if _, err := fmt.Sscanf(commitsOut, "%d", &commits); err != nil {
+			return ChangeSummary{}, fmt.Errorf("parse worktree commit count: %w", err)
+		}
+	}
+	return ChangeSummary{ChangedFiles: changed, IgnoredFiles: ignored, Commits: commits}, nil
 }
 
 func Remove(cwd, name string, force bool) (RemoveResult, error) {
@@ -475,6 +537,43 @@ func localConfigExcludeFor(workspaceRel string) string {
 		return localConfigExcludePattern
 	}
 	return filepath.ToSlash(filepath.Join(workspaceRel, ".whale", "config.local.toml"))
+}
+
+// managedLocalConfigRelPath returns the slash-separated, worktree-relative path
+// of Whale's managed config.local.toml copy when the given `git status
+// --porcelain --ignored` line refers to it, or "" otherwise. The path is
+// matched at any workspace depth because Start copies the config into the
+// worktree subdirectory that mirrors the invoking workspace.
+func managedLocalConfigRelPath(line string) string {
+	p := strings.TrimSpace(strings.TrimPrefix(line, "!!"))
+	p = strings.Trim(p, `"`)
+	p = filepath.ToSlash(p)
+	p = strings.TrimPrefix(p, "/")
+	if p == localConfigExcludePattern || strings.HasSuffix(p, "/"+localConfigExcludePattern) {
+		return p
+	}
+	return ""
+}
+
+// managedLocalConfigUnchanged reports whether the managed config copy at
+// worktreePath/rel is byte-identical to the config.local.toml in
+// originalWorkspace that Start copied it from. When the baseline cannot be read
+// it returns false, so the caller conservatively counts the file as a user
+// change rather than silently discarding a possible edit.
+func managedLocalConfigUnchanged(worktreePath, rel, originalWorkspace string) bool {
+	originalWorkspace = strings.TrimSpace(originalWorkspace)
+	if originalWorkspace == "" {
+		return false
+	}
+	copyContent, err := os.ReadFile(filepath.Join(worktreePath, filepath.FromSlash(rel)))
+	if err != nil {
+		return false
+	}
+	baseContent, err := os.ReadFile(filepath.Join(originalWorkspace, ".whale", "config.local.toml"))
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(copyContent, baseContent)
 }
 
 func excludeContainsPattern(content, pattern string) bool {

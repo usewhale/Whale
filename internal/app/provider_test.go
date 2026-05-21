@@ -77,7 +77,7 @@ func TestTaskProviderUsesConfiguredRetryPolicy(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.DataDir = t.TempDir()
 	cfg.APIBaseURL = srv.URL
-	cfg.ApprovalMode = "never"
+	cfg.AutoAcceptPermissions = true
 	cfg.RetryMaxAttempts = 1
 	cfg.RetryMaxDelay = time.Second
 	a, err := New(context.Background(), cfg, StartOptions{NewSession: true})
