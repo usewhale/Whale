@@ -84,6 +84,7 @@ const (
 	EventSessionsListed    EventKind = "sessions_listed"
 	EventLocalSubmitResult EventKind = "local_submit_result"
 	EventLocalSubmitDone   EventKind = "local_submit_done"
+	EventDiffResult        EventKind = "diff_result"
 	EventBtwStarted        EventKind = "btw_started"
 	EventBtwDelta          EventKind = "btw_delta"
 	EventBtwDone           EventKind = "btw_done"

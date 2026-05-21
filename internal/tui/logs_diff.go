@@ -3,6 +3,10 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+
+	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
 
 func (m model) filteredLogs() []string {
@@ -61,9 +65,36 @@ func (m model) renderDiffs() []string {
 	}
 	rows := make([]string, 0, len(m.diffs))
 	for _, d := range m.diffs {
+		if strings.TrimSpace(d.Source) == "" {
+			rows = append(rows, d.Line)
+			continue
+		}
 		rows = append(rows, fmt.Sprintf("[%s] %s", d.Source, d.Line))
 	}
 	return rows
+}
+
+func (m *model) setDiffText(text string) {
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	m.diffs = make([]diffEntry, 0, len(lines))
+	for _, line := range lines {
+		m.diffs = append(m.diffs, diffEntry{Line: line})
+	}
+	if len(m.diffs) == 0 {
+		m.diffs = []diffEntry{{Line: "No changes detected."}}
+	}
+}
+
+func (m model) renderDiffPagerHints(mainWidth int) string {
+	lines := []string{
+		"↑/↓/j/k scroll  PgUp/PgDown page  Home/End jump",
+		"q/Esc close",
+	}
+	style := lipgloss.NewStyle().Foreground(tuitheme.Default.Muted).Width(mainWidth).MaxWidth(mainWidth)
+	for i, line := range lines {
+		lines[i] = style.Render(line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func truncateLine(s string, max int) string {

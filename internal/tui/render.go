@@ -15,6 +15,13 @@ func (m model) renderBody(mainWidth, bodyHeight int) string {
 	if bodyHeight <= 0 {
 		return ""
 	}
+	if m.page == pageDiff {
+		m.ensureViewportContentForSize(mainWidth, bodyHeight)
+		return lipgloss.NewStyle().
+			Width(mainWidth).
+			Height(bodyHeight).
+			Render(m.viewport.View())
+	}
 	if m.page != pageChat {
 		m.ensureViewportContentForSize(mainWidth, bodyHeight)
 		return lipgloss.NewStyle().
@@ -129,7 +136,7 @@ func (m model) renderBottom(mainWidth int) string {
 }
 
 func (m model) shouldRenderComposer() bool {
-	return m.mode == modeChat
+	return m.mode == modeChat && m.page == pageChat
 }
 
 func (m model) bottomPartsBeforeInput(mainWidth int) []string {
@@ -175,6 +182,9 @@ func (m model) bottomPartsBeforeInput(mainWidth int) []string {
 	}
 	if m.mode == modeHelp {
 		bottomParts = append(bottomParts, m.renderHelp())
+	}
+	if m.mode == modeChat && m.page == pageDiff {
+		bottomParts = append(bottomParts, m.renderDiffPagerHints(mainWidth))
 	}
 	if m.mode == modeSessionPicker {
 		rows := []string{"sessions (↑/↓ select, enter confirm, esc cancel):"}

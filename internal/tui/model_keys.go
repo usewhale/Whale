@@ -77,6 +77,15 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 		}
 	}
 	m.updateSlashMatches()
+	if m.mode == modeChat && m.page == pageDiff {
+		if msg.String() == "ctrl+c" && m.busy {
+			return m.interruptBusyTurn(), false, true
+		}
+		if msg.String() == "ctrl+c" {
+			return m.handleGlobalKey(msg)
+		}
+		return m.handleDiffPageKey(msg), false, true
+	}
 	if m.mode == modeChat && msg.Paste {
 		m.cancelWindowsDeferredEnter()
 		m.input.HandlePaste(string(msg.Runes))
@@ -230,6 +239,11 @@ func (m *model) handleChatModeKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		if m.busy {
 			return m.interruptBusyTurn(), true
 		}
+		if m.page != pageChat {
+			m.page = pageChat
+			m.refreshViewportContentFollow(true)
+			return nil, true
+		}
 		if m.hasSlashPanel() {
 			m.slash.matches = nil
 			m.slash.selected = 0
@@ -245,6 +259,29 @@ func (m *model) handleChatModeKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		return m.handleViewportScrollKey(msg.String()), true
 	}
 	return nil, false
+}
+
+func (m *model) handleDiffPageKey(msg tea.KeyMsg) tea.Cmd {
+	switch msg.String() {
+	case "q", "esc":
+		m.page = pageChat
+		m.refreshViewportContentFollow(true)
+	case "up", "k":
+		m.refreshViewportContent()
+		m.viewport.LineUp(1)
+	case "down", "j":
+		m.refreshViewportContent()
+		m.viewport.LineDown(1)
+	case "pgup":
+		m.handleViewportScrollKey("pgup")
+	case "pgdown":
+		m.handleViewportScrollKey("pgdown")
+	case "home":
+		m.handleViewportScrollKey("home")
+	case "end":
+		m.handleViewportScrollKey("end")
+	}
+	return nil
 }
 
 func (m *model) handleApprovalKey(msg tea.KeyMsg) tea.Cmd {

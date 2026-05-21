@@ -29,6 +29,7 @@ func DefaultSlashCommands() []SlashCommandSpec {
 		{Name: "/plan", Description: "Switch to plan mode, optionally submit a prompt", ArgumentHint: "[prompt]", AutoRun: true},
 		{Name: "/btw", Description: "Ask a side question without changing the conversation", ArgumentHint: "<question>"},
 		{Name: "/focus", Description: "Toggle focus view", AutoRun: true},
+		{Name: "/diff", Description: "Show current git diff", AutoRun: true},
 		{Name: "/review", Description: "Open review mode or review a target", ArgumentHint: "[local|branch|pr|commit|<instructions>]", AutoRun: true, Options: []SlashCommandOption{
 			{Token: "local", Description: "Review staged, unstaged, and relevant untracked files", AutoRun: true},
 			{Token: "branch", Description: "Review current branch against default branch or base", AutoRun: true},

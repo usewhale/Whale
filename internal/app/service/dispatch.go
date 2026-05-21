@@ -165,6 +165,10 @@ func (s *Service) handleLocalSubmit(line string) {
 		s.emit(localSubmitResultEvent("error", "command is not available as a local submit"))
 		return
 	}
+	if line == "/diff" {
+		s.emit(Event{Kind: EventDiffResult, Text: s.app.BuildDiffText(s.ctx), Metadata: map[string]any{EventMetadataLocalSubmit: true}})
+		return
+	}
 	prevSessionID := s.app.SessionID()
 	if line == "/model" {
 		s.emit(Event{

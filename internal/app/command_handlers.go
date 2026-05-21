@@ -160,6 +160,12 @@ func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 	if trimmed == "/feedback" {
 		return CommandExecution{Handled: true, Text: openFeedbackIssues()}, nil
 	}
+	if trimmed == "/diff" {
+		return CommandExecution{Handled: true, Text: a.BuildDiffText(a.ctx)}, nil
+	}
+	if strings.HasPrefix(trimmed, "/diff ") {
+		return CommandExecution{Handled: true}, errors.New("usage: /diff")
+	}
 	if trimmed == "/worktree" || strings.HasPrefix(trimmed, "/worktree ") {
 		fields := strings.Fields(trimmed)
 		args := fields[1:]

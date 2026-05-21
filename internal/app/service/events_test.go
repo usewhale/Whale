@@ -768,6 +768,27 @@ func TestLocalSubmitBtwWithoutQuestionEmitsUsage(t *testing.T) {
 	waitForServiceEvent(t, svc, EventLocalSubmitDone)
 }
 
+func TestLocalSubmitDiffEmitsDiffResult(t *testing.T) {
+	work := t.TempDir()
+	t.Chdir(work)
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+
+	svc.Dispatch(Intent{Kind: IntentSubmitLocal, Input: "/diff"})
+
+	ev := waitForServiceEvent(t, svc, EventDiffResult)
+	if !strings.Contains(ev.Text, "not inside a git repository") {
+		t.Fatalf("unexpected diff result: %q", ev.Text)
+	}
+	waitForServiceEvent(t, svc, EventLocalSubmitDone)
+}
+
 func TestPermissionsCommandOpensMenuAndSetsSessionAutoAccept(t *testing.T) {
 	work := t.TempDir()
 	t.Chdir(work)

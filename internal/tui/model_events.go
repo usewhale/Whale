@@ -159,6 +159,14 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 			m.syncModelEffortFromInfo(ev.Text)
 			m.refreshViewportContentFollow(true)
 		}
+	case service.EventDiffResult:
+		m.clearProviderRetryStatus()
+		m.appendLocalCommandEcho(m.popLocalSubmitCommand())
+		m.setDiffText(ev.Text)
+		m.page = pageDiff
+		m.status = "diff"
+		m.refreshViewportContentFollow(true)
+		m.viewport.GotoTop()
 	case service.EventBtwStarted:
 		m.clearProviderRetryStatus()
 		m.startBtwPanel(ev.Count, ev.Text)
