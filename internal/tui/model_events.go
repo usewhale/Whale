@@ -418,6 +418,14 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 			m.refreshViewportContentFollow(true)
 		}
 		m.status = "ready"
+	case service.EventWorktreeExitPrompt:
+		m.clearProviderRetryStatus()
+		if ev.WorktreeExit != nil {
+			m.worktreeExit.summary = *ev.WorktreeExit
+			m.worktreeExit.selected = 0
+			m.mode = modeWorktreeExit
+			m.status = "worktree exit"
+		}
 	case service.EventClearScreen:
 		m.clearProviderRetryStatus()
 		m.assembler.Reset()

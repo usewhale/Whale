@@ -67,16 +67,6 @@ func classifySlashFields(head string, fields []string, line string) SubmitClass 
 			return SubmitLocalReadOnly
 		}
 		return SubmitUsageError
-	case "/worktree":
-		if len(fields) == 1 || (len(fields) == 2 && fields[1] == "list") || (len(fields) == 2 && fields[1] == "status") || (len(fields) == 3 && fields[1] == "status") {
-			return SubmitLocalReadOnly
-		}
-		if len(fields) >= 3 && fields[1] == "remove" {
-			if len(fields) == 3 || (len(fields) == 4 && fields[3] == "--force") {
-				return SubmitLocalMutating
-			}
-		}
-		return SubmitUsageError
 	case "/memory":
 		if class, ok := plugins.BuiltinSlashCommandClass(line); ok {
 			return submitClassFromPluginCommandClass(class)

@@ -25,6 +25,7 @@ const (
 	IntentCancelUserInput     IntentKind = "cancel_user_input"
 	IntentSelectSession       IntentKind = "select_session"
 	IntentRequestSessions     IntentKind = "request_sessions"
+	IntentRequestExit         IntentKind = "request_exit"
 	IntentShutdown            IntentKind = "shutdown"
 	IntentSetModelAndEffort   IntentKind = "set_model_and_effort"
 	IntentSetApprovalMode     IntentKind = "set_approval_mode"
@@ -34,25 +35,27 @@ const (
 	IntentRequestSkillsManage IntentKind = "request_skills_manage"
 	IntentSetSkillEnabled     IntentKind = "set_skill_enabled"
 	IntentSetPluginEnabled    IntentKind = "set_plugin_enabled"
+	IntentWorktreeExitChoice  IntentKind = "worktree_exit_choice"
 )
 
 type Intent struct {
-	Kind          IntentKind
-	Input         string
-	HiddenInput   bool
-	ToolCallID    string
-	UserInput     *core.UserInputResponse
-	SessionInput  string
-	Model         string
-	Effort        string
-	Thinking      string
-	ApprovalMode  string
-	ViewMode      string
-	SkillName     string
-	SkillEnabled  bool
-	PluginID      string
-	PluginEnabled bool
-	SkillBinding  *app.SkillBinding
+	Kind           IntentKind
+	Input          string
+	HiddenInput    bool
+	ToolCallID     string
+	UserInput      *core.UserInputResponse
+	SessionInput   string
+	Model          string
+	Effort         string
+	Thinking       string
+	ApprovalMode   string
+	ViewMode       string
+	SkillName      string
+	SkillEnabled   bool
+	PluginID       string
+	PluginEnabled  bool
+	SkillBinding   *app.SkillBinding
+	WorktreeAction string
 }
 
 type EventKind string
@@ -63,44 +66,45 @@ const (
 )
 
 const (
-	EventInfo              EventKind = "info"
-	EventError             EventKind = "error"
-	EventAssistantDelta    EventKind = "assistant_delta"
-	EventReasoningDelta    EventKind = "reasoning_delta"
-	EventPlanDelta         EventKind = "plan_delta"
-	EventPlanCompleted     EventKind = "plan_completed"
-	EventPlanUpdate        EventKind = "plan_update"
-	EventProviderRetry     EventKind = "provider_retry"
-	EventToolCall          EventKind = "tool_call"
-	EventToolResult        EventKind = "tool_result"
-	EventTaskStarted       EventKind = "task_started"
-	EventTaskProgress      EventKind = "task_progress"
-	EventTaskCompleted     EventKind = "task_completed"
-	EventMCPStatus         EventKind = "mcp_status"
-	EventMCPComplete       EventKind = "mcp_complete"
-	EventApprovalRequired  EventKind = "approval_required"
-	EventUserInputRequired EventKind = "user_input_required"
-	EventUserInputDone     EventKind = "user_input_done"
-	EventSessionsListed    EventKind = "sessions_listed"
-	EventLocalSubmitResult EventKind = "local_submit_result"
-	EventLocalSubmitDone   EventKind = "local_submit_done"
-	EventDiffResult        EventKind = "diff_result"
-	EventBtwStarted        EventKind = "btw_started"
-	EventBtwDelta          EventKind = "btw_delta"
-	EventBtwDone           EventKind = "btw_done"
-	EventBtwError          EventKind = "btw_error"
-	EventTurnDone          EventKind = "turn_done"
-	EventModelPicker       EventKind = "model_picker"
-	EventPermissionsMenu   EventKind = "permissions_menu"
-	EventSkillsMenu        EventKind = "skills_menu"
-	EventSkillsManager     EventKind = "skills_manager"
-	EventPluginsManager    EventKind = "plugins_manager"
-	EventReviewMenu        EventKind = "review_menu"
-	EventViewModeChanged   EventKind = "view_mode_changed"
-	EventSkillLoaded       EventKind = "skill_loaded"
-	EventExitRequested     EventKind = "exit_requested"
-	EventClearScreen       EventKind = "clear_screen"
-	EventSessionHydrated   EventKind = "session_hydrated"
+	EventInfo               EventKind = "info"
+	EventError              EventKind = "error"
+	EventAssistantDelta     EventKind = "assistant_delta"
+	EventReasoningDelta     EventKind = "reasoning_delta"
+	EventPlanDelta          EventKind = "plan_delta"
+	EventPlanCompleted      EventKind = "plan_completed"
+	EventPlanUpdate         EventKind = "plan_update"
+	EventProviderRetry      EventKind = "provider_retry"
+	EventToolCall           EventKind = "tool_call"
+	EventToolResult         EventKind = "tool_result"
+	EventTaskStarted        EventKind = "task_started"
+	EventTaskProgress       EventKind = "task_progress"
+	EventTaskCompleted      EventKind = "task_completed"
+	EventMCPStatus          EventKind = "mcp_status"
+	EventMCPComplete        EventKind = "mcp_complete"
+	EventApprovalRequired   EventKind = "approval_required"
+	EventUserInputRequired  EventKind = "user_input_required"
+	EventUserInputDone      EventKind = "user_input_done"
+	EventSessionsListed     EventKind = "sessions_listed"
+	EventLocalSubmitResult  EventKind = "local_submit_result"
+	EventLocalSubmitDone    EventKind = "local_submit_done"
+	EventDiffResult         EventKind = "diff_result"
+	EventBtwStarted         EventKind = "btw_started"
+	EventBtwDelta           EventKind = "btw_delta"
+	EventBtwDone            EventKind = "btw_done"
+	EventBtwError           EventKind = "btw_error"
+	EventTurnDone           EventKind = "turn_done"
+	EventModelPicker        EventKind = "model_picker"
+	EventPermissionsMenu    EventKind = "permissions_menu"
+	EventSkillsMenu         EventKind = "skills_menu"
+	EventSkillsManager      EventKind = "skills_manager"
+	EventPluginsManager     EventKind = "plugins_manager"
+	EventReviewMenu         EventKind = "review_menu"
+	EventViewModeChanged    EventKind = "view_mode_changed"
+	EventSkillLoaded        EventKind = "skill_loaded"
+	EventWorktreeExitPrompt EventKind = "worktree_exit_prompt"
+	EventExitRequested      EventKind = "exit_requested"
+	EventClearScreen        EventKind = "clear_screen"
+	EventSessionHydrated    EventKind = "session_hydrated"
 )
 
 type Event struct {
@@ -127,6 +131,7 @@ type Event struct {
 	ViewMode        string
 	Skills          []skills.SkillView
 	Plugins         []plugins.PluginStatus
+	WorktreeExit    *app.WorktreeExitSummary
 	SessionID       string
 	Messages        []core.Message
 }

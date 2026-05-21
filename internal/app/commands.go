@@ -15,7 +15,6 @@ import (
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/skills"
 	"github.com/usewhale/whale/internal/store"
-	whaleworktree "github.com/usewhale/whale/internal/worktree"
 )
 
 func resolveInitialSessionID(sessionsDir string) (string, error) {
@@ -61,114 +60,24 @@ func (a *App) buildStatus() string {
 		fmt.Sprintf("- model: %s", a.model),
 		fmt.Sprintf("- effort: %s", a.reasoningEffort),
 		fmt.Sprintf("- thinking: %s", onOff(a.thinkingEnabled)),
-		fmt.Sprintf("- view: %s", a.ViewMode()),
 	}
-	if strings.TrimSpace(a.worktree.Name) != "" {
-		parts = append(parts, fmt.Sprintf("- worktree: %s (%s)", a.worktree.Name, a.worktree.Path))
-	}
+	parts = append(parts, a.formatCurrentWorktreeStatusLines()...)
 	parts = append(parts, formatContextWindowStatus(a))
 	parts = append(parts, a.formatBudgetStatusLine())
 	return strings.Join(parts, "\n")
 }
 
-func (a *App) buildWorktreeStatus(args []string) (string, error) {
-	if len(args) == 0 {
-		if strings.TrimSpace(a.worktree.Name) == "" {
-			return "Worktree\n\ncurrent: none", nil
-		}
-		return strings.Join([]string{
-			"Worktree",
-			"",
-			"current: " + a.worktree.Name,
-			"branch: " + valueOrDash(a.worktree.Branch),
-			"path: " + a.worktree.Path,
-			"original workspace: " + valueOrDash(a.worktree.OriginalWorkspace),
-		}, "\n"), nil
+func (a *App) formatCurrentWorktreeStatusLines() []string {
+	if strings.TrimSpace(a.worktree.Name) == "" {
+		return nil
 	}
-	switch args[0] {
-	case "list":
-		items, err := whaleworktree.List(a.workspaceRoot)
-		if err != nil {
-			return "", err
-		}
-		return formatWorktreeList(items), nil
-	case "status":
-		if len(args) == 1 {
-			return a.buildWorktreeStatus(nil)
-		}
-		item, err := whaleworktree.Status(a.workspaceRoot, args[1])
-		if err != nil {
-			return "", err
-		}
-		return formatWorktreeDetail(item), nil
-	default:
-		return "", fmt.Errorf("usage: /worktree [list|status [name]|remove <name> [--force]]")
+	return []string{
+		"- worktree: " + a.worktree.Name,
+		"- worktree.branch: " + valueOrDash(a.worktree.Branch),
+		"- worktree.path: " + valueOrDash(a.worktree.Path),
+		"- worktree.original_workspace: " + valueOrDash(a.worktree.OriginalWorkspace),
+		"- worktree.original_branch: " + valueOrDash(a.worktree.OriginalBranch),
 	}
-}
-
-func (a *App) removeWorktree(args []string) (string, error) {
-	if len(args) != 2 && len(args) != 3 {
-		return "", fmt.Errorf("usage: /worktree remove <name> [--force]")
-	}
-	if args[0] != "remove" {
-		return "", fmt.Errorf("usage: /worktree remove <name> [--force]")
-	}
-	force := false
-	if len(args) == 3 {
-		if args[2] != "--force" {
-			return "", fmt.Errorf("usage: /worktree remove <name> [--force]")
-		}
-		force = true
-	}
-	res, err := whaleworktree.Remove(a.workspaceRoot, args[1], force)
-	if err != nil {
-		return "", err
-	}
-	lines := []string{
-		"Removed worktree",
-		"",
-		"name: " + res.Entry.Name,
-		"path: " + res.Entry.Path,
-	}
-	if res.BranchDeleted {
-		lines = append(lines, "deleted branch: "+whaleworktree.BranchName(args[1]))
-	} else if strings.TrimSpace(res.BranchWarning) != "" {
-		lines = append(lines, "branch warning: "+res.BranchWarning)
-	}
-	return strings.Join(lines, "\n"), nil
-}
-
-func formatWorktreeList(items []whaleworktree.Entry) string {
-	if len(items) == 0 {
-		return "Worktrees\n\nnone"
-	}
-	lines := []string{"Worktrees", ""}
-	for _, item := range items {
-		lines = append(lines, fmt.Sprintf("- %s: %s %s %s", item.Name, worktreeStatusLabel(item), valueOrDash(item.Head), item.Path))
-	}
-	return strings.Join(lines, "\n")
-}
-
-func formatWorktreeDetail(item whaleworktree.Entry) string {
-	return strings.Join([]string{
-		"Worktree",
-		"",
-		"name: " + item.Name,
-		"branch: " + item.Branch,
-		"head: " + valueOrDash(item.Head),
-		"status: " + worktreeStatusLabel(item),
-		"path: " + item.Path,
-	}, "\n")
-}
-
-func worktreeStatusLabel(item whaleworktree.Entry) string {
-	if item.Missing {
-		return "missing"
-	}
-	if item.Dirty {
-		return "dirty"
-	}
-	return "clean"
 }
 
 func valueOrDash(v string) string {

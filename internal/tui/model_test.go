@@ -3799,6 +3799,18 @@ func TestPickerAndModalViewsHideComposer(t *testing.T) {
 			want: "Implement this plan?",
 		},
 		{
+			name: "worktree exit",
+			setup: func(m *model) {
+				m.mode = modeWorktreeExit
+				m.worktreeExit.summary = app.WorktreeExitSummary{
+					Session:      app.WorktreeSession{Name: "feature", Path: "/tmp/repo/.whale/worktrees/feature", Branch: "worktree-feature"},
+					ChangedFiles: 2,
+					Commits:      1,
+				}
+			},
+			want: "Exiting worktree session",
+		},
+		{
 			name: "skills menu",
 			setup: func(m *model) {
 				m.mode = modeSkillsMenu
@@ -3947,6 +3959,24 @@ func TestCtrlCClearsNonEmptyInputWithoutArmingQuit(t *testing.T) {
 	}
 	if m.status != "input cleared" {
 		t.Fatalf("unexpected status: %q", m.status)
+	}
+}
+
+func TestSecondIdleCtrlCRequestsExitFlow(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.quitArmedUntil = time.Now().Add(time.Second)
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = next.(model)
+
+	if len(*intents) != 1 {
+		t.Fatalf("expected one intent, got %+v", *intents)
+	}
+	if (*intents)[0].Kind != service.IntentRequestExit {
+		t.Fatalf("expected exit request intent, got %+v", (*intents)[0])
+	}
+	if !m.quitArmedUntil.IsZero() || m.status != "exiting" {
+		t.Fatalf("unexpected quit state/status: %v %q", m.quitArmedUntil, m.status)
 	}
 }
 
@@ -4169,6 +4199,55 @@ func TestDiffPageCtrlCInterruptsBusyTurn(t *testing.T) {
 	}
 	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentShutdown {
 		t.Fatalf("expected shutdown intent from diff page ctrl+c, got %+v", *intents)
+	}
+}
+
+func TestWorktreeExitPromptEnterDispatchesSelectedAction(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.mode = modeWorktreeExit
+	m.worktreeExit.summary = app.WorktreeExitSummary{
+		Session:      app.WorktreeSession{Name: "feature", Path: "/tmp/repo/.whale/worktrees/feature", Branch: "worktree-feature"},
+		ChangedFiles: 1,
+	}
+	m.worktreeExit.selected = 1
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+
+	if len(*intents) != 1 {
+		t.Fatalf("expected one intent, got %+v", *intents)
+	}
+	if (*intents)[0].Kind != service.IntentWorktreeExitChoice || (*intents)[0].WorktreeAction != "remove" {
+		t.Fatalf("unexpected intent: %+v", (*intents)[0])
+	}
+	if m.mode != modeChat || m.status != "removing worktree" {
+		t.Fatalf("unexpected mode/status: %v %q", m.mode, m.status)
+	}
+}
+
+func TestWorktreeExitSummaryIncludesIgnoredFiles(t *testing.T) {
+	got := worktreeExitSummaryText(0, 1, 0)
+	if !strings.Contains(got, "1 ignored file") {
+		t.Fatalf("expected ignored file warning, got %q", got)
+	}
+}
+
+func TestWorktreeExitPromptEscCancelsExit(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.mode = modeWorktreeExit
+	m.worktreeExit.summary = app.WorktreeExitSummary{Session: app.WorktreeSession{Name: "feature"}}
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(model)
+
+	if len(*intents) != 1 {
+		t.Fatalf("expected one intent, got %+v", *intents)
+	}
+	if (*intents)[0].Kind != service.IntentWorktreeExitChoice || (*intents)[0].WorktreeAction != "cancel" {
+		t.Fatalf("unexpected intent: %+v", (*intents)[0])
+	}
+	if m.mode != modeChat || m.status != "exit canceled" {
+		t.Fatalf("unexpected mode/status: %v %q", m.mode, m.status)
 	}
 }
 

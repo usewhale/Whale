@@ -137,6 +137,8 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 		return m.handleReviewTargetPickerKey(msg), false, true
 	case modeHelp:
 		return m.handleHelpKey(msg), false, true
+	case modeWorktreeExit:
+		return m.handleWorktreeExitKey(msg), false, true
 	}
 	cmd, quit, handled := m.handleGlobalKey(msg)
 	if handled {
@@ -509,8 +511,13 @@ func (m *model) handleGlobalKey(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 		}
 		now := time.Now()
 		if !m.quitArmedUntil.IsZero() && now.Before(m.quitArmedUntil) {
-			m.dispatchIntent(service.Intent{Kind: service.IntentShutdown})
-			return nil, true, true
+			if m.dispatch == nil {
+				return nil, true, true
+			}
+			m.dispatchIntent(service.Intent{Kind: service.IntentRequestExit})
+			m.quitArmedUntil = time.Time{}
+			m.status = "exiting"
+			return nil, false, true
 		}
 		m.quitArmedUntil = now.Add(2 * time.Second)
 		m.status = "Press Ctrl+C again to quit"

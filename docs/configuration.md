@@ -218,26 +218,19 @@ When Whale creates a worktree, it best-effort copies only
 the whole `./.whale` directory.
 
 Worktree startup is supported for `whale --worktree` and
-`whale exec --worktree`. `doctor`, `setup`, and `migrate-config` reject
-`--worktree`.
+`whale exec --worktree`. `doctor`, `setup`, `migrate-config`, and `resume`
+reject `--worktree`.
 
-Manage worktrees with:
+When exiting an interactive session from a worktree, Whale removes a clean
+worktree automatically. If the worktree has uncommitted files or commits after
+the original checkout head, Whale prompts you to keep or remove it. Removing a
+worktree discards that checkout and its uncommitted changes, but it does not
+delete the conversation. After a worktree session exits, `whale resume
+<session-id>` resumes the conversation from the original workspace rather than
+re-entering the exited worktree.
 
-```bash
-whale worktree list
-whale worktree status feature-x
-whale worktree remove feature-x
-whale worktree remove feature-x --force
-```
-
-Removal refuses dirty worktrees by default; `--force` discards changes. `whale
-resume <session-id>` and `whale resume --last` automatically enter the
-worktree recorded in session metadata before loading project config. If the
-recorded worktree no longer exists, Whale reports the missing path and suggests
-`whale worktree list`.
-
-The current worktree implementation still does not include tmux, automatic
-exit-time cleanup prompts, stale sweeps, or sparse checkout.
+The current worktree implementation still does not include tmux, stale sweeps,
+or sparse checkout.
 
 On macOS and Linux, `shell_run` runs commands through `/bin/sh`. On Windows,
 Whale first tries `pwsh`; if it is not available, it falls back to `ComSpec`

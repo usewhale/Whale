@@ -34,6 +34,8 @@ func (s *Service) Dispatch(in Intent) {
 		s.resolveUserInput(in.ToolCallID, core.UserInputResponse{}, false)
 	case IntentRequestSessions:
 		s.emitSessionChoices()
+	case IntentRequestExit:
+		s.requestExit()
 	case IntentSelectSession:
 		res, err := s.app.ApplyResumeChoice(in.SessionInput)
 		if err != nil {
@@ -51,6 +53,8 @@ func (s *Service) Dispatch(in Intent) {
 		}
 		s.cancelMu.Unlock()
 		s.cancelPendingInteractions()
+	case IntentWorktreeExitChoice:
+		s.handleWorktreeExitChoice(in.WorktreeAction)
 	case IntentSetModelAndEffort:
 		if err := s.app.SetModelAndEffort(in.Model, in.Effort); err != nil {
 			s.emit(Event{Kind: EventError, Text: err.Error()})
@@ -107,6 +111,61 @@ func (s *Service) Dispatch(in Intent) {
 			return
 		}
 		s.emit(Event{Kind: EventPluginsManager, Plugins: s.PluginsForManager()})
+	}
+}
+
+func (s *Service) requestExit() {
+	summary, ok, err := s.app.BuildWorktreeExitSummary()
+	if !ok {
+		s.emit(Event{Kind: EventExitRequested})
+		return
+	}
+	if err != nil {
+		res, clearErr := s.app.ForgetCurrentWorktree()
+		if clearErr != nil {
+			s.emit(Event{Kind: EventError, Text: err.Error() + "\n" + clearErr.Error()})
+			s.emit(Event{Kind: EventExitRequested})
+			return
+		}
+		s.emit(Event{Kind: EventInfo, Text: res.Message})
+		s.emit(Event{Kind: EventExitRequested})
+		return
+	}
+	if summary.ChangedFiles == 0 && summary.IgnoredFiles == 0 && summary.Commits == 0 {
+		res, err := s.app.RemoveCurrentWorktree(false)
+		if err != nil {
+			s.emit(Event{Kind: EventError, Text: err.Error()})
+			return
+		}
+		s.emit(Event{Kind: EventInfo, Text: res.Message})
+		s.emit(Event{Kind: EventExitRequested})
+		return
+	}
+	s.emit(Event{Kind: EventWorktreeExitPrompt, WorktreeExit: &summary})
+}
+
+func (s *Service) handleWorktreeExitChoice(action string) {
+	switch strings.TrimSpace(action) {
+	case "keep":
+		res, err := s.app.KeepCurrentWorktree()
+		if err != nil {
+			s.emit(Event{Kind: EventError, Text: err.Error()})
+			return
+		}
+		s.emit(Event{Kind: EventInfo, Text: res.Message})
+		s.emit(Event{Kind: EventExitRequested})
+	case "remove":
+		res, err := s.app.RemoveCurrentWorktree(true)
+		if err != nil {
+			s.emit(Event{Kind: EventError, Text: err.Error()})
+			return
+		}
+		s.emit(Event{Kind: EventInfo, Text: res.Message})
+		s.emit(Event{Kind: EventExitRequested})
+	case "cancel":
+		s.emit(Event{Kind: EventInfo, Text: "Exit canceled"})
+	default:
+		s.emit(Event{Kind: EventError, Text: "unknown worktree exit action"})
 	}
 }
 
@@ -237,7 +296,7 @@ func (s *Service) handleLocalSubmit(line string) {
 			s.emit(Event{Kind: EventClearScreen})
 		}
 		if cmd.ShouldExit {
-			s.emit(Event{Kind: EventExitRequested})
+			s.requestExit()
 		}
 		if s.app.SessionID() != prevSessionID {
 			s.emitSessionHydrated()
@@ -370,7 +429,7 @@ func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.
 			s.emit(Event{Kind: EventClearScreen})
 		}
 		if cmd.ShouldExit {
-			s.emit(Event{Kind: EventExitRequested})
+			s.requestExit()
 		}
 		if s.app.SessionID() != prevSessionID {
 			s.emitSessionHydrated()

@@ -155,7 +155,7 @@ func shouldConsumeWorktreeValue(args []string, index int, stdinTerminal bool) bo
 		return !stdinTerminal && whaleworktree.ValidateName(next) == nil
 	}
 	switch next {
-	case "exec", "resume", "doctor", "setup", "migrate-config", "worktree", "help", "completion":
+	case "exec", "resume", "doctor", "setup", "migrate-config", "help", "completion":
 		return false
 	default:
 		return true
@@ -277,6 +277,5 @@ func newRootCmd(opts *cliOptions) *cobra.Command {
 	root.AddCommand(newMigrateConfigCmd(opts))
 	root.AddCommand(newSetupCmd(opts))
 	root.AddCommand(newResumeCmd(opts))
-	root.AddCommand(newWorktreeCmd(opts))
 	return root
 }

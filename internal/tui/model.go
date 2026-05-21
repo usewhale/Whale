@@ -38,6 +38,7 @@ const (
 	modeReviewCommitPicker
 	modeReviewPRPicker
 	modeHelp
+	modeWorktreeExit
 )
 
 type page int
@@ -165,6 +166,10 @@ type model struct {
 	permissionsMenu struct {
 		autoAccept bool
 		selected   int
+	}
+	worktreeExit struct {
+		summary  app.WorktreeExitSummary
+		selected int
 	}
 	planImplementation struct {
 		index int

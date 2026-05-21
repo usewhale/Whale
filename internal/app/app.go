@@ -78,6 +78,19 @@ type WorktreeSession struct {
 	OriginalHeadCommit string
 }
 
+type WorktreeExitSummary struct {
+	Session      WorktreeSession
+	ChangedFiles int
+	IgnoredFiles int
+	Commits      int
+}
+
+type WorktreeExitResult struct {
+	Action        string
+	Message       string
+	BranchWarning string
+}
+
 type ResumeChoice struct {
 	Index int
 	ID    string

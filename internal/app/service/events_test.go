@@ -17,6 +17,7 @@ import (
 	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/skills"
+	"github.com/usewhale/whale/internal/store"
 )
 
 func TestCriticalEventsDeliverAfterDeltaBackpressure(t *testing.T) {
@@ -523,6 +524,53 @@ func TestLocalSubmitDoesNotEmitTurnDone(t *testing.T) {
 			t.Fatal("local submit emitted delayed EventTurnDone")
 		}
 	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestRequestExitClearsUnreadableWorktreeAndQuits(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	workspace := t.TempDir()
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	missing := filepath.Join(t.TempDir(), "missing-worktree")
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{
+		NewSession: true,
+		Worktree: app.WorktreeSession{
+			Name:              "missing",
+			Path:              missing,
+			Branch:            "worktree-missing",
+			OriginalWorkspace: workspace,
+			OriginalBranch:    "main",
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+
+	svc.Dispatch(Intent{Kind: IntentRequestExit})
+	info := waitForServiceEvent(t, svc, EventInfo)
+	if !strings.Contains(info.Text, "Worktree state cleared: missing") {
+		t.Fatalf("unexpected info event: %+v", info)
+	}
+	waitForServiceEvent(t, svc, EventExitRequested)
+
+	meta, err := session.LoadSessionMeta(store.DefaultSessionsDir(cfg.DataDir), svc.SessionID())
+	if err != nil {
+		t.Fatalf("LoadSessionMeta: %v", err)
+	}
+	if meta.WorktreeName != "" || meta.WorktreePath != "" || meta.WorktreeBranch != "" {
+		t.Fatalf("expected worktree metadata cleared: %+v", meta)
 	}
 }
 

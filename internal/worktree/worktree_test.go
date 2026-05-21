@@ -80,6 +80,142 @@ func TestStartCreatesReusesAndCopiesOnlyLocalConfig(t *testing.T) {
 	}
 }
 
+func TestCountChangesWithoutOriginalHeadCountsOnlyDirtyFiles(t *testing.T) {
+	repo := newGitRepo(t)
+	sess, err := Start(repo, "legacy-metadata")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	write(t, filepath.Join(sess.Path, "dirty.txt"), []byte("dirty\n"))
+
+	got, err := CountChanges(sess.Path, sess.OriginalWorkspace, "")
+	if err != nil {
+		t.Fatalf("CountChanges: %v", err)
+	}
+	if got.ChangedFiles != 1 || got.Commits != 0 {
+		t.Fatalf("CountChanges = %+v, want 1 dirty file and 0 commits", got)
+	}
+}
+
+func TestCountChangesIncludesIgnoredFiles(t *testing.T) {
+	repo := newGitRepo(t)
+	write(t, filepath.Join(repo, ".gitignore"), []byte(".env\nbuild/\n"))
+	run(t, repo, "git", "add", ".gitignore")
+	run(t, repo, "git", "commit", "-m", "ignore local artifacts")
+	sess, err := Start(repo, "ignored-files")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	write(t, filepath.Join(sess.Path, ".env"), []byte("secret\n"))
+
+	got, err := CountChanges(sess.Path, sess.OriginalWorkspace, sess.OriginalHeadCommit)
+	if err != nil {
+		t.Fatalf("CountChanges: %v", err)
+	}
+	if got.ChangedFiles != 0 || got.IgnoredFiles != 1 || got.Commits != 0 {
+		t.Fatalf("CountChanges = %+v, want 1 ignored file only", got)
+	}
+}
+
+func TestCountChangesExcludesCopiedLocalConfig(t *testing.T) {
+	repo := newGitRepo(t)
+	write(t, filepath.Join(repo, ".whale", "config.local.toml"), []byte("model = \"deepseek-v4-pro\"\n"))
+	sess, err := Start(repo, "config-clean")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(sess.Path, ".whale", "config.local.toml")); err != nil {
+		t.Fatalf("expected copied local config in worktree: %v", err)
+	}
+
+	got, err := CountChanges(sess.Path, sess.OriginalWorkspace, sess.OriginalHeadCommit)
+	if err != nil {
+		t.Fatalf("CountChanges: %v", err)
+	}
+	if got.ChangedFiles != 0 || got.IgnoredFiles != 0 || got.Commits != 0 {
+		t.Fatalf("CountChanges = %+v, want clean worktree (copied local config excluded)", got)
+	}
+}
+
+func TestCountChangesExcludesLocalConfigWhenWholeWhaleDirIgnored(t *testing.T) {
+	repo := newGitRepo(t)
+	write(t, filepath.Join(repo, ".gitignore"), []byte(".whale/\n"))
+	run(t, repo, "git", "add", ".gitignore")
+	run(t, repo, "git", "commit", "-m", "ignore whale directory")
+	write(t, filepath.Join(repo, ".whale", "config.local.toml"), []byte("model = \"deepseek-v4-pro\"\n"))
+
+	sess, err := Start(repo, "whale-dir-ignored")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(sess.Path, ".whale", "config.local.toml")); err != nil {
+		t.Fatalf("expected copied local config in worktree: %v", err)
+	}
+
+	got, err := CountChanges(sess.Path, sess.OriginalWorkspace, sess.OriginalHeadCommit)
+	if err != nil {
+		t.Fatalf("CountChanges: %v", err)
+	}
+	if got.ChangedFiles != 0 || got.IgnoredFiles != 0 || got.Commits != 0 {
+		t.Fatalf("CountChanges = %+v, want clean worktree even when .whale/ is ignored wholesale", got)
+	}
+
+	// A user file alongside the copied config under the ignored .whale/ dir
+	// must still be counted.
+	write(t, filepath.Join(sess.Path, ".whale", "scratch.txt"), []byte("notes\n"))
+	got, err = CountChanges(sess.Path, sess.OriginalWorkspace, sess.OriginalHeadCommit)
+	if err != nil {
+		t.Fatalf("CountChanges: %v", err)
+	}
+	if got.ChangedFiles != 0 || got.IgnoredFiles != 1 || got.Commits != 0 {
+		t.Fatalf("CountChanges = %+v, want the user file under ignored .whale/ counted", got)
+	}
+}
+
+func TestCountChangesCountsEditedLocalConfig(t *testing.T) {
+	repo := newGitRepo(t)
+	write(t, filepath.Join(repo, ".whale", "config.local.toml"), []byte("model = \"deepseek-v4-pro\"\n"))
+	sess, err := Start(repo, "config-edited")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	// Simulate the user editing the copied local config during the session.
+	write(t, filepath.Join(sess.Path, ".whale", "config.local.toml"), []byte("model = \"deepseek-v4-flash\"\n"))
+
+	got, err := CountChanges(sess.Path, sess.OriginalWorkspace, sess.OriginalHeadCommit)
+	if err != nil {
+		t.Fatalf("CountChanges: %v", err)
+	}
+	if got.ChangedFiles != 0 || got.IgnoredFiles != 1 || got.Commits != 0 {
+		t.Fatalf("CountChanges = %+v, want the edited local config counted as a change", got)
+	}
+}
+
+func TestCountChangesExcludesSubdirLocalConfigButCountsOtherIgnored(t *testing.T) {
+	repo := newGitRepo(t)
+	subdir := filepath.Join(repo, "packages", "api")
+	write(t, filepath.Join(subdir, "api.txt"), []byte("api\n"))
+	run(t, repo, "git", "add", "packages/api/api.txt")
+	write(t, filepath.Join(repo, ".gitignore"), []byte("build/\n"))
+	run(t, repo, "git", "add", ".gitignore")
+	run(t, repo, "git", "commit", "-m", "add api package and ignore build")
+	write(t, filepath.Join(subdir, ".whale", "config.local.toml"), []byte("model = \"deepseek-v4-flash\"\n"))
+
+	sess, err := Start(subdir, "subdir-config")
+	if err != nil {
+		t.Fatalf("Start from subdir: %v", err)
+	}
+	write(t, filepath.Join(sess.Path, "build", "artifact.bin"), []byte("binary\n"))
+
+	got, err := CountChanges(sess.Path, sess.OriginalWorkspace, sess.OriginalHeadCommit)
+	if err != nil {
+		t.Fatalf("CountChanges: %v", err)
+	}
+	if got.ChangedFiles != 0 || got.IgnoredFiles != 1 || got.Commits != 0 {
+		t.Fatalf("CountChanges = %+v, want only the genuinely ignored build artifact counted", got)
+	}
+}
+
 func TestStartFromSubdirectoryCopiesLocalConfigToMatchingSubdirectory(t *testing.T) {
 	repo := newGitRepo(t)
 	subdir := filepath.Join(repo, "packages", "api")

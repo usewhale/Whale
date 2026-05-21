@@ -73,7 +73,20 @@ func ResolveResumeWorktree(cfg Config, start StartOptions, currentWorkspace stri
 	path := strings.TrimSpace(meta.WorktreePath)
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
-			return WorktreeSession{}, fmt.Errorf("worktree missing for session %s: %s\nRun `whale worktree list` to inspect worktrees.", sessionID, path)
+			workspace := firstNonEmpty(strings.TrimSpace(meta.OriginalWorkspace), currentWorkspace)
+			branch := strings.TrimSpace(meta.OriginalBranch)
+			if _, updateErr := session.UpdateSessionMeta(sessionsDir, sessionID, func(meta *session.SessionMeta) {
+				if workspace != "" {
+					meta.Workspace = workspace
+				}
+				if branch != "" {
+					meta.Branch = branch
+				}
+				clearSessionMetaWorktree(meta)
+			}); updateErr != nil {
+				return WorktreeSession{}, fmt.Errorf("record missing worktree exit: %w", updateErr)
+			}
+			return WorktreeSession{}, nil
 		}
 		return WorktreeSession{}, fmt.Errorf("stat worktree: %w", err)
 	}

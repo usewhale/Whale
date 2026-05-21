@@ -166,16 +166,6 @@ func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 	if strings.HasPrefix(trimmed, "/diff ") {
 		return CommandExecution{Handled: true}, errors.New("usage: /diff")
 	}
-	if trimmed == "/worktree" || strings.HasPrefix(trimmed, "/worktree ") {
-		fields := strings.Fields(trimmed)
-		args := fields[1:]
-		if len(args) > 0 && args[0] == "remove" {
-			text, err := a.removeWorktree(args)
-			return CommandExecution{Handled: true, Text: text, Mutated: err == nil}, err
-		}
-		text, err := a.buildWorktreeStatus(args)
-		return CommandExecution{Handled: true, Text: text}, err
-	}
 	if trimmed == "/focus" {
 		mode, err := a.ToggleViewMode()
 		if err != nil {

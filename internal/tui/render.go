@@ -186,6 +186,9 @@ func (m model) bottomPartsBeforeInput(mainWidth int) []string {
 	if m.mode == modeChat && m.page == pageDiff {
 		bottomParts = append(bottomParts, m.renderDiffPagerHints(mainWidth))
 	}
+	if m.mode == modeWorktreeExit {
+		bottomParts = append(bottomParts, m.renderWorktreeExit())
+	}
 	if m.mode == modeSessionPicker {
 		rows := []string{"sessions (↑/↓ select, enter confirm, esc cancel):"}
 		for i, row := range m.sessionChoices {

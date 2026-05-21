@@ -48,11 +48,6 @@ func DefaultSlashCommands() []SlashCommandSpec {
 		{Name: "/new", Description: "Start a new session", ArgumentHint: "[id]", AutoRun: true},
 		{Name: "/fork", Description: "Fork the current session", ArgumentHint: "[name]", AutoRun: true},
 		{Name: "/resume", Description: "Open the resume picker", AutoRun: true},
-		{Name: "/worktree", Description: "Show or manage Whale worktrees", ArgumentHint: "[list|status [name]|remove <name> [--force]]", Options: []SlashCommandOption{
-			{Token: "list", Description: "List worktrees", AutoRun: true},
-			{Token: "status", Description: "Show current or named worktree status", AutoRun: true},
-			{Token: "remove", Description: "Remove a worktree", InsertText: "/worktree remove "},
-		}},
 		{Name: "/clear", Description: "Clear the visible conversation", AutoRun: true},
 		{Name: "/status", Description: "Show session and configuration status", AutoRun: true},
 		{Name: "/stats", Description: "Show usage and tool statistics", ArgumentHint: "[usage|tools|repair|recent|all]", Options: []SlashCommandOption{
