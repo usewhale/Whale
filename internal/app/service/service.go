@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"os/exec"
 	"sync"
 	"sync/atomic"
 
@@ -202,6 +203,13 @@ func (s *Service) Events() <-chan Event { return s.events }
 func (s *Service) SessionID() string    { return s.app.SessionID() }
 func (s *Service) WorkspaceRoot() string {
 	return s.app.WorkspaceRoot()
+}
+func (s *Service) PrepareOpenCommand(line string) (string, *exec.Cmd, error) {
+	openCmd, err := s.app.PrepareOpenCommand(line)
+	if err != nil {
+		return "", nil, err
+	}
+	return openCmd.Path, openCmd.Cmd, nil
 }
 func (s *Service) Model() string           { return s.app.Model() }
 func (s *Service) ReasoningEffort() string { return s.app.ReasoningEffort() }

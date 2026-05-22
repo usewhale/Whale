@@ -3074,6 +3074,30 @@ func TestLocalImmediateSlashCommandsDoNotStartWorkingState(t *testing.T) {
 	}
 }
 
+func TestOpenCommandUsesTerminalExecInsteadOfServiceDispatch(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.input.SetValue("/open .")
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+
+	if cmd == nil {
+		t.Fatal("expected /open to return a terminal exec command")
+	}
+	if len(*intents) != 0 {
+		t.Fatalf("expected no service dispatch for /open, got %+v", *intents)
+	}
+	if m.localSubmitPending != 1 {
+		t.Fatalf("expected pending local submit, got %d", m.localSubmitPending)
+	}
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected input cleared, got %q", got)
+	}
+	if m.busy || !m.busySince.IsZero() {
+		t.Fatalf("/open should not start working state, busy=%v busySince=%v", m.busy, m.busySince)
+	}
+}
+
 func TestSlashSuggestionTabFillsInputWithoutDispatch(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.windowsPaste.enabled = true
