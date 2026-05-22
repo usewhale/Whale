@@ -49,7 +49,7 @@ func TestTaskApprovalRequiredWriteDenied(t *testing.T) {
 		Suite: SuiteRegression,
 		Scenario: ScenarioSpec{
 			AgentOptions: []agent.AgentOption{
-				agent.WithToolPolicy(policy.DefaultToolPolicy{Mode: policy.ApprovalModeOnRequest}),
+				agent.WithToolPolicy(policy.DefaultToolPolicy{}),
 				agent.WithApprovalFunc(func(req policy.ApprovalRequest) policy.ApprovalDecision { return policy.ApprovalDeny }),
 			},
 			Turns: []TurnSpec{
@@ -83,7 +83,7 @@ func TestTaskPlanModeBlocksWriteFlow(t *testing.T) {
 		Scenario: ScenarioSpec{
 			AgentOptions: []agent.AgentOption{
 				agent.WithSessionMode(session.ModePlan),
-				agent.WithToolPolicy(policy.DefaultToolPolicy{Mode: policy.ApprovalModeNever}),
+				agent.WithToolPolicy(policy.RulePolicy{Default: policy.PermissionAllow}),
 			},
 			Turns: []TurnSpec{
 				{

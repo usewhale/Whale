@@ -91,7 +91,7 @@ func TestRunStreamCancelDuringToolSkipsRecovery(t *testing.T) {
 		prov,
 		store,
 		NewToolRegistry([]Tool{blockingCancelTool{}}),
-		WithToolPolicy(DefaultToolPolicy{Mode: ApprovalModeNever}),
+		WithToolPolicy(RulePolicy{Default: PermissionAllow}),
 		WithRecoveryPolicy(DefaultRecoveryPolicy()),
 	)
 	ctx, cancel := context.WithCancel(context.Background())

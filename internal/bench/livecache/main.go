@@ -215,7 +215,7 @@ func runTask(parent context.Context, args cliArgs, task taskSpec, repeat int) (r
 		provider,
 		msgStore,
 		registry,
-		agent.WithToolPolicy(policy.DefaultToolPolicy{Mode: policy.ApprovalModeNever}),
+		agent.WithToolPolicy(policy.RulePolicy{Default: policy.PermissionAllow}),
 		agent.WithUsageLogPath(usagePath),
 		agent.WithSessionsDir(filepath.Join(dataDir, "sessions")),
 		agent.WithAutoCompact(false, 0, defaults.DeepSeekV4ContextWindow),

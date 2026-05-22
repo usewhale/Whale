@@ -1051,7 +1051,7 @@ func TestReviewPRPromptCommandsAreScopedAutoAllowed(t *testing.T) {
 		t.Fatal("expected /review pr to return scoped allow prefixes")
 	}
 	p := policy.ScopedAllowPolicy{
-		Base:               policy.DefaultToolPolicy{Mode: policy.ApprovalModeOnRequest},
+		Base:               policy.DefaultToolPolicy{},
 		ShellAllowPrefixes: allowPrefixes,
 	}
 	spec := core.ToolSpec{Name: "shell_run"}

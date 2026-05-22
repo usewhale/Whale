@@ -5447,8 +5447,7 @@ func TestChatFooterFollowsContentAfterSlashSuggestionsClose(t *testing.T) {
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
 	m = next.(model)
 	withSlash := m.View()
-	assertFooterLastLine(t, withSlash, "model: deepseek-v4-pro")
-	assertFooterLastLine(t, withSlash, "effort: normal")
+	assertFooterLastLine(t, withSlash, "deepseek-v4-pro . normal")
 	assertFooterLastLine(t, withSlash, "whale")
 	assertFooterLastLineNotContains(t, withSlash, "dir:")
 	if !strings.Contains(withSlash, "Tab/Enter pick") {
@@ -5458,8 +5457,7 @@ func TestChatFooterFollowsContentAfterSlashSuggestionsClose(t *testing.T) {
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
 	m = next.(model)
 	afterDelete := m.View()
-	assertFooterLastLine(t, afterDelete, "model: deepseek-v4-pro")
-	assertFooterLastLine(t, afterDelete, "effort: normal")
+	assertFooterLastLine(t, afterDelete, "deepseek-v4-pro . normal")
 	assertFooterLastLine(t, afterDelete, "whale")
 	assertFooterLastLineNotContains(t, afterDelete, "dir:")
 	if strings.Contains(afterDelete, "Tab/Enter pick") {
@@ -6281,8 +6279,7 @@ func TestChatViewPinsBottomAfterContentExceedsScreen(t *testing.T) {
 	if got := countVisibleLines(view); got != m.height {
 		t.Fatalf("expected overflowing chat view to occupy terminal height %d, got %d:\n%s", m.height, got, view)
 	}
-	assertFooterLastLine(t, view, "model: deepseek-v4-flash")
-	assertFooterLastLine(t, view, "effort: max")
+	assertFooterLastLine(t, view, "deepseek-v4-flash . max")
 	if !strings.Contains(view, "entry-39") {
 		t.Fatalf("expected overflowing chat view to follow latest content:\n%s", view)
 	}
@@ -7471,14 +7468,13 @@ func TestApprovalBusyViewDoesNotDuplicatePromptInBusyStatus(t *testing.T) {
 }
 
 func TestChatFooterShowsEffectiveThinkingAndEffort(t *testing.T) {
-	m := newModel(nil, "deepseek-v4-pro", "max", "off")
+	m := newModel(nil, "deepseek-v4-flash", "high", "on")
 	m.width = 80
 	m.height = 24
 
 	view := m.View()
-	assertFooterLastLine(t, view, "model: deepseek-v4-pro")
-	assertFooterLastLine(t, view, "effort: max")
-	assertFooterLastLine(t, view, "thinking: off")
+	assertFooterLastLine(t, view, "deepseek-v4-flash . high")
+	assertFooterLastLine(t, view, "thinking: on")
 }
 
 func TestChatFooterUsesSemanticColorSegments(t *testing.T) {
@@ -7500,8 +7496,7 @@ func TestChatFooterUsesSemanticColorSegments(t *testing.T) {
 	}
 	plain := xansi.Strip(footer)
 	for _, want := range []string{
-		"model: deepseek-v4-pro",
-		"effort: max",
+		"deepseek-v4-pro . max",
 		"thinking: on",
 		"whale-theme-colors",
 		"focus",
@@ -7541,8 +7536,7 @@ func TestModelSetRefreshesHeaderCache(t *testing.T) {
 	if strings.Contains(view, "model set: newer-model") {
 		t.Fatalf("expected printed model set result not to repeat in tail viewport:\n%s", view)
 	}
-	assertFooterLastLine(t, view, "model: newer-model")
-	assertFooterLastLine(t, view, "effort: low")
+	assertFooterLastLine(t, view, "newer-model . low")
 	assertFooterLastLine(t, view, "thinking: off")
 }
 

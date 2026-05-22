@@ -266,7 +266,7 @@ func TestRecoveryRetriesTimeoutLikeAndSucceeds(t *testing.T) {
 		prov,
 		store,
 		NewToolRegistry([]Tool{tool}),
-		WithToolPolicy(DefaultToolPolicy{Mode: ApprovalModeNever}),
+		WithToolPolicy(RulePolicy{Default: PermissionAllow}),
 		WithRecoveryPolicy(RecoveryPolicy{
 			Enabled: true,
 			Rules: map[FailureClass]RecoveryRule{
@@ -319,7 +319,7 @@ func TestRecoveryHardBlockExhaustedNoRetry(t *testing.T) {
 		prov,
 		store,
 		NewToolRegistry([]Tool{alwaysFailTool{}}),
-		WithToolPolicy(DefaultToolPolicy{Mode: ApprovalModeNever}),
+		WithToolPolicy(RulePolicy{Default: PermissionAllow}),
 		WithRecoveryPolicy(DefaultRecoveryPolicy()),
 	)
 	events, err := a.RunStream(context.Background(), "s-retry-no", "go")
@@ -363,7 +363,7 @@ func TestRecoveryFallbackReadonlyExecutesTool(t *testing.T) {
 		prov,
 		store,
 		NewToolRegistry([]Tool{failWriteTool{}, readOnlyViewTool{}}),
-		WithToolPolicy(DefaultToolPolicy{Mode: ApprovalModeNever}),
+		WithToolPolicy(RulePolicy{Default: PermissionAllow}),
 		WithRecoveryPolicy(RecoveryPolicy{
 			Enabled: true,
 			Rules: map[FailureClass]RecoveryRule{
@@ -445,7 +445,7 @@ func TestDefaultRecoveryPassesThroughCommonToolFailures(t *testing.T) {
 				prov,
 				store,
 				NewToolRegistry([]Tool{tt.reg}),
-				WithToolPolicy(DefaultToolPolicy{Mode: ApprovalModeNever}),
+				WithToolPolicy(RulePolicy{Default: PermissionAllow}),
 				WithRecoveryPolicy(DefaultRecoveryPolicy()),
 			)
 			sessionID := "s-pass-through-" + strings.ReplaceAll(tt.name, " ", "-")
@@ -483,7 +483,7 @@ func TestRecoveryRequestReplanBuildsStructuredResult(t *testing.T) {
 		prov,
 		store,
 		NewToolRegistry([]Tool{alwaysFailTool{}}),
-		WithToolPolicy(DefaultToolPolicy{Mode: ApprovalModeNever}),
+		WithToolPolicy(RulePolicy{Default: PermissionAllow}),
 		WithRecoveryPolicy(RecoveryPolicy{
 			Enabled: true,
 			Rules: map[FailureClass]RecoveryRule{
@@ -529,7 +529,7 @@ func TestRecoveryDoesNotWrapExploratoryPathFailures(t *testing.T) {
 		prov,
 		store,
 		NewToolRegistry([]Tool{notFoundTool{}}),
-		WithToolPolicy(DefaultToolPolicy{Mode: ApprovalModeNever}),
+		WithToolPolicy(RulePolicy{Default: PermissionAllow}),
 		WithRecoveryPolicy(DefaultRecoveryPolicy()),
 	)
 	events, err := a.RunStream(context.Background(), "s-not-found", "go")

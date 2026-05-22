@@ -8,54 +8,26 @@ import (
 	whaleTools "github.com/usewhale/whale/internal/tools"
 )
 
-func TestDefaultToolPolicyPrefixRulesApplyToShellRunCommand(t *testing.T) {
-	p := DefaultToolPolicy{
-		Mode:          ApprovalModeOnRequest,
-		AllowPrefixes: []string{"git status"},
-		DenyPrefixes:  []string{"rm -rf"},
-	}
+func TestDefaultToolPolicyAllowsOrdinaryShellCommands(t *testing.T) {
+	p := DefaultToolPolicy{}
 	spec := core.ToolSpec{Name: "shell_run"}
-
-	allow := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"git status --short"}`})
-	if !allow.Allow || allow.RequiresApproval || allow.Code != "allow_prefix" || allow.MatchedRule != "git status" {
-		t.Fatalf("expected allow-prefix decision for shell_run.command: %+v", allow)
-	}
-
-	deny := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"rm -rf /tmp/x"}`})
-	if deny.Allow || deny.Code != "policy_denied" || deny.MatchedRule != "rm -rf" {
-		t.Fatalf("expected deny-prefix decision for shell_run.command: %+v", deny)
-	}
-}
-
-func TestDefaultToolPolicyPrefixRulesRequireTokenBoundary(t *testing.T) {
-	p := DefaultToolPolicy{
-		Mode:          ApprovalModeOnRequest,
-		AllowPrefixes: []string{"git status"},
-		DenyPrefixes:  []string{"rm -rf"},
-	}
-	spec := core.ToolSpec{Name: "shell_run"}
-
-	allow := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"git   status   --short"}`})
-	if !allow.Allow || allow.RequiresApproval || allow.Code != "allow_prefix" {
-		t.Fatalf("expected whitespace-normalized allow-prefix decision: %+v", allow)
-	}
-	notAllow := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"git statusfoo"}`})
-	if !notAllow.Allow || !notAllow.RequiresApproval || notAllow.Code != "approval_required" {
-		t.Fatalf("expected statusfoo not to match git status prefix: %+v", notAllow)
-	}
-	newline := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"git\nstatus --short"}`})
-	if !newline.Allow || !newline.RequiresApproval || newline.Code != "approval_required" {
-		t.Fatalf("expected newline-separated command not to match git status prefix: %+v", newline)
-	}
-	notDeny := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"rm -rfoo /tmp/x"}`})
-	if !notDeny.Allow || !notDeny.RequiresApproval || notDeny.Code != "approval_required" {
-		t.Fatalf("expected rm -rfoo not to match rm -rf deny prefix: %+v", notDeny)
+	for _, command := range []string{
+		"git tag --list 'v0.1.*' --sort=-v:refname",
+		"git worktree list",
+		"git config --get remote.origin.url && git remote -v",
+		`ls -la .worktrees 2>/dev/null; echo "---"; ls -la worktrees 2>/dev/null; echo "---"; git worktree list 2>/dev/null; echo "---"`,
+		"make test",
+	} {
+		decision := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`})
+		if !decision.Allow || decision.RequiresApproval {
+			t.Fatalf("expected no approval for %q: %+v", command, decision)
+		}
 	}
 }
 
 func TestScopedAllowPolicyAllowsOnlyConfiguredShellPrefixes(t *testing.T) {
 	p := ScopedAllowPolicy{
-		Base:               DefaultToolPolicy{Mode: ApprovalModeOnRequest},
+		Base:               DefaultToolPolicy{},
 		ShellAllowPrefixes: []string{"gh pr list", "gh pr view", "gh pr diff"},
 	}
 	spec := core.ToolSpec{Name: "shell_run"}
@@ -79,8 +51,8 @@ func TestScopedAllowPolicyAllowsOnlyConfiguredShellPrefixes(t *testing.T) {
 	}
 
 	wideGh := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"gh repo clone usewhale/whale"}`})
-	if !wideGh.Allow || !wideGh.RequiresApproval {
-		t.Fatalf("expected unrelated gh command to keep default approval requirement: %+v", wideGh)
+	if !wideGh.Allow || wideGh.RequiresApproval || wideGh.Code == "scoped_allow_prefix" {
+		t.Fatalf("expected unrelated gh command to use default shell allow: %+v", wideGh)
 	}
 
 	for _, command := range []string{
@@ -97,7 +69,7 @@ func TestScopedAllowPolicyAllowsOnlyConfiguredShellPrefixes(t *testing.T) {
 		"gh pr list --repo other/repo",
 	} {
 		decision := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`})
-		if !decision.Allow || !decision.RequiresApproval {
+		if decision.Code == "scoped_allow_prefix" {
 			t.Fatalf("expected scoped allow to reject shell compound %q: %+v", command, decision)
 		}
 	}
@@ -123,9 +95,12 @@ func TestScopedAllowPolicyAllowsOnlyConfiguredShellPrefixes(t *testing.T) {
 
 func TestScopedAllowPolicyDoesNotOverrideBaseDeny(t *testing.T) {
 	p := ScopedAllowPolicy{
-		Base: DefaultToolPolicy{
-			Mode:         ApprovalModeOnRequest,
-			DenyPrefixes: []string{"gh pr diff"},
+		Base: RulePolicy{
+			Default: PermissionAllow,
+			Rules: []PermissionRule{
+				{Permission: "shell", Pattern: "*", Action: PermissionAllow},
+				{Permission: "shell", Pattern: "gh pr diff*", Action: PermissionDeny},
+			},
 		},
 		ShellAllowPrefixes: []string{"gh pr diff"},
 	}
@@ -133,13 +108,13 @@ func TestScopedAllowPolicyDoesNotOverrideBaseDeny(t *testing.T) {
 		core.ToolSpec{Name: "shell_run"},
 		core.ToolCall{Name: "shell_run", Input: `{"command":"gh pr diff 123"}`},
 	)
-	if decision.Allow || decision.Code != "policy_denied" {
+	if decision.Allow || decision.Code != "permission_denied" {
 		t.Fatalf("expected base deny to win over scoped allow: %+v", decision)
 	}
 }
 
 func TestReadOnlyTurnPolicyDeniesMutatingToolsWithoutApproval(t *testing.T) {
-	p := ReadOnlyTurnPolicy{Base: DefaultToolPolicy{Mode: ApprovalModeOnRequest}}
+	p := ReadOnlyTurnPolicy{Base: DefaultToolPolicy{}}
 	decision := p.Decide(
 		core.ToolSpec{Name: "edit"},
 		core.ToolCall{Name: "edit", Input: `{"file_path":"a.txt","search":"a","replace":"b"}`},
@@ -151,7 +126,7 @@ func TestReadOnlyTurnPolicyDeniesMutatingToolsWithoutApproval(t *testing.T) {
 
 func TestReadOnlyTurnPolicyAllowsReadOnlyShellAndScopedPRShell(t *testing.T) {
 	p := ReadOnlyTurnPolicy{Base: ScopedAllowPolicy{
-		Base:               DefaultToolPolicy{Mode: ApprovalModeOnRequest},
+		Base:               DefaultToolPolicy{},
 		ShellAllowPrefixes: []string{"gh pr view", "gh pr diff"},
 	}}
 	spec := productionShellRunSpec(t)
@@ -173,7 +148,7 @@ func TestReadOnlyTurnPolicyAllowsReadOnlyShellAndScopedPRShell(t *testing.T) {
 }
 
 func TestDefaultToolPolicyAutoAllowsCommonShellChecksInOnRequest(t *testing.T) {
-	p := DefaultToolPolicy{Mode: ApprovalModeOnRequest}
+	p := DefaultToolPolicy{}
 	spec := productionShellRunSpec(t)
 	for _, command := range []string{
 		"git status --short",
@@ -257,147 +232,29 @@ func TestDefaultToolPolicyAutoAllowsCommonShellChecksInOnRequest(t *testing.T) {
 	}
 }
 
-func TestDefaultToolPolicyRequiresApprovalForBoundedWriteShellCommands(t *testing.T) {
-	p := DefaultToolPolicy{Mode: ApprovalModeOnRequest}
-	spec := core.ToolSpec{Name: "shell_run"}
-	for _, command := range []string{
-		"make test",
-		"make test-tui",
-		"make build",
-		"go test ./...",
-		"go vet ./...",
-		"go vet ./internal/app/commands/... ./internal/app/... ./internal/policy/... ./internal/tui/... 2>&1",
-		"npm run test -- --runInBand",
-		"npm run typecheck",
-		"pnpm run build",
-		"cargo check --workspace",
-	} {
-		decision := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`})
-		if !decision.Allow || !decision.RequiresApproval || decision.Code != "bounded_write" {
-			t.Fatalf("expected bounded_write approval for %q: %+v", command, decision)
-		}
-	}
-}
-
-func TestDefaultToolPolicyDoesNotAutoAllowUnsafeShellVariants(t *testing.T) {
-	p := DefaultToolPolicy{Mode: ApprovalModeOnRequest}
+func TestDefaultToolPolicyAppliesExplicitShellAskAndDenyRules(t *testing.T) {
+	p := DefaultToolPolicy{}
 	spec := productionShellRunSpec(t)
-	for _, command := range []string{
-		"make test clean",
-		"make build clean",
-		"npm run lint -- --fix",
-		"npx jest --updateSnapshot",
-		"npx jest -u",
-		"npx vitest run --update",
-		"find . -delete",
-		"find . -exec rm {} +",
-		"find . -fprint out",
-		"git diff --output=out.patch",
-		"git diff --output=out.patch 2>&1",
-		"git diff --output out.patch",
-		"git diff --no-index /dev/null /etc/passwd",
-		"git diff --no-index /dev/null ../secret.txt",
-		"git diff 'feature;$(touch-pwn)...HEAD'",
-		"git -c core.pager=cat diff",
-		"git -C /tmp status --short",
-		"git -C ../private diff",
-		"git -C.. status --short",
-		"git -C status --short",
-		"cd /Users/goranka/Engineer/ai/dsk/whale-review-command && git status --short",
-		"cd /Users/goranka/Engineer/ai/dsk/whale-review-command && git status --short 2>&1",
-		"git branch -d feature",
-		"git symbolic-ref HEAD refs/heads/main",
-		"git symbolic-ref --delete HEAD",
-		"git symbolic-ref --short HEAD refs/heads/main",
-		"git remote add origin git@example.com:repo.git",
-		"git show --ext-diff HEAD",
-		"git log --textconv",
-		"git diff -- internal/policy/policy_test.go | sh",
-		"git diff -- internal/policy/policy_test.go || tail -80",
-		"git diff -- internal/policy/policy_test.go | tail -80 > out.txt",
-		"git diff --output=out.patch | tail -80",
-		"git show HEAD:internal/app/config_file.go | sed -i '300,459p'",
-		"git show HEAD:internal/app/config_file.go | sed -n '300,459w out.txt'",
-		"git status --short && git branch -D feature",
-		"cd /Users/goranka/Engineer/ai/dsk/whale-review-command && git diff | tail -80",
-		"rg --pre ./danger pattern",
-		"date -s now",
-		"date -f dates.txt",
-		"env",
-		"printenv",
-		"go test -c ./pkg",
-		"go test -exec ./wrapper ./pkg",
-		"go test -toolexec ./wrapper ./pkg",
-		"go build ./cmd/whale",
-		"command -v go > out.txt",
-		"go test ./... > out.txt",
-		"go test ./... > out.txt 2>&1",
-		"go test ./... 2> out.txt",
-		"go test ./... '2>&1'",
-		"go test ./...\nrm -rf /tmp/x",
-	} {
+	for _, command := range []string{"rm file", "git push origin main", "curl https://example.com"} {
 		decision := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`})
-		if !decision.Allow || !decision.RequiresApproval || decision.Code != "approval_required" {
-			t.Fatalf("expected approval_required for %q: %+v", command, decision)
+		if !decision.Allow || !decision.RequiresApproval || decision.Code != "permission_required" {
+			t.Fatalf("expected approval for %q: %+v", command, decision)
 		}
-	}
-}
-
-func TestDefaultToolPolicyNeverSkipsApprovalForMutatingTools(t *testing.T) {
-	p := DefaultToolPolicy{Mode: ApprovalModeNever}
-	tests := []struct {
-		name string
-		spec core.ToolSpec
-		call core.ToolCall
-	}{
-		{
-			name: "write",
-			spec: core.ToolSpec{Name: "write"},
-			call: core.ToolCall{Name: "write", Input: `{"file_path":"a.txt","content":"x"}`},
-		},
-		{
-			name: "apply_patch",
-			spec: core.ToolSpec{Name: "apply_patch"},
-			call: core.ToolCall{Name: "apply_patch", Input: `{"patch":"*** Begin Patch\n*** End Patch\n"}`},
-		},
-		{
-			name: "shell_run",
-			spec: core.ToolSpec{Name: "shell_run"},
-			call: core.ToolCall{Name: "shell_run", Input: `{"command":"go test ./..."}`},
-		},
-		{
-			name: "mcp",
-			spec: core.ToolSpec{Name: "mcp__github__create_issue"},
-			call: core.ToolCall{Name: "mcp__github__create_issue", Input: `{}`},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			decision := p.Decide(tc.spec, tc.call)
-			if !decision.Allow || decision.RequiresApproval || decision.Code != "auto_allow" {
-				t.Fatalf("decision: %+v", decision)
-			}
-		})
-	}
-}
-
-func TestDefaultToolPolicyNeverStillHonorsDenyPrefixes(t *testing.T) {
-	p := DefaultToolPolicy{
-		Mode:         ApprovalModeNever,
-		DenyPrefixes: []string{"rm -rf"},
 	}
 	for _, command := range []string{
 		"rm -rf /tmp/x",
-		"rm -rf /tmp/x\necho done",
+		"rm -fr /tmp/x",
+		"rm -r -f /tmp/x",
+		"rm -R dir",
+		"git status\nrm -rf /tmp/x",
 		"echo before\nrm -rf /tmp/x",
 	} {
 		decision := p.Decide(
 			core.ToolSpec{Name: "shell_run"},
 			core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`},
 		)
-		if decision.Allow || decision.Code != "policy_denied" || decision.MatchedRule != "rm -rf" {
-			t.Fatalf("expected deny prefix for %q, got %+v", command, decision)
+		if decision.Allow || decision.Code != "permission_denied" {
+			t.Fatalf("expected deny for %q, got %+v", command, decision)
 		}
 	}
 }
@@ -412,21 +269,21 @@ func TestShellCommandFromInput(t *testing.T) {
 }
 
 func TestDefaultToolPolicyRequiresApprovalForMutatingCapability(t *testing.T) {
-	decision := DefaultToolPolicy{Mode: ApprovalModeOnRequest}.Decide(
+	decision := DefaultToolPolicy{}.Decide(
 		core.ToolSpec{Name: "remember", Capabilities: []string{"mutates_state"}},
 		core.ToolCall{Name: "remember", Input: `{}`},
 	)
-	if !decision.Allow || !decision.RequiresApproval || decision.Code != "approval_required" {
+	if !decision.Allow || !decision.RequiresApproval || decision.Code != "permission_required" {
 		t.Fatalf("decision: %+v", decision)
 	}
 }
 
-func TestDefaultToolPolicyNeverAllowsMutatingCapability(t *testing.T) {
-	decision := DefaultToolPolicy{Mode: ApprovalModeNever}.Decide(
+func TestRulePolicyAllowDefaultAllowsMutatingCapability(t *testing.T) {
+	decision := RulePolicy{Default: PermissionAllow}.Decide(
 		core.ToolSpec{Name: "remember", Capabilities: []string{"mutates_state"}},
 		core.ToolCall{Name: "remember", Input: `{}`},
 	)
-	if !decision.Allow || decision.RequiresApproval || decision.Code != "auto_allow" {
+	if !decision.Allow || decision.RequiresApproval || decision.Code != "permission_allow" {
 		t.Fatalf("decision: %+v", decision)
 	}
 }

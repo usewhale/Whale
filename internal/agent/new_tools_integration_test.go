@@ -84,7 +84,7 @@ func TestAgentE2ENewToolsFlow(t *testing.T) {
 		provider,
 		store,
 		agent.NewToolRegistry(toolset.Tools()),
-		agent.WithToolPolicy(agent.DefaultToolPolicy{Mode: agent.ApprovalModeNever}),
+		agent.WithToolPolicy(agent.RulePolicy{Default: agent.PermissionAllow}),
 		agent.WithSessionsDir(sessionsDir),
 	)
 

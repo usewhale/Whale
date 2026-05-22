@@ -12,7 +12,6 @@ import (
 	"sync"
 
 	"github.com/usewhale/whale/internal/core"
-	"github.com/usewhale/whale/internal/policy/shellrisk"
 )
 
 type PermissionAction string
@@ -22,24 +21,6 @@ const (
 	PermissionAsk   PermissionAction = "ask"
 	PermissionDeny  PermissionAction = "deny"
 )
-
-type ApprovalMode string
-
-const (
-	ApprovalModeOnRequest ApprovalMode = "on-request"
-	ApprovalModeNever     ApprovalMode = "never"
-)
-
-func ParseApprovalMode(v string) (ApprovalMode, error) {
-	switch strings.TrimSpace(strings.ToLower(v)) {
-	case "", "on-request", "on_request":
-		return ApprovalModeOnRequest, nil
-	case "never", "never-ask", "never_ask":
-		return ApprovalModeNever, nil
-	default:
-		return "", fmt.Errorf("invalid approval mode: %s", v)
-	}
-}
 
 func ParsePermissionAction(v string) (PermissionAction, error) {
 	switch strings.TrimSpace(strings.ToLower(v)) {
@@ -60,6 +41,17 @@ type PermissionRule struct {
 	Action     PermissionAction
 }
 
+type PermissionConfig struct {
+	Read              map[string]string
+	Edit              map[string]string
+	Shell             map[string]string
+	ExternalDirectory map[string]string
+	MCP               map[string]string
+	Memory            map[string]string
+	Task              map[string]string
+	MutatingTool      map[string]string
+}
+
 type RulePolicy struct {
 	Default       PermissionAction
 	Rules         []PermissionRule
@@ -70,10 +62,6 @@ type DefaultToolPolicy struct {
 	Default       PermissionAction
 	Rules         []PermissionRule
 	WorkspaceRoot string
-
-	Mode          ApprovalMode
-	AllowPrefixes []string
-	DenyPrefixes  []string
 }
 
 type PolicyDecision struct {
@@ -149,24 +137,66 @@ func (p ReadOnlyTurnPolicy) Decide(spec core.ToolSpec, call core.ToolCall) Polic
 }
 
 func DefaultRules() []PermissionRule {
-	return []PermissionRule{
-		{Permission: "read", Pattern: "*", Action: PermissionAllow},
-		{Permission: "read", Pattern: "*.env", Action: PermissionAsk},
-		{Permission: "read", Pattern: "*.env.*", Action: PermissionAsk},
-		{Permission: "read", Pattern: "*.env.example", Action: PermissionAllow},
-		{Permission: "edit", Pattern: "*", Action: PermissionAsk},
-		{Permission: "shell", Pattern: "*", Action: PermissionAllow},
-		{Permission: "shell", Pattern: "curl *", Action: PermissionAsk},
-		{Permission: "shell", Pattern: "wget *", Action: PermissionAsk},
-		{Permission: "shell", Pattern: "npm install*", Action: PermissionAsk},
-		{Permission: "shell", Pattern: "pnpm install*", Action: PermissionAsk},
-		{Permission: "shell", Pattern: "yarn add*", Action: PermissionAsk},
-		{Permission: "shell", Pattern: "git push*", Action: PermissionAsk},
-		{Permission: "shell", Pattern: "gh pr merge*", Action: PermissionAsk},
-		{Permission: "shell", Pattern: "rm -rf*", Action: PermissionDeny},
-		{Permission: "external_directory", Pattern: "*", Action: PermissionAsk},
-		{Permission: "mcp", Pattern: "*", Action: PermissionAsk},
-		{Permission: "memory", Pattern: "*", Action: PermissionAsk},
+	rules, err := RulesFromConfig(DefaultPermissionConfig())
+	if err != nil {
+		panic(fmt.Sprintf("invalid default permission config: %v", err))
+	}
+	return rules
+}
+
+func DefaultPermissionConfig() PermissionConfig {
+	return PermissionConfig{
+		Read: map[string]string{
+			"*":             "allow",
+			"*.env":         "ask",
+			"*.env.*":       "ask",
+			"*.env.example": "allow",
+		},
+		Edit: map[string]string{
+			"*": "ask",
+		},
+		Shell: map[string]string{
+			"*":                       "allow",
+			"rm *":                    "ask",
+			"rm -r*":                  "deny",
+			"rm -R*":                  "deny",
+			"rm -f -r*":               "deny",
+			"rm -r -f*":               "deny",
+			"rm -fr*":                 "deny",
+			"rm -rf*":                 "deny",
+			"rm --recursive*":         "deny",
+			"rm --force -r*":          "deny",
+			"rm --force -R*":          "deny",
+			"rm --force --recursive*": "deny",
+			"rm --recursive --force*": "deny",
+			"curl *":                  "ask",
+			"wget *":                  "ask",
+			"npm install*":            "ask",
+			"pnpm install*":           "ask",
+			"yarn add*":               "ask",
+			"git reset*":              "ask",
+			"git restore*":            "ask",
+			"git rm*":                 "ask",
+			"git clean*":              "ask",
+			"git push*":               "ask",
+			"gh pr merge*":            "ask",
+			"sudo *":                  "ask",
+			"dd *":                    "ask",
+			"mkfs*":                   "deny",
+			"diskutil erase*":         "deny",
+		},
+		ExternalDirectory: map[string]string{
+			"*": "ask",
+		},
+		MCP: map[string]string{
+			"*": "ask",
+		},
+		Memory: map[string]string{
+			"*": "ask",
+		},
+		MutatingTool: map[string]string{
+			"*": "ask",
+		},
 	}
 }
 
@@ -176,7 +206,6 @@ func (p RulePolicy) Decide(spec core.ToolSpec, call core.ToolCall) PolicyDecisio
 		requests = []permissionRequest{{Kind: permissionKind(spec.Name), Pattern: permissionTarget(call)}}
 	}
 	var ask *PermissionRule
-	var pending *PolicyDecision
 	for _, req := range requests {
 		rule := p.evaluate(req.Kind, req.Pattern)
 		switch rule.Action {
@@ -191,25 +220,7 @@ func (p RulePolicy) Decide(spec core.ToolSpec, call core.ToolCall) PolicyDecisio
 		case PermissionAsk:
 			copy := rule
 			ask = &copy
-		case PermissionAllow:
-			if req.Kind == "shell" && shellWildcardAllow(rule) {
-				decision := shellrisk.Classify(req.Pattern)
-				if decision.Allow && decision.Level == shellrisk.LevelSafeRead {
-					continue
-				}
-				// Defer the risk-classifier decision instead of returning
-				// immediately so later requests (e.g. external_directory)
-				// can still surface a deny that must take precedence.
-				code := "approval_required"
-				if decision.Level == shellrisk.LevelBoundedWrite {
-					code = shellrisk.CodeBoundedWrite
-				}
-				pending = &PolicyDecision{Allow: true, RequiresApproval: true, Reason: decision.Reason, Code: code, Phase: "needs_approval", MatchedRule: ruleLabel(rule)}
-			}
 		}
-	}
-	if pending != nil {
-		return *pending
 	}
 	if ask != nil {
 		return PolicyDecision{
@@ -224,80 +235,14 @@ func (p RulePolicy) Decide(spec core.ToolSpec, call core.ToolCall) PolicyDecisio
 	return PolicyDecision{Allow: true, Code: "permission_allow", Phase: "allowed"}
 }
 
-func shellWildcardAllow(rule PermissionRule) bool {
-	return strings.TrimSpace(rule.Pattern) == "*"
-}
-
 func (p DefaultToolPolicy) Decide(spec core.ToolSpec, call core.ToolCall) PolicyDecision {
-	if p.Mode != "" || (p.Default == "" && len(p.Rules) == 0 && strings.TrimSpace(p.WorkspaceRoot) == "") {
-		return p.legacyDecide(spec, call)
-	}
 	rules := append([]PermissionRule{}, DefaultRules()...)
 	rules = append(rules, p.Rules...)
-	for _, prefix := range p.AllowPrefixes {
-		if strings.TrimSpace(prefix) != "" {
-			rules = append(rules, PermissionRule{Permission: "shell", Pattern: strings.TrimSpace(prefix) + "*", Action: PermissionAllow})
-		}
-	}
-	for _, prefix := range p.DenyPrefixes {
-		if strings.TrimSpace(prefix) != "" {
-			rules = append(rules, PermissionRule{Permission: "shell", Pattern: strings.TrimSpace(prefix) + "*", Action: PermissionDeny})
-		}
-	}
 	def := p.Default
 	if def == "" {
 		def = PermissionAllow
 	}
-	if p.Mode == ApprovalModeNever {
-		def = PermissionAllow
-	}
 	return RulePolicy{Default: def, Rules: rules, WorkspaceRoot: p.WorkspaceRoot}.Decide(spec, call)
-}
-
-func (p DefaultToolPolicy) legacyDecide(spec core.ToolSpec, call core.ToolCall) PolicyDecision {
-	if p.Mode == "" {
-		p.Mode = ApprovalModeOnRequest
-	}
-	if spec.Name == "shell_run" {
-		cmd := shellCommandFromInput(call.Input)
-		for _, deny := range p.DenyPrefixes {
-			if hasDenyCommandPrefix(cmd, deny) {
-				return PolicyDecision{Allow: false, Reason: "command blocked by deny prefix", Code: "policy_denied", Phase: "denied", MatchedRule: deny}
-			}
-		}
-		for _, allow := range p.AllowPrefixes {
-			if hasAllowCommandPrefix(cmd, allow) {
-				return PolicyDecision{Allow: true, RequiresApproval: false, Code: "allow_prefix", Phase: "allowed", MatchedRule: allow}
-			}
-		}
-	}
-	if p.Mode == ApprovalModeNever {
-		return PolicyDecision{Allow: true, Code: "auto_allow", Phase: "allowed"}
-	}
-	if core.IsReadOnlyToolCall(spec, call) {
-		return PolicyDecision{Allow: true, Code: "read_only", Phase: "allowed"}
-	}
-	if spec.Name == "shell_run" {
-		decision := shellrisk.Classify(shellCommandFromInput(call.Input))
-		if decision.Allow {
-			return PolicyDecision{Allow: true, Code: "shell_auto_allow", Phase: "allowed"}
-		}
-		if decision.Level == shellrisk.LevelBoundedWrite {
-			return PolicyDecision{Allow: true, RequiresApproval: true, Reason: decision.Reason, Code: shellrisk.CodeBoundedWrite, Phase: "needs_approval"}
-		}
-	}
-	if hasCapability(spec, "mutates_state") {
-		return PolicyDecision{Allow: true, RequiresApproval: true, Reason: "tool mutates persistent state", Code: "approval_required", Phase: "needs_approval"}
-	}
-	switch spec.Name {
-	case "edit", "write", "apply_patch", "shell_run":
-	default:
-		if strings.HasPrefix(spec.Name, "mcp__") {
-			return PolicyDecision{Allow: true, RequiresApproval: true, Reason: "MCP tool requires approval", Code: "approval_required", Phase: "needs_approval"}
-		}
-		return PolicyDecision{Allow: true, Code: "non_mutating_default", Phase: "allowed"}
-	}
-	return PolicyDecision{Allow: true, RequiresApproval: true, Reason: "tool requires approval", Code: "approval_required", Phase: "needs_approval"}
 }
 
 type permissionRequest struct {
@@ -308,6 +253,14 @@ type permissionRequest struct {
 func (p RulePolicy) requestsFor(spec core.ToolSpec, call core.ToolCall) []permissionRequest {
 	kind := permissionKind(spec.Name)
 	target := permissionTarget(call)
+	// A custom or plugin tool that advertises a state-mutating capability but
+	// whose name resolves to no built-in permission category is governed by the
+	// mutating_tool permission kind. Do not also evaluate the raw tool name, or
+	// restrictive global defaults would make [permissions.mutating_tool] allow
+	// rules ineffective.
+	if !isMappedPermissionKind(kind) && hasCapability(spec, "mutates_state") {
+		return []permissionRequest{{Kind: "mutating_tool", Pattern: spec.Name}}
+	}
 	requests := []permissionRequest{{Kind: kind, Pattern: target}}
 	switch spec.Name {
 	case "shell_run":
@@ -334,6 +287,30 @@ func (p RulePolicy) requestsFor(spec core.ToolSpec, call core.ToolCall) []permis
 		}
 	}
 	return requests
+}
+
+// isMappedPermissionKind reports whether kind is one of the built-in permission
+// categories permissionKind resolves known tools to, as opposed to a raw,
+// unmapped custom or plugin tool name.
+func isMappedPermissionKind(kind string) bool {
+	switch kind {
+	case "read", "edit", "shell", "memory", "task", "mcp":
+		return true
+	default:
+		return false
+	}
+}
+
+// hasCapability reports whether spec advertises the given capability,
+// case-insensitively.
+func hasCapability(spec core.ToolSpec, capability string) bool {
+	want := strings.TrimSpace(strings.ToLower(capability))
+	for _, got := range spec.Capabilities {
+		if strings.TrimSpace(strings.ToLower(got)) == want {
+			return true
+		}
+	}
+	return false
 }
 
 // patchEditPaths extracts the file paths an apply_patch call modifies from its
@@ -368,16 +345,8 @@ func (p RulePolicy) evaluate(permission, pattern string) PermissionRule {
 	if fallback.Action == "" {
 		fallback.Action = PermissionAllow
 	}
-	normalizeShell := permission == "shell"
-	var shellSegments []string
-	if normalizeShell {
-		// Shell commands are matched line by line. Newlines are kept as
-		// segment boundaries rather than collapsed into spaces so a benign
-		// prefix on the first line cannot carry an allow rule across a
-		// newline onto a second command, and a deny rule on a later line is
-		// still caught. Intra-line whitespace is still collapsed so legacy
-		// prefixes match regardless of spacing ("rm   -rf x" -> "rm -rf x").
-		shellSegments = normalizeShellSegments(pattern)
+	if permission == "shell" {
+		return p.evaluateShell(pattern, fallback)
 	}
 	for i := len(p.Rules) - 1; i >= 0; i-- {
 		rule := p.Rules[i]
@@ -387,17 +356,59 @@ func (p RulePolicy) evaluate(permission, pattern string) PermissionRule {
 		if !wildcardMatch(rule.Permission, permission) {
 			continue
 		}
-		if normalizeShell {
-			if shellRuleMatches(rule, shellSegments) {
-				return rule
-			}
-			continue
-		}
 		if wildcardMatch(rule.Pattern, pattern) {
 			return rule
 		}
 	}
 	return fallback
+}
+
+func (p RulePolicy) evaluateShell(command string, fallback PermissionRule) PermissionRule {
+	// Each shell segment keeps normal last-match-wins rule evaluation. The
+	// command-level result then preserves deny precedence across segments so an
+	// approval prompt cannot mask a separate denied command.
+	segments := normalizeShellSegments(command)
+	var ask *PermissionRule
+	var allow *PermissionRule
+	for _, segment := range segments {
+		rule, matched := p.evaluateShellSegment(segment)
+		if !matched {
+			rule = fallback
+		}
+		switch rule.Action {
+		case PermissionDeny:
+			return rule
+		case PermissionAsk:
+			copy := rule
+			ask = &copy
+		case PermissionAllow:
+			copy := rule
+			allow = &copy
+		}
+	}
+	if ask != nil {
+		return *ask
+	}
+	if allow != nil {
+		return *allow
+	}
+	return fallback
+}
+
+func (p RulePolicy) evaluateShellSegment(segment string) (PermissionRule, bool) {
+	for i := len(p.Rules) - 1; i >= 0; i-- {
+		rule := p.Rules[i]
+		if rule.Action == "" {
+			continue
+		}
+		if !wildcardMatch(rule.Permission, "shell") {
+			continue
+		}
+		if shellSegmentRuleMatches(rule, segment) {
+			return rule, true
+		}
+	}
+	return PermissionRule{}, false
 }
 
 // normalizeShellWhitespace collapses runs of intra-line whitespace to single
@@ -406,17 +417,15 @@ func normalizeShellWhitespace(v string) string {
 	return strings.Join(strings.Fields(v), " ")
 }
 
-// normalizeShellSegments splits a shell command on newline boundaries and
-// returns one whitespace-normalized segment per non-empty line. Splitting
-// before normalizing keeps newlines from being folded into spaces, so rule
-// matching cannot span two commands written on separate lines. An empty or
-// whitespace-only command yields a single empty segment.
+// normalizeShellSegments splits a shell command on common shell control
+// boundaries and returns one whitespace-normalized segment per non-empty part.
+// Splitting before normalizing keeps separators from being folded into spaces,
+// so rule matching cannot span two commands. An empty or whitespace-only
+// command yields a single empty segment.
 func normalizeShellSegments(command string) []string {
 	var out []string
-	for _, line := range strings.FieldsFunc(command, func(r rune) bool {
-		return r == '\n' || r == '\r'
-	}) {
-		if seg := normalizeShellWhitespace(line); seg != "" {
+	for _, part := range expandShellRuleSegments(command) {
+		if seg := normalizeShellSegmentForRule(part); seg != "" {
 			out = append(out, seg)
 		}
 	}
@@ -426,26 +435,175 @@ func normalizeShellSegments(command string) []string {
 	return out
 }
 
-// shellRuleMatches reports whether a shell rule applies to a command already
-// split into normalized newline segments. The "*" rule matches any command. A
-// non-"*" allow rule never matches a multi-line command, mirroring the legacy
-// allow_shell_prefixes behavior that rejected commands containing newlines;
-// ask and deny rules match when any single line matches, so a dangerous
-// command smuggled onto a later line is still caught.
-func shellRuleMatches(rule PermissionRule, segments []string) bool {
+func normalizeShellSegmentForRule(segment string) string {
+	var fields []string
+	var current strings.Builder
+	var quote rune
+	escaped := false
+	runes := []rune(segment)
+
+	flush := func() {
+		if current.Len() == 0 {
+			return
+		}
+		fields = append(fields, current.String())
+		current.Reset()
+	}
+
+	for _, r := range runes {
+		if quote == '\'' {
+			if r == '\'' {
+				quote = 0
+			} else {
+				current.WriteRune(r)
+			}
+			continue
+		}
+		if escaped {
+			escaped = false
+			current.WriteRune(r)
+			continue
+		}
+		switch r {
+		case '\\':
+			if quote == '"' || quote == 0 {
+				escaped = true
+				continue
+			}
+			current.WriteRune(r)
+		case '"':
+			if quote == 0 {
+				quote = '"'
+			} else if quote == '"' {
+				quote = 0
+			} else {
+				current.WriteRune(r)
+			}
+		case '\'':
+			if quote == 0 {
+				quote = '\''
+			} else {
+				current.WriteRune(r)
+			}
+		case ' ', '\t':
+			if quote == 0 {
+				flush()
+			} else {
+				current.WriteRune(r)
+			}
+		default:
+			current.WriteRune(r)
+		}
+	}
+	flush()
+	return strings.Join(fields, " ")
+}
+
+func expandShellRuleSegments(command string) []string {
+	var out []string
+	for _, part := range splitShellRuleSegments(command) {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func splitShellRuleSegments(command string) []string {
+	var parts []string
+	var current strings.Builder
+	var quote rune
+	escaped := false
+	runes := []rune(command)
+
+	flush := func() {
+		part := strings.TrimSpace(current.String())
+		current.Reset()
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if quote == '\'' {
+			if r == '\'' {
+				quote = 0
+			}
+			current.WriteRune(r)
+			continue
+		}
+		if escaped {
+			escaped = false
+			current.WriteRune(r)
+			continue
+		}
+		switch r {
+		case '\\':
+			if quote == '"' {
+				escaped = true
+			}
+			current.WriteRune(r)
+		case '"':
+			if quote == 0 {
+				quote = '"'
+			} else if quote == '"' {
+				quote = 0
+			}
+			current.WriteRune(r)
+		case '\'':
+			if quote == 0 {
+				quote = '\''
+			}
+			current.WriteRune(r)
+		case '\n', '\r', ';', '|':
+			if quote != 0 {
+				current.WriteRune(r)
+				continue
+			}
+			flush()
+			if r == '|' && i+1 < len(runes) && runes[i+1] == r {
+				i++
+			}
+		case '&':
+			if quote != 0 {
+				current.WriteRune(r)
+				continue
+			}
+			if i+1 < len(runes) && runes[i+1] == '&' {
+				flush()
+				i++
+				continue
+			}
+			if previousNonSpaceRune(runes, i) == '>' || previousNonSpaceRune(runes, i) == '<' {
+				current.WriteRune(r)
+				continue
+			}
+			flush()
+		default:
+			current.WriteRune(r)
+		}
+	}
+	flush()
+	return parts
+}
+
+func previousNonSpaceRune(runes []rune, before int) rune {
+	for i := before - 1; i >= 0; i-- {
+		if runes[i] != ' ' && runes[i] != '\t' {
+			return runes[i]
+		}
+	}
+	return 0
+}
+
+func shellSegmentRuleMatches(rule PermissionRule, segment string) bool {
 	pattern := normalizeShellWhitespace(rule.Pattern)
 	if pattern == "*" {
 		return true
 	}
-	if rule.Action == PermissionAllow && len(segments) > 1 {
-		return false
-	}
-	for _, seg := range segments {
-		if wildcardMatch(pattern, seg) {
-			return true
-		}
-	}
-	return false
+	return wildcardMatch(pattern, segment)
 }
 
 func (p RulePolicy) externalDirs(command string) []string {
@@ -454,31 +612,18 @@ func (p RulePolicy) externalDirs(command string) []string {
 		return nil
 	}
 	var out []string
-	for _, token := range strings.Fields(command) {
-		token = strings.Trim(token, `"'`)
-		// Split on shell redirection operators so a path glued to a
-		// redirection without a separating space (e.g. ">/etc/out",
-		// "2>>/var/log/x", "<~/secret", "cat foo>/etc/x") is still scanned
-		// instead of being mistaken for a workspace-relative token.
-		for _, frag := range strings.FieldsFunc(token, isRedirectionRune) {
-			frag = strings.Trim(frag, `"'`)
-			if frag == "" {
+	for _, segment := range expandShellRuleSegments(command) {
+		argv := strings.Fields(segment)
+		if len(argv) == 0 || !shellFileCommand(argv[0]) {
+			continue
+		}
+		for _, arg := range argv[1:] {
+			arg = strings.Trim(arg, `"'`)
+			arg = shellPathArgBeforeRedirection(arg)
+			if !shellFileCommandPathArg(arg) {
 				continue
 			}
-			// A flag token still carries a path in its value (e.g.
-			// "-coverprofile=/etc/out", "--output=/etc/out"); extract the
-			// value before discarding the option itself.
-			if strings.HasPrefix(frag, "-") {
-				idx := strings.IndexByte(frag, '=')
-				if idx < 0 {
-					continue
-				}
-				frag = strings.Trim(frag[idx+1:], `"'`)
-			}
-			if frag == "" || strings.HasPrefix(frag, "-") || strings.Contains(frag, "://") {
-				continue
-			}
-			clean := p.resolveShellPathToken(root, frag)
+			clean := p.resolveShellPathToken(root, arg)
 			if clean == "" || pathInside(clean, root) || strings.HasPrefix(clean, "/tmp/") || strings.HasPrefix(clean, "/private/tmp/") {
 				continue
 			}
@@ -488,12 +633,34 @@ func (p RulePolicy) externalDirs(command string) []string {
 	return uniqueStrings(out)
 }
 
-// isRedirectionRune reports whether r is a shell redirection operator
-// character. In unquoted command text these characters always introduce a
-// redirection (or process substitution), so splitting on them isolates the
-// redirected path even when no whitespace separates it from the operator.
-func isRedirectionRune(r rune) bool {
-	return r == '<' || r == '>'
+func shellFileCommand(command string) bool {
+	// Normalize with filepath.Base so a tool invoked by path, e.g. /bin/cat,
+	// still matches and its outside-workspace operands are checked against the
+	// external_directory rules.
+	switch strings.ToLower(filepath.Base(strings.TrimSpace(command))) {
+	case "cat", "ls", "cp", "mv", "rm", "mkdir", "rmdir", "touch", "chmod", "chown", "readlink", "realpath", "stat", "du", "head", "tail", "wc":
+		return true
+	default:
+		return false
+	}
+}
+
+func shellFileCommandPathArg(arg string) bool {
+	if arg == "" || strings.HasPrefix(arg, "-") || strings.Contains(arg, "://") {
+		return false
+	}
+	if strings.ContainsAny(arg, "<>$`") || strings.Contains(arg, "$(") || strings.Contains(arg, "${") {
+		return false
+	}
+	return true
+}
+
+func shellPathArgBeforeRedirection(arg string) string {
+	idx := strings.IndexAny(arg, "<>")
+	if idx < 0 {
+		return arg
+	}
+	return arg[:idx]
 }
 
 // externalDirForToken returns the directory a shell path token should be
@@ -600,6 +767,31 @@ func RulesFromMap(permission string, rules map[string]string) ([]PermissionRule,
 			return nil, err
 		}
 		out = append(out, PermissionRule{Permission: permission, Pattern: expandHome(pattern), Action: action})
+	}
+	return out, nil
+}
+
+func RulesFromConfig(config PermissionConfig) ([]PermissionRule, error) {
+	tables := []struct {
+		name  string
+		rules map[string]string
+	}{
+		{name: "read", rules: config.Read},
+		{name: "edit", rules: config.Edit},
+		{name: "shell", rules: config.Shell},
+		{name: "external_directory", rules: config.ExternalDirectory},
+		{name: "mcp", rules: config.MCP},
+		{name: "memory", rules: config.Memory},
+		{name: "task", rules: config.Task},
+		{name: "mutating_tool", rules: config.MutatingTool},
+	}
+	var out []PermissionRule
+	for _, table := range tables {
+		rules, err := RulesFromMap(table.name, table.rules)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", table.name, err)
+		}
+		out = append(out, rules...)
 	}
 	return out, nil
 }
@@ -761,20 +953,6 @@ func hasAllowCommandPrefix(command, rule string) bool {
 	return hasSingleLineCommandPrefix(command, rule)
 }
 
-func hasDenyCommandPrefix(command, rule string) bool {
-	if strings.ContainsAny(rule, "\n\r") {
-		return false
-	}
-	for _, segment := range strings.FieldsFunc(command, func(r rune) bool {
-		return r == '\n' || r == '\r'
-	}) {
-		if hasSingleLineCommandPrefix(segment, rule) {
-			return true
-		}
-	}
-	return false
-}
-
 func hasSingleLineCommandPrefix(command, rule string) bool {
 	command = normalizeCommandPrefix(command)
 	rule = normalizeCommandPrefix(rule)
@@ -782,19 +960,6 @@ func hasSingleLineCommandPrefix(command, rule string) bool {
 		return false
 	}
 	return command == rule || strings.HasPrefix(command, rule+" ")
-}
-
-func hasCapability(spec core.ToolSpec, capability string) bool {
-	want := strings.TrimSpace(strings.ToLower(capability))
-	if want == "" {
-		return false
-	}
-	for _, got := range spec.Capabilities {
-		if strings.TrimSpace(strings.ToLower(got)) == want {
-			return true
-		}
-	}
-	return false
 }
 
 func normalizeCommandPrefix(v string) string {

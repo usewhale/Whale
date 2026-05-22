@@ -53,10 +53,7 @@ type FilePermissionsConfig struct {
 	MCP               map[string]string `toml:"mcp,omitempty"`
 	Memory            map[string]string `toml:"memory,omitempty"`
 	Task              map[string]string `toml:"task,omitempty"`
-
-	Mode               string   `toml:"mode,omitempty"`
-	AllowShellPrefixes []string `toml:"allow_shell_prefixes,omitempty"`
-	DenyShellPrefixes  []string `toml:"deny_shell_prefixes,omitempty"`
+	MutatingTool      map[string]string `toml:"mutating_tool,omitempty"`
 }
 
 type FileAPIConfig struct {
@@ -163,72 +160,36 @@ func LoadConfigFile(path string) (FileConfig, bool, error) {
 		return FileConfig{}, false, fmt.Errorf("read config %s: %w", path, err)
 	}
 	var cfg FileConfig
-	md, err := toml.Decode(string(b), &cfg)
+	meta, err := toml.Decode(string(b), &cfg)
 	if err != nil {
 		return FileConfig{}, false, fmt.Errorf("parse config %s: %w", path, err)
 	}
-	if err := migrateLegacyPermissionKeys(md, &cfg); err != nil {
-		return FileConfig{}, false, fmt.Errorf("parse config %s: %w", path, err)
+	if err := checkRemovedConfigKeys(path, meta); err != nil {
+		return FileConfig{}, false, err
 	}
 	return cfg, true, nil
 }
 
-func migrateLegacyPermissionKeys(md toml.MetaData, cfg *FileConfig) error {
-	perms := &cfg.Permissions
-	if md.IsDefined("permissions", "mode") {
-		mode, err := policy.ParseApprovalMode(perms.Mode)
-		if err != nil {
-			return fmt.Errorf("invalid legacy permissions.mode: %w", err)
+// removedConfigKeys maps pre-v0.1.9 permission keys, which no longer have a
+// migration, to the modern setting that replaces them. Both the [permissions]
+// table form and the original top-level form are listed.
+var removedConfigKeys = map[string]string{
+	"permissions.mode":                 "set permissions.default and the per-tool [permissions.*] tables instead",
+	"permissions.allow_shell_prefixes": "add [permissions.shell] entries with an \"allow\" action instead",
+	"permissions.deny_shell_prefixes":  "add [permissions.shell] entries with a \"deny\" action instead",
+	"allow_shell_prefixes":             "add [permissions.shell] entries with an \"allow\" action instead",
+	"deny_shell_prefixes":              "add [permissions.shell] entries with a \"deny\" action instead",
+}
+
+// checkRemovedConfigKeys rejects configs that still carry legacy permission
+// keys. They decode without error but are silently dropped, so a user relying
+// on a legacy deny would lose that protection without warning; failing loudly
+// forces an explicit migration instead.
+func checkRemovedConfigKeys(path string, meta toml.MetaData) error {
+	for _, key := range meta.Undecoded() {
+		if hint, ok := removedConfigKeys[key.String()]; ok {
+			return fmt.Errorf("config %s uses removed permission key %q; %s", path, key.String(), hint)
 		}
-		switch mode {
-		case policy.ApprovalModeNever:
-			if strings.TrimSpace(perms.Default) == "" {
-				perms.Default = string(policy.PermissionAllow)
-			}
-			if perms.AutoAccept == nil {
-				enabled := true
-				perms.AutoAccept = &enabled
-			}
-		case policy.ApprovalModeOnRequest:
-			if strings.TrimSpace(perms.Default) == "" {
-				// Legacy on-request auto-allowed read-only/non-mutating tools
-				// and only prompted for writes, shell, and MCP. Keeping the
-				// global default at allow reproduces that: DefaultRules routes
-				// edit/shell/MCP/memory through ask while leaving unrelated
-				// tools (web search, todos, request_user_input) un-prompted.
-				perms.Default = string(policy.PermissionAllow)
-			}
-		}
-		perms.Mode = ""
-	}
-	if md.IsDefined("permissions", "allow_shell_prefixes") {
-		if perms.Shell == nil {
-			perms.Shell = map[string]string{}
-		}
-		for _, prefix := range trimList(perms.AllowShellPrefixes) {
-			// Legacy allow_shell_prefixes matched on command-token
-			// boundaries: the prefix "git status" allowed "git status" and
-			// "git status ..." but never "git statusfoo". A bare "<prefix>*"
-			// glob would lose that boundary and auto-allow "git statusfoo;
-			// rm -rf .", so emit the exact command plus a space-delimited
-			// glob to preserve the original semantics.
-			perms.Shell[prefix] = string(policy.PermissionAllow)
-			perms.Shell[prefix+" *"] = string(policy.PermissionAllow)
-		}
-		perms.AllowShellPrefixes = nil
-	}
-	if md.IsDefined("permissions", "deny_shell_prefixes") {
-		if perms.Shell == nil {
-			perms.Shell = map[string]string{}
-		}
-		for _, prefix := range trimList(perms.DenyShellPrefixes) {
-			// Mirror the allow-prefix migration above: emit the exact command
-			// plus a space-delimited glob so the original token-boundary
-			// semantics are preserved ("rm -rf" never blocks "rm -rfoo").
-			perms.Shell[prefix] = string(policy.PermissionDeny)
-			perms.Shell[prefix+" *"] = string(policy.PermissionDeny)
-		}
-		perms.DenyShellPrefixes = nil
 	}
 	return nil
 }
@@ -452,25 +413,20 @@ func applyPermissionsConfig(cfg *Config, file FilePermissionsConfig) error {
 	if file.AutoAccept != nil {
 		cfg.AutoAcceptPermissions = *file.AutoAccept
 	}
-	tables := []struct {
-		name  string
-		rules map[string]string
-	}{
-		{name: "read", rules: file.Read},
-		{name: "edit", rules: file.Edit},
-		{name: "shell", rules: file.Shell},
-		{name: "external_directory", rules: file.ExternalDirectory},
-		{name: "mcp", rules: file.MCP},
-		{name: "memory", rules: file.Memory},
-		{name: "task", rules: file.Task},
+	rules, err := policy.RulesFromConfig(policy.PermissionConfig{
+		Read:              file.Read,
+		Edit:              file.Edit,
+		Shell:             file.Shell,
+		ExternalDirectory: file.ExternalDirectory,
+		MCP:               file.MCP,
+		Memory:            file.Memory,
+		Task:              file.Task,
+		MutatingTool:      file.MutatingTool,
+	})
+	if err != nil {
+		return fmt.Errorf("invalid permissions: %w", err)
 	}
-	for _, table := range tables {
-		rules, err := policy.RulesFromMap(table.name, table.rules)
-		if err != nil {
-			return fmt.Errorf("invalid permissions.%s: %w", table.name, err)
-		}
-		cfg.PermissionRules = append(cfg.PermissionRules, rules...)
-	}
+	cfg.PermissionRules = append(cfg.PermissionRules, rules...)
 	return nil
 }
 

@@ -7,7 +7,7 @@ import (
 )
 
 func TestDefaultToolPolicyRequiresApprovalForMCPTools(t *testing.T) {
-	decision := DefaultToolPolicy{Mode: ApprovalModeOnRequest}.Decide(
+	decision := DefaultToolPolicy{}.Decide(
 		core.ToolSpec{Name: "mcp__github__create_issue"},
 		core.ToolCall{Name: "mcp__github__create_issue", Input: `{}`},
 	)
@@ -16,12 +16,12 @@ func TestDefaultToolPolicyRequiresApprovalForMCPTools(t *testing.T) {
 	}
 }
 
-func TestDefaultToolPolicyAllowsReadOnlyMCPTools(t *testing.T) {
-	decision := DefaultToolPolicy{Mode: ApprovalModeOnRequest}.Decide(
+func TestDefaultToolPolicyRequiresApprovalForReadOnlyMCPTools(t *testing.T) {
+	decision := DefaultToolPolicy{}.Decide(
 		core.ToolSpec{Name: "mcp__fs__read", ReadOnly: true},
 		core.ToolCall{Name: "mcp__fs__read", Input: `{}`},
 	)
-	if !decision.Allow || decision.RequiresApproval || decision.Code != "read_only" {
+	if !decision.Allow || !decision.RequiresApproval || decision.Code != "permission_required" {
 		t.Fatalf("decision: %+v", decision)
 	}
 }
