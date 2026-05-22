@@ -130,7 +130,7 @@ func RunScenario(ctx context.Context, spec ScenarioSpec) (*Run, error) {
 		provider,
 		store,
 		core.NewToolRegistry(toolset.Tools()),
-		agent.WithToolPolicy(policy.DefaultToolPolicy{Mode: policy.ApprovalModeNever}),
+		agent.WithToolPolicy(policy.RulePolicy{Default: policy.PermissionAllow}),
 		agent.WithRecoveryPolicy(agent.RecoveryPolicy{Enabled: false}),
 		agent.WithProjectMemory(false, 0, nil, root),
 		agent.WithSessionsDir(filepath.Join(root, ".sessions")),

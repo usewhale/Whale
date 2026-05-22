@@ -32,7 +32,7 @@ func (b *Toolset) editFile(_ context.Context, call core.ToolCall) (core.ToolResu
 		}
 		return marshalToolError(call, "read_failed", err.Error()), nil
 	}
-	before, lineEndings := normalizeLineEndings(string(data))
+	before, lineEndings := normalizeTextFileBytes(data)
 	if in.Search == "" {
 		return marshalToolError(call, "invalid_args", "search is required"), nil
 	}
@@ -49,7 +49,7 @@ func (b *Toolset) editFile(_ context.Context, call core.ToolCall) (core.ToolResu
 	} else {
 		after = strings.Replace(before, search, replace, 1)
 	}
-	if err := os.WriteFile(abs, []byte(restoreLineEndings(after, lineEndings)), 0o644); err != nil {
+	if err := os.WriteFile(abs, restoreTextFileBytes(after, lineEndings), 0o644); err != nil {
 		return marshalToolError(call, "write_failed", err.Error()), nil
 	}
 	metadata := fileDiffMetadata([]fileChangePreview{{path: in.FilePath, before: before, after: after}})
@@ -80,7 +80,7 @@ func (b *Toolset) previewEditFile(_ context.Context, call core.ToolCall) (map[st
 	if err != nil {
 		return nil, err
 	}
-	before, _ := normalizeLineEndings(string(data))
+	before, _ := normalizeTextFileBytes(data)
 	if in.Search == "" {
 		return nil, os.ErrInvalid
 	}

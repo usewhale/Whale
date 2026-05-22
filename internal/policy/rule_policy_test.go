@@ -68,9 +68,16 @@ func TestRulePolicyDefaultEditRequiresApproval(t *testing.T) {
 
 func TestRulePolicyExternalDirectory(t *testing.T) {
 	p := RulePolicy{Default: PermissionAllow, Rules: DefaultRules(), WorkspaceRoot: "/repo"}
-	got := p.Decide(core.ToolSpec{Name: "shell_run"}, core.ToolCall{Name: "shell_run", Input: `{"command":"cat /etc/hosts"}`})
-	if !got.Allow || !got.RequiresApproval || got.MatchedRule != "external_directory:*=ask" {
-		t.Fatalf("external dir decision = %+v, want external_directory approval", got)
+	for _, command := range []string{
+		"cat /etc/hosts",
+		"stat /etc/hosts",
+		"du -sh /etc",
+		"/bin/cat /etc/hosts",
+	} {
+		got := p.Decide(core.ToolSpec{Name: "shell_run"}, core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`})
+		if !got.Allow || !got.RequiresApproval || got.MatchedRule != "external_directory:*=ask" {
+			t.Fatalf("external dir decision for %q = %+v, want external_directory approval", command, got)
+		}
 	}
 }
 
@@ -110,24 +117,117 @@ func TestRulePolicyExternalDirectoryResolvesHomeAndParentRelativePaths(t *testin
 	}
 }
 
-func TestRulePolicyShellWildcardAllowStillUsesRiskClassifier(t *testing.T) {
-	p := RulePolicy{Default: PermissionAllow, Rules: DefaultRules()}
+func TestRulePolicyShellWildcardAllowOnlyUsesExplicitRules(t *testing.T) {
+	p := RulePolicy{Default: PermissionAllow, Rules: DefaultRules(), WorkspaceRoot: "/repo"}
 	spec := core.ToolSpec{Name: "shell_run"}
 
 	for _, command := range []string{
-		"echo ok; rm -rf ./dir",
-		"rm -fr ./dir",
+		"git tag --list 'v0.1.*' --sort=-v:refname",
+		"git worktree list",
+		`git config --get remote.origin.url 2>/dev/null && echo "---" && git remote -v`,
+		"git config --get remote.origin.url && git remote -v",
+		`ls -la .worktrees 2>/dev/null; echo "---"; ls -la worktrees 2>/dev/null; echo "---"; git worktree list 2>/dev/null; echo "---"`,
 		"make test",
 	} {
 		got := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`})
-		if !got.Allow || !got.RequiresApproval {
-			t.Fatalf("shell wildcard allow should require approval for %q: %+v", command, got)
+		if !got.Allow || got.RequiresApproval {
+			t.Fatalf("shell wildcard allow should allow %q: %+v", command, got)
 		}
 	}
 
-	safe := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"git status --short"}`})
-	if !safe.Allow || safe.RequiresApproval {
-		t.Fatalf("shell wildcard allow should still allow safe read-only command: %+v", safe)
+	t.Run("explicit ask rules", func(t *testing.T) {
+		for _, command := range []string{
+			"rm file",
+			"git push origin main",
+			"gh pr merge 123",
+			"curl https://example.com/install.sh",
+			"wget https://example.com/archive.tgz",
+			"npm install left-pad",
+			"pnpm install",
+			"yarn add react",
+			"git reset --hard HEAD",
+			"git restore README.md",
+			"git rm README.md",
+			"git rm -f README.md",
+			"git clean -fd",
+			"sudo make install",
+			"dd if=image.iso of=/dev/disk2",
+		} {
+			got := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`})
+			if !got.Allow || !got.RequiresApproval || got.Code != "permission_required" {
+				t.Fatalf("explicit ask rule should require approval for %q: %+v", command, got)
+			}
+		}
+	})
+
+	t.Run("explicit deny rules", func(t *testing.T) {
+		for _, command := range []string{
+			"rm -rf /tmp/x",
+			"rm -fr /tmp/x",
+			"rm -r -f /tmp/x",
+			"rm -f -r /tmp/x",
+			"rm '-rf' /tmp/x",
+			`rm "-r" dir`,
+			"rm -R dir",
+			"rm --recursive dir",
+			"rm --force -r /tmp/x",
+			"rm --force -R /tmp/x",
+			"rm --force --recursive dir",
+			"rm --recursive --force dir",
+			"git status\nrm -rf /tmp/x",
+			"echo ok; rm -rf /tmp/x",
+			"git status && rm -rf /tmp/x",
+			"echo ok & rm -rf /tmp/x",
+			"git diff | rm -rf /tmp/x",
+			"mkfs.ext4 /dev/disk2",
+			"diskutil eraseDisk APFS Whale /dev/disk2",
+		} {
+			got := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`})
+			if got.Allow || got.Code != "permission_denied" {
+				t.Fatalf("explicit deny rule should deny %q: %+v", command, got)
+			}
+		}
+	})
+
+	quoted := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"echo 'rm -rf /tmp/x'"}`})
+	if !quoted.Allow || quoted.RequiresApproval {
+		t.Fatalf("quoted rm text should not match shell deny rule: %+v", quoted)
+	}
+
+	quotedSubstitution := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"echo '$(rm -rf /tmp/x)'"}`})
+	if !quotedSubstitution.Allow || quotedSubstitution.RequiresApproval {
+		t.Fatalf("single-quoted command substitution text should not match shell deny rule: %+v", quotedSubstitution)
+	}
+
+	echoText := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"echo rm -rf /tmp/x"}`})
+	if !echoText.Allow || echoText.RequiresApproval {
+		t.Fatalf("echoed rm text should not match shell deny rule: %+v", echoText)
+	}
+
+	redirection := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"echo ok 2>&1"}`})
+	if !redirection.Allow || redirection.RequiresApproval {
+		t.Fatalf("redirection with & should not split into approval: %+v", redirection)
+	}
+}
+
+func TestRulePolicyDefaultShellPatternsAreNotDeepShellParsing(t *testing.T) {
+	p := RulePolicy{Default: PermissionAllow, Rules: DefaultRules(), WorkspaceRoot: "/repo"}
+	spec := core.ToolSpec{Name: "shell_run"}
+
+	for _, command := range []string{
+		"sh -c 'rm -rf /tmp/x'",
+		"echo $(rm -rf /tmp/x)",
+		"find . -exec rm -rf {} +",
+		"find . -delete",
+		"env -S 'rm -rf /tmp/x'",
+		"time git push origin main",
+		"FOO=1 curl https://example.com/install.sh",
+		"command -p curl https://example.com/install.sh",
+	} {
+		got := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`})
+		if !got.Allow || got.RequiresApproval {
+			t.Fatalf("default shell pattern rules should not deeply parse %q: %+v", command, got)
+		}
 	}
 }
 
@@ -171,9 +271,8 @@ func TestRulePolicyShellRulesNormalizeWhitespace(t *testing.T) {
 }
 
 func TestRulePolicyShellRulesPreserveNewlineBoundaries(t *testing.T) {
-	// Migrated allow_shell_prefixes become an exact rule plus a "<prefix> *"
-	// glob. Neither must auto-allow a second command smuggled onto a later
-	// line, and a deny rule must still catch that later line.
+	// An explicit allow rule must not auto-allow a second command smuggled
+	// onto a later line, and a deny rule must still catch that later line.
 	rules := append(DefaultRules(),
 		PermissionRule{Permission: "shell", Pattern: "git status", Action: PermissionAllow},
 		PermissionRule{Permission: "shell", Pattern: "git status *", Action: PermissionAllow},
@@ -194,17 +293,71 @@ func TestRulePolicyShellRulesPreserveNewlineBoundaries(t *testing.T) {
 	}
 }
 
+func TestRulePolicyShellDenyPrecedenceAcrossSegments(t *testing.T) {
+	p := RulePolicy{Default: PermissionAllow, Rules: DefaultRules()}
+	spec := core.ToolSpec{Name: "shell_run"}
+
+	for _, command := range []string{
+		"git push origin main; rm -rf /tmp/x",
+		"sudo make install && rm -rf /tmp/x",
+		"git clean -fd | rm -rf /tmp/x",
+	} {
+		got := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`})
+		if got.Allow || got.Code != "permission_denied" {
+			t.Fatalf("deny segment should dominate compound command %q: %+v", command, got)
+		}
+	}
+}
+
+func TestRulePolicyShellAllowBeatsRestrictiveFallback(t *testing.T) {
+	spec := core.ToolSpec{Name: "shell_run"}
+
+	defaultAllow := RulePolicy{Default: PermissionDeny, Rules: DefaultRules()}
+	got := defaultAllow.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"git status --short"}`})
+	if !got.Allow || got.RequiresApproval {
+		t.Fatalf("default shell wildcard allow should beat deny fallback: %+v", got)
+	}
+
+	whitelist := RulePolicy{
+		Default: PermissionDeny,
+		Rules: []PermissionRule{
+			{Permission: "shell", Pattern: "git status*", Action: PermissionAllow},
+		},
+	}
+	allowed := whitelist.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"git status --short"}`})
+	if !allowed.Allow || allowed.RequiresApproval {
+		t.Fatalf("explicit shell allow should beat deny fallback: %+v", allowed)
+	}
+
+	denied := whitelist.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"git log --oneline"}`})
+	if denied.Allow || denied.Code != "permission_denied" {
+		t.Fatalf("unmatched shell command should still use deny fallback: %+v", denied)
+	}
+}
+
+func TestRulePolicyUserShellRuleOverridesDefaultAllow(t *testing.T) {
+	rules := append(DefaultRules(), PermissionRule{Permission: "shell", Pattern: "git worktree *", Action: PermissionAsk})
+	p := RulePolicy{Default: PermissionAllow, Rules: rules}
+	got := p.Decide(
+		core.ToolSpec{Name: "shell_run"},
+		core.ToolCall{Name: "shell_run", Input: `{"command":"git worktree list"}`},
+	)
+	if !got.Allow || !got.RequiresApproval || got.MatchedRule != "shell:git worktree *=ask" {
+		t.Fatalf("user rule should override default allow: %+v", got)
+	}
+}
+
 func TestRulePolicyExternalDirectoryDenyOverridesShellApproval(t *testing.T) {
 	rules := append(DefaultRules(), PermissionRule{Permission: "external_directory", Pattern: "*", Action: PermissionDeny})
 	p := RulePolicy{Default: PermissionAllow, Rules: rules, WorkspaceRoot: "/repo"}
 
-	got := p.Decide(core.ToolSpec{Name: "shell_run"}, core.ToolCall{Name: "shell_run", Input: `{"command":"echo x > /etc/whale-test"}`})
+	got := p.Decide(core.ToolSpec{Name: "shell_run"}, core.ToolCall{Name: "shell_run", Input: `{"command":"cat /etc/hosts"}`})
 	if got.Allow || got.Code != "permission_denied" {
 		t.Fatalf("external_directory deny should override shell approval: %+v", got)
 	}
 }
 
-func TestRulePolicyExternalDirectoryCatchesSpacelessRedirections(t *testing.T) {
+func TestRulePolicyExternalDirectoryDoesNotScanRedirections(t *testing.T) {
 	rules := append(DefaultRules(), PermissionRule{Permission: "external_directory", Pattern: "*", Action: PermissionDeny})
 	p := RulePolicy{Default: PermissionAllow, Rules: rules, WorkspaceRoot: "/repo"}
 	spec := core.ToolSpec{Name: "shell_run"}
@@ -217,8 +370,8 @@ func TestRulePolicyExternalDirectoryCatchesSpacelessRedirections(t *testing.T) {
 		"cat foo>/etc/whale-test",
 	} {
 		got := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`})
-		if got.Allow || got.Code != "permission_denied" {
-			t.Fatalf("redirection %q = %+v, want external_directory deny", command, got)
+		if !got.Allow || got.Code == "permission_denied" {
+			t.Fatalf("redirection %q = %+v, want no external_directory deny", command, got)
 		}
 	}
 
@@ -228,7 +381,23 @@ func TestRulePolicyExternalDirectoryCatchesSpacelessRedirections(t *testing.T) {
 	}
 }
 
-func TestRulePolicyExternalDirectoryCatchesFlagValuePaths(t *testing.T) {
+func TestRulePolicyExternalDirectoryKeepsOperandsBeforeAttachedRedirections(t *testing.T) {
+	rules := append(DefaultRules(), PermissionRule{Permission: "external_directory", Pattern: "*", Action: PermissionDeny})
+	p := RulePolicy{Default: PermissionAllow, Rules: rules, WorkspaceRoot: "/repo"}
+	spec := core.ToolSpec{Name: "shell_run"}
+
+	for _, command := range []string{
+		"cat /etc/hosts>/tmp/out",
+		"cp local /etc/out>/tmp/log",
+	} {
+		got := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`})
+		if got.Allow || got.Code != "permission_denied" {
+			t.Fatalf("external operand before attached redirection %q = %+v, want external_directory deny", command, got)
+		}
+	}
+}
+
+func TestRulePolicyExternalDirectorySkipsFlagValuePaths(t *testing.T) {
 	rules := append(DefaultRules(), PermissionRule{Permission: "external_directory", Pattern: "*", Action: PermissionDeny})
 	p := RulePolicy{Default: PermissionAllow, Rules: rules, WorkspaceRoot: "/repo"}
 	spec := core.ToolSpec{Name: "shell_run"}
@@ -238,8 +407,8 @@ func TestRulePolicyExternalDirectoryCatchesFlagValuePaths(t *testing.T) {
 		"git diff --output=/etc/out",
 	} {
 		got := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`})
-		if got.Allow || got.Code != "permission_denied" {
-			t.Fatalf("flag value path %q = %+v, want external_directory deny", command, got)
+		if !got.Allow || got.Code == "permission_denied" {
+			t.Fatalf("flag value path %q = %+v, want no external_directory deny", command, got)
 		}
 	}
 
@@ -271,5 +440,67 @@ func TestRulePolicyExternalDirectoryMatchesDirectoryOperandItself(t *testing.T) 
 	got := p.Decide(core.ToolSpec{Name: "shell_run"}, core.ToolCall{Name: "shell_run", Input: `{"command":"ls ` + extDir + `"}`})
 	if got.Allow || got.MatchedRule != ruleLabel(rule) {
 		t.Fatalf("ls of external directory = %+v, want deny matching the directory's own rule", got)
+	}
+}
+
+func TestRulePolicyMutatingCapabilityToolRequiresApproval(t *testing.T) {
+	p := RulePolicy{Default: PermissionAllow, Rules: DefaultRules()}
+
+	mutating := core.ToolSpec{Name: "delete_project", Capabilities: []string{"mutates_state"}}
+	got := p.Decide(mutating, core.ToolCall{Name: "delete_project", Input: `{}`})
+	if !got.Allow || !got.RequiresApproval || got.Code != "permission_required" {
+		t.Fatalf("mutating plugin tool should require approval: %+v", got)
+	}
+
+	// A custom tool with no mutating capability stays on the default allow.
+	readOnly := core.ToolSpec{Name: "list_projects"}
+	if got := p.Decide(readOnly, core.ToolCall{Name: "list_projects", Input: `{}`}); !got.Allow || got.RequiresApproval {
+		t.Fatalf("non-mutating custom tool should not require approval: %+v", got)
+	}
+}
+
+func TestRulePolicyMutatingToolAllowBeatsRestrictiveFallback(t *testing.T) {
+	mutating := core.ToolSpec{Name: "delete_project", Capabilities: []string{"mutates_state"}}
+	call := core.ToolCall{Name: "delete_project", Input: `{}`}
+	p := RulePolicy{
+		Default: PermissionDeny,
+		Rules: []PermissionRule{
+			{Permission: "mutating_tool", Pattern: "delete_project", Action: PermissionAllow},
+		},
+	}
+
+	got := p.Decide(mutating, call)
+	if !got.Allow || got.RequiresApproval {
+		t.Fatalf("mutating_tool allow should beat raw tool fallback: %+v", got)
+	}
+}
+
+func TestRulePolicyPathSpecificRecursiveRemoveAllowOverridesDeny(t *testing.T) {
+	rules := append(DefaultRules(), PermissionRule{Permission: "shell", Pattern: "rm -rf ./dist*", Action: PermissionAllow})
+	p := RulePolicy{Default: PermissionAllow, Rules: rules, WorkspaceRoot: "/repo"}
+	spec := core.ToolSpec{Name: "shell_run"}
+
+	allowed := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"rm -rf ./dist/cache"}`})
+	if !allowed.Allow || allowed.RequiresApproval {
+		t.Fatalf("path-specific rm -rf allow should permit the command: %+v", allowed)
+	}
+
+	// A recursive remove outside the allowed path still hits the default deny.
+	denied := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"rm -rf /etc"}`})
+	if denied.Allow || denied.Code != "permission_denied" {
+		t.Fatalf("rm -rf outside the allowed path should still be denied: %+v", denied)
+	}
+}
+
+func TestRulePolicyUserShellWildcardAllowOverridesDefaultShellPatterns(t *testing.T) {
+	rules := append(DefaultRules(), PermissionRule{Permission: "shell", Pattern: "*", Action: PermissionAllow})
+	p := RulePolicy{Default: PermissionAllow, Rules: rules, WorkspaceRoot: "/repo"}
+
+	got := p.Decide(
+		core.ToolSpec{Name: "shell_run"},
+		core.ToolCall{Name: "shell_run", Input: `{"command":"rm -rf /tmp/x"}`},
+	)
+	if !got.Allow || got.RequiresApproval {
+		t.Fatalf("user shell wildcard allow should override default shell pattern deny: %+v", got)
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/policy"
 )
 
@@ -70,106 +69,6 @@ func TestConfigFileRoundTrip(t *testing.T) {
 	}
 	if loaded.Permissions.Default != "ask" || loaded.Permissions.AutoAccept == nil || !*loaded.Permissions.AutoAccept || loaded.Permissions.Shell["git push*"] != "ask" {
 		t.Fatalf("permissions config: %+v", loaded.Permissions)
-	}
-}
-
-func TestLoadConfigFileMigratesLegacyPermissionKeys(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-	raw := strings.TrimSpace(`
-[permissions]
-mode = "never"
-allow_shell_prefixes = ["git status"]
-deny_shell_prefixes = ["rm -rf"]
-`) + "\n"
-	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	cfg, loaded, err := LoadConfigFile(path)
-	if err != nil {
-		t.Fatalf("LoadConfigFile: %v", err)
-	}
-	if !loaded {
-		t.Fatal("expected config to load")
-	}
-	if cfg.Permissions.Default != string(policy.PermissionAllow) {
-		t.Fatalf("legacy mode default = %q, want allow", cfg.Permissions.Default)
-	}
-	if cfg.Permissions.AutoAccept == nil || !*cfg.Permissions.AutoAccept {
-		t.Fatalf("legacy mode auto_accept = %+v, want true", cfg.Permissions.AutoAccept)
-	}
-	if cfg.Permissions.Shell["git status"] != string(policy.PermissionAllow) ||
-		cfg.Permissions.Shell["git status *"] != string(policy.PermissionAllow) ||
-		cfg.Permissions.Shell["rm -rf"] != string(policy.PermissionDeny) ||
-		cfg.Permissions.Shell["rm -rf *"] != string(policy.PermissionDeny) {
-		t.Fatalf("legacy prefixes not migrated: %+v", cfg.Permissions.Shell)
-	}
-	if _, ok := cfg.Permissions.Shell["git status*"]; ok {
-		t.Fatalf("migrated allow prefix should not be an unbounded glob: %+v", cfg.Permissions.Shell)
-	}
-	if _, ok := cfg.Permissions.Shell["rm -rf*"]; ok {
-		t.Fatalf("migrated deny prefix should not be an unbounded glob: %+v", cfg.Permissions.Shell)
-	}
-	if cfg.Permissions.Mode != "" || len(cfg.Permissions.AllowShellPrefixes) != 0 || len(cfg.Permissions.DenyShellPrefixes) != 0 {
-		t.Fatalf("legacy fields should be cleared after migration: %+v", cfg.Permissions)
-	}
-}
-
-// policyFromMigratedConfig writes raw TOML, runs it through the legacy
-// migration path, and builds the RulePolicy the runtime would use.
-func policyFromMigratedConfig(t *testing.T, raw string) policy.RulePolicy {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "config.toml")
-	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-	cfg, _, err := LoadConfigFile(path)
-	if err != nil {
-		t.Fatalf("LoadConfigFile: %v", err)
-	}
-	base := DefaultConfig()
-	if err := ApplyFileConfig(&base, cfg); err != nil {
-		t.Fatalf("ApplyFileConfig: %v", err)
-	}
-	return policy.RulePolicy{Default: base.PermissionDefault, Rules: base.PermissionRules}
-}
-
-func TestMigratedAllowPrefixKeepsTokenBoundary(t *testing.T) {
-	p := policyFromMigratedConfig(t, "[permissions]\nallow_shell_prefixes = [\"git status\"]\n")
-	spec := core.ToolSpec{Name: "shell_run"}
-
-	allowed := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"git status --short"}`})
-	if !allowed.Allow || allowed.RequiresApproval {
-		t.Fatalf("git status should be auto-allowed by migrated prefix: %+v", allowed)
-	}
-
-	sneaky := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"git statusfoo; rm -rf ."}`})
-	if !sneaky.RequiresApproval {
-		t.Fatalf("git statusfoo should not inherit the allow prefix: %+v", sneaky)
-	}
-}
-
-func TestMigratedOnRequestModeDoesNotOverPrompt(t *testing.T) {
-	p := policyFromMigratedConfig(t, "[permissions]\nmode = \"on-request\"\n")
-
-	nonMutating := p.Decide(core.ToolSpec{Name: "request_user_input"}, core.ToolCall{Name: "request_user_input", Input: `{}`})
-	if !nonMutating.Allow || nonMutating.RequiresApproval {
-		t.Fatalf("non-mutating tool should not prompt under migrated on-request mode: %+v", nonMutating)
-	}
-
-	edit := p.Decide(core.ToolSpec{Name: "edit"}, core.ToolCall{Name: "edit", Input: `{"file_path":"main.go"}`})
-	if !edit.Allow || !edit.RequiresApproval {
-		t.Fatalf("edit should still require approval under migrated on-request mode: %+v", edit)
-	}
-}
-
-func TestMigratedDenyPrefixMatchesNormalizedWhitespace(t *testing.T) {
-	p := policyFromMigratedConfig(t, "[permissions]\nmode = \"never\"\ndeny_shell_prefixes = [\"rm -rf\"]\n")
-
-	got := p.Decide(core.ToolSpec{Name: "shell_run"}, core.ToolCall{Name: "shell_run", Input: `{"command":"rm   -rf /tmp/x"}`})
-	if got.Allow || got.Code != "permission_denied" {
-		t.Fatalf("migrated deny prefix should block whitespace-normalized command: %+v", got)
 	}
 }
 
@@ -432,6 +331,9 @@ func TestApplyFileConfigLoadsPermissionRules(t *testing.T) {
 			Read:       map[string]string{"*": "allow", "*.env": "ask"},
 			Shell:      map[string]string{"*": "allow", "git push*": "ask", "rm -rf*": "deny"},
 			MCP:        map[string]string{"*": "ask"},
+			MutatingTool: map[string]string{
+				"delete_project": "deny",
+			},
 		},
 	}); err != nil {
 		t.Fatalf("ApplyFileConfig: %v", err)
@@ -442,11 +344,14 @@ func TestApplyFileConfigLoadsPermissionRules(t *testing.T) {
 	if !cfg.AutoAcceptPermissions {
 		t.Fatal("auto accept not applied")
 	}
-	if len(cfg.PermissionRules) != 6 {
-		t.Fatalf("permission rules = %d, want 6: %+v", len(cfg.PermissionRules), cfg.PermissionRules)
+	if len(cfg.PermissionRules) != 7 {
+		t.Fatalf("permission rules = %d, want 7: %+v", len(cfg.PermissionRules), cfg.PermissionRules)
 	}
 	if got := cfg.PermissionRules[0]; got.Permission != "read" || got.Pattern != "*" || got.Action != policy.PermissionAllow {
 		t.Fatalf("first rule = %+v", got)
+	}
+	if got := cfg.PermissionRules[len(cfg.PermissionRules)-1]; got.Permission != "mutating_tool" || got.Pattern != "delete_project" || got.Action != policy.PermissionDeny {
+		t.Fatalf("last rule = %+v", got)
 	}
 }
 
@@ -509,6 +414,33 @@ func TestApplyFileConfigRejectsInvalidRetryConfig(t *testing.T) {
 	}
 	if err := ApplyFileConfig(&cfg, FileConfig{Retry: FileRetryConfig{MaxDelay: "soon"}}); err == nil {
 		t.Fatal("expected invalid max_delay error")
+	}
+}
+
+func TestLoadConfigFileRejectsRemovedPermissionKeys(t *testing.T) {
+	for _, body := range []string{
+		"[permissions]\nmode = \"ask\"\n",
+		"[permissions]\ndeny_shell_prefixes = [\"git push --force\"]\n",
+		"allow_shell_prefixes = [\"ls\"]\n",
+	} {
+		dir := t.TempDir()
+		path := GlobalConfigPath(dir)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		_, ok, err := LoadConfigFile(path)
+		if err == nil {
+			t.Fatalf("expected removed-key error for config:\n%s", body)
+		}
+		if ok {
+			t.Fatalf("config should not load when a removed key is present:\n%s", body)
+		}
+		if !strings.Contains(err.Error(), "removed permission key") {
+			t.Fatalf("unexpected error %v for config:\n%s", err, body)
+		}
 	}
 }
 

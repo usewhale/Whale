@@ -341,7 +341,7 @@ func splitNonEmptyLines(s string) []string {
 }
 
 func policyNever() policy.ToolPolicy {
-	return policy.DefaultToolPolicy{Mode: policy.ApprovalModeNever}
+	return policy.RulePolicy{Default: policy.PermissionAllow}
 }
 
 func TestToolInputEventsUseSessionSidecarName(t *testing.T) {

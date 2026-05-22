@@ -431,6 +431,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.gitBranch = msg.branch
 		}
 		return m, m.sequenceCmds()
+	case openCommandFinishedMsg:
+		cmd := m.handleOpenCommandFinished(msg)
+		m.refreshViewportContentFollow(true)
+		return m, m.sequenceCmds(cmd)
 	case reviewCommitsLoadedMsg:
 		m.handleReviewCommitsLoaded(msg)
 		return m, m.sequenceCmds()

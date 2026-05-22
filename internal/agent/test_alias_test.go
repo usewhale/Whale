@@ -51,21 +51,22 @@ const (
 type MessageStore = store.MessageStore
 type ApprovalStore = store.ApprovalStore
 
-type ApprovalMode = policy.ApprovalMode
 type PolicyDecision = policy.PolicyDecision
 type ToolPolicy = policy.ToolPolicy
 type DefaultToolPolicy = policy.DefaultToolPolicy
+type RulePolicy = policy.RulePolicy
+type PermissionRule = policy.PermissionRule
 type ApprovalRequest = policy.ApprovalRequest
 type ApprovalDecision = policy.ApprovalDecision
 type ApprovalFunc = policy.ApprovalFunc
 
 const (
-	ApprovalModeOnRequest   = policy.ApprovalModeOnRequest
-	ApprovalModeNever       = policy.ApprovalModeNever
 	ApprovalDeny            = policy.ApprovalDeny
 	ApprovalAllow           = policy.ApprovalAllow
 	ApprovalAllowForSession = policy.ApprovalAllowForSession
 	ApprovalCancel          = policy.ApprovalCancel
+	PermissionAllow         = policy.PermissionAllow
+	PermissionAsk           = policy.PermissionAsk
 )
 
 var (
@@ -73,7 +74,6 @@ var (
 	NewToolRegistryChecked = core.NewToolRegistryChecked
 	NewInMemoryStore       = store.NewInMemoryStore
 	NewJSONLStore          = store.NewJSONLStore
-	ParseApprovalMode      = policy.ParseApprovalMode
 	MostRecentSessionID    = store.MostRecentSessionID
 	ListSessions           = session.ListSessions
 )

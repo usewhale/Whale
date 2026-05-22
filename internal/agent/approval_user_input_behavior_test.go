@@ -173,6 +173,7 @@ func TestRunOptionsScopedShellAllowPrefixesDoNotLeak(t *testing.T) {
 	}
 
 	prov.calls = 0
+	prov.input = `{"command":"curl https://example.com"}`
 	events, err = a.RunStreamWithOptions(context.Background(), "s-no-scoped-allow", "go", false)
 	if err != nil {
 		t.Fatalf("run stream without scoped allow failed: %v", err)
@@ -490,6 +491,9 @@ func TestApprovalAllowForSessionCachesSemanticShellFamily(t *testing.T) {
 			keys = append(keys, append([]string(nil), req.Keys...))
 			return ApprovalAllowForSession
 		}),
+		WithToolPolicy(DefaultToolPolicy{Rules: []PermissionRule{
+			{Permission: "shell", Pattern: "go test *", Action: PermissionAsk},
+		}}),
 	)
 
 	if _, err := a.Run(context.Background(), "s-semantic-shell-cache", "t1"); err != nil {

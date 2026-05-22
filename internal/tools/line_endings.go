@@ -14,6 +14,33 @@ type lineEndingSnapshot struct {
 	style lineEndingStyle
 	mixed bool
 	lines []lineEndingLine
+	bom   bool
+}
+
+var utf8BOMBytes = []byte{0xEF, 0xBB, 0xBF}
+
+func normalizeTextFileBytes(data []byte) (string, lineEndingSnapshot) {
+	bom := len(data) >= len(utf8BOMBytes) &&
+		data[0] == utf8BOMBytes[0] &&
+		data[1] == utf8BOMBytes[1] &&
+		data[2] == utf8BOMBytes[2]
+	if bom {
+		data = data[len(utf8BOMBytes):]
+	}
+	text, snapshot := normalizeLineEndings(string(data))
+	snapshot.bom = bom
+	return text, snapshot
+}
+
+func restoreTextFileBytes(s string, snapshot lineEndingSnapshot) []byte {
+	text := restoreLineEndings(s, snapshot)
+	if !snapshot.bom {
+		return []byte(text)
+	}
+	out := make([]byte, 0, len(utf8BOMBytes)+len(text))
+	out = append(out, utf8BOMBytes...)
+	out = append(out, text...)
+	return out
 }
 
 type lineEndingLine struct {

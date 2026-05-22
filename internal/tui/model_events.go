@@ -283,35 +283,7 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		m.status = "session picker"
 	case service.EventLocalSubmitDone:
 		m.clearProviderRetryStatus()
-		if m.localSubmitPending > 0 {
-			m.localSubmitPending--
-		}
-		if len(m.localSubmitCommands) > m.localSubmitPending {
-			m.localSubmitCommands = m.localSubmitCommands[len(m.localSubmitCommands)-m.localSubmitPending:]
-		}
-		if !m.busy && m.localSubmitPending > 0 {
-			m.status = "wait for command to finish"
-		}
-		if !m.busy && m.localSubmitPending == 0 {
-			if m.status == "command pending" || m.status == "wait for command to finish" {
-				m.status = "ready"
-			}
-			pendingWindowsInput := m.snapshotWindowsBusyInput()
-			if next, ok := m.popQueuedPrompt(); ok {
-				m.deferredPlanPicker = false
-				eventCmd = m.submitPromptWithBinding(next.Text, next.SkillBinding)
-				m.restoreWindowsBusyInput(pendingWindowsInput)
-			} else {
-				m.restoreWindowsBusyInput(pendingWindowsInput)
-				if m.deferredPlanPicker && m.mode == modeChat {
-					if m.hasPendingWindowsBusyInput() {
-						m.deferredPlanPicker = false
-					} else {
-						m.openPlanImplementationPicker()
-					}
-				}
-			}
-		}
+		eventCmd = m.finishLocalSubmit()
 	case service.EventTurnDone:
 		m.clearProviderRetryStatus()
 		eventCmd = m.handleTurnDone(ev)

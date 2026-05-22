@@ -148,6 +148,9 @@ func TestClassifySubmitSlashCommands(t *testing.T) {
 		{line: "/model", want: appcommands.SubmitLocalUI},
 		{line: "/permissions", want: appcommands.SubmitLocalUI},
 		{line: "/focus", want: appcommands.SubmitLocalUI},
+		{line: "/open", want: appcommands.SubmitLocalUI},
+		{line: "/open .", want: appcommands.SubmitLocalUI},
+		{line: "/open My Folder/file.txt", want: appcommands.SubmitLocalUI},
 		{line: "/skills", want: appcommands.SubmitLocalUI},
 		{line: "/plugins", want: appcommands.SubmitLocalUI},
 		{line: "/review", want: appcommands.SubmitLocalUI},
@@ -1051,7 +1054,7 @@ func TestReviewPRPromptCommandsAreScopedAutoAllowed(t *testing.T) {
 		t.Fatal("expected /review pr to return scoped allow prefixes")
 	}
 	p := policy.ScopedAllowPolicy{
-		Base:               policy.DefaultToolPolicy{Mode: policy.ApprovalModeOnRequest},
+		Base:               policy.DefaultToolPolicy{},
 		ShellAllowPrefixes: allowPrefixes,
 	}
 	spec := core.ToolSpec{Name: "shell_run"}

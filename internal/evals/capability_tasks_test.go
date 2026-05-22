@@ -97,7 +97,7 @@ func TestTaskPlanModeReadOnlyFlow(t *testing.T) {
 			},
 			AgentOptions: []agent.AgentOption{
 				agent.WithSessionMode(session.ModePlan),
-				agent.WithToolPolicy(policy.DefaultToolPolicy{Mode: policy.ApprovalModeNever}),
+				agent.WithToolPolicy(policy.RulePolicy{Default: policy.PermissionAllow}),
 			},
 			Turns: []TurnSpec{
 				{
@@ -130,7 +130,7 @@ func TestTaskApprovalRequiredWriteApproved(t *testing.T) {
 		Suite: SuiteCapability,
 		Scenario: ScenarioSpec{
 			AgentOptions: []agent.AgentOption{
-				agent.WithToolPolicy(policy.DefaultToolPolicy{Mode: policy.ApprovalModeOnRequest}),
+				agent.WithToolPolicy(policy.DefaultToolPolicy{}),
 				agent.WithApprovalFunc(func(req policy.ApprovalRequest) policy.ApprovalDecision { return policy.ApprovalAllow }),
 			},
 			Turns: []TurnSpec{

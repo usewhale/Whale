@@ -110,6 +110,17 @@ install_binary() {
   printf '%s\n' "$target"
 }
 
+warn_if_shadowed() {
+  target="$1"
+  hash -r 2>/dev/null || true
+  resolved="$(command -v whale 2>/dev/null || true)"
+  if [ -n "$resolved" ] && [ "$resolved" != "$target" ]; then
+    printf '\n%s\n' "Warning: 'whale' resolves to $resolved, not $target."
+    printf '%s\n' "A different install may shadow this one in PATH."
+    printf '%s\n' "Run '$target --version' to use this install directly, or adjust PATH so $(dirname "$target") comes before $(dirname "$resolved")."
+  fi
+}
+
 OS="$(detect_os)" || {
   printf '%s\n' "whale install: unsupported OS: $(uname -s)" >&2
   exit 1
@@ -177,6 +188,7 @@ TARGET="$(install_binary "$ASSET_PATH" "$BIN_DIR")"
 
 printf '%s\n' "Installed whale $RESOLVED_VERSION to $TARGET"
 "$TARGET" --version
+warn_if_shadowed "$TARGET"
 
 case ":$PATH:" in
   *:"$BIN_DIR":*) ;;

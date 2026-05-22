@@ -84,7 +84,7 @@ func (b *Toolset) applyPatch(_ context.Context, call core.ToolCall) (core.ToolRe
 		if err := os.MkdirAll(filepath.Dir(plan.abs), 0o755); err != nil {
 			return marshalToolError(call, "patch_apply_failed", err.Error()), nil
 		}
-		if err := os.WriteFile(plan.abs, []byte(restoreLineEndings(plan.after, plan.lineEndings)), 0o644); err != nil {
+		if err := os.WriteFile(plan.abs, restoreTextFileBytes(plan.after, plan.lineEndings), 0o644); err != nil {
 			return marshalToolError(call, "patch_apply_failed", err.Error()), nil
 		}
 	}
@@ -166,7 +166,7 @@ func (b *Toolset) planPatch(ops []patchOp) ([]patchFilePlan, error) {
 			}
 			exists = false
 		}
-		before, lineEndings := normalizeLineEndings(string(raw))
+		before, lineEndings := normalizeTextFileBytes(raw)
 		st := &patchFileState{path: path, abs: abs, before: before, after: before, lineEndings: lineEndings, exists: exists}
 		states[path] = st
 		order = append(order, path)

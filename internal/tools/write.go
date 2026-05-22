@@ -66,12 +66,12 @@ func prepareWriteFileContent(beforeBytes []byte, content string, existing bool) 
 	if !existing {
 		return "", content, content
 	}
+	before, lineEndings := normalizeTextFileBytes(beforeBytes)
 	if !hasLineEndingBytes(beforeBytes) {
-		return string(beforeBytes), content, content
+		return before, content, string(restoreTextFileBytes(content, lineEndings))
 	}
-	before, lineEndings := normalizeLineEndings(string(beforeBytes))
 	after := normalizeLineEndingText(content)
-	return before, after, restoreLineEndings(after, lineEndings)
+	return before, after, string(restoreTextFileBytes(after, lineEndings))
 }
 
 func hasLineEndingBytes(b []byte) bool {

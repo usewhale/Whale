@@ -66,7 +66,7 @@ func TestAgentExecutesToolsetToolsInLoop(t *testing.T) {
 		provider,
 		store,
 		registry,
-		agent.WithToolPolicy(agent.DefaultToolPolicy{Mode: agent.ApprovalModeNever}),
+		agent.WithToolPolicy(agent.RulePolicy{Default: agent.PermissionAllow}),
 	)
 
 	msg, err := a.Run(context.Background(), "s-tools", "run tools")

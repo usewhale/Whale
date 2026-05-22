@@ -239,7 +239,7 @@ func TestRuntimeApprovalDeniedStopsToolExecution(t *testing.T) {
 		provider,
 		store.NewInMemoryStore(),
 		core.NewToolRegistry(toolset.Tools()),
-		agent.WithToolPolicy(policy.DefaultToolPolicy{Mode: policy.ApprovalModeOnRequest}),
+		agent.WithToolPolicy(policy.DefaultToolPolicy{}),
 		agent.WithApprovalFunc(func(req policy.ApprovalRequest) policy.ApprovalDecision {
 			asked++
 			return policy.ApprovalDeny
@@ -351,7 +351,7 @@ func TestRuntimeExecFailurePassesThroughWithoutReplan(t *testing.T) {
 		&execFailureProvider{},
 		store.NewInMemoryStore(),
 		core.NewToolRegistry(toolset.Tools()),
-		agent.WithToolPolicy(policy.DefaultToolPolicy{Mode: policy.ApprovalModeNever}),
+		agent.WithToolPolicy(policy.RulePolicy{Default: policy.PermissionAllow}),
 	)
 
 	events, err := a.RunStream(context.Background(), "eval-exec-fail", "go")
@@ -399,7 +399,7 @@ func TestRuntimeExecTimeoutRetriesThenReturnsTimeout(t *testing.T) {
 		&execTimeoutProvider{},
 		store.NewInMemoryStore(),
 		core.NewToolRegistry(toolset.Tools()),
-		agent.WithToolPolicy(policy.DefaultToolPolicy{Mode: policy.ApprovalModeNever}),
+		agent.WithToolPolicy(policy.RulePolicy{Default: policy.PermissionAllow}),
 	)
 
 	events, err := a.RunStream(context.Background(), "eval-exec-timeout", "go")
@@ -489,7 +489,7 @@ func TestRuntimeShellWaitReturnsRunningOnShortTimeout(t *testing.T) {
 		&backgroundShellProvider{},
 		store.NewInMemoryStore(),
 		core.NewToolRegistry(toolset.Tools()),
-		agent.WithToolPolicy(policy.DefaultToolPolicy{Mode: policy.ApprovalModeNever}),
+		agent.WithToolPolicy(policy.RulePolicy{Default: policy.PermissionAllow}),
 	)
 
 	if _, err := a.Run(context.Background(), "eval-bg-running", "start"); err != nil {
@@ -541,7 +541,7 @@ func TestRuntimeShellWaitUnknownTaskReturnsNotFound(t *testing.T) {
 		&shellWaitNotFoundProvider{},
 		store.NewInMemoryStore(),
 		core.NewToolRegistry(toolset.Tools()),
-		agent.WithToolPolicy(policy.DefaultToolPolicy{Mode: policy.ApprovalModeNever}),
+		agent.WithToolPolicy(policy.RulePolicy{Default: policy.PermissionAllow}),
 		agent.WithRecoveryPolicy(agent.RecoveryPolicy{Enabled: false}),
 	)
 
@@ -618,7 +618,7 @@ func TestRuntimeShellWaitReturnsExitedResult(t *testing.T) {
 		&backgroundShellDoneProvider{},
 		store.NewInMemoryStore(),
 		core.NewToolRegistry(toolset.Tools()),
-		agent.WithToolPolicy(policy.DefaultToolPolicy{Mode: policy.ApprovalModeNever}),
+		agent.WithToolPolicy(policy.RulePolicy{Default: policy.PermissionAllow}),
 	)
 	if _, err := a.Run(context.Background(), "eval-bg-done", "start"); err != nil {
 		t.Fatalf("start run failed: %v", err)
@@ -698,7 +698,7 @@ func TestRuntimeShellWaitReturnsFailedResult(t *testing.T) {
 		&backgroundShellFailProvider{},
 		store.NewInMemoryStore(),
 		core.NewToolRegistry(toolset.Tools()),
-		agent.WithToolPolicy(policy.DefaultToolPolicy{Mode: policy.ApprovalModeNever}),
+		agent.WithToolPolicy(policy.RulePolicy{Default: policy.PermissionAllow}),
 	)
 	if _, err := a.Run(context.Background(), "eval-bg-fail", "start"); err != nil {
 		t.Fatalf("start run failed: %v", err)
@@ -769,7 +769,7 @@ func TestRuntimeApprovalCacheBySessionKey(t *testing.T) {
 		provider,
 		store.NewInMemoryStore(),
 		core.NewToolRegistry(toolset.Tools()),
-		agent.WithToolPolicy(policy.DefaultToolPolicy{Mode: policy.ApprovalModeOnRequest}),
+		agent.WithToolPolicy(policy.DefaultToolPolicy{}),
 		agent.WithApprovalFunc(func(req policy.ApprovalRequest) policy.ApprovalDecision {
 			asked++
 			return policy.ApprovalAllowForSession
@@ -829,7 +829,7 @@ func TestRuntimeApprovalCacheDoesNotCrossSessions(t *testing.T) {
 		provider,
 		store.NewInMemoryStore(),
 		core.NewToolRegistry(toolset.Tools()),
-		agent.WithToolPolicy(policy.DefaultToolPolicy{Mode: policy.ApprovalModeOnRequest}),
+		agent.WithToolPolicy(policy.DefaultToolPolicy{}),
 		agent.WithApprovalFunc(func(req policy.ApprovalRequest) policy.ApprovalDecision {
 			asked++
 			return policy.ApprovalAllowForSession
@@ -954,7 +954,7 @@ func TestRuntimeRecoveryFallbackReadonly(t *testing.T) {
 		&failingWriteProvider{},
 		store.NewInMemoryStore(),
 		core.NewToolRegistry([]core.Tool{failWriteTool{}, readOnlyViewTool{}}),
-		agent.WithToolPolicy(policy.DefaultToolPolicy{Mode: policy.ApprovalModeNever}),
+		agent.WithToolPolicy(policy.RulePolicy{Default: policy.PermissionAllow}),
 		agent.WithRecoveryPolicy(agent.RecoveryPolicy{
 			Enabled: true,
 			Rules: map[agent.FailureClass]agent.RecoveryRule{
@@ -1499,7 +1499,7 @@ func TestRuntimeScavengesToolCallFromAssistantContent(t *testing.T) {
 		&scavengeProvider{},
 		store.NewInMemoryStore(),
 		core.NewToolRegistry([]core.Tool{readOnlyViewTool{}}),
-		agent.WithToolPolicy(policy.DefaultToolPolicy{Mode: policy.ApprovalModeNever}),
+		agent.WithToolPolicy(policy.RulePolicy{Default: policy.PermissionAllow}),
 	)
 	events, err := a.RunStream(context.Background(), "eval-scavenge", "go")
 	if err != nil {
@@ -1599,7 +1599,7 @@ func TestRuntimeRepairsTruncatedToolArgs(t *testing.T) {
 		&toolArgsRepairProvider{},
 		store.NewInMemoryStore(),
 		core.NewToolRegistry([]core.Tool{writeEchoTool{}}),
-		agent.WithToolPolicy(policy.DefaultToolPolicy{Mode: policy.ApprovalModeNever}),
+		agent.WithToolPolicy(policy.RulePolicy{Default: policy.PermissionAllow}),
 	)
 	events, err := a.RunStream(context.Background(), "eval-tool-args-repair", "go")
 	if err != nil {

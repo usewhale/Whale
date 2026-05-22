@@ -84,6 +84,32 @@ func TestReadFileNormalizesCRLFContent(t *testing.T) {
 	}
 }
 
+func TestReadFileStripsUTF8BOMFromVisibleContent(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), append([]byte{0xEF, 0xBB, 0xBF}, []byte("zero\none\n")...), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
+		"file_path": "a.txt",
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
+	}
+	data := readFileData(t, res)
+	content := readFileContent(t, data)
+	if content != "zero\none" {
+		t.Fatalf("content = %q, want BOM stripped from visible content", content)
+	}
+	if strings.Contains(content, "\ufeff") {
+		t.Fatalf("content still contains BOM: %q", content)
+	}
+}
+
 func TestWriteFilePreservesCRLFWhenOverwritingExistingFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a.txt")
@@ -135,6 +161,34 @@ func TestWriteFilePreservesLFWhenOverwritingExistingFile(t *testing.T) {
 	}
 	if string(got) != "alpha\nwhale\n" {
 		t.Fatalf("content = %q, want LF preserved", string(got))
+	}
+}
+
+func TestWriteFilePreservesUTF8BOMWhenOverwritingExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, append([]byte{0xEF, 0xBB, 0xBF}, []byte("alpha\r\nbeta\r\n")...), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.writeFile(context.Background(), tc("write", map[string]any{
+		"file_path": "a.txt",
+		"content":   "alpha\nwhale\n",
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("write failed: err=%v res=%+v", err, res)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	want := append([]byte{0xEF, 0xBB, 0xBF}, []byte("alpha\r\nwhale\r\n")...)
+	if string(got) != string(want) {
+		t.Fatalf("content bytes = % x, want % x", got, want)
 	}
 }
 
@@ -225,6 +279,35 @@ func TestEditFileMatchesLFSearchAndPreservesCRLF(t *testing.T) {
 	}
 	if string(got) != "alpha\r\nwhale\r\ngamma\r\n" {
 		t.Fatalf("content = %q, want CRLF preserved", string(got))
+	}
+}
+
+func TestEditFileMatchesFirstLineAfterUTF8BOMAndPreservesBOM(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, append([]byte{0xEF, 0xBB, 0xBF}, []byte("SIF LOCAL:1 > 0\r\n中文┃全角\r\n")...), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.editFile(context.Background(), tc("edit", map[string]any{
+		"file_path": "a.txt",
+		"search":    "SIF LOCAL:1 > 0",
+		"replace":   "SIF LOCAL:1 > 1",
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("edit failed: err=%v res=%+v", err, res)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	want := append([]byte{0xEF, 0xBB, 0xBF}, []byte("SIF LOCAL:1 > 1\r\n中文┃全角\r\n")...)
+	if string(got) != string(want) {
+		t.Fatalf("content bytes = % x, want % x", got, want)
 	}
 }
 
@@ -322,6 +405,40 @@ func TestApplyPatchMatchesLFHunksAndPreservesCRLF(t *testing.T) {
 	}
 	if string(got) != "alpha\r\nwhale\r\ngamma\r\n" {
 		t.Fatalf("content = %q, want CRLF preserved", string(got))
+	}
+}
+
+func TestApplyPatchMatchesFirstLineAfterUTF8BOMAndPreservesBOM(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, append([]byte{0xEF, 0xBB, 0xBF}, []byte("SIF LOCAL:1 > 0\r\n中文┃全角\r\n")...), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	patch := strings.Join([]string{
+		"*** Begin Patch",
+		"*** Update File: a.txt",
+		"@@",
+		"-SIF LOCAL:1 > 0",
+		"+SIF LOCAL:1 > 1",
+		" 中文┃全角",
+		"*** End Patch",
+	}, "\n")
+
+	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
+	if err != nil || res.IsError {
+		t.Fatalf("apply patch failed: err=%v res=%+v", err, res)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	want := append([]byte{0xEF, 0xBB, 0xBF}, []byte("SIF LOCAL:1 > 1\r\n中文┃全角\r\n")...)
+	if string(got) != string(want) {
+		t.Fatalf("content bytes = % x, want % x", got, want)
 	}
 }
 

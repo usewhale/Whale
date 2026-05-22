@@ -101,8 +101,7 @@ func (m model) chatViewportBodyHeight(mainWidth, bodyHeight int) int {
 }
 
 func (m model) renderBottom(mainWidth int) string {
-	footerText := footerField("model:", m.model, tuitheme.Default.InfoSoft) +
-		"  " + footerField("effort:", m.effort, tuitheme.Default.InfoSoft) +
+	footerText := footerModelEffort(m.model, m.effort) +
 		"  " + footerField("thinking:", m.thinking, thinkingFooterColor(m.thinking))
 	if m.autoAccept {
 		footerText += "  " + footerAutoAccept("auto-accept on")
@@ -541,6 +540,14 @@ func footerField(label, value string, valueColor lipgloss.Color) string {
 	return lipgloss.NewStyle().Foreground(tuitheme.Default.Muted).Render(label) +
 		" " +
 		lipgloss.NewStyle().Foreground(valueColor).Render(value)
+}
+
+func footerModelEffort(model, effort string) string {
+	return lipgloss.NewStyle().Foreground(tuitheme.Default.InfoSoft).Render(model) +
+		" " +
+		lipgloss.NewStyle().Foreground(tuitheme.Default.Muted).Render(".") +
+		" " +
+		lipgloss.NewStyle().Foreground(tuitheme.Default.InfoSoft).Render(effort)
 }
 
 func footerHint(text string) string {

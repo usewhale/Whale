@@ -85,9 +85,27 @@ auto_accept = false
 
 [permissions.shell]
 "*" = "allow"
+"rm *" = "ask"
+"rm -r*" = "deny"
+"rm -R*" = "deny"
+"rm -f -r*" = "deny"
+"rm -r -f*" = "deny"
+"rm -fr*" = "deny"
+"rm --force -r*" = "deny"
+"rm --force -R*" = "deny"
 "git push*" = "ask"
+"gh pr merge*" = "ask"
 "npm install*" = "ask"
 "pnpm install*" = "ask"
+"yarn add*" = "ask"
+"git reset*" = "ask"
+"git restore*" = "ask"
+"git rm*" = "ask"
+"git clean*" = "ask"
+"sudo *" = "ask"
+"dd *" = "ask"
+"mkfs*" = "deny"
+"diskutil erase*" = "deny"
 "curl *" = "ask"
 "wget *" = "ask"
 "rm -rf*" = "deny"
@@ -99,6 +117,9 @@ auto_accept = false
 "*" = "ask"
 
 [permissions.memory]
+"*" = "ask"
+
+[permissions.mutating_tool]
 "*" = "ask"
 
 [api]
@@ -185,16 +206,28 @@ Whale exposes shell execution through the `shell_run` tool. Commands run from
 the current workspace root by default. Use relative paths, or pass the `cwd`
 parameter to run from a workspace subdirectory.
 
-By default, Whale allows normal workspace shell commands and asks for higher
-risk patterns such as `git push*`, package installation, `curl *`, and `wget *`.
-Commands matching deny rules such as `rm -rf*` are blocked. If a shell command
-obviously references an absolute path outside the workspace or temp directories,
-Whale also evaluates `[permissions.external_directory]` for that path.
+By default, Whale allows normal workspace shell commands and ships explicit
+default shell rules for common prompts and blocks. The default shell table asks
+for patterns such as `rm *`, `git push*`, `gh pr merge*`, package installation,
+`curl *`, and `wget *`. It denies literal recursive remove patterns such as
+`rm -rf*`, `rm -fr*`, `rm -r -f*`, and `rm -R*`.
+
+These shell rules are normal permission patterns, not an OS sandbox or a deep
+shell-language safety boundary. A user or project config can override them with
+later `[permissions.shell]` entries, including `"*" = "allow"`. Write explicit
+rules for the shell forms you want to prompt or block.
+
+For common file commands such as `cat`, `ls`, `cp`, `mv`, `rm`, `stat`, and
+`du`, Whale also evaluates `[permissions.external_directory]` when path operands
+point outside the workspace or temp directories. Shell redirections are not
+treated as external directory operands.
 
 File edits (`edit`, `write`, `apply_patch`) ask for approval by default; set
 `[permissions.edit]` to `"allow"` to apply edits without prompting, or to
 `"deny"` to block them. Reading files is allowed by default except for `.env`
-files, which ask.
+files, which ask. Custom or plugin tools that advertise a `mutates_state`
+capability are evaluated under `[permissions.mutating_tool]` and ask by
+default.
 
 ## Worktrees
 
@@ -234,8 +267,8 @@ or sparse checkout.
 
 On macOS and Linux, `shell_run` runs commands through `/bin/sh`. On Windows,
 Whale first tries `pwsh`; if it is not available, it falls back to `ComSpec`
-and then `cmd.exe`. Write hooks and allow/deny shell prefixes to match the
-shell syntax used on the target platform.
+and then `cmd.exe`. Write shell rules to match the shell syntax used on the
+target platform.
 
 Configured shell hooks and official plugin hooks run through the same hook
 pipeline. Shell hooks can keep using exit codes, or return JSON on stdout with
