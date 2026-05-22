@@ -148,6 +148,10 @@ func (a *App) HandleLocalCommand(line string) (handled bool, output string, synt
 
 func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 	trimmed := strings.TrimSpace(line)
+	if IsOpenCommandLine(trimmed) {
+		msg, err := a.ExecuteOpenCommand(trimmed)
+		return CommandExecution{Handled: true, Text: msg}, err
+	}
 	if trimmed == "/mcp" {
 		return CommandExecution{Handled: true, Text: a.buildMCPStatus()}, nil
 	}

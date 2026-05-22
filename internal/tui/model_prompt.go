@@ -36,8 +36,7 @@ func (m *model) submitPromptWithBinding(value string, binding *app.SkillBinding)
 	}
 	submit := appcommands.ClassifySubmit(value, app.CommandsHelp, "/mcp")
 	if submit.LocalNoTurn() {
-		m.submitLocalNoTurn(submit)
-		return nil
+		return m.submitLocalNoTurn(submit)
 	}
 	m.clearEphemeralMessages()
 	m.recordPromptHistory(value)
@@ -67,7 +66,7 @@ func (m *model) submitPromptWhileBusy(value string) {
 	}
 	submit := appcommands.ClassifySubmit(value, app.CommandsHelp, "/mcp")
 	if submit.BusyImmediate() {
-		m.submitLocalNoTurn(submit)
+		_ = m.submitLocalNoTurn(submit)
 		return
 	}
 	if appcommands.LooksLikeSlashCommand(submit.Line) {
@@ -93,7 +92,7 @@ func (m *model) submitPromptFromDeferredBusyEnter(value string, wasStopping bool
 	}
 	submit := appcommands.ClassifySubmit(value, app.CommandsHelp, "/mcp")
 	if submit.BusyImmediate() {
-		m.submitLocalNoTurn(submit)
+		_ = m.submitLocalNoTurn(submit)
 		return nil
 	}
 	stopping := m.stopping || wasStopping
@@ -124,15 +123,15 @@ func busySlashBlockedMessage(line string, stopping bool) string {
 	return fmt.Sprintf("%s is disabled while %s. Press Esc/Ctrl+C to interrupt or wait.", cmd, state)
 }
 
-func (m *model) submitLocalNoTurn(submit appcommands.SubmitClassification) {
+func (m *model) submitLocalNoTurn(submit appcommands.SubmitClassification) tea.Cmd {
 	cmd := submit.Line
 	if strings.TrimSpace(cmd) == "/help" {
 		m.openHelp()
-		return
+		return nil
 	}
 	if m.btwPanel.loading && isBtwCommand(cmd) {
 		m.status = "/btw is already answering"
-		return
+		return nil
 	}
 	m.clearEphemeralMessages()
 	m.recordPromptHistory(cmd)
@@ -148,8 +147,12 @@ func (m *model) submitLocalNoTurn(submit appcommands.SubmitClassification) {
 	if !m.busy || submit.SubmitBarrier() {
 		m.status = "command pending"
 	}
+	if app.IsOpenCommandLine(cmd) {
+		return m.startOpenCommand(cmd)
+	}
 	m.dispatchIntent(service.Intent{Kind: service.IntentSubmitLocal, Input: cmd})
 	m.refreshViewportContent()
+	return nil
 }
 
 func isBtwCommand(line string) bool {

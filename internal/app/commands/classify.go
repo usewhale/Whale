@@ -100,6 +100,8 @@ func classifySlashFields(head string, fields []string, line string) SubmitClass 
 			return SubmitLocalUI
 		}
 		return SubmitUsageError
+	case "/open":
+		return SubmitLocalUI
 	case "/agent":
 		if len(fields) == 1 {
 			return SubmitLocalMode
