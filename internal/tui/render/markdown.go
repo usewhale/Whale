@@ -34,7 +34,8 @@ func Markdown(input string, width int, quiet bool) string {
 		return ""
 	}
 	if width < 20 {
-		// Narrow fallback skips goldmark, so only strip autolink brackets for direct terminal output.
+		// Narrow fallback skips goldmark. No wrap, so terminal URL autodetect
+		// already finds the full link — no OSC 8 needed and no code marking.
 		input = normalizeMarkdownLinks(input, stripAutolinkBracketsOnly)
 		return strings.TrimRight(input, "\n")
 	}
@@ -49,11 +50,217 @@ func Markdown(input string, width int, quiet bool) string {
 	}
 	rendered, err := renderMarkdown(input, width, style)
 	if err != nil {
-		return strings.TrimRight(input, "\n")
+		return injectHyperlinks(strings.TrimRight(input, "\n"))
 	}
-	out := strings.TrimRight(rendered, "\n")
+	out := injectHyperlinks(strings.TrimRight(rendered, "\n"))
 	markdownCachePut(key, out)
 	return out
+}
+
+// urlSkipMark is a zero-width C0 control byte (FS) inserted right before
+// http(s):// URLs that originate inside fenced/inline code regions. Glamour
+// preserves the byte and treats it as zero width during wrap, so injecting it
+// in the markdown source doesn't shift any visible columns. injectHyperlinks
+// reads the marker to suppress OSC 8 wrapping for those URLs and then strips
+// the byte from the final output.
+const urlSkipMark = '\x1c'
+
+// injectHyperlinks wraps http(s) URLs in OSC 8 escape sequences so terminal
+// clicks resolve to the full URL even when word-wrap inserted newlines and
+// padding inside the URL text. Glamour's ANSI renderer breaks long URLs at
+// hyphens; without OSC 8, terminals fall back to text-based URL detection,
+// which stops at the first whitespace/newline and yields a truncated link.
+func injectHyperlinks(s string) string {
+	if !strings.Contains(s, "http://") && !strings.Contains(s, "https://") {
+		if strings.IndexByte(s, urlSkipMark) >= 0 {
+			return strings.ReplaceAll(s, string(urlSkipMark), "")
+		}
+		return s
+	}
+	var out strings.Builder
+	out.Grow(len(s) + 32)
+	i := 0
+	for i < len(s) {
+		start := findURLStart(s, i)
+		if start < 0 {
+			out.WriteString(s[i:])
+			break
+		}
+		skip := start > 0 && s[start-1] == urlSkipMark
+		if skip {
+			out.WriteString(s[i : start-1])
+		} else {
+			out.WriteString(s[i:start])
+		}
+		end, url := scanWrappedURL(s, start)
+		if end <= start || url == "" {
+			out.WriteByte(s[start])
+			i = start + 1
+			continue
+		}
+		if skip {
+			out.WriteString(s[start:end])
+		} else {
+			out.WriteString("\x1b]8;;")
+			out.WriteString(url)
+			out.WriteString("\x07")
+			out.WriteString(s[start:end])
+			out.WriteString("\x1b]8;;\x07")
+		}
+		i = end
+	}
+	result := out.String()
+	if strings.IndexByte(result, urlSkipMark) >= 0 {
+		result = strings.ReplaceAll(result, string(urlSkipMark), "")
+	}
+	return result
+}
+
+func findURLStart(s string, from int) int {
+	for {
+		hi := strings.Index(s[from:], "http")
+		if hi < 0 {
+			return -1
+		}
+		p := from + hi
+		rest := s[p:]
+		switch {
+		case strings.HasPrefix(rest, "https://"), strings.HasPrefix(rest, "http://"):
+			return p
+		}
+		from = p + 4
+	}
+}
+
+// scanWrappedURL walks URL characters starting at start, treating
+// "[spaces]\n[spaces]" (glamour's wrap padding) as a gap that joins URL
+// fragments when the next line still looks like URL syntax. Returns the end
+// index in s (one past the last consumed byte) and the reconstructed URL (with
+// joined gaps removed). Trailing punctuation that commonly trails URLs in prose
+// (.,;:!?) and unbalanced closers (), ], >) is trimmed off both the returned
+// URL and the end index.
+func scanWrappedURL(s string, start int) (int, string) {
+	var url strings.Builder
+	i := start
+	for i < len(s) {
+		c := s[i]
+		if isURLByte(c) {
+			url.WriteByte(c)
+			i++
+			continue
+		}
+		if c == ' ' || c == '\n' {
+			j := i
+			for j < len(s) && s[j] == ' ' {
+				j++
+			}
+			if j < len(s) && s[j] == '\n' {
+				j++
+				for j < len(s) && s[j] == ' ' {
+					j++
+				}
+				if j < len(s) && isURLByte(s[j]) && shouldJoinWrappedURL(s, j, url.String()) {
+					i = j
+					continue
+				}
+			}
+		}
+		break
+	}
+	raw := url.String()
+	for shouldTrimURLTail(raw) {
+		raw = raw[:len(raw)-1]
+		i--
+	}
+	return i, raw
+}
+
+func shouldJoinWrappedURL(s string, next int, raw string) bool {
+	if raw == "" || next >= len(s) {
+		return false
+	}
+	nextEnd := next
+	for nextEnd < len(s) && isURLByte(s[nextEnd]) {
+		nextEnd++
+	}
+	nextPart := s[next:nextEnd]
+	if nextPart == "" {
+		return false
+	}
+	if strings.IndexAny(nextPart, "/?#=&%") >= 0 {
+		return true
+	}
+	switch nextPart[0] {
+	case '/', '?', '#', '&', '=', '%', '.', '-', '_', '~':
+		return true
+	}
+	switch raw[len(raw)-1] {
+	case '/', '?', '#', '&', '=', '%', '.', '-', '_', '~', ':', '(', '[', ',':
+		return true
+	}
+	return false
+}
+
+func shouldTrimURLTail(raw string) bool {
+	if raw == "" {
+		return false
+	}
+	last := raw[len(raw)-1]
+	switch last {
+	case '.', ',', ';', ':', '!', '?':
+		return true
+	case ')':
+		return strings.Count(raw, ")") > strings.Count(raw, "(")
+	case ']':
+		return strings.Count(raw, "]") > strings.Count(raw, "[")
+	case '>':
+		return strings.Count(raw, ">") > strings.Count(raw, "<")
+	default:
+		return false
+	}
+}
+
+// markCodeURLs prefixes every http(s):// occurrence with urlSkipMark so the
+// post-render hyperlink injector knows to leave those URLs literal.
+func markCodeURLs(s string, on bool) string {
+	if !on || !strings.Contains(s, "http") {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 4)
+	i := 0
+	for i < len(s) {
+		idx := strings.Index(s[i:], "http")
+		if idx < 0 {
+			b.WriteString(s[i:])
+			break
+		}
+		p := i + idx
+		rest := s[p:]
+		if strings.HasPrefix(rest, "https://") || strings.HasPrefix(rest, "http://") {
+			b.WriteString(s[i:p])
+			b.WriteByte(urlSkipMark)
+			b.WriteString("http")
+			i = p + 4
+		} else {
+			b.WriteString(s[i : p+4])
+			i = p + 4
+		}
+	}
+	return b.String()
+}
+
+func isURLByte(c byte) bool {
+	switch {
+	case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+		return true
+	}
+	switch c {
+	case '-', '.', '_', '~', ':', '/', '?', '#', '[', ']', '@',
+		'!', '$', '&', '\'', '(', ')', '*', '+', ',', ';', '=', '%':
+		return true
+	}
+	return false
 }
 
 func renderMarkdown(input string, width int, style ansi.StyleConfig) (string, error) {
@@ -89,22 +296,23 @@ func renderMarkdown(input string, width int, style ansi.StyleConfig) (string, er
 }
 
 func normalizeMarkdownLinks(input string, escaping autolinkEscaping) string {
+	markCode := escaping == escapeAutolinksForRenderer
 	var out strings.Builder
 	for i := 0; i < len(input); {
 		if inFence, fenceChar, fenceLen, _ := detectFence(input, i); inFence {
 			lineEnd := nextLineEnd(input, i)
 			end := findFenceEnd(input, lineEnd, fenceChar, fenceLen)
 			if end < 0 {
-				out.WriteString(input[i:])
+				out.WriteString(markCodeURLs(input[i:], markCode))
 				return out.String()
 			}
-			out.WriteString(input[i:end])
+			out.WriteString(markCodeURLs(input[i:end], markCode))
 			i = end
 			continue
 		}
 		if input[i] == '`' {
 			end := findInlineCodeEnd(input, i)
-			out.WriteString(input[i:end])
+			out.WriteString(markCodeURLs(input[i:end], markCode))
 			i = end
 			continue
 		}

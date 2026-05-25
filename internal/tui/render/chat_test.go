@@ -478,7 +478,7 @@ func TestMarkdown_NarrowWidthAutolinkDoesNotLeakEscapes(t *testing.T) {
 func TestMarkdown_TableBareURLDoesNotDuplicate(t *testing.T) {
 	input := "| 项目 | 地址 |\n|---|---|\n| A | https://example.com |\n"
 	got := Markdown(input, 80, false)
-	if strings.Count(got, "https://example.com") != 1 {
+	if strings.Count(xansi.Strip(got), "https://example.com") != 1 {
 		t.Fatalf("expected bare URL once, got: %q", got)
 	}
 }
@@ -486,7 +486,7 @@ func TestMarkdown_TableBareURLDoesNotDuplicate(t *testing.T) {
 func TestMarkdown_TableSelfLinkDoesNotDuplicate(t *testing.T) {
 	input := "| 项目 | 地址 |\n|---|---|\n| A | [https://example.com](https://example.com) |\n"
 	got := Markdown(input, 80, false)
-	if strings.Count(got, "https://example.com") != 1 {
+	if strings.Count(xansi.Strip(got), "https://example.com") != 1 {
 		t.Fatalf("expected self link once, got: %q", got)
 	}
 }
@@ -494,10 +494,11 @@ func TestMarkdown_TableSelfLinkDoesNotDuplicate(t *testing.T) {
 func TestMarkdown_ExplicitLinkShowsTextAndURL(t *testing.T) {
 	input := "[示例](https://example.com)"
 	got := Markdown(input, 80, false)
-	if !strings.Contains(got, "示例") || !strings.Contains(got, "https://example.com") {
+	visible := xansi.Strip(got)
+	if !strings.Contains(visible, "示例") || !strings.Contains(visible, "https://example.com") {
 		t.Fatalf("expected link text and URL, got: %q", got)
 	}
-	if !strings.Contains(got, "示例 (https://example.com)") {
+	if !strings.Contains(visible, "示例 (https://example.com)") {
 		t.Fatalf("expected terminal link format, got: %q", got)
 	}
 }
@@ -505,7 +506,7 @@ func TestMarkdown_ExplicitLinkShowsTextAndURL(t *testing.T) {
 func TestMarkdown_AutolinkDoesNotDuplicate(t *testing.T) {
 	input := "PR 已创建：<https://github.com/usewhale/DeepSeek-Code-Whale/pull/92>"
 	got := Markdown(input, 100, false)
-	if strings.Count(got, "https://github.com/usewhale/DeepSeek-Code-Whale/pull/92") != 1 {
+	if strings.Count(xansi.Strip(got), "https://github.com/usewhale/DeepSeek-Code-Whale/pull/92") != 1 {
 		t.Fatalf("expected autolink URL once, got: %q", got)
 	}
 	if strings.Contains(got, "<https://github.com/usewhale/DeepSeek-Code-Whale/pull/92>") {
@@ -516,7 +517,7 @@ func TestMarkdown_AutolinkDoesNotDuplicate(t *testing.T) {
 func TestMarkdown_AutolinkPreservesMarkdownPunctuation(t *testing.T) {
 	input := "URL：<https://example.com/a*b*c>"
 	got := Markdown(input, 100, false)
-	if strings.Count(got, "https://example.com/a*b*c") != 1 {
+	if strings.Count(xansi.Strip(got), "https://example.com/a*b*c") != 1 {
 		t.Fatalf("expected autolink with markdown punctuation preserved once, got: %q", got)
 	}
 	if strings.Contains(got, "abc") || strings.Contains(got, "\\*") {
