@@ -636,7 +636,9 @@ func (a *App) reloadPluginDisabledConfig() error {
 		return err
 	}
 	cfg := Config{}
-	ApplyLoadedConfig(&cfg, loaded)
+	if err := ApplyLoadedConfig(&cfg, loaded); err != nil {
+		return err
+	}
 	a.cfg.PluginsDisabled = trimList(cfg.PluginsDisabled)
 	return nil
 }

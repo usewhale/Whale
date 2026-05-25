@@ -276,5 +276,5 @@ func (r *Runner) patchSubagentMeta(sessionID string, meta session.SessionMeta) {
 	if strings.TrimSpace(r.sessionsDir) == "" || strings.TrimSpace(sessionID) == "" {
 		return
 	}
-	_, _ = session.PatchSessionMeta(r.sessionsDir, sessionID, meta)
+	_, _ = session.PatchSessionMeta(r.sessionsDir, sessionID, session.SessionMetaPatchFromMeta(meta))
 }

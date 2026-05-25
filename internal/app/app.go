@@ -242,7 +242,7 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 			meta.OriginalBranch = start.Worktree.OriginalBranch
 			meta.OriginalHeadCommit = start.Worktree.OriginalHeadCommit
 		}
-		if _, err := session.PatchSessionMeta(sessionsDir, sessionID, meta); err != nil {
+		if _, err := session.PatchSessionMeta(sessionsDir, sessionID, session.SessionMetaPatchFromMeta(meta)); err != nil {
 			return nil, fmt.Errorf("patch session meta failed: %w", err)
 		}
 	}

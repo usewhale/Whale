@@ -53,6 +53,61 @@ type SessionMeta struct {
 	UpdatedAt          time.Time `json:"updated_at"`
 }
 
+type SessionMetaPatch struct {
+	Branch             string
+	Title              string
+	Summary            string
+	TotalCostUSD       *float64
+	TurnCount          *int
+	Workspace          string
+	WorktreeName       string
+	WorktreePath       string
+	WorktreeBranch     string
+	OriginalWorkspace  string
+	OriginalBranch     string
+	OriginalHeadCommit string
+	Kind               string
+	ParentSessionID    string
+	Role               string
+	Model              string
+	Task               string
+	Status             string
+	Error              string
+	StartedAt          time.Time
+	CompletedAt        time.Time
+}
+
+func SessionMetaPatchFromMeta(meta SessionMeta) SessionMetaPatch {
+	patch := SessionMetaPatch{
+		Branch:             meta.Branch,
+		Title:              meta.Title,
+		Summary:            meta.Summary,
+		Workspace:          meta.Workspace,
+		WorktreeName:       meta.WorktreeName,
+		WorktreePath:       meta.WorktreePath,
+		WorktreeBranch:     meta.WorktreeBranch,
+		OriginalWorkspace:  meta.OriginalWorkspace,
+		OriginalBranch:     meta.OriginalBranch,
+		OriginalHeadCommit: meta.OriginalHeadCommit,
+		Kind:               meta.Kind,
+		ParentSessionID:    meta.ParentSessionID,
+		Role:               meta.Role,
+		Model:              meta.Model,
+		Task:               meta.Task,
+		Status:             meta.Status,
+		Error:              meta.Error,
+		StartedAt:          meta.StartedAt,
+		CompletedAt:        meta.CompletedAt,
+	}
+	if meta.TotalCostUSD != 0 {
+		patch.TotalCostUSD = &meta.TotalCostUSD
+	}
+	if meta.TurnCount != 0 {
+		patch.TurnCount = &meta.TurnCount
+	}
+	return patch
+}
+
 func metaStatePath(sessionsDir, sessionID string) string {
 	return filepath.Join(sessionsDir, sanitizeSessionID(sessionID)+".meta.json")
 }
@@ -121,7 +176,7 @@ func UpdateSessionMeta(sessionsDir, sessionID string, mutate func(*SessionMeta))
 	return cur, nil
 }
 
-func PatchSessionMeta(sessionsDir, sessionID string, patch SessionMeta) (SessionMeta, error) {
+func PatchSessionMeta(sessionsDir, sessionID string, patch SessionMetaPatch) (SessionMeta, error) {
 	path := metaStatePath(sessionsDir, sessionID)
 	lock := metaLock(sessionsDir)
 	lock.Lock()
@@ -139,11 +194,11 @@ func PatchSessionMeta(sessionsDir, sessionID string, patch SessionMeta) (Session
 	if strings.TrimSpace(patch.Summary) != "" {
 		cur.Summary = strings.TrimSpace(patch.Summary)
 	}
-	if patch.TotalCostUSD != 0 {
-		cur.TotalCostUSD = patch.TotalCostUSD
+	if patch.TotalCostUSD != nil {
+		cur.TotalCostUSD = *patch.TotalCostUSD
 	}
-	if patch.TurnCount != 0 {
-		cur.TurnCount = patch.TurnCount
+	if patch.TurnCount != nil {
+		cur.TurnCount = *patch.TurnCount
 	}
 	if strings.TrimSpace(patch.Workspace) != "" {
 		cur.Workspace = strings.TrimSpace(patch.Workspace)
