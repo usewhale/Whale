@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,6 +57,7 @@ func LoadConfig(path string) (Config, error) {
 		Servers    map[string]ServerConfig `json:"servers"`
 		MCPServers map[string]ServerConfig `json:"mcpServers"`
 	}
+	b = bytes.TrimPrefix(b, []byte{0xEF, 0xBB, 0xBF})
 	if err := json.Unmarshal(b, &raw); err != nil {
 		return cfg, fmt.Errorf("parse mcp config: %w", err)
 	}

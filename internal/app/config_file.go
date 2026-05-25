@@ -255,10 +255,11 @@ func ApplyFileConfig(cfg *Config, file FileConfig) error {
 		cfg.APIBaseURL = strings.TrimRight(strings.TrimSpace(file.API.BaseURL), "/")
 	}
 	if file.Retry.MaxAttempts != nil {
-		if *file.Retry.MaxAttempts <= 0 {
-			return fmt.Errorf("invalid retry.max_attempts: must be greater than 0")
+		if *file.Retry.MaxAttempts < 0 {
+			return fmt.Errorf("invalid retry.max_attempts: must be 0 or greater")
 		}
 		cfg.RetryMaxAttempts = *file.Retry.MaxAttempts
+		cfg.RetryMaxAttemptsExplicit = true
 	}
 	if file.Retry.StreamMaxAttempts != nil {
 		if *file.Retry.StreamMaxAttempts <= 0 {
