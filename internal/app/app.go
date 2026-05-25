@@ -127,6 +127,12 @@ type App struct {
 	worktree              WorktreeSession
 	mcpInitMu             sync.Mutex
 	mcpInitStarted        bool
+	// toolMu guards mutable tool/plugin state (pluginManager, pluginTools,
+	// toolset, hookRunner) that SetPluginEnabled rewrites while the MCP
+	// startup goroutine concurrently reads via refreshMCPTools. Held across
+	// the entire refreshMCPTools body so concurrent refreshes serialize and
+	// the last one always observes the latest pluginTools.
+	toolMu sync.Mutex
 
 	a          *agent.Agent
 	apiKey     string

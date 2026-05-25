@@ -33,6 +33,9 @@ func (a *App) refreshMCPTools() error {
 	if a == nil {
 		return nil
 	}
+	a.toolMu.Lock()
+	defer a.toolMu.Unlock()
+
 	base := append([]core.Tool{}, a.baseTools...)
 	base = append(base, a.mcpManager.Tools()...)
 	if err := a.baseToolRegistry.ReplaceTools(base); err != nil {
