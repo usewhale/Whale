@@ -39,14 +39,25 @@ func TestComposerMultilinePromptOnlyMarksFirstLine(t *testing.T) {
 	}
 }
 
-func TestComposerCtrlUClearsWholeBuffer(t *testing.T) {
+func TestComposerCtrlUKillsToLineStart(t *testing.T) {
+	// readline semantics: Ctrl+U kills from the cursor to the start of the
+	// current line. With cursor at the end of "two" on line 2, only "two"
+	// is removed — "one\n" must survive.
 	c := New()
 	c.SetValue("one\ntwo")
-	if !c.HandleKey(tea.KeyMsg{Type: tea.KeyCtrlU}) {
-		t.Fatal("expected ctrl+u to be handled")
+	c.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	if got := c.Value(); got != "one\n" {
+		t.Fatalf("expected ctrl+u to kill only current line, got %q", got)
 	}
-	if got := c.Value(); got != "" {
-		t.Fatalf("expected empty buffer, got %q", got)
+}
+
+func TestComposerCtrlDDeletesCharacterForward(t *testing.T) {
+	c := New()
+	c.SetValue("hello")
+	c.Update(tea.KeyMsg{Type: tea.KeyCtrlA}) // cursor → line start
+	c.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	if got := c.Value(); got != "ello" {
+		t.Fatalf("expected ctrl+d to delete the character at cursor, got %q", got)
 	}
 }
 

@@ -1067,19 +1067,22 @@ func TestWindowsUnbracketedPasteFallbackQueuesWhileBusy(t *testing.T) {
 	}
 }
 
-func TestWindowsPasteFallbackCtrlUResetsQuietWindow(t *testing.T) {
+func TestWindowsPasteFallbackCtrlCResetsQuietWindow(t *testing.T) {
+	// Ctrl+C is the canonical clear-with-state-reset path after PR 2 moved
+	// Ctrl+U to readline kill-to-line-start. handleGlobalKey clears the
+	// composer and resets the Windows paste fallback state in one go.
 	m, intents := newModelWithDispatchSpy()
 	m.windowsPaste.enabled = true
 	m.input.SetValue("old")
 	m.windowsPaste.buffer = "pending paste"
 	m.windowsPaste.activeUntil = time.Now().Add(windowsPasteQuietDelay)
 
-	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlU})
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
 	if got := m.input.Value(); got != "" {
-		t.Fatalf("expected Ctrl+U to clear composer, got %q", got)
+		t.Fatalf("expected Ctrl+C to clear composer, got %q", got)
 	}
 	if m.windowsPaste.pendingEnter || m.windowsPaste.buffer != "" || !m.windowsPaste.activeUntil.IsZero() {
-		t.Fatalf("expected Ctrl+U to reset paste fallback state, got %+v", m.windowsPaste)
+		t.Fatalf("expected Ctrl+C to reset paste fallback state, got %+v", m.windowsPaste)
 	}
 
 	m = typeRunesForTest(t, m, "replacement")
@@ -4900,7 +4903,14 @@ func TestEscWhileBusyKeepsTurnBusyUntilTurnDone(t *testing.T) {
 	}
 }
 
-func TestCtrlCWhileBusyCancelsPendingWindowsEnter(t *testing.T) {
+func TestCtrlCWhileBusyClearsDraftAndPendingWindowsEnter(t *testing.T) {
+	// After PR 2's Ctrl+C-precedence change, a non-empty composer while busy
+	// resolves Ctrl+C to "clear the draft" rather than "interrupt the turn".
+	// The clear path still tears down the Windows deferred-enter state via
+	// resetWindowsPasteFallbackInputState, so a stale deferred enter cannot
+	// fire after the user abandons the queued draft. Esc remains the
+	// unconditional busy interrupt for users who also want to cancel the
+	// running turn.
 	m, intents := newModelWithDispatchSpy()
 	m.svc = &service.Service{}
 	m.width = 80
@@ -4919,16 +4929,22 @@ func TestCtrlCWhileBusyCancelsPendingWindowsEnter(t *testing.T) {
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	m = next.(model)
 	if m.windowsPaste.pendingEnter {
-		t.Fatal("expected ctrl+c interrupt to clear pending windows enter")
+		t.Fatal("expected ctrl+c clear path to drop pending windows enter")
 	}
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentShutdown {
-		t.Fatalf("expected only the shutdown intent from interrupt, got %+v", *intents)
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected Ctrl+C with non-empty composer to clear draft, got %q", got)
+	}
+	if len(*intents) != 0 {
+		t.Fatalf("expected Ctrl+C with non-empty composer not to interrupt the turn, got intents %+v", *intents)
+	}
+	if m.stopping {
+		t.Fatal("expected Ctrl+C with non-empty composer not to mark the turn stopping")
 	}
 
 	next, _ = m.Update(windowsDeferredEnterMsg{id: deferredID})
 	m = next.(model)
-	if len(*intents) != 1 {
-		t.Fatalf("stale deferred enter should not submit after interrupt, got %+v", *intents)
+	if len(*intents) != 0 {
+		t.Fatalf("stale deferred enter should not submit after clear, got %+v", *intents)
 	}
 }
 
@@ -7103,7 +7119,7 @@ func TestNativeScrollbackWaitsWhileChatViewportFrozenAndFlushesAtTail(t *testing
 	}
 }
 
-func TestCtrlUStillClearsComposerInsteadOfScrollingTranscript(t *testing.T) {
+func TestCtrlUKillsSingleLineComposerDoesNotScrollTranscript(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 80
 	m.height = 8
@@ -7122,6 +7138,155 @@ func TestCtrlUStillClearsComposerInsteadOfScrollingTranscript(t *testing.T) {
 	}
 	if m.viewport.YOffset != 0 {
 		t.Fatalf("expected Ctrl+U not to scroll transcript, offset=%d", m.viewport.YOffset)
+	}
+}
+
+func TestCtrlDDeletesComposerCharDoesNotScrollTranscript(t *testing.T) {
+	// PR 2 removed the chat-mode interception of Ctrl+D for transcript
+	// half-page-down. Ctrl+D should now reach the textarea's
+	// DeleteCharacterForward via the standard composer dispatch path.
+	m := newModel(nil, "", "", "")
+	m.width = 80
+	m.height = 8
+	m.transcript = nil
+	for i := 0; i < 30; i++ {
+		m.appendTranscript("info", tuirender.KindText, fmt.Sprintf("entry-%02d", i))
+	}
+	m.refreshViewportContentFollow(true)
+	m.handleViewportScrollKey("home")
+	initialOffset := m.viewport.YOffset
+	m.input.SetValue("abc")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlA}) // cursor → line start
+	m = next.(model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	m = next.(model)
+	if got := m.input.Value(); got != "bc" {
+		t.Fatalf("expected Ctrl+D to delete first char, got %q", got)
+	}
+	if m.viewport.YOffset != initialOffset {
+		t.Fatalf("expected Ctrl+D not to scroll transcript, offset=%d want %d", m.viewport.YOffset, initialOffset)
+	}
+}
+
+func TestCtrlCWhileBusyClearsNonEmptyComposer(t *testing.T) {
+	// PR 2 promoted Ctrl+C to the canonical clear-all path. During a busy
+	// turn the composer-clear path must still be reachable so users can
+	// drop a queued draft mid-stream without canceling the running turn.
+	// Esc remains the unconditional interrupt for those who want to cancel.
+	m, _ := newModelWithDispatchSpy()
+	m.busy = true
+	m.input.SetValue("queued draft text")
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected Ctrl+C to clear non-empty composer during busy, got %q", got)
+	}
+	if m.stopping {
+		t.Fatal("expected Ctrl+C with non-empty composer not to interrupt the busy turn")
+	}
+}
+
+func TestCtrlCWhileBusyEmptyComposerInterruptsTurn(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.busy = true
+	m.input.SetValue("")
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	if !m.stopping {
+		t.Fatal("expected Ctrl+C with empty composer during busy to interrupt the turn")
+	}
+}
+
+func TestCtrlCWhileBusyInBlockingModeAlwaysInterrupts(t *testing.T) {
+	// The composer-clear precedence is scoped to modeChat. In blocking
+	// modes (approval, user-input) Ctrl+C must interrupt the running turn
+	// even with a queued draft — otherwise it would only dismiss the modal
+	// via the mode-specific handler and leave the turn running.
+	m, _ := newModelWithDispatchSpy()
+	m.busy = true
+	m.input.SetValue("queued draft kept while modal blocks")
+	m.mode = modeApproval
+	m.approval.toolCallID = "tool-1"
+	m.approval.toolName = "shell"
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	if !m.stopping {
+		t.Fatal("expected Ctrl+C in modeApproval during busy to interrupt the turn, not just dismiss the modal")
+	}
+	if got := m.input.Value(); got != "queued draft kept while modal blocks" {
+		t.Fatalf("expected interrupt path not to touch the composer draft, got %q", got)
+	}
+}
+
+func TestCtrlCClearsWhitespaceOnlyDraft(t *testing.T) {
+	// After PR 2 made Ctrl+C the canonical clear-all, the path must accept
+	// whitespace-only buffers too — otherwise a stray Enter / blank-line
+	// paste leaves the user with no way to clear short of Ctrl+C ×2 quit.
+	m, _ := newModelWithDispatchSpy()
+	m.input.SetValue("   \n\n  ")
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected Ctrl+C to clear whitespace-only draft, got %q", got)
+	}
+	if !m.quitArmedUntil.IsZero() {
+		t.Fatal("expected Ctrl+C with whitespace draft to clear (not arm quit)")
+	}
+}
+
+func TestCtrlCWhileBusyClearsWhitespaceOnlyDraft(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.busy = true
+	m.input.SetValue("   ")
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected Ctrl+C to clear whitespace-only draft during busy, got %q", got)
+	}
+	if m.stopping {
+		t.Fatal("expected Ctrl+C with whitespace draft during busy to clear (not interrupt)")
+	}
+}
+
+func TestCtrlCWhileBusyClearsPendingWindowsPasteBuffer(t *testing.T) {
+	// Windows paste fallback buffers burst chunks in m.windowsPaste.buffer
+	// for windowsPasteQuietDelay (80ms) before flushing into the textarea.
+	// In that window m.input.Value() is still empty, so the busy gate must
+	// also consult hasWindowsPasteBuffer() to avoid interrupting the turn
+	// when the user is really just trying to drop the pasted draft.
+	m, _ := newModelWithDispatchSpy()
+	m.windowsPaste.enabled = true
+	m.busy = true
+	m.windowsPaste.buffer = "buffered paste chunk"
+	m.windowsPaste.activeUntil = time.Now().Add(windowsPasteQuietDelay)
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	if m.hasWindowsPasteBuffer() {
+		t.Fatalf("expected Ctrl+C to drop pending paste buffer, got %q", m.windowsPaste.buffer)
+	}
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected composer to stay empty after clearing pending paste, got %q", got)
+	}
+	if m.stopping {
+		t.Fatal("expected Ctrl+C with pending paste buffer not to interrupt the busy turn")
+	}
+}
+
+func TestCtrlCClearsPendingWindowsPasteBufferNotBusy(t *testing.T) {
+	// Outside of busy, the same paste-buffer state must hit the clear path
+	// rather than arming quit — otherwise users get a "Press Ctrl+C again
+	// to quit" prompt while their just-pasted draft is still pending.
+	m, _ := newModelWithDispatchSpy()
+	m.windowsPaste.enabled = true
+	m.windowsPaste.buffer = "buffered chunk"
+	m.windowsPaste.activeUntil = time.Now().Add(windowsPasteQuietDelay)
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	if m.hasWindowsPasteBuffer() {
+		t.Fatalf("expected Ctrl+C to drop pending paste buffer outside busy, got %q", m.windowsPaste.buffer)
+	}
+	if !m.quitArmedUntil.IsZero() {
+		t.Fatal("expected Ctrl+C with pending paste buffer to clear (not arm quit)")
 	}
 }
 
@@ -7351,7 +7516,7 @@ func TestComposerHeightShrinkOffTailClampsLayoutWithoutRerender(t *testing.T) {
 	}
 }
 
-func TestCtrlUClearsMultilineComposerWithLayoutSyncOnly(t *testing.T) {
+func TestCtrlCClearsMultilineComposerWithLayoutSyncOnly(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 80
 	m.height = 10
@@ -7365,20 +7530,22 @@ func TestCtrlUClearsMultilineComposerWithLayoutSyncOnly(t *testing.T) {
 	initialBodyHeight := m.viewportBodyHeight(mainWidth)
 	initialGeneration := m.chat.generation
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	// Ctrl+C is the canonical full-clear after PR 2 moved Ctrl+U to readline
+	// kill-to-line-start (which would only kill the current line "beta").
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	m = next.(model)
 	mainWidth, _ = m.layoutDims()
 	if got := m.viewportBodyHeight(mainWidth); got <= initialBodyHeight {
-		t.Fatalf("expected Ctrl+U clear to free composer height, got %d want > %d", got, initialBodyHeight)
+		t.Fatalf("expected Ctrl+C clear to free composer height, got %d want > %d", got, initialBodyHeight)
 	}
 	if got := m.input.Value(); got != "" {
-		t.Fatalf("expected Ctrl+U to clear multiline composer, got %q", got)
+		t.Fatalf("expected Ctrl+C to clear multiline composer, got %q", got)
 	}
 	if m.chat.generation != initialGeneration {
-		t.Fatalf("expected Ctrl+U clear not to rerender chat, gen=%d want=%d", m.chat.generation, initialGeneration)
+		t.Fatalf("expected Ctrl+C clear not to rerender chat, gen=%d want=%d", m.chat.generation, initialGeneration)
 	}
 	if !m.followTail || !m.chat.AtBottom() {
-		t.Fatalf("expected Ctrl+U clear at tail to keep latest content visible, follow=%v chatBottom=%v", m.followTail, m.chat.AtBottom())
+		t.Fatalf("expected Ctrl+C clear at tail to keep latest content visible, follow=%v chatBottom=%v", m.followTail, m.chat.AtBottom())
 	}
 }
 

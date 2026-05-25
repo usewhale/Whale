@@ -119,9 +119,6 @@ func (c *Composer) Update(msg tea.Msg) tea.Cmd {
 func (c *Composer) HandleKey(msg tea.KeyMsg) bool {
 	c.ensureInitialized()
 	switch msg.String() {
-	case "ctrl+u":
-		c.Reset()
-		return true
 	case "ctrl+p", "ctrl+n":
 		return false
 	case "ctrl+j", "shift+enter":
@@ -354,7 +351,7 @@ func (c Composer) hiddenLine(n int) string {
 func (c Composer) hintLine(n int) string {
 	return lipgloss.NewStyle().
 		Foreground(tuitheme.Default.Muted).
-		Render(fmt.Sprintf("  [%d lines · Ctrl+A/E/K line · Ctrl+W/Alt+B,F word · Ctrl+U clear · PgUp/PgDn]", n))
+		Render(fmt.Sprintf("  [%d lines · Ctrl+A/E/K/U line · Ctrl+W/Alt+B,F word · Ctrl+C clear · PgUp/PgDn]", n))
 }
 
 func splitComposerLines(value string) []string {

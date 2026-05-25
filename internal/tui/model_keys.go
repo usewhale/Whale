@@ -99,7 +99,23 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 			return nil, false, true
 		}
 	}
-	if msg.String() == "ctrl+c" && m.busy {
+	// Ctrl+C precedence while busy: in modeChat a non-empty composer means
+	// the user is editing a queued draft, so the first Ctrl+C clears the
+	// draft (via handleGlobalKey below). With the composer empty, Ctrl+C
+	// interrupts the running turn as before. Esc remains the unconditional
+	// busy interrupt (handleChatModeKey "esc" case) for users who want to
+	// cancel mid-edit. In blocking modes (approval, user-input, …) Ctrl+C
+	// must continue to interrupt unconditionally — otherwise it would fall
+	// through to the modal's own Ctrl+C handler, which only dismisses the
+	// modal without canceling the running turn. The raw Value() check (not
+	// TrimSpace) keeps whitespace-only drafts on the clear path so users
+	// can recover from accidental blank lines / whitespace paste. The
+	// hasWindowsPasteBuffer() check covers the Windows paste quiet-delay
+	// window: chunks pasted during a burst live in m.windowsPaste.buffer
+	// for up to windowsPasteQuietDelay (80ms) before flushing into the
+	// textarea, so a Ctrl+C arriving inside that window would otherwise
+	// see an empty textarea and incorrectly interrupt the running turn.
+	if msg.String() == "ctrl+c" && m.busy && (m.mode != modeChat || (m.input.Value() == "" && !m.hasWindowsPasteBuffer())) {
 		return m.interruptBusyTurn(), false, true
 	}
 	if m.mode == modeChat {
@@ -257,7 +273,7 @@ func (m *model) handleChatModeKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 			m.skills.selected = 0
 			return nil, true
 		}
-	case "pgup", "pgdown", "ctrl+d", "home", "end":
+	case "pgup", "pgdown", "home", "end":
 		return m.handleViewportScrollKey(msg.String()), true
 	}
 	return nil, false
@@ -498,7 +514,15 @@ func (m *model) handlePlanImplementationKey(msg tea.KeyMsg) tea.Cmd {
 func (m *model) handleGlobalKey(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 	switch msg.String() {
 	case "ctrl+c":
-		if strings.TrimSpace(m.input.Value()) != "" {
+		// Use the raw value (not TrimSpace) so whitespace-only drafts can
+		// still be cleared. Without this, a draft containing only spaces or
+		// blank lines would arm quit / interrupt the busy turn instead of
+		// clearing — leaving the user stuck after an accidental paste.
+		// Also clear when only the Windows paste buffer has content (the
+		// 80ms quiet-delay window before chunks flush into the textarea) —
+		// otherwise pasting during a busy turn and immediately hitting
+		// Ctrl+C would arm quit instead of dropping the pasted draft.
+		if m.input.Value() != "" || m.hasWindowsPasteBuffer() {
 			m.input.Reset()
 			m.skillBinding = nil
 			m.resetWindowsPasteFallbackInputState()
