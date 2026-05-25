@@ -61,7 +61,7 @@ func TestResolveWindowsPrefersPwsh(t *testing.T) {
 	if spec.Bin != `C:\Program Files\PowerShell\7\pwsh.exe` {
 		t.Fatalf("Bin = %q", spec.Bin)
 	}
-	wantArgs := []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-Command", powerShellUTF8OutputPrefix + "& {\nGet-ChildItem\n}"}
+	wantArgs := []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-Command", powerShellUTF8OutputPrefix + "& {\nGet-ChildItem\n}; if ($global:LASTEXITCODE -ne $null) { exit $global:LASTEXITCODE }"}
 	if !reflect.DeepEqual(spec.Args, wantArgs) {
 		t.Fatalf("Args = %#v, want %#v", spec.Args, wantArgs)
 	}

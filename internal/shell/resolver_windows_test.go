@@ -3,6 +3,7 @@
 package shell
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -71,6 +72,23 @@ func TestWindowsResolvePreservesPowerShellFirstStatementSemantics(t *testing.T) 
 	}
 	if !strings.Contains(string(out), "marker.txt") {
 		t.Fatalf("output %q does not contain expected filename", string(out))
+	}
+}
+
+func TestWindowsPowerShellSpecPropagatesNativeExitCode(t *testing.T) {
+	bin, err := exec.LookPath("pwsh")
+	if err != nil {
+		t.Skip("pwsh not available")
+	}
+	spec := powerShellSpec(bin, `cmd.exe /d /c exit 7`)
+
+	err = Command(spec).Run()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("Run error = %v, want ExitError", err)
+	}
+	if exitErr.ExitCode() != 7 {
+		t.Fatalf("exit code = %d, want 7", exitErr.ExitCode())
 	}
 }
 
