@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/x/term"
 )
@@ -196,6 +199,17 @@ func (r *shiftEnterReader) drainPending(final bool) {
 			continue
 		}
 
+		if consumed, ok := discardTerminalResponseSequence(r.pending); ok {
+			r.pending = r.pending[consumed:]
+			continue
+		}
+
+		if out, consumed, ok := translateEnhancedPrintableSequence(r.pending); ok {
+			r.out = append(r.out, out...)
+			r.pending = r.pending[consumed:]
+			continue
+		}
+
 		if !final && isPartialShiftEnterSequence(r.pending) {
 			return
 		}
@@ -214,7 +228,125 @@ func isPartialShiftEnterSequence(input []byte) bool {
 			return true
 		}
 	}
+	if isPartialEnhancedPrintableSequence(input) {
+		return true
+	}
+	if isPartialTerminalResponseSequence(input) {
+		return true
+	}
 	return false
+}
+
+func discardTerminalResponseSequence(input []byte) (int, bool) {
+	if !bytes.HasPrefix(input, []byte("\x1b]")) {
+		return 0, false
+	}
+	if end := bytes.IndexByte(input, '\a'); end >= 0 {
+		return end + 1, true
+	}
+	if end := bytes.Index(input, []byte("\x1b\\")); end >= 0 {
+		return end + 2, true
+	}
+	return 0, false
+}
+
+func isPartialTerminalResponseSequence(input []byte) bool {
+	if len(input) == 0 || !bytes.HasPrefix([]byte("\x1b]"), input[:min(len(input), 2)]) {
+		return false
+	}
+	return !bytes.Contains(input, []byte{'\a'}) && !bytes.Contains(input, []byte("\x1b\\"))
+}
+
+func translateEnhancedPrintableSequence(input []byte) ([]byte, int, bool) {
+	codepoint, modifier, consumed, ok := parseCSIUPrintableSequence(input)
+	if !ok {
+		codepoint, modifier, consumed, ok = parseModifyOtherKeysPrintableSequence(input)
+	}
+	if !ok || !isTextInputModifier(modifier) || !isPrintableCodepoint(codepoint) {
+		return nil, 0, false
+	}
+	return []byte(string(rune(codepoint))), consumed, true
+}
+
+func parseCSIUPrintableSequence(input []byte) (int, int, int, bool) {
+	if !bytes.HasPrefix(input, []byte("\x1b[")) {
+		return 0, 0, 0, false
+	}
+	end := bytes.IndexByte(input, 'u')
+	if end < 0 {
+		return 0, 0, 0, false
+	}
+	parts := strings.Split(string(input[2:end]), ";")
+	if len(parts) != 2 {
+		return 0, 0, 0, false
+	}
+	codepoint, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	modifier, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	return codepoint, modifier, end + 1, true
+}
+
+func parseModifyOtherKeysPrintableSequence(input []byte) (int, int, int, bool) {
+	if !bytes.HasPrefix(input, []byte("\x1b[")) {
+		return 0, 0, 0, false
+	}
+	end := bytes.IndexByte(input, '~')
+	if end < 0 {
+		return 0, 0, 0, false
+	}
+	parts := strings.Split(string(input[2:end]), ";")
+	if len(parts) != 3 || parts[0] != "27" {
+		return 0, 0, 0, false
+	}
+	modifier, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	codepoint, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	return codepoint, modifier, end + 1, true
+}
+
+func isTextInputModifier(modifier int) bool {
+	return modifier == 1 || modifier == 2
+}
+
+func isPrintableCodepoint(codepoint int) bool {
+	r := rune(codepoint)
+	return codepoint >= 0x20 && codepoint != 0x7f && utf8.ValidRune(r)
+}
+
+func isPartialEnhancedPrintableSequence(input []byte) bool {
+	if len(input) == 0 || !bytes.HasPrefix([]byte("\x1b["), input[:min(len(input), 2)]) {
+		return false
+	}
+	if len(input) <= 2 {
+		return true
+	}
+	body := string(input[2:])
+	if strings.ContainsAny(body, "u~") {
+		return false
+	}
+	parts := strings.Split(body, ";")
+	if len(parts) > 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		if _, err := strconv.Atoi(part); err != nil {
+			return false
+		}
+	}
+	return len(parts) <= 2 || parts[0] == "27"
 }
 
 func enableTerminalKeyboardEnhancements(output *os.File) func() {

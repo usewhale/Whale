@@ -81,6 +81,10 @@ func ResolveOpenPath(workspaceRoot, raw string) (string, error) {
 	}
 	baseReal = filepath.Clean(baseReal)
 	target := strings.TrimSpace(raw)
+	target, err = expandOpenHomePath(target)
+	if err != nil {
+		return "", err
+	}
 	relativeTarget := target != "" && !filepath.IsAbs(target)
 	if target == "" {
 		target = baseAbs
@@ -108,6 +112,23 @@ func ResolveOpenPath(workspaceRoot, raw string) (string, error) {
 		return "", openPathOutsideWorkspaceError(baseAbs, abs)
 	}
 	return abs, nil
+}
+
+func expandOpenHomePath(path string) (string, error) {
+	if path != "~" && !strings.HasPrefix(path, "~/") {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	if home == "" {
+		return "", errors.New("home directory is unavailable")
+	}
+	if path == "~" {
+		return home, nil
+	}
+	return filepath.Join(home, strings.TrimPrefix(path, "~/")), nil
 }
 
 func openPathOutsideWorkspaceError(workspaceRoot, target string) error {

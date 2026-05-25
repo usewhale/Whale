@@ -25,6 +25,7 @@ tmp/
 .whale/worktrees/
 .whale/sessions/
 .whale/usage.jsonl
+.antigravitycli/
 .omx/
 session.json
 .env

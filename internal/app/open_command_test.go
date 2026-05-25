@@ -46,6 +46,27 @@ func TestResolveOpenPathHandlesRelativeAbsoluteAndSpaces(t *testing.T) {
 	}
 }
 
+func TestResolveOpenPathExpandsHomePathInsideWorkspace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workspace := filepath.Join(home, "Engineer", "ai", "dsk", "whale")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(workspace, "README.md")
+	if err := os.WriteFile(file, []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ResolveOpenPath(workspace, "~/Engineer/ai/dsk/whale/README.md")
+	if err != nil {
+		t.Fatalf("ResolveOpenPath: %v", err)
+	}
+	if got != file {
+		t.Fatalf("home path = %q, want %q", got, file)
+	}
+}
+
 func TestResolveOpenPathMissingTarget(t *testing.T) {
 	dir := t.TempDir()
 	_, err := ResolveOpenPath(dir, "missing.txt")

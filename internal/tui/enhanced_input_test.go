@@ -39,6 +39,30 @@ func TestShiftEnterReaderTranslatesEnhancedCtrlJSequences(t *testing.T) {
 	}
 }
 
+func TestShiftEnterReaderTranslatesEnhancedPrintableTextInput(t *testing.T) {
+	input := "alpha\x1b[65;2ubeta\x1b[27;2;90~gamma"
+	got := readShiftEnterInput(t, strings.NewReader(input))
+	if want := "alphaAbetaZgamma"; got != want {
+		t.Fatalf("unexpected translated printable input: got %q want %q", got, want)
+	}
+}
+
+func TestShiftEnterReaderPreservesEnhancedCtrlAltPrintableSequences(t *testing.T) {
+	input := "alpha\x1b[65;5ubeta\x1b[27;3;90~gamma"
+	got := readShiftEnterInput(t, strings.NewReader(input))
+	if got != input {
+		t.Fatalf("unexpected translated shortcut input: got %q want %q", got, input)
+	}
+}
+
+func TestShiftEnterReaderDiscardsTerminalColorResponses(t *testing.T) {
+	input := "alpha\x1b]10;rgb:ffff/ffff/ffff\abeta\x1b]11;rgb:2828/2c2c/3434\x1b\\gamma"
+	got := readShiftEnterInput(t, strings.NewReader(input))
+	if want := "alphabetagamma"; got != want {
+		t.Fatalf("unexpected terminal response filtering: got %q want %q", got, want)
+	}
+}
+
 func TestShiftEnterReaderPreservesPlainEnterAndUnknownEscapeSequences(t *testing.T) {
 	input := "alpha\rbeta\x1b[15~gamma\x1b"
 	got := readShiftEnterInput(t, strings.NewReader(input))
@@ -58,6 +82,32 @@ func TestShiftEnterReaderHandlesChunkedSequences(t *testing.T) {
 	got := readShiftEnterInput(t, reader)
 	if want := "alpha\nbeta\ngamma"; got != want {
 		t.Fatalf("unexpected translated chunked input: got %q want %q", got, want)
+	}
+}
+
+func TestShiftEnterReaderHandlesChunkedEnhancedPrintableTextInput(t *testing.T) {
+	reader := &chunkReader{chunks: []string{
+		"/open /Users/goranka/Engineer/ai/ohm/",
+		"\x1b[65;",
+		"2u",
+		"ntigravity",
+	}}
+	got := readShiftEnterInput(t, reader)
+	if want := "/open /Users/goranka/Engineer/ai/ohm/Antigravity"; got != want {
+		t.Fatalf("unexpected translated chunked printable input: got %q want %q", got, want)
+	}
+}
+
+func TestShiftEnterReaderDiscardsChunkedTerminalColorResponses(t *testing.T) {
+	reader := &chunkReader{chunks: []string{
+		"alpha\x1b]10;rgb:ffff/",
+		"ffff/ffff\a",
+		"beta\x1b]11;rgb:2828/2c2c/",
+		"3434\x1b\\gamma",
+	}}
+	got := readShiftEnterInput(t, reader)
+	if want := "alphabetagamma"; got != want {
+		t.Fatalf("unexpected chunked terminal response filtering: got %q want %q", got, want)
 	}
 }
 
