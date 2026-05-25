@@ -69,7 +69,7 @@ func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolRe
 	if err != nil {
 		return marshalToolError(call, "exec_failed", err.Error()), nil
 	}
-	cmd := exec.Command(spec.Bin, spec.Args...)
+	cmd := shell.Command(spec)
 	cmd.Dir = workdir
 	var stdoutBuf bytes.Buffer
 	var stderrBuf bytes.Buffer

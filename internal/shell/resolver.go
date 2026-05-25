@@ -85,7 +85,7 @@ func cmdSpec(bin, command string) Spec {
 		Kind:        KindCmd,
 		DisplayName: "cmd.exe",
 		Bin:         bin,
-		Args:        []string{"/d", "/s", "/c", withCmdUTF8Codepage(command)},
+		Args:        []string{"/d", "/c", withCmdUTF8Codepage(command)},
 	}
 }
 

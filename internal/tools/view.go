@@ -22,6 +22,16 @@ func (b *Toolset) readFile(_ context.Context, call core.ToolCall) (core.ToolResu
 	if err != nil {
 		return marshalToolError(call, "permission_denied", err.Error()), nil
 	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return marshalToolError(call, "not_found", err.Error()), nil
+		}
+		return marshalToolError(call, "read_failed", err.Error()), nil
+	}
+	if info.IsDir() {
+		return marshalToolError(call, "not_file", abs+" is a directory; use list_dir or search_files for directories"), nil
+	}
 	data, err := os.ReadFile(abs)
 	if err != nil {
 		if os.IsNotExist(err) {

@@ -195,7 +195,7 @@ func (d devEnv) testWindows() error {
 	steps := [][]string{
 		{"go", "test", "./internal/tui", "./internal/tui/render", "-count=1"},
 		{"go", "test", "./internal/shell", "-count=1"},
-		{"go", "test", "./internal/tools", "-run", "Test(ReadFileNormalizesCRLFContent|EditFileMatchesLFSearchAndPreservesCRLF|EditFilePreservesMixedLineEndings|ApplyPatchMatchesLFHunksAndPreservesCRLF|ApplyPatchPreservesMixedLineEndings|WindowsShellRunForegroundAndBackground|WindowsShellRunCancelKillsProcessTree|WindowsShellRunKeepsLaunchedChildOnSuccess)$", "-count=1"},
+		{"go", "test", "./internal/tools", "-run", "Test(ReadFileNormalizesCRLFContent|ReadFileDirectoryReturnsStableToolError|EditFileMatchesLFSearchAndPreservesCRLF|EditFilePreservesMixedLineEndings|ApplyPatchMatchesLFHunksAndPreservesCRLF|ApplyPatchPreservesMixedLineEndings|WindowsShellRunForegroundAndBackground|WindowsShellRunCancelKillsProcessTree|WindowsShellRunKeepsLaunchedChildOnSuccess|WindowsShellRunDecodesGBKStdout|WindowsShellRunPreservesAmbiguousValidUTF8Stdout|WindowsShellRunDecodesGBKStderrOnFailure|WindowsDecodeTextBytesDecodesGB18030WhenUTF8Invalid|WindowsReadFileDecodesGB18030Text|WindowsEditFilePreservesGB18030Bytes|WindowsEditFileMatchesVisibleGB18030Text|WindowsEditFilePreservesNonChineseLegacyBytes|WindowsGoSearchFallbackDecodesGB18030Text)$", "-count=1"},
 		{"go", "test", "./internal/agent", "-run", "TestWindowsHook", "-count=1"},
 		{"go", "test", "./internal/ui/cli", "-count=1"},
 	}
