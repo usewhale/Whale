@@ -3,5 +3,5 @@
 package tools
 
 func decodeShellOutput(b []byte) string {
-	return string(b)
+	return decodeTextBytes(b)
 }

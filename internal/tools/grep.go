@@ -214,18 +214,19 @@ func searchWithGo(pattern, path, include string, literal bool, displayPath func(
 
 // grepFile searches a single file for regex matches, returning match rows.
 func grepFile(filePath string, re *regexp.Regexp, displayPath func(string) string) ([]matchRow, error) {
-	f, err := os.Open(filePath)
+	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-
 	var matches []matchRow
-	sc := bufio.NewScanner(f)
-	lineNum := 0
-	for sc.Scan() {
-		lineNum++
-		line := sc.Text()
+	text, _ := normalizeTextFileBytes(data)
+	lines := strings.Split(text, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	for idx, line := range lines {
+		lineNum := idx + 1
+		line = strings.TrimSuffix(line, "\r")
 		locs := re.FindAllStringIndex(line, -1)
 		if len(locs) == 0 {
 			continue
@@ -247,9 +248,6 @@ func grepFile(filePath string, re *regexp.Regexp, displayPath func(string) strin
 			})
 		}
 		matches = append(matches, row)
-	}
-	if err := sc.Err(); err != nil {
-		return matches, err
 	}
 	return matches, nil
 }

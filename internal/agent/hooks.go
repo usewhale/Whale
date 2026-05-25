@@ -698,7 +698,7 @@ func defaultHookSpawner(parent context.Context, in HookSpawnInput) HookSpawnResu
 	if err != nil {
 		return HookSpawnResult{ExitCode: -1, SpawnErr: err}
 	}
-	cmd := exec.Command(spec.Bin, spec.Args...)
+	cmd := shell.Command(spec)
 	if in.CWD != "" {
 		cmd.Dir = in.CWD
 	}

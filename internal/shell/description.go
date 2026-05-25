@@ -69,7 +69,7 @@ func (d RuntimeDescription) executionSummary() string {
 	case KindPowerShell:
 		return "PowerShell -NoLogo -NoProfile -NonInteractive -Command"
 	case KindCmd:
-		return "cmd.exe /d /s /c"
+		return "cmd.exe /d /c"
 	case KindPOSIX:
 		return "/bin/sh -lc"
 	default:

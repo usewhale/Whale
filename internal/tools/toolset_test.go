@@ -110,6 +110,30 @@ func TestReadFileStripsUTF8BOMFromVisibleContent(t *testing.T) {
 	}
 }
 
+func TestReadFileDirectoryReturnsStableToolError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "subdir"), 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
+		"file_path": "subdir",
+	}))
+	if err != nil {
+		t.Fatalf("read_file dispatch error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected read_file directory to fail, got: %+v", res)
+	}
+	if !strings.Contains(res.Content, "not_file") || strings.Contains(res.Content, "Incorrect function") {
+		t.Fatalf("expected stable not_file error without OS-specific text, got: %s", res.Content)
+	}
+}
+
 func TestWriteFilePreservesCRLFWhenOverwritingExistingFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a.txt")
@@ -1216,6 +1240,42 @@ func TestSearchFiles(t *testing.T) {
 	}
 	if !strings.Contains(res.Content, "alpha.go") {
 		t.Fatalf("expected alpha.go in result: %s", res.Content)
+	}
+}
+
+func TestGoSearchFallbackDoesNotMatchSyntheticFinalLine(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "trailing.txt"), []byte("one\n"), 0o644); err != nil {
+		t.Fatalf("write trailing fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "empty.txt"), nil, 0o644); err != nil {
+		t.Fatalf("write empty fixture: %v", err)
+	}
+
+	matches, _, err := searchWithGo("^$", dir, "*.txt", false, nil)
+	if err != nil {
+		t.Fatalf("searchWithGo: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("expected no synthetic empty-line matches, got: %+v", matches)
+	}
+}
+
+func TestGoSearchFallbackMatchesRealEmptyLine(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "blank.txt"), []byte("one\n\nthree\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	matches, _, err := searchWithGo("^$", dir, "*.txt", false, nil)
+	if err != nil {
+		t.Fatalf("searchWithGo: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected one real empty-line match, got: %+v", matches)
+	}
+	if matches[0].LineNumber != 2 || matches[0].Line != "" {
+		t.Fatalf("unexpected empty-line match: %+v", matches[0])
 	}
 }
 

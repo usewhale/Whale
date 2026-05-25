@@ -85,7 +85,7 @@ func cmdSpec(bin, command string) Spec {
 		Kind:        KindCmd,
 		DisplayName: "cmd.exe",
 		Bin:         bin,
-		Args:        []string{"/d", "/s", "/c", withCmdUTF8Codepage(command)},
+		Args:        []string{"/d", "/c", withCmdUTF8Codepage(command)},
 	}
 }
 
@@ -99,7 +99,7 @@ func withPowerShellUTF8Output(command string) string {
 	if powerShellRequiresFirstStatement(trimmed) {
 		return command
 	}
-	return powerShellUTF8OutputPrefix + "& {\n" + command + "\n}"
+	return powerShellUTF8OutputPrefix + "& {\n" + command + "\n}; if ($global:LASTEXITCODE -ne $null) { exit $global:LASTEXITCODE }"
 }
 
 func powerShellRequiresFirstStatement(command string) bool {

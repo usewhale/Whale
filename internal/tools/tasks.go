@@ -183,7 +183,7 @@ func runShellBackground(ctx context.Context, dir, command string, task *shellTas
 		markShellTaskFailed(task, err.Error())
 		return
 	}
-	cmd := exec.Command(spec.Bin, spec.Args...)
+	cmd := shell.Command(spec)
 	cmd.Dir = dir
 	var stdoutBuf bytes.Buffer
 	var stderrBuf bytes.Buffer

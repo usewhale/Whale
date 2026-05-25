@@ -71,7 +71,7 @@ func TestRuntimeDescriptionCmdGuidance(t *testing.T) {
 	}
 	assertContainsAll(t, rt.ToolGuidance(), []string{
 		"OS: windows.",
-		"Runtime shell: cmd.exe (cmd.exe /d /s /c).",
+		"Runtime shell: cmd.exe (cmd.exe /d /c).",
 		"Use cmd.exe syntax",
 		"dir",
 		"findstr",

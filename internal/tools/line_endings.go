@@ -11,10 +11,11 @@ const (
 )
 
 type lineEndingSnapshot struct {
-	style lineEndingStyle
-	mixed bool
-	lines []lineEndingLine
-	bom   bool
+	style    lineEndingStyle
+	mixed    bool
+	lines    []lineEndingLine
+	bom      bool
+	encoding textEncoding
 }
 
 var utf8BOMBytes = []byte{0xEF, 0xBB, 0xBF}
@@ -27,19 +28,22 @@ func normalizeTextFileBytes(data []byte) (string, lineEndingSnapshot) {
 	if bom {
 		data = data[len(utf8BOMBytes):]
 	}
-	text, snapshot := normalizeLineEndings(string(data))
+	decoded, encoding := decodeTextFileBytes(data)
+	text, snapshot := normalizeLineEndings(decoded)
 	snapshot.bom = bom
+	snapshot.encoding = encoding
 	return text, snapshot
 }
 
 func restoreTextFileBytes(s string, snapshot lineEndingSnapshot) []byte {
 	text := restoreLineEndings(s, snapshot)
+	encoded := encodeTextFileString(text, snapshot.encoding)
 	if !snapshot.bom {
-		return []byte(text)
+		return encoded
 	}
-	out := make([]byte, 0, len(utf8BOMBytes)+len(text))
+	out := make([]byte, 0, len(utf8BOMBytes)+len(encoded))
 	out = append(out, utf8BOMBytes...)
-	out = append(out, text...)
+	out = append(out, encoded...)
 	return out
 }
 
