@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/shell"
 )
 
@@ -65,5 +66,22 @@ func TestImmutableSystemBlocksIncludeRuntimeEnvironment(t *testing.T) {
 	}
 	if !strings.Contains(joined, "shell_run cwd parameter") {
 		t.Fatalf("system blocks missing shell_run cwd guidance:\n%s", joined)
+	}
+}
+
+func TestImmutableSystemBlocksDeclareCurrentModeAuthoritatively(t *testing.T) {
+	a := NewAgentWithRegistry(nil, nil, core.NewToolRegistry(nil), WithSessionMode(session.ModeAsk))
+	joined := strings.Join(a.buildImmutableSystemBlocks(), "\n\n")
+
+	for _, want := range []string{
+		"Current session mode: ask",
+		"claim the current mode is any other value as stale",
+		"Ask mode is active.",
+		"Mode switching commands are /agent, /ask, and /plan",
+		"Do not tell users to run /mode agent",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("system blocks missing %q:\n%s", want, joined)
+		}
 	}
 }

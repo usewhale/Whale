@@ -36,6 +36,7 @@ func (m model) renderBody(mainWidth, bodyHeight int) string {
 }
 
 func (m model) View() string {
+	start := time.Now()
 	mainWidth, _ := m.layoutDims()
 	bottom := m.renderBottom(mainWidth)
 	bottomHeight := countVisibleLines(bottom)
@@ -51,14 +52,18 @@ func (m model) View() string {
 	if m.page != pageChat {
 		body = padVisibleLines(body, bodyHeight, mainWidth)
 	}
+	var out string
 	if body == "" {
-		return bottom
+		out = bottom
+	} else {
+		separator := "\n"
+		if m.chatViewNeedsBottomGap(body, bottom) {
+			separator = "\n\n"
+		}
+		out = body + separator + bottom
 	}
-	separator := "\n"
-	if m.chatViewNeedsBottomGap(body, bottom) {
-		separator = "\n\n"
-	}
-	return body + separator + bottom
+	recordFrame(start, out, m.page, m.width, m.height)
+	return out
 }
 
 func (m model) chatViewNeedsBottomGap(body, bottom string) bool {

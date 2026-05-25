@@ -101,3 +101,14 @@ func TestTaskProviderUsesConfiguredRetryPolicy(t *testing.T) {
 		t.Fatalf("child provider requests: want configured max_attempts=1, got %d", got)
 	}
 }
+
+func TestRetryPolicyFromConfigDisablesRequestRetriesWhenExplicitZero(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.RetryMaxAttempts = 0
+	cfg.RetryMaxAttemptsExplicit = true
+
+	policy := retryPolicyFromConfig(cfg)
+	if policy.MaxAttempts != 1 {
+		t.Fatalf("MaxAttempts = %d, want one attempt with no retries", policy.MaxAttempts)
+	}
+}

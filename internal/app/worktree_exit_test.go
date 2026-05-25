@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -119,8 +120,7 @@ func TestRemoveCurrentWorktreeChdirsOutOfWorktree(t *testing.T) {
 		t.Fatalf("Start worktree: %v", err)
 	}
 	// Simulate an interactive --worktree session, which has chdir'd into the
-	// managed worktree. Windows cannot remove a process's current directory, so
-	// removal must move the cwd out first. t.Chdir restores cwd after the test.
+	// managed worktree. t.Chdir restores cwd after the test.
 	t.Chdir(sess.Path)
 	app := &App{worktree: WorktreeSession{
 		Name:               sess.Name,
@@ -151,6 +151,91 @@ func TestRemoveCurrentWorktreeChdirsOutOfWorktree(t *testing.T) {
 	if got != sess.OriginalWorkspace {
 		t.Fatalf("process cwd after removal = %q, want original workspace %q", got, sess.OriginalWorkspace)
 	}
+}
+
+func TestRemoveCurrentWorktreeDoesNotChdirWhenCwdOutsideWorktree(t *testing.T) {
+	repo := newAppGitRepo(t)
+	sess, err := whaleworktree.Start(repo, "exit-no-chdir")
+	if err != nil {
+		t.Fatalf("Start worktree: %v", err)
+	}
+	// Pin cwd somewhere outside the worktree so we can assert it does not move.
+	t.Chdir(repo)
+	wantCwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd before removal: %v", err)
+	}
+
+	app := &App{worktree: WorktreeSession{
+		Name:               sess.Name,
+		Path:               sess.Path,
+		Branch:             sess.Branch,
+		OriginalWorkspace:  sess.OriginalWorkspace,
+		OriginalBranch:     sess.OriginalBranch,
+		OriginalHeadCommit: sess.OriginalHeadCommit,
+	}}
+
+	if _, err := app.RemoveCurrentWorktree(false); err != nil {
+		t.Fatalf("RemoveCurrentWorktree: %v", err)
+	}
+	got, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd after removal: %v", err)
+	}
+	if got != wantCwd {
+		t.Fatalf("process cwd changed: got %q, want %q", got, wantCwd)
+	}
+}
+
+// When removal fails and the cwd restore also fails, the restore error must
+// be surfaced to the caller instead of being silently swallowed (which would
+// leave the process stuck in the wrong working directory with no signal).
+func TestRemoveCurrentWorktreeSurfacesCwdRestoreError(t *testing.T) {
+	prevFn := worktreeChdirFn
+	t.Cleanup(func() {
+		worktreeChdirFn = prevFn
+	})
+
+	repo := newAppGitRepo(t)
+	sess, err := whaleworktree.Start(repo, "exit-restore-fail")
+	if err != nil {
+		t.Fatalf("Start worktree: %v", err)
+	}
+	// Make removal fail by dirtying the worktree.
+	if err := os.WriteFile(filepath.Join(sess.Path, "scratch.txt"), []byte("dirty\n"), 0o600); err != nil {
+		t.Fatalf("write dirty file: %v", err)
+	}
+	t.Chdir(sess.Path)
+
+	// First chdir (leaving the worktree) succeeds; restore chdir fails.
+	calls := 0
+	worktreeChdirFn = func(dir string) error {
+		calls++
+		if calls == 1 {
+			return os.Chdir(dir)
+		}
+		return fmt.Errorf("simulated restore failure")
+	}
+
+	app := &App{worktree: WorktreeSession{
+		Name:               sess.Name,
+		Path:               sess.Path,
+		Branch:             sess.Branch,
+		OriginalWorkspace:  sess.OriginalWorkspace,
+		OriginalBranch:     sess.OriginalBranch,
+		OriginalHeadCommit: sess.OriginalHeadCommit,
+	}}
+
+	_, err = app.RemoveCurrentWorktree(false)
+	if err == nil {
+		t.Fatal("expected RemoveCurrentWorktree to fail")
+	}
+	if !strings.Contains(err.Error(), "failed to restore cwd") {
+		t.Fatalf("error did not surface cwd restore failure: %v", err)
+	}
+
+	// Put the process back where the test expects so cleanup can run.
+	_ = os.Chdir(sess.OriginalWorkspace)
 }
 
 func TestRemoveCurrentWorktreeRestoresCwdWhenRemovalFails(t *testing.T) {

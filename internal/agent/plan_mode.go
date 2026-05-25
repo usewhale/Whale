@@ -1,27 +1,30 @@
 package agent
 
 import (
+	"context"
 	"strings"
 
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/session"
 )
 
-func (a *Agent) emitAssistantContentDelta(delta string, parser *core.ProposedPlanParser, planText *strings.Builder, planStarted, planCompleted *bool, events chan<- AgentEvent) {
+func (a *Agent) emitAssistantContentDelta(ctx context.Context, delta string, parser *core.ProposedPlanParser, planText *strings.Builder, planStarted, planCompleted *bool, events chan<- AgentEvent) bool {
 	if a.mode != session.ModePlan {
-		events <- AgentEvent{Type: AgentEventTypeAssistantDelta, Content: delta}
-		return
+		return sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypeAssistantDelta, Content: delta})
 	}
 	for _, seg := range parser.Parse(delta) {
-		a.emitProposedPlanSegment(seg, planText, planStarted, planCompleted, events)
+		if !a.emitProposedPlanSegment(ctx, seg, planText, planStarted, planCompleted, events) {
+			return false
+		}
 	}
+	return true
 }
 
-func (a *Agent) emitProposedPlanSegment(seg core.ProposedPlanSegment, planText *strings.Builder, planStarted, planCompleted *bool, events chan<- AgentEvent) {
+func (a *Agent) emitProposedPlanSegment(ctx context.Context, seg core.ProposedPlanSegment, planText *strings.Builder, planStarted, planCompleted *bool, events chan<- AgentEvent) bool {
 	switch seg.Kind {
 	case core.ProposedPlanSegmentNormal:
 		if seg.Text != "" {
-			events <- AgentEvent{Type: AgentEventTypeAssistantDelta, Content: seg.Text}
+			return sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypeAssistantDelta, Content: seg.Text})
 		}
 	case core.ProposedPlanSegmentStart:
 		*planStarted = true
@@ -30,27 +33,30 @@ func (a *Agent) emitProposedPlanSegment(seg core.ProposedPlanSegment, planText *
 	case core.ProposedPlanSegmentDelta:
 		if *planStarted && seg.Text != "" {
 			planText.WriteString(seg.Text)
-			events <- AgentEvent{Type: AgentEventTypePlanDelta, Content: seg.Text}
+			return sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypePlanDelta, Content: seg.Text})
 		}
 	case core.ProposedPlanSegmentEnd:
 		if *planStarted && !*planCompleted {
 			*planCompleted = true
-			events <- AgentEvent{Type: AgentEventTypePlanCompleted, Content: planText.String()}
+			return sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypePlanCompleted, Content: planText.String()})
 		}
 	}
+	return true
 }
 
-func (a *Agent) emitFinalProposedPlan(text string, planText *strings.Builder, planStarted, planCompleted *bool, events chan<- AgentEvent) {
+func (a *Agent) emitFinalProposedPlan(ctx context.Context, text string, planText *strings.Builder, planStarted, planCompleted *bool, events chan<- AgentEvent) bool {
 	plan, ok := core.ExtractProposedPlanText(text)
 	if !ok {
-		return
+		return true
 	}
 	*planStarted = true
 	*planCompleted = true
 	planText.Reset()
 	planText.WriteString(plan)
 	if plan != "" {
-		events <- AgentEvent{Type: AgentEventTypePlanDelta, Content: plan}
+		if !sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypePlanDelta, Content: plan}) {
+			return false
+		}
 	}
-	events <- AgentEvent{Type: AgentEventTypePlanCompleted, Content: plan}
+	return sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypePlanCompleted, Content: plan})
 }

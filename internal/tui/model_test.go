@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -1067,19 +1068,22 @@ func TestWindowsUnbracketedPasteFallbackQueuesWhileBusy(t *testing.T) {
 	}
 }
 
-func TestWindowsPasteFallbackCtrlUResetsQuietWindow(t *testing.T) {
+func TestWindowsPasteFallbackCtrlCResetsQuietWindow(t *testing.T) {
+	// Ctrl+C is the canonical clear-with-state-reset path after PR 2 moved
+	// Ctrl+U to readline kill-to-line-start. handleGlobalKey clears the
+	// composer and resets the Windows paste fallback state in one go.
 	m, intents := newModelWithDispatchSpy()
 	m.windowsPaste.enabled = true
 	m.input.SetValue("old")
 	m.windowsPaste.buffer = "pending paste"
 	m.windowsPaste.activeUntil = time.Now().Add(windowsPasteQuietDelay)
 
-	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlU})
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
 	if got := m.input.Value(); got != "" {
-		t.Fatalf("expected Ctrl+U to clear composer, got %q", got)
+		t.Fatalf("expected Ctrl+C to clear composer, got %q", got)
 	}
 	if m.windowsPaste.pendingEnter || m.windowsPaste.buffer != "" || !m.windowsPaste.activeUntil.IsZero() {
-		t.Fatalf("expected Ctrl+U to reset paste fallback state, got %+v", m.windowsPaste)
+		t.Fatalf("expected Ctrl+C to reset paste fallback state, got %+v", m.windowsPaste)
 	}
 
 	m = typeRunesForTest(t, m, "replacement")
@@ -2393,7 +2397,7 @@ func TestTurnDoneReasoningOnlyCommitsFallback(t *testing.T) {
 	}
 }
 
-func TestPlanTurnDoneWithAssistantButNoProposedPlanShowsNotice(t *testing.T) {
+func TestPlanTurnDoneWithAssistantButNoProposedPlanDoesNotShowNotice(t *testing.T) {
 	m := model{
 		assembler: tuirender.NewAssembler(),
 		mode:      modeChat,
@@ -2417,8 +2421,8 @@ func TestPlanTurnDoneWithAssistantButNoProposedPlanShowsNotice(t *testing.T) {
 	if !strings.Contains(got, "Here is the test execution plan") {
 		t.Fatalf("expected assistant text to remain visible:\n%s", got)
 	}
-	if !strings.Contains(got, "No proposed plan was produced") || !strings.Contains(got, "<proposed_plan>") {
-		t.Fatalf("expected missing proposed plan notice in transcript:\n%s", got)
+	if strings.Contains(got, "No proposed plan was produced") || strings.Contains(got, "<proposed_plan>") {
+		t.Fatalf("did not expect missing proposed plan notice in transcript:\n%s", got)
 	}
 	if m.sawAssistantThisTurn || m.sawPlanThisTurn {
 		t.Fatal("expected turn tracking flags to reset")
@@ -2665,7 +2669,7 @@ func TestMarkNoFinalAnswerIfNeededSkippedWithAssistant(t *testing.T) {
 	}
 }
 
-func TestMarkMissingProposedPlanIfNeeded(t *testing.T) {
+func TestMarkMissingProposedPlanIfNeededLogsOnly(t *testing.T) {
 	m := model{
 		assembler:            tuirender.NewAssembler(),
 		chatMode:             "plan",
@@ -2675,14 +2679,8 @@ func TestMarkMissingProposedPlanIfNeeded(t *testing.T) {
 		t.Fatal("expected missing proposed plan to be marked")
 	}
 	snap := m.assembler.Snapshot()
-	if len(snap) != 1 {
-		t.Fatalf("expected one notice entry, got %+v", snap)
-	}
-	if snap[0].Kind != tuirender.KindNotice || snap[0].Role != "notice" {
-		t.Fatalf("expected notice entry, got %+v", snap[0])
-	}
-	if !strings.Contains(snap[0].Text, "No proposed plan was produced") {
-		t.Fatalf("expected missing proposed plan notice, got %q", snap[0].Text)
+	if len(snap) != 0 {
+		t.Fatalf("expected no user-visible notice entry, got %+v", snap)
 	}
 	if len(m.logs) != 1 || m.logs[0].Kind != "missing_proposed_plan" {
 		t.Fatalf("expected diagnostic log entry, got %+v", m.logs)
@@ -4900,7 +4898,14 @@ func TestEscWhileBusyKeepsTurnBusyUntilTurnDone(t *testing.T) {
 	}
 }
 
-func TestCtrlCWhileBusyCancelsPendingWindowsEnter(t *testing.T) {
+func TestCtrlCWhileBusyClearsDraftAndPendingWindowsEnter(t *testing.T) {
+	// After PR 2's Ctrl+C-precedence change, a non-empty composer while busy
+	// resolves Ctrl+C to "clear the draft" rather than "interrupt the turn".
+	// The clear path still tears down the Windows deferred-enter state via
+	// resetWindowsPasteFallbackInputState, so a stale deferred enter cannot
+	// fire after the user abandons the queued draft. Esc remains the
+	// unconditional busy interrupt for users who also want to cancel the
+	// running turn.
 	m, intents := newModelWithDispatchSpy()
 	m.svc = &service.Service{}
 	m.width = 80
@@ -4919,16 +4924,22 @@ func TestCtrlCWhileBusyCancelsPendingWindowsEnter(t *testing.T) {
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	m = next.(model)
 	if m.windowsPaste.pendingEnter {
-		t.Fatal("expected ctrl+c interrupt to clear pending windows enter")
+		t.Fatal("expected ctrl+c clear path to drop pending windows enter")
 	}
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentShutdown {
-		t.Fatalf("expected only the shutdown intent from interrupt, got %+v", *intents)
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected Ctrl+C with non-empty composer to clear draft, got %q", got)
+	}
+	if len(*intents) != 0 {
+		t.Fatalf("expected Ctrl+C with non-empty composer not to interrupt the turn, got intents %+v", *intents)
+	}
+	if m.stopping {
+		t.Fatal("expected Ctrl+C with non-empty composer not to mark the turn stopping")
 	}
 
 	next, _ = m.Update(windowsDeferredEnterMsg{id: deferredID})
 	m = next.(model)
-	if len(*intents) != 1 {
-		t.Fatalf("stale deferred enter should not submit after interrupt, got %+v", *intents)
+	if len(*intents) != 0 {
+		t.Fatalf("stale deferred enter should not submit after clear, got %+v", *intents)
 	}
 }
 
@@ -5026,11 +5037,37 @@ func TestCtrlCWhileBusyInterruptsBeforeUserInputMode(t *testing.T) {
 	if m.mode != modeChat {
 		t.Fatalf("expected interrupt to leave user-input mode, got %v", m.mode)
 	}
-	if len(*intents) != 2 ||
-		(*intents)[0].Kind != service.IntentCancelUserInput ||
-		(*intents)[0].ToolCallID != "tool-1" ||
-		(*intents)[1].Kind != service.IntentShutdown {
-		t.Fatalf("expected cancel input then shutdown intents, got %+v", *intents)
+	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentShutdown {
+		t.Fatalf("expected user input interrupt to dispatch shutdown only, got %+v", *intents)
+	}
+}
+
+func TestEscWhileBusyUserInputInterruptsTurn(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.svc = &service.Service{}
+	m.width = 80
+	m.height = 24
+	m.busy = true
+	m.mode = modeUserInput
+	m.userInput.toolCallID = "tool-1"
+	m.userInput.questions = []core.UserInputQuestion{{
+		Header:   "Scope",
+		ID:       "scope",
+		Question: "Continue?",
+		Options:  []core.UserInputOption{{Label: "Yes", Description: "Proceed."}},
+	}}
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(model)
+
+	if !m.stopping {
+		t.Fatal("expected esc in busy user-input mode to interrupt the turn")
+	}
+	if m.mode != modeChat {
+		t.Fatalf("expected interrupt to leave user-input mode, got %v", m.mode)
+	}
+	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentShutdown {
+		t.Fatalf("expected esc user input interrupt to dispatch shutdown only, got %+v", *intents)
 	}
 }
 
@@ -5222,7 +5259,7 @@ func TestPlanCompletedReplacesPartialPlanAndTurnDoneShowsPicker(t *testing.T) {
 	}
 }
 
-func TestPlanImplementationIntentIncludesLastProposedPlan(t *testing.T) {
+func TestPlanImplementationIntentDoesNotEmbedLastProposedPlan(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.mode = modePlanImplementation
 	m.planImplementation.index = 0
@@ -5234,11 +5271,59 @@ func TestPlanImplementationIntentIncludesLastProposedPlan(t *testing.T) {
 	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentImplementPlan {
 		t.Fatalf("expected implement intent, got %+v", *intents)
 	}
-	if (*intents)[0].Input != "# Plan\n- Patch it" {
-		t.Fatalf("expected approved plan in intent input, got %q", (*intents)[0].Input)
+	if (*intents)[0].Input != "" {
+		t.Fatalf("expected implement intent to avoid embedding plan text, got %q", (*intents)[0].Input)
 	}
 	if m.chatMode != "agent" {
 		t.Fatalf("expected chat mode switched to agent, got %q", m.chatMode)
+	}
+}
+
+func TestPlanImplementationNoDeclinesAndClearsPendingPlan(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.mode = modePlanImplementation
+	m.chatMode = "plan"
+	m.planImplementation.index = 1
+	m.lastProposedPlan = "# Plan\n- Patch it"
+	m.sawPlanThisTurn = true
+	m.deferredPlanPicker = true
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+
+	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentDeclinePlan {
+		t.Fatalf("expected decline intent, got %+v", *intents)
+	}
+	if m.mode != modeChat {
+		t.Fatalf("expected chat mode after decline popup, got %v", m.mode)
+	}
+	if m.chatMode != "plan" {
+		t.Fatalf("decline should stay in plan chat mode, got %q", m.chatMode)
+	}
+	if m.lastProposedPlan != "" || m.sawPlanThisTurn || m.deferredPlanPicker || m.planImplementation.index != 0 {
+		t.Fatalf("expected stale plan state cleared, last=%q saw=%v deferred=%v index=%d", m.lastProposedPlan, m.sawPlanThisTurn, m.deferredPlanPicker, m.planImplementation.index)
+	}
+}
+
+func TestPlanImplementationEscDeclinesAndStaysInPlanMode(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.mode = modePlanImplementation
+	m.chatMode = "plan"
+	m.lastProposedPlan = "# Plan\n- Patch it"
+	m.sawPlanThisTurn = true
+	m.deferredPlanPicker = true
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(model)
+
+	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentDeclinePlan {
+		t.Fatalf("expected decline intent, got %+v", *intents)
+	}
+	if m.mode != modeChat || m.chatMode != "plan" {
+		t.Fatalf("expected esc decline to close popup and stay in plan mode, mode=%v chatMode=%q", m.mode, m.chatMode)
+	}
+	if m.lastProposedPlan != "" || m.sawPlanThisTurn || m.deferredPlanPicker {
+		t.Fatalf("expected stale plan state cleared, last=%q saw=%v deferred=%v", m.lastProposedPlan, m.sawPlanThisTurn, m.deferredPlanPicker)
 	}
 }
 
@@ -5779,13 +5864,12 @@ func TestLocalCommandResultCommitsIdleAssemblerBeforeNextPrompt(t *testing.T) {
 	m.height = 14
 
 	next, _ := m.Update(svcMsg(service.Event{
-		Kind:   service.EventMCPStatus,
-		Status: "failed",
-		Text:   "MCP startup failed: fs. Run /mcp for details.",
+		Kind: service.EventInfo,
+		Text: "Startup notice",
 	}))
 	m = next.(model)
 	if got := len(m.assembler.Snapshot()); got == 0 {
-		t.Fatal("expected idle MCP status to leave live assembler content")
+		t.Fatal("expected idle info event to leave live assembler content")
 	}
 
 	m.input.SetValue("/status")
@@ -5813,10 +5897,10 @@ func TestLocalCommandResultCommitsIdleAssemblerBeforeNextPrompt(t *testing.T) {
 	m = next.(model)
 
 	rendered := strings.Join(tuirender.ChatLines(m.chatMessages(), 80), "\n")
-	mcpIx := strings.Index(rendered, "MCP startup failed")
+	noticeIx := strings.Index(rendered, "Startup notice")
 	statusIx := strings.Index(rendered, "session: test-session")
 	promptIx := strings.Index(rendered, "next prompt")
-	if mcpIx < 0 || statusIx < 0 || promptIx < 0 || !(mcpIx < statusIx && statusIx < promptIx) {
+	if noticeIx < 0 || statusIx < 0 || promptIx < 0 || !(noticeIx < statusIx && statusIx < promptIx) {
 		t.Fatalf("expected idle live content and local result before next prompt:\n%s", rendered)
 	}
 }
@@ -6333,7 +6417,10 @@ func TestChatViewportScrollsTranscript(t *testing.T) {
 	}
 }
 
-func TestChatViewportScrollKeysUseTranscriptBeforeComposer(t *testing.T) {
+func TestPgUpPgDownScrollTranscriptHomeEndStayOnComposer(t *testing.T) {
+	// PgUp/PgDn remain the transcript-scroll keys. Home/End are now readline
+	// line-start/end on the composer (they used to jump the transcript to
+	// the extremes; that behavior moved to the explicit PgUp/PgDn flow).
 	m := newModel(nil, "", "", "")
 	m.width = 80
 	m.height = 8
@@ -6352,6 +6439,7 @@ func TestChatViewportScrollKeysUseTranscriptBeforeComposer(t *testing.T) {
 	if m.viewport.YOffset >= bottomOffset {
 		t.Fatalf("expected PageUp to scroll transcript up, offset=%d bottom=%d", m.viewport.YOffset, bottomOffset)
 	}
+	scrolledOffset := m.viewport.YOffset
 
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
 	m = next.(model)
@@ -6359,20 +6447,37 @@ func TestChatViewportScrollKeysUseTranscriptBeforeComposer(t *testing.T) {
 		t.Fatalf("expected PageDown to return to bottom, offset=%d bottom=%d", m.viewport.YOffset, bottomOffset)
 	}
 
+	// Scroll partway up so we can detect any accidental viewport movement
+	// from Home/End — they should NOT touch the transcript anymore.
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m = next.(model)
+	preHomeOffset := m.viewport.YOffset
+	preHomeFollow := m.followTail
+	m.input.SetValue("draft")
+
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyHome})
 	m = next.(model)
-	if m.viewport.YOffset != 0 {
-		t.Fatalf("expected Home to jump to top, offset=%d", m.viewport.YOffset)
+	if m.viewport.YOffset != preHomeOffset {
+		t.Fatalf("expected Home not to scroll transcript, offset=%d want %d", m.viewport.YOffset, preHomeOffset)
+	}
+	if m.followTail != preHomeFollow {
+		t.Fatalf("expected Home not to toggle followTail, got %v want %v", m.followTail, preHomeFollow)
 	}
 
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnd})
 	m = next.(model)
-	if !m.followTail {
-		t.Fatal("expected End to resume tail following")
+	if m.viewport.YOffset != preHomeOffset {
+		t.Fatalf("expected End not to scroll transcript, offset=%d want %d", m.viewport.YOffset, preHomeOffset)
 	}
-	if m.viewport.YOffset != 0 {
-		t.Fatalf("expected printed transcript to leave an empty tail viewport, offset=%d", m.viewport.YOffset)
+	if m.followTail != preHomeFollow {
+		t.Fatalf("expected End not to toggle followTail, got %v want %v", m.followTail, preHomeFollow)
 	}
+	if m.input.Value() != "draft" {
+		t.Fatalf("expected composer value preserved across Home/End (cursor moves only), got %q", m.input.Value())
+	}
+	// Keep referencing scrolledOffset so the partially-scrolled state above
+	// is acknowledged as the precondition for the no-scroll checks.
+	_ = scrolledOffset
 }
 
 func TestMouseEventsDoNotDriveTerminalNativeTUI(t *testing.T) {
@@ -6609,6 +6714,24 @@ func TestChatViewportIdleFollowTailUsesTailRenderWindow(t *testing.T) {
 	}
 }
 
+func TestChatViewportTailRenderBoundedWithAlternatingToolAndAssistant(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 80
+	m.height = 10
+	m.transcript = nil
+	for i := 0; i < 200; i++ {
+		m.appendTranscript("tool", tuirender.KindToolCall, fmt.Sprintf("tool-call-%03d", i))
+		m.appendTranscript("tool", tuirender.KindToolResult, fmt.Sprintf("tool-result-%03d", i))
+		m.appendTranscript("assistant", tuirender.KindText, fmt.Sprintf("assistant-reply-%03d", i))
+	}
+	m.refreshViewportContentFollow(false)
+
+	lineLimit := max(chatTailRenderLineFloor, m.viewportBodyHeight(m.width)*4)
+	if lines := m.viewport.TotalLineCount(); lines > lineLimit {
+		t.Fatalf("alternating tool/assistant tail render should stay within %d lines (work separators included), got %d", lineLimit, lines)
+	}
+}
+
 func TestChatViewportBusyFollowTailKeepsSingleLargeLiveMessageScrollable(t *testing.T) {
 	for _, height := range []int{8, 10, 20} {
 		t.Run(fmt.Sprintf("height_%d", height), func(t *testing.T) {
@@ -6650,20 +6773,23 @@ func TestChatViewportHomeFromIdleTailRenderRestoresFullHistory(t *testing.T) {
 	m.refreshViewportContentFollow(false)
 	tailLines := m.viewport.TotalLineCount()
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyHome})
-	m = next.(model)
+	// handleViewportScrollKey is still the underlying scroll-to-top primitive
+	// (used directly by the diff page and intended for future programmatic
+	// callers). The Home key no longer routes here in chat mode after the
+	// readline alignment, but the function's invariants must hold.
+	m.handleViewportScrollKey("home")
 	if m.followTail {
-		t.Fatal("expected Home from idle tail render to disable tail following")
+		t.Fatal("expected scroll-to-top from idle tail render to disable tail following")
 	}
 	if fullLines := m.viewport.TotalLineCount(); fullLines <= tailLines {
-		t.Fatalf("expected Home from idle tail render to restore full scrollable content, tail=%d full=%d", tailLines, fullLines)
+		t.Fatalf("expected scroll-to-top from idle tail render to restore full scrollable content, tail=%d full=%d", tailLines, fullLines)
 	}
 	view := m.View()
 	if !strings.Contains(view, "entry-000") {
-		t.Fatalf("expected Home from idle tail render to restore early history:\n%s", view)
+		t.Fatalf("expected scroll-to-top from idle tail render to restore early history:\n%s", view)
 	}
 	if strings.Contains(view, "entry-199") {
-		t.Fatalf("expected Home from idle tail render to move away from the latest tail:\n%s", view)
+		t.Fatalf("expected scroll-to-top from idle tail render to move away from the latest tail:\n%s", view)
 	}
 }
 
@@ -6736,17 +6862,20 @@ func TestChatViewportEndUnfreezesLiveOutputAndReturnsToTail(t *testing.T) {
 		m.append("assistant", fmt.Sprintf("live-tail-%02d\n", i))
 	}
 
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnd})
-	m = next.(model)
+	// handleViewportScrollKey is still the unfreeze-and-resume-tail primitive
+	// for the chat page. The End key no longer routes here in chat mode after
+	// the readline alignment, but the underlying viewport invariants —
+	// unfreezing the frozen state and restoring tail-follow — must hold.
+	m.handleViewportScrollKey("end")
 	if m.viewportFrozen {
-		t.Fatal("expected End to unfreeze chat viewport")
+		t.Fatal("expected scroll-to-tail to unfreeze chat viewport")
 	}
 	if !m.followTail {
-		t.Fatal("expected End to re-enable tail following")
+		t.Fatal("expected scroll-to-tail to re-enable tail following")
 	}
 	view := m.View()
 	if !strings.Contains(view, "live-tail-29") {
-		t.Fatalf("expected End to reveal latest live tail:\n%s", view)
+		t.Fatalf("expected scroll-to-tail to reveal latest live tail:\n%s", view)
 	}
 }
 
@@ -6859,6 +6988,46 @@ func TestLongTurnDoneWhileScrolledPreservesViewportAndDefersDurationNotice(t *te
 	}
 	if got := fmt.Sprintf("%#v", cmd()); !strings.Contains(got, "✻ Worked for 3m ") {
 		t.Fatalf("expected deferred native scrollback to include duration notice, got %s", got)
+	}
+}
+
+// When most of the transcript has been emitted to native scrollback
+// (nativeScrollbackPrinted near len(transcript)), PgUp from the live tail
+// must reveal the older transcript that is still semantically part of the
+// session — not just the trimmed transcript[nativeScrollbackPrinted:]
+// window. Previously PgUp scrolled within that trimmed view and landed at
+// the startup banner (when start==0) or at very recent entries only.
+func TestPageUpAtTailRevealsTranscriptAboveScrollbackBoundary(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 80
+	m.height = 20
+	m.transcript = nil
+	for i := 0; i < 40; i++ {
+		m.appendTranscript("info", tuirender.KindText, fmt.Sprintf("entry-%02d", i))
+	}
+	// Simulate that all but the last two entries have already been written
+	// to terminal native scrollback (the common state after a couple of
+	// completed turns).
+	m.nativeScrollbackPrinted = len(m.transcript) - 2
+	m.followTail = true
+	m.refreshViewportContentFollow(true)
+	if !strings.Contains(m.View(), "entry-39") {
+		t.Fatalf("precondition: expected tail view to show latest entry, got:\n%s", m.View())
+	}
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m = next.(model)
+	if m.followTail {
+		t.Fatal("expected PageUp to leave followTail mode")
+	}
+	view := m.View()
+	// PageUp from the tail should expose entries above the scrollback
+	// boundary (entries with index < 38), not just the two trimmed entries.
+	if !regexp.MustCompile(`entry-3[0-7]`).MatchString(view) {
+		t.Fatalf("expected PageUp from tail to expose transcript above the scrollback boundary, got:\n%s", view)
+	}
+	if strings.Contains(view, "WHALE") {
+		t.Fatalf("expected PageUp from tail not to jump to the startup banner, got:\n%s", view)
 	}
 }
 
@@ -7103,7 +7272,7 @@ func TestNativeScrollbackWaitsWhileChatViewportFrozenAndFlushesAtTail(t *testing
 	}
 }
 
-func TestCtrlUStillClearsComposerInsteadOfScrollingTranscript(t *testing.T) {
+func TestCtrlUKillsSingleLineComposerDoesNotScrollTranscript(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 80
 	m.height = 8
@@ -7122,6 +7291,155 @@ func TestCtrlUStillClearsComposerInsteadOfScrollingTranscript(t *testing.T) {
 	}
 	if m.viewport.YOffset != 0 {
 		t.Fatalf("expected Ctrl+U not to scroll transcript, offset=%d", m.viewport.YOffset)
+	}
+}
+
+func TestCtrlDDeletesComposerCharDoesNotScrollTranscript(t *testing.T) {
+	// PR 2 removed the chat-mode interception of Ctrl+D for transcript
+	// half-page-down. Ctrl+D should now reach the textarea's
+	// DeleteCharacterForward via the standard composer dispatch path.
+	m := newModel(nil, "", "", "")
+	m.width = 80
+	m.height = 8
+	m.transcript = nil
+	for i := 0; i < 30; i++ {
+		m.appendTranscript("info", tuirender.KindText, fmt.Sprintf("entry-%02d", i))
+	}
+	m.refreshViewportContentFollow(true)
+	m.handleViewportScrollKey("home")
+	initialOffset := m.viewport.YOffset
+	m.input.SetValue("abc")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlA}) // cursor → line start
+	m = next.(model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	m = next.(model)
+	if got := m.input.Value(); got != "bc" {
+		t.Fatalf("expected Ctrl+D to delete first char, got %q", got)
+	}
+	if m.viewport.YOffset != initialOffset {
+		t.Fatalf("expected Ctrl+D not to scroll transcript, offset=%d want %d", m.viewport.YOffset, initialOffset)
+	}
+}
+
+func TestCtrlCWhileBusyClearsNonEmptyComposer(t *testing.T) {
+	// PR 2 promoted Ctrl+C to the canonical clear-all path. During a busy
+	// turn the composer-clear path must still be reachable so users can
+	// drop a queued draft mid-stream without canceling the running turn.
+	// Esc remains the unconditional interrupt for those who want to cancel.
+	m, _ := newModelWithDispatchSpy()
+	m.busy = true
+	m.input.SetValue("queued draft text")
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected Ctrl+C to clear non-empty composer during busy, got %q", got)
+	}
+	if m.stopping {
+		t.Fatal("expected Ctrl+C with non-empty composer not to interrupt the busy turn")
+	}
+}
+
+func TestCtrlCWhileBusyEmptyComposerInterruptsTurn(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.busy = true
+	m.input.SetValue("")
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	if !m.stopping {
+		t.Fatal("expected Ctrl+C with empty composer during busy to interrupt the turn")
+	}
+}
+
+func TestCtrlCWhileBusyInBlockingModeAlwaysInterrupts(t *testing.T) {
+	// The composer-clear precedence is scoped to modeChat. In blocking
+	// modes (approval, user-input) Ctrl+C must interrupt the running turn
+	// even with a queued draft — otherwise it would only dismiss the modal
+	// via the mode-specific handler and leave the turn running.
+	m, _ := newModelWithDispatchSpy()
+	m.busy = true
+	m.input.SetValue("queued draft kept while modal blocks")
+	m.mode = modeApproval
+	m.approval.toolCallID = "tool-1"
+	m.approval.toolName = "shell"
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	if !m.stopping {
+		t.Fatal("expected Ctrl+C in modeApproval during busy to interrupt the turn, not just dismiss the modal")
+	}
+	if got := m.input.Value(); got != "queued draft kept while modal blocks" {
+		t.Fatalf("expected interrupt path not to touch the composer draft, got %q", got)
+	}
+}
+
+func TestCtrlCClearsWhitespaceOnlyDraft(t *testing.T) {
+	// After PR 2 made Ctrl+C the canonical clear-all, the path must accept
+	// whitespace-only buffers too — otherwise a stray Enter / blank-line
+	// paste leaves the user with no way to clear short of Ctrl+C ×2 quit.
+	m, _ := newModelWithDispatchSpy()
+	m.input.SetValue("   \n\n  ")
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected Ctrl+C to clear whitespace-only draft, got %q", got)
+	}
+	if !m.quitArmedUntil.IsZero() {
+		t.Fatal("expected Ctrl+C with whitespace draft to clear (not arm quit)")
+	}
+}
+
+func TestCtrlCWhileBusyClearsWhitespaceOnlyDraft(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.busy = true
+	m.input.SetValue("   ")
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected Ctrl+C to clear whitespace-only draft during busy, got %q", got)
+	}
+	if m.stopping {
+		t.Fatal("expected Ctrl+C with whitespace draft during busy to clear (not interrupt)")
+	}
+}
+
+func TestCtrlCWhileBusyClearsPendingWindowsPasteBuffer(t *testing.T) {
+	// Windows paste fallback buffers burst chunks in m.windowsPaste.buffer
+	// for windowsPasteQuietDelay (80ms) before flushing into the textarea.
+	// In that window m.input.Value() is still empty, so the busy gate must
+	// also consult hasWindowsPasteBuffer() to avoid interrupting the turn
+	// when the user is really just trying to drop the pasted draft.
+	m, _ := newModelWithDispatchSpy()
+	m.windowsPaste.enabled = true
+	m.busy = true
+	m.windowsPaste.buffer = "buffered paste chunk"
+	m.windowsPaste.activeUntil = time.Now().Add(windowsPasteQuietDelay)
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	if m.hasWindowsPasteBuffer() {
+		t.Fatalf("expected Ctrl+C to drop pending paste buffer, got %q", m.windowsPaste.buffer)
+	}
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected composer to stay empty after clearing pending paste, got %q", got)
+	}
+	if m.stopping {
+		t.Fatal("expected Ctrl+C with pending paste buffer not to interrupt the busy turn")
+	}
+}
+
+func TestCtrlCClearsPendingWindowsPasteBufferNotBusy(t *testing.T) {
+	// Outside of busy, the same paste-buffer state must hit the clear path
+	// rather than arming quit — otherwise users get a "Press Ctrl+C again
+	// to quit" prompt while their just-pasted draft is still pending.
+	m, _ := newModelWithDispatchSpy()
+	m.windowsPaste.enabled = true
+	m.windowsPaste.buffer = "buffered chunk"
+	m.windowsPaste.activeUntil = time.Now().Add(windowsPasteQuietDelay)
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	if m.hasWindowsPasteBuffer() {
+		t.Fatalf("expected Ctrl+C to drop pending paste buffer outside busy, got %q", m.windowsPaste.buffer)
+	}
+	if !m.quitArmedUntil.IsZero() {
+		t.Fatal("expected Ctrl+C with pending paste buffer to clear (not arm quit)")
 	}
 }
 
@@ -7351,7 +7669,7 @@ func TestComposerHeightShrinkOffTailClampsLayoutWithoutRerender(t *testing.T) {
 	}
 }
 
-func TestCtrlUClearsMultilineComposerWithLayoutSyncOnly(t *testing.T) {
+func TestCtrlCClearsMultilineComposerWithLayoutSyncOnly(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 80
 	m.height = 10
@@ -7365,20 +7683,22 @@ func TestCtrlUClearsMultilineComposerWithLayoutSyncOnly(t *testing.T) {
 	initialBodyHeight := m.viewportBodyHeight(mainWidth)
 	initialGeneration := m.chat.generation
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	// Ctrl+C is the canonical full-clear after PR 2 moved Ctrl+U to readline
+	// kill-to-line-start (which would only kill the current line "beta").
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	m = next.(model)
 	mainWidth, _ = m.layoutDims()
 	if got := m.viewportBodyHeight(mainWidth); got <= initialBodyHeight {
-		t.Fatalf("expected Ctrl+U clear to free composer height, got %d want > %d", got, initialBodyHeight)
+		t.Fatalf("expected Ctrl+C clear to free composer height, got %d want > %d", got, initialBodyHeight)
 	}
 	if got := m.input.Value(); got != "" {
-		t.Fatalf("expected Ctrl+U to clear multiline composer, got %q", got)
+		t.Fatalf("expected Ctrl+C to clear multiline composer, got %q", got)
 	}
 	if m.chat.generation != initialGeneration {
-		t.Fatalf("expected Ctrl+U clear not to rerender chat, gen=%d want=%d", m.chat.generation, initialGeneration)
+		t.Fatalf("expected Ctrl+C clear not to rerender chat, gen=%d want=%d", m.chat.generation, initialGeneration)
 	}
 	if !m.followTail || !m.chat.AtBottom() {
-		t.Fatalf("expected Ctrl+U clear at tail to keep latest content visible, follow=%v chatBottom=%v", m.followTail, m.chat.AtBottom())
+		t.Fatalf("expected Ctrl+C clear at tail to keep latest content visible, follow=%v chatBottom=%v", m.followTail, m.chat.AtBottom())
 	}
 }
 
@@ -8358,12 +8678,12 @@ func TestSummarizeToolResultForChat_Denied(t *testing.T) {
 }
 
 func TestSummarizeToolResultForChat_AskModeBlockedShowsProductCommands(t *testing.T) {
-	raw := `{"success":false,"code":"ask_mode_blocked","message":"tool unavailable in ask mode","summary":"Current mode: ask. Ask mode only allows read-only tools. To execute or modify files, switch to agent mode. To propose a reviewed approach first, switch to plan mode.","data":{"current_mode":"ask","suggested_modes":["agent","plan"]}}`
+	raw := `{"success":false,"code":"ask_mode_blocked","message":"tool unavailable in ask mode","summary":"Current mode: ask. Ask mode only allows read-only tools. To execute or modify files, switch to agent mode with /agent or Shift+Tab. To propose a reviewed approach first, switch to plan mode with /plan or Shift+Tab.","data":{"current_mode":"ask","suggested_modes":["/agent","/plan","Shift+Tab"]}}`
 	role, got := summarizeToolResultForChat("shell_run", raw)
 	if role != "result_failed" {
 		t.Fatalf("expected result_failed role, got %q", role)
 	}
-	want := "✗ · Current mode: ask. Ask mode only allows read-only tools. To execute or modify files, switch to agent mode. To propose a reviewed approach first, switch to plan mode."
+	want := "✗ · Current mode: ask. Ask mode only allows read-only tools. To execute or modify files, switch to agent mode with /agent or Shift+Tab. To propose a reviewed approach first, switch to plan mode with /plan or Shift+Tab."
 	if got != want {
 		t.Fatalf("unexpected ask-mode summary:\nwant: %q\ngot:  %q", want, got)
 	}
@@ -8584,16 +8904,18 @@ func TestTaskActivityEventsUpdateStatusOnly(t *testing.T) {
 	}
 }
 
-func TestMCPStatusFailureAddsVisibleWarning(t *testing.T) {
+func TestMCPStatusFailureUpdatesStatusAndLogOnly(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat}
 	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventMCPStatus, Status: "failed", Text: "MCP startup failed: fs. Run /mcp for details."}))
 	m = next.(model)
 	if m.status != "MCP startup failed: fs. Run /mcp for details." {
 		t.Fatalf("unexpected status: %q", m.status)
 	}
-	snap := m.assembler.Snapshot()
-	if len(snap) == 0 || !strings.Contains(snap[0].Text, "MCP startup failed: fs") {
-		t.Fatalf("expected visible warning, got: %+v", snap)
+	if snap := m.assembler.Snapshot(); len(snap) != 0 {
+		t.Fatalf("expected MCP failure to stay out of transcript, got: %+v", snap)
+	}
+	if len(m.logs) != 1 || m.logs[0].Kind != "mcp_status" || !strings.Contains(m.logs[0].Summary, "MCP startup failed: fs") {
+		t.Fatalf("expected MCP failure log entry, got: %+v", m.logs)
 	}
 }
 

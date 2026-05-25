@@ -231,9 +231,6 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 	case service.EventMCPStatus:
 		m.clearProviderRetryStatus()
 		m.status = ev.Text
-		if ev.Status == "failed" || ev.Status == "cancelled" {
-			m.append("error", ev.Text)
-		}
 		m.addLog(logEntry{Kind: "mcp_status", Source: "mcp", Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Metadata)})
 	case service.EventMCPComplete:
 		m.clearProviderRetryStatus()

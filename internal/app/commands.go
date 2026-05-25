@@ -590,13 +590,17 @@ func (a *App) SetPluginEnabled(id string, enabled bool) (string, error) {
 	if err := a.reloadPluginDisabledConfig(); err != nil {
 		return "", err
 	}
-	a.pluginManager = plugins.NewManager(plugins.Context{DataDir: a.cfg.DataDir, WorkspaceRoot: a.workspaceRoot}, a.cfg.PluginsDisabled)
-	a.pluginTools = a.pluginManager.Tools()
+	pm := plugins.NewManager(plugins.Context{DataDir: a.cfg.DataDir, WorkspaceRoot: a.workspaceRoot}, a.cfg.PluginsDisabled)
+	hookRunner := agent.NewHookRunner(a.hooks, a.workspaceRoot)
+	hookRunner.AddHandlers(pm.Hooks()...)
+	a.toolMu.Lock()
+	a.pluginManager = pm
+	a.pluginTools = pm.Tools()
 	if a.toolset != nil {
-		a.toolset.SetExtraSkills(a.pluginManager.Skills())
+		a.toolset.SetExtraSkills(pm.Skills())
 	}
-	a.hookRunner = agent.NewHookRunner(a.hooks, a.workspaceRoot)
-	a.hookRunner.AddHandlers(a.pluginManager.Hooks()...)
+	a.hookRunner = hookRunner
+	a.toolMu.Unlock()
 	if err := a.refreshMCPTools(); err != nil {
 		return "", err
 	}
@@ -636,7 +640,9 @@ func (a *App) reloadPluginDisabledConfig() error {
 		return err
 	}
 	cfg := Config{}
-	ApplyLoadedConfig(&cfg, loaded)
+	if err := ApplyLoadedConfig(&cfg, loaded); err != nil {
+		return err
+	}
 	a.cfg.PluginsDisabled = trimList(cfg.PluginsDisabled)
 	return nil
 }

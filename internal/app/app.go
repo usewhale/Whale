@@ -32,30 +32,31 @@ const (
 )
 
 type Config struct {
-	DataDir                 string
-	ConfigLoaded            bool
-	PermissionDefault       policy.PermissionAction
-	PermissionRules         []policy.PermissionRule
-	AutoAcceptPermissions   bool
-	AutoCompact             bool
-	AutoCompactThreshold    float64
-	MemoryEnabled           bool
-	MemoryMaxChars          int
-	MemoryFileOrder         string
-	BudgetWarningUSD        float64
-	Model                   string
-	ModelExplicit           bool
-	ReasoningEffort         string
-	ThinkingEnabled         bool
-	CheckForUpdateOnStartup bool
-	ViewMode                string
-	RetryMaxAttempts        int
-	RetryStreamMaxAttempts  int
-	RetryMaxDelay           time.Duration
-	MCPConfigPath           string
-	APIBaseURL              string
-	SkillsDisabled          []string
-	PluginsDisabled         []string
+	DataDir                  string
+	ConfigLoaded             bool
+	PermissionDefault        policy.PermissionAction
+	PermissionRules          []policy.PermissionRule
+	AutoAcceptPermissions    bool
+	AutoCompact              bool
+	AutoCompactThreshold     float64
+	MemoryEnabled            bool
+	MemoryMaxChars           int
+	MemoryFileOrder          string
+	BudgetWarningUSD         float64
+	Model                    string
+	ModelExplicit            bool
+	ReasoningEffort          string
+	ThinkingEnabled          bool
+	CheckForUpdateOnStartup  bool
+	ViewMode                 string
+	RetryMaxAttempts         int
+	RetryMaxAttemptsExplicit bool
+	RetryStreamMaxAttempts   int
+	RetryMaxDelay            time.Duration
+	MCPConfigPath            string
+	APIBaseURL               string
+	SkillsDisabled           []string
+	PluginsDisabled          []string
 }
 
 type StartOptions struct {
@@ -126,6 +127,12 @@ type App struct {
 	worktree              WorktreeSession
 	mcpInitMu             sync.Mutex
 	mcpInitStarted        bool
+	// toolMu guards mutable tool/plugin state (pluginManager, pluginTools,
+	// toolset, hookRunner) that SetPluginEnabled rewrites while the MCP
+	// startup goroutine concurrently reads via refreshMCPTools. Held across
+	// the entire refreshMCPTools body so concurrent refreshes serialize and
+	// the last one always observes the latest pluginTools.
+	toolMu sync.Mutex
 
 	a          *agent.Agent
 	apiKey     string
@@ -242,7 +249,7 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 			meta.OriginalBranch = start.Worktree.OriginalBranch
 			meta.OriginalHeadCommit = start.Worktree.OriginalHeadCommit
 		}
-		if _, err := session.PatchSessionMeta(sessionsDir, sessionID, meta); err != nil {
+		if _, err := session.PatchSessionMeta(sessionsDir, sessionID, session.SessionMetaPatchFromMeta(meta)); err != nil {
 			return nil, fmt.Errorf("patch session meta failed: %w", err)
 		}
 	}
@@ -435,11 +442,15 @@ func (a *App) SetMode(mode session.Mode) (string, error) {
 	if _, err := session.ParseMode(string(mode)); err != nil {
 		return "", err
 	}
+	previous := a.currentMode
 	if err := session.SaveModeState(a.sessionsDir, a.sessionID, mode); err != nil {
 		return "", err
 	}
 	a.currentMode = mode
 	a.a = nil
+	if previous != "" {
+		a.RecordModeChanged(string(previous), string(mode))
+	}
 	return fmt.Sprintf("%s mode enabled", modeTitle(mode)), nil
 }
 func (a *App) ToggleMode() (string, error) {

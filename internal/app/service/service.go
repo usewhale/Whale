@@ -33,6 +33,7 @@ const (
 	IntentSetViewMode         IntentKind = "set_view_mode"
 	IntentToggleMode          IntentKind = "toggle_mode"
 	IntentImplementPlan       IntentKind = "implement_plan"
+	IntentDeclinePlan         IntentKind = "decline_plan"
 	IntentRequestSkillsManage IntentKind = "request_skills_manage"
 	IntentSetSkillEnabled     IntentKind = "set_skill_enabled"
 	IntentSetPluginEnabled    IntentKind = "set_plugin_enabled"
@@ -146,6 +147,7 @@ type Service struct {
 	cancelMu         sync.Mutex
 	cancel           context.CancelFunc
 	active           bool
+	bgWG             sync.WaitGroup
 
 	interactionMu     sync.Mutex
 	shutdownRequested bool
@@ -184,7 +186,7 @@ func New(ctx context.Context, cfg app.Config, start app.StartOptions) (*Service,
 	}
 	a.SetApprovalFunc(s.awaitApproval)
 	a.SetUserInputFunc(s.awaitUserInput)
-	go s.runLocalSubmitWorker()
+	s.goTracked(s.runLocalSubmitWorker)
 	for _, line := range a.StartupLines() {
 		s.emit(Event{Kind: EventInfo, Text: line})
 	}
@@ -197,6 +199,18 @@ func New(ctx context.Context, cfg app.Config, start app.StartOptions) (*Service,
 	}
 	s.startMCPStartup()
 	return s, nil
+}
+
+// goTracked runs fn in a goroutine and tracks it on bgWG so Close can wait
+// for in-flight work (turns, side questions, local submits) to finish before
+// the service tears down. Without this, background goroutines can outlive
+// Close and race with cleanup of caller-owned state (e.g. test temp dirs).
+func (s *Service) goTracked(fn func()) {
+	s.bgWG.Add(1)
+	go func() {
+		defer s.bgWG.Done()
+		fn()
+	}()
 }
 
 func (s *Service) Events() <-chan Event { return s.events }
@@ -243,5 +257,6 @@ func (s *Service) Close() error {
 	if s.serviceCtxCancel != nil {
 		s.serviceCtxCancel()
 	}
+	s.bgWG.Wait()
 	return s.app.Close()
 }

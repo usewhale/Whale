@@ -46,11 +46,136 @@ func TestResolveOpenPathHandlesRelativeAbsoluteAndSpaces(t *testing.T) {
 	}
 }
 
+func TestResolveOpenPathExpandsHomePathInsideWorkspace(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	workspace := filepath.Join(home, "Engineer", "ai", "dsk", "whale")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(workspace, "README.md")
+	if err := os.WriteFile(file, []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ResolveOpenPath(workspace, "~/Engineer/ai/dsk/whale/README.md")
+	if err != nil {
+		t.Fatalf("ResolveOpenPath: %v", err)
+	}
+	if got != file {
+		t.Fatalf("home path = %q, want %q", got, file)
+	}
+}
+
 func TestResolveOpenPathMissingTarget(t *testing.T) {
 	dir := t.TempDir()
 	_, err := ResolveOpenPath(dir, "missing.txt")
 	if err == nil || !strings.Contains(err.Error(), "open target does not exist") {
 		t.Fatalf("expected missing target error, got %v", err)
+	}
+}
+
+func TestResolveOpenPathRejectsWorkspaceEscapes(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	if err := os.Mkdir(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(root, "outside.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, target := range []string{"../outside.txt", outside} {
+		t.Run(target, func(t *testing.T) {
+			_, err := ResolveOpenPath(workspace, target)
+			if err == nil {
+				t.Fatal("expected workspace escape error")
+			}
+			requested := target
+			if !filepath.IsAbs(requested) {
+				requested = filepath.Clean(filepath.Join(workspace, requested))
+			}
+			assertOpenPathOutsideWorkspaceError(t, err, workspace, requested)
+		})
+	}
+}
+
+func assertOpenPathOutsideWorkspaceError(t *testing.T, err error, workspace, requested string) {
+	t.Helper()
+	for _, want := range []string{
+		"Cannot open files outside the current workspace.",
+		"Current workspace:\n  " + workspace,
+		"Requested file:\n  " + requested,
+		"Use /open with a path inside the workspace, or run your editor directly for external files.",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("expected workspace escape error to contain %q, got %v", want, err)
+		}
+	}
+}
+
+func TestResolveOpenPathRejectsSymlinkEscapes(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	if err := os.Mkdir(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(root, "outside.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(workspace, "outside-link.txt")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	_, err := ResolveOpenPath(workspace, "outside-link.txt")
+	if err == nil {
+		t.Fatal("expected workspace escape error")
+	}
+	assertOpenPathOutsideWorkspaceError(t, err, workspace, link)
+}
+
+func TestResolveOpenPathOutsideWorkspaceErrorUsesResolvedPath(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "workspace")
+	if err := os.Mkdir(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(root, "outside.txt")
+	if err := os.WriteFile(outside, []byte("secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := ResolveOpenPath(workspace, outside)
+	if err == nil {
+		t.Fatal("expected workspace escape error")
+	}
+	assertOpenPathOutsideWorkspaceError(t, err, workspace, outside)
+}
+
+func TestResolveOpenPathAllowsRealPathInsideSymlinkedWorkspace(t *testing.T) {
+	root := t.TempDir()
+	realWorkspace := filepath.Join(root, "real-workspace")
+	if err := os.Mkdir(realWorkspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(realWorkspace, "file.txt")
+	if err := os.WriteFile(file, []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linkWorkspace := filepath.Join(root, "link-workspace")
+	if err := os.Symlink(realWorkspace, linkWorkspace); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	got, err := ResolveOpenPath(linkWorkspace, file)
+	if err != nil {
+		t.Fatalf("ResolveOpenPath: %v", err)
+	}
+	if got != file {
+		t.Fatalf("path = %q, want %q", got, file)
 	}
 }
 

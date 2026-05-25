@@ -48,7 +48,9 @@ func newDeepSeekProvider(opts providerOptions) (llm.Provider, error) {
 
 func retryPolicyFromConfig(cfg Config) llmretry.Policy {
 	policy := llmretry.DefaultPolicy()
-	if cfg.RetryMaxAttempts > 0 {
+	if cfg.RetryMaxAttemptsExplicit && cfg.RetryMaxAttempts == 0 {
+		policy.MaxAttempts = 1
+	} else if cfg.RetryMaxAttempts > 0 {
 		policy.MaxAttempts = cfg.RetryMaxAttempts
 	}
 	if cfg.RetryMaxDelay > 0 {

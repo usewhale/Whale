@@ -406,7 +406,7 @@ func TestApplyLoadedConfigLocalEnabledOverridesSharedDisabled(t *testing.T) {
 
 func TestApplyFileConfigRejectsInvalidRetryConfig(t *testing.T) {
 	cfg := DefaultConfig()
-	if err := ApplyFileConfig(&cfg, FileConfig{Retry: FileRetryConfig{MaxAttempts: intPtr(0)}}); err == nil {
+	if err := ApplyFileConfig(&cfg, FileConfig{Retry: FileRetryConfig{MaxAttempts: intPtr(-1)}}); err == nil {
 		t.Fatal("expected invalid max_attempts error")
 	}
 	if err := ApplyFileConfig(&cfg, FileConfig{Retry: FileRetryConfig{StreamMaxAttempts: intPtr(0)}}); err == nil {
@@ -414,6 +414,19 @@ func TestApplyFileConfigRejectsInvalidRetryConfig(t *testing.T) {
 	}
 	if err := ApplyFileConfig(&cfg, FileConfig{Retry: FileRetryConfig{MaxDelay: "soon"}}); err == nil {
 		t.Fatal("expected invalid max_delay error")
+	}
+}
+
+func TestApplyFileConfigAllowsRetryMaxAttemptsZero(t *testing.T) {
+	cfg := DefaultConfig()
+	if err := ApplyFileConfig(&cfg, FileConfig{Retry: FileRetryConfig{MaxAttempts: intPtr(0)}}); err != nil {
+		t.Fatalf("ApplyFileConfig: %v", err)
+	}
+	if cfg.RetryMaxAttempts != 0 {
+		t.Fatalf("RetryMaxAttempts = %d, want explicit zero", cfg.RetryMaxAttempts)
+	}
+	if !cfg.RetryMaxAttemptsExplicit {
+		t.Fatal("RetryMaxAttemptsExplicit was not set")
 	}
 }
 
@@ -483,6 +496,26 @@ func TestConfigExplicitUpdateCheckDisableOverridesFileConfig(t *testing.T) {
 	}
 	if loaded.CheckForUpdateOnStartup {
 		t.Fatal("check_for_update_on_startup: want explicit programmatic false to be preserved")
+	}
+}
+
+func TestConfigExplicitRetryZeroOverridesDefault(t *testing.T) {
+	dir := t.TempDir()
+	workspace := t.TempDir()
+
+	cfg := DefaultConfig()
+	cfg.DataDir = dir
+	cfg.RetryMaxAttempts = 0
+	cfg.RetryMaxAttemptsExplicit = true
+	loaded, err := LoadAndApplyConfig(cfg, workspace)
+	if err != nil {
+		t.Fatalf("LoadAndApplyConfig: %v", err)
+	}
+	if loaded.RetryMaxAttempts != 0 {
+		t.Fatalf("RetryMaxAttempts = %d, want explicit zero", loaded.RetryMaxAttempts)
+	}
+	if !loaded.RetryMaxAttemptsExplicit {
+		t.Fatal("RetryMaxAttemptsExplicit was not preserved")
 	}
 }
 

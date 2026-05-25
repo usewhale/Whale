@@ -3,10 +3,19 @@ package app
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/usewhale/whale/internal/session"
 	whaleworktree "github.com/usewhale/whale/internal/worktree"
+)
+
+// worktreeChdirFn / worktreeGetwdFn are indirection points so tests can
+// inject failures regardless of the host OS. Production code uses the
+// defaults.
+var (
+	worktreeChdirFn = os.Chdir
+	worktreeGetwdFn = os.Getwd
 )
 
 func (a *App) CurrentWorktree() WorktreeSession {
@@ -70,29 +79,37 @@ func (a *App) RemoveCurrentWorktree(force bool) (WorktreeExitResult, error) {
 		}
 		cwd = root
 	}
-	// An interactive --worktree session has os.Chdir'd into the managed
-	// worktree. Windows refuses to remove a directory that is a process's
-	// current working directory, so move the process cwd back to the original
-	// workspace (falling back to the repo root) before git removes it.
-	previousCwd, _ := os.Getwd()
-	if err := os.Chdir(cwd); err != nil {
-		root, rootErr := whaleworktree.CanonicalRepoRoot(a.worktree.Path)
-		if rootErr != nil {
-			return WorktreeExitResult{}, fmt.Errorf("leave worktree before removal: %w", err)
+	// If the interactive process is still inside the managed worktree, move it
+	// out before removal. Windows requires this for deletion, and POSIX systems
+	// otherwise leave the process with a deleted cwd after successful removal.
+	previousCwd, shouldRestoreCwd, err := worktreeRemovalCwdState(a.worktree.Path)
+	if err != nil {
+		return WorktreeExitResult{}, err
+	}
+	if shouldRestoreCwd {
+		if err := worktreeChdirFn(cwd); err != nil {
+			root, rootErr := whaleworktree.CanonicalRepoRoot(a.worktree.Path)
+			if rootErr != nil {
+				return WorktreeExitResult{}, fmt.Errorf("leave worktree before removal: %w", err)
+			}
+			if rootChErr := worktreeChdirFn(root); rootChErr != nil {
+				return WorktreeExitResult{}, fmt.Errorf("leave worktree before removal: %w", rootChErr)
+			}
+			cwd = root
 		}
-		if rootChErr := os.Chdir(root); rootChErr != nil {
-			return WorktreeExitResult{}, fmt.Errorf("leave worktree before removal: %w", rootChErr)
-		}
-		cwd = root
 	}
 	name := a.worktree.Name
 	res, err := whaleworktree.Remove(cwd, name, force)
 	if err != nil {
 		// Removal failed, so the worktree still exists and the session keeps
 		// running. Move the process back to where it was so later commands do
-		// not execute in the wrong directory.
-		if previousCwd != "" {
-			_ = os.Chdir(previousCwd)
+		// not execute in the wrong directory. If the restore itself fails the
+		// process is stuck in the wrong cwd; surface that loudly rather than
+		// swallowing the second error.
+		if shouldRestoreCwd && previousCwd != "" {
+			if rerr := worktreeChdirFn(previousCwd); rerr != nil {
+				return WorktreeExitResult{}, fmt.Errorf("%w (also failed to restore cwd to %s: %v)", err, previousCwd, rerr)
+			}
 		}
 		return WorktreeExitResult{}, err
 	}
@@ -111,6 +128,45 @@ func (a *App) RemoveCurrentWorktree(force bool) (WorktreeExitResult, error) {
 		Message:       msg,
 		BranchWarning: res.BranchWarning,
 	}, nil
+}
+
+func worktreeRemovalCwdState(worktreePath string) (string, bool, error) {
+	previousCwd, err := worktreeGetwdFn()
+	if err != nil {
+		return "", false, fmt.Errorf("resolve current directory before worktree removal: %w", err)
+	}
+	inside, err := pathInside(previousCwd, worktreePath)
+	if err != nil {
+		return "", false, fmt.Errorf("check current directory before worktree removal: %w", err)
+	}
+	return previousCwd, inside, nil
+}
+
+func pathInside(path, parent string) (bool, error) {
+	path = strings.TrimSpace(path)
+	parent = strings.TrimSpace(parent)
+	if path == "" || parent == "" {
+		return false, nil
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false, err
+	}
+	absParent, err := filepath.Abs(parent)
+	if err != nil {
+		return false, err
+	}
+	if resolved, err := filepath.EvalSymlinks(absPath); err == nil {
+		absPath = resolved
+	}
+	if resolved, err := filepath.EvalSymlinks(absParent); err == nil {
+		absParent = resolved
+	}
+	rel, err := filepath.Rel(absParent, absPath)
+	if err != nil {
+		return false, err
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))), nil
 }
 
 func (a *App) markWorktreeExited() error {

@@ -186,8 +186,9 @@ If you started with Whale v0.1.9 or newer, you do not need this command.
 - `[retry]` controls transient API retries. Whale retries 429, 500, 502, 503,
   504, and network errors with an internal 1s exponential backoff, 10% jitter,
   and `Retry-After` support. `max_attempts` counts request attempts before
-  streaming starts; `stream_max_attempts` counts full stream attempts when the
-  provider disconnects after streaming has started.
+  streaming starts; set it to `0` to send one request and disable request
+  retries. `stream_max_attempts` counts full stream attempts when the provider
+  disconnects after streaming has started.
 - `[ui].view_mode = "focus"` starts the TUI in focus view. `/focus` toggles this
   global preference and hides thinking/tool detail while keeping prompts, tool
   summaries, and final responses visible.

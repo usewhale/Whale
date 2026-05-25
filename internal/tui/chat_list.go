@@ -11,17 +11,23 @@ import (
 const chatListGap = 1
 
 type chatList struct {
-	width      int
-	height     int
-	items      []chatItem
-	offsetIdx  int
-	offsetLine int
-	generation uint64
+	width       int
+	height      int
+	items       []chatItem
+	offsetIdx   int
+	offsetLine  int
+	generation  uint64
+	renderCache map[chatItemRenderKey][]string
 }
 
 type chatItem struct {
 	msg   tuirender.UIMessage
 	lines []string
+}
+
+type chatItemRenderKey struct {
+	msg         tuirender.UIMessage
+	renderWidth int
 }
 
 func newChatList() chatList {
@@ -36,12 +42,19 @@ func (l *chatList) SetSize(width, height int) {
 
 func (l *chatList) SetMessages(messages []tuirender.UIMessage, renderWidth int) {
 	items := make([]chatItem, 0, len(messages))
+	nextCache := make(map[chatItemRenderKey][]string, len(messages))
 	pendingWorkSeparator := false
 	for _, msg := range messages {
-		lines := renderChatItemLines(msg, renderWidth)
-		if len(lines) == 0 {
+		key := chatItemRenderKey{msg: msg, renderWidth: renderWidth}
+		baseLines, ok := l.renderCache[key]
+		if !ok {
+			baseLines = renderChatItemLines(msg, renderWidth)
+		}
+		if len(baseLines) == 0 {
 			continue
 		}
+		nextCache[key] = baseLines
+		lines := baseLines
 		if pendingWorkSeparator && tuirender.NeedsWorkSeparatorBefore(msg) {
 			lines = append([]string{tuirender.WorkSeparator(max(20, renderWidth)), ""}, lines...)
 			pendingWorkSeparator = false
@@ -55,6 +68,7 @@ func (l *chatList) SetMessages(messages []tuirender.UIMessage, renderWidth int) 
 		}
 	}
 	l.items = items
+	l.renderCache = nextCache
 	l.generation++
 	if len(l.items) == 0 {
 		l.offsetIdx = 0
@@ -62,6 +76,22 @@ func (l *chatList) SetMessages(messages []tuirender.UIMessage, renderWidth int) 
 		return
 	}
 	l.clampOffset()
+}
+
+// measureLines returns the rendered line count for msg at renderWidth,
+// reusing renderCache so a subsequent SetMessages call for the same
+// (msg, renderWidth) skips re-rendering.
+func (l *chatList) measureLines(msg tuirender.UIMessage, renderWidth int) int {
+	key := chatItemRenderKey{msg: msg, renderWidth: renderWidth}
+	if lines, ok := l.renderCache[key]; ok {
+		return len(lines)
+	}
+	lines := renderChatItemLines(msg, renderWidth)
+	if l.renderCache == nil {
+		l.renderCache = make(map[chatItemRenderKey][]string)
+	}
+	l.renderCache[key] = lines
+	return len(lines)
 }
 
 func renderChatItemLines(msg tuirender.UIMessage, width int) []string {

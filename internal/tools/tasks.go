@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os/exec"
 	"sync"
 	"sync/atomic"
@@ -171,18 +172,18 @@ func shellTaskExpired(task shellTaskSnapshot, now time.Time) bool {
 }
 
 func runShellBackground(ctx context.Context, dir, command string, task *shellTask) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			markShellTaskFailed(task, fmt.Sprintf("panic: %v", recovered))
+		}
+	}()
+
 	spec, err := shell.Resolve(command)
 	if err != nil {
-		task.mu.Lock()
-		defer task.mu.Unlock()
-		now := time.Now()
-		task.finishedAt = &now
-		task.stderr = err.Error()
-		task.status = "failed"
-		task.exitCode = nil
+		markShellTaskFailed(task, err.Error())
 		return
 	}
-	cmd := exec.Command(spec.Bin, spec.Args...)
+	cmd := shell.Command(spec)
 	cmd.Dir = dir
 	var stdoutBuf bytes.Buffer
 	var stderrBuf bytes.Buffer
@@ -221,6 +222,19 @@ func runShellBackground(ctx context.Context, dir, command string, task *shellTas
 	code := 0
 	task.exitCode = &code
 	task.status = "exited"
+}
+
+func markShellTaskFailed(task *shellTask, stderr string) {
+	if task == nil {
+		return
+	}
+	task.mu.Lock()
+	defer task.mu.Unlock()
+	now := time.Now()
+	task.finishedAt = &now
+	task.stderr = stderr
+	task.status = "failed"
+	task.exitCode = nil
 }
 
 func itoa(n uint64) string {

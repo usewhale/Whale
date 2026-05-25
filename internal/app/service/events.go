@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"sync"
 	"time"
 )
 
@@ -42,6 +43,7 @@ type deltaChunk struct {
 }
 
 type turnDeltaCoalescers struct {
+	mu             sync.Mutex
 	svc            *Service
 	chunks         []deltaChunk
 	queuedChars    int
@@ -64,6 +66,7 @@ func (c *turnDeltaCoalescers) add(kind EventKind, text string) {
 	if text == "" {
 		return
 	}
+	c.mu.Lock()
 	if n := len(c.chunks); n > 0 && c.chunks[n-1].kind == kind {
 		c.chunks[n-1].text += text
 	} else {
@@ -72,18 +75,37 @@ func (c *turnDeltaCoalescers) add(kind EventKind, text string) {
 	c.queuedChars += len(text)
 	now := time.Now()
 	if c.queuedChars >= c.flushChars || c.lastFlush.IsZero() || now.Sub(c.lastFlush) >= c.flushInterval {
-		c.flushBestEffort()
+		chunks := c.drainLocked(now)
+		c.mu.Unlock()
+		c.flushChunksBestEffort(chunks)
+		return
 	}
+	c.mu.Unlock()
 }
 
 func (c *turnDeltaCoalescers) flushBestEffort() {
-	if c == nil || len(c.chunks) == 0 {
+	if c == nil {
 		return
 	}
-	chunks := c.chunks
+	c.mu.Lock()
+	chunks := c.drainLocked(time.Now())
+	c.mu.Unlock()
+	c.flushChunksBestEffort(chunks)
+}
+
+func (c *turnDeltaCoalescers) drainLocked(now time.Time) []deltaChunk {
+	if len(c.chunks) == 0 {
+		return nil
+	}
+	chunks := append([]deltaChunk(nil), c.chunks...)
 	c.chunks = nil
 	c.queuedChars = 0
-	c.lastFlush = time.Now()
+	c.lastFlush = now
+	return chunks
+}
+
+func (c *turnDeltaCoalescers) flushChunksBestEffort(chunks []deltaChunk) {
+	dropped := 0
 	for _, chunk := range chunks {
 		if chunk.text == "" {
 			continue
@@ -91,8 +113,13 @@ func (c *turnDeltaCoalescers) flushBestEffort() {
 		select {
 		case c.svc.events <- Event{Kind: chunk.kind, Text: chunk.text}:
 		default:
-			c.droppedFlushes++
+			dropped++
 		}
+	}
+	if dropped > 0 {
+		c.mu.Lock()
+		c.droppedFlushes += dropped
+		c.mu.Unlock()
 	}
 }
 
@@ -100,25 +127,24 @@ func (c *turnDeltaCoalescers) flushReliable() {
 	if c == nil {
 		return
 	}
-	if len(c.chunks) > 0 {
-		chunks := c.chunks
-		c.chunks = nil
-		c.queuedChars = 0
-		c.lastFlush = time.Now()
-		for _, chunk := range chunks {
-			if chunk.text != "" {
-				c.svc.emitReliable(Event{Kind: chunk.kind, Text: chunk.text})
-			}
+	c.mu.Lock()
+	chunks := c.drainLocked(time.Now())
+	droppedFlushes := c.droppedFlushes
+	c.droppedFlushes = 0
+	c.mu.Unlock()
+
+	for _, chunk := range chunks {
+		if chunk.text != "" {
+			c.svc.emitReliable(Event{Kind: chunk.kind, Text: chunk.text})
 		}
 	}
-	if c.droppedFlushes > 0 {
+	if droppedFlushes > 0 {
 		// The notice itself must be reliable: emitting it best-effort means
 		// that under sustained UI backpressure the user never learns chunks
 		// were dropped, defeating the point of the notice.
 		c.svc.emitReliable(Event{
 			Kind: EventInfo,
-			Text: fmt.Sprintf("[stream] coalesced output under UI backpressure; omitted %d intermediate chunks", c.droppedFlushes),
+			Text: fmt.Sprintf("[stream] coalesced output under UI backpressure; omitted %d intermediate chunks", droppedFlushes),
 		})
-		c.droppedFlushes = 0
 	}
 }

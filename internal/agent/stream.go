@@ -26,6 +26,9 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 	planCompleted := false
 	assistantDeltaSeen := false
 	streamPersisted := false
+	emit := func(ev AgentEvent) bool {
+		return sendAgentEvent(ctx, events, ev)
+	}
 
 	ch := a.provider.StreamResponse(ctx, a.buildTurnProviderHistory(sessionID, rt), a.tools.Tools())
 	for ev := range ch {
@@ -33,7 +36,9 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 		case llm.EventContentDelta:
 			assistant.Text += ev.Content
 			assistantDeltaSeen = true
-			a.emitAssistantContentDelta(ev.Content, &planParser, &planText, &planStarted, &planCompleted, events)
+			if !a.emitAssistantContentDelta(ctx, ev.Content, &planParser, &planText, &planStarted, &planCompleted, events) {
+				return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+			}
 			// Intentionally do not persist on every delta: rewriting the full
 			// session JSONL per token produced O(n·m) disk I/O and caused TUI
 			// stutter in long-context sessions (issue #22). The accumulated
@@ -42,11 +47,13 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 		case llm.EventReasoningDelta:
 			assistant.Reasoning += ev.ReasoningDelta
 			rt.Scratch.Reasoning += ev.ReasoningDelta
-			events <- AgentEvent{Type: AgentEventTypeReasoningDelta, ReasoningDelta: ev.ReasoningDelta}
+			if !emit(AgentEvent{Type: AgentEventTypeReasoningDelta, ReasoningDelta: ev.ReasoningDelta}) {
+				return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+			}
 		case llm.EventToolArgsDelta:
 			if ev.ToolArgsDelta != nil {
 				rt.Scratch.UpdateToolArgs(ev.ToolArgsDelta.ToolCallIndex, ev.ToolArgsDelta.ToolName, ev.ToolArgsDelta.ArgsChars, ev.ToolArgsDelta.ReadyCount)
-				events <- AgentEvent{
+				if !emit(AgentEvent{
 					Type: AgentEventTypeToolArgsDelta,
 					ToolArgs: &ToolArgsProgress{
 						ToolCallIndex: ev.ToolArgsDelta.ToolCallIndex,
@@ -54,6 +61,8 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 						ArgsChars:     ev.ToolArgsDelta.ArgsChars,
 						ReadyCount:    ev.ToolArgsDelta.ReadyCount,
 					},
+				}) {
+					return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
 				}
 			}
 		case llm.EventToolUseStart:
@@ -84,7 +93,9 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 						return core.Message{}, nil, llm.Usage{}, "", false, err
 					}
 				}
-				events <- AgentEvent{Type: AgentEventTypeProviderRetryScheduled, ProviderRetry: &info}
+				if !emit(AgentEvent{Type: AgentEventTypeProviderRetryScheduled, ProviderRetry: &info}) {
+					return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+				}
 			}
 		case llm.EventComplete:
 			if ev.Response != nil {
@@ -101,18 +112,26 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 					// Emit tool call events now that Input is fully populated.
 					for i := range ev.Response.ToolCalls {
 						tc := ev.Response.ToolCalls[i]
-						events <- AgentEvent{Type: AgentEventTypeToolCall, ToolCall: &tc}
+						if !emit(AgentEvent{Type: AgentEventTypeToolCall, ToolCall: &tc}) {
+							return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+						}
 						if taskEvent, ok := taskStartedEvent(tc); ok {
-							events <- taskEvent
+							if !emit(taskEvent) {
+								return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+							}
 						}
 					}
 				}
 				if ev.Response.Content != "" {
 					assistant.Text = ev.Response.Content
 					if !assistantDeltaSeen {
-						a.emitAssistantContentDelta(ev.Response.Content, &planParser, &planText, &planStarted, &planCompleted, events)
+						if !a.emitAssistantContentDelta(ctx, ev.Response.Content, &planParser, &planText, &planStarted, &planCompleted, events) {
+							return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+						}
 					} else if a.mode == session.ModePlan && !planCompleted {
-						a.emitFinalProposedPlan(ev.Response.Content, &planText, &planStarted, &planCompleted, events)
+						if !a.emitFinalProposedPlan(ctx, ev.Response.Content, &planText, &planStarted, &planCompleted, events) {
+							return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+						}
 					}
 				}
 				if err := a.store.Update(ctx, assistant); err != nil {
@@ -137,7 +156,9 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 	}
 	if a.mode == session.ModePlan && !planCompleted {
 		for _, seg := range planParser.Finish() {
-			a.emitProposedPlanSegment(seg, &planText, &planStarted, &planCompleted, events)
+			if !a.emitProposedPlanSegment(ctx, seg, &planText, &planStarted, &planCompleted, events) {
+				return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+			}
 		}
 	}
 
@@ -158,17 +179,21 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 		var report repairReport
 		dispatchCalls, blocked, report = a.repairer.process(assistant.ToolCalls, assistant.Reasoning, assistant.Text, allowed, isMutating)
 		if report.scavenged > 0 {
-			events <- AgentEvent{Type: AgentEventTypeToolCallScavenged, Scavenged: &ToolCallScavenged{Count: report.scavenged}}
+			if !emit(AgentEvent{Type: AgentEventTypeToolCallScavenged, Scavenged: &ToolCallScavenged{Count: report.scavenged}}) {
+				return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+			}
 		}
 		if report.truncationsFixed > 0 {
 			for i := range report.repairedCalls {
 				a.recordToolInputRepair(sessionID, lastModel, assistant.ID, report.repairedCalls[i], "truncated_json")
-				events <- AgentEvent{
+				if !emit(AgentEvent{
 					Type: AgentEventTypeToolArgsRepaired,
 					ToolArgsRepair: &ToolArgsRepair{
 						ToolCallIndex: i,
 						ToolName:      report.repairedCalls[i].Name,
 					},
+				}) {
+					return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
 				}
 			}
 		}
@@ -179,28 +204,34 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 	results := make([]core.ToolResult, 0, len(assistant.ToolCalls))
 	for _, blockedRes := range blocked {
 		br := blockedRes
-		events <- AgentEvent{
+		if !emit(AgentEvent{
 			Type: AgentEventTypeToolCallBlocked,
 			ToolBlocked: &ToolCallBlocked{
 				ToolCallID: br.ToolCallID,
 				ToolName:   br.Name,
 				ReasonCode: "storm_blocked",
 			},
+		}) {
+			return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
 		}
 		results = append(results, br)
-		events <- AgentEvent{Type: AgentEventTypeToolResult, Result: &br}
+		if !emit(AgentEvent{Type: AgentEventTypeToolResult, Result: &br}) {
+			return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+		}
 	}
 	for i, call := range dispatchCalls {
 		if spec, ok := a.tools.Spec(call.Name); ok {
 			if fixed, changed := core.RenestFlatInputForSpec(spec, call.Input); changed {
 				call.Input = fixed
 				a.recordToolInputRepair(sessionID, lastModel, assistant.ID, call, "renest_flat_input")
-				events <- AgentEvent{
+				if !emit(AgentEvent{
 					Type: AgentEventTypeToolArgsRepaired,
 					ToolArgsRepair: &ToolArgsRepair{
 						ToolCallIndex: i,
 						ToolName:      call.Name,
 					},
+				}) {
+					return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
 				}
 			}
 			if fixed, repairs := core.RepairToolInputForSpec(spec, call.Input); len(repairs) > 0 {
@@ -208,12 +239,14 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 				for _, repair := range repairs {
 					a.recordToolInputRepairDetail(sessionID, lastModel, assistant.ID, call, repair)
 				}
-				events <- AgentEvent{
+				if !emit(AgentEvent{
 					Type: AgentEventTypeToolArgsRepaired,
 					ToolArgsRepair: &ToolArgsRepair{
 						ToolCallIndex: i,
 						ToolName:      call.Name,
 					},
+				}) {
+					return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
 				}
 			}
 		}
@@ -229,7 +262,7 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 		// re-evaluated by policy.
 		earlyDecision := toolPolicy.Decide(spec, call)
 		if !earlyDecision.Allow {
-			events <- AgentEvent{
+			if !emit(AgentEvent{
 				Type: AgentEventTypeToolPolicyDecision,
 				Policy: &ToolPolicyDecision{
 					ToolCallID:    call.ID,
@@ -241,6 +274,8 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 					Phase:         earlyDecision.Phase,
 					MatchedRule:   earlyDecision.MatchedRule,
 				},
+			}) {
+				return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
 			}
 			tr := core.ToolResult{
 				ToolCallID: call.ID,
@@ -249,14 +284,18 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 				IsError:    true,
 			}
 			results = append(results, tr)
-			events <- AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}
+			if !emit(AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}) {
+				return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+			}
 			continue
 		}
 		if !a.hooks.Empty() {
 			var toolArgs any
 			_ = json.Unmarshal([]byte(call.Input), &toolArgs)
 			report := a.hooks.Run(ctx, NewPreToolUsePayload(sessionID, call, toolArgs))
-			a.emitHookReport(events, report)
+			if !a.emitHookReport(ctx, events, report) {
+				return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+			}
 			if report.Blocked {
 				msg := "blocked by PreToolUse hook"
 				code := "hook_blocked"
@@ -277,7 +316,9 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 					IsError:    true,
 				}
 				results = append(results, tr)
-				events <- AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}
+				if !emit(AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}) {
+					return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+				}
 				continue
 			}
 			if strings.TrimSpace(report.UpdatedInput) != "" {
@@ -305,33 +346,41 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 				Content:    content,
 				IsError:    true,
 			}
-			events <- AgentEvent{
+			if !emit(AgentEvent{
 				Type: AgentEventTypeToolModeBlocked,
 				ToolBlocked: &ToolCallBlocked{
 					ToolCallID: call.ID,
 					ToolName:   call.Name,
 					ReasonCode: blockedCode,
 				},
+			}) {
+				return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
 			}
 			results = append(results, tr)
-			events <- AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}
+			if !emit(AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}) {
+				return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+			}
 			continue
 		}
 		if call.Name == "update_plan" {
-			res, err := a.handleUpdatePlan(call, events)
+			res, err := a.handleUpdatePlan(ctx, call, events)
 			if err != nil {
 				tr := core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: err.Error(), IsError: true}
 				results = append(results, tr)
-				events <- AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}
+				if !emit(AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}) {
+					return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+				}
 				continue
 			}
 			results = append(results, res)
 			r := res
-			events <- AgentEvent{Type: AgentEventTypeToolResult, Result: &r}
+			if !emit(AgentEvent{Type: AgentEventTypeToolResult, Result: &r}) {
+				return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+			}
 			continue
 		}
 		decision := toolPolicy.Decide(spec, call)
-		events <- AgentEvent{
+		if !emit(AgentEvent{
 			Type: AgentEventTypeToolPolicyDecision,
 			Policy: &ToolPolicyDecision{
 				ToolCallID:    call.ID,
@@ -343,6 +392,8 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 				Phase:         decision.Phase,
 				MatchedRule:   decision.MatchedRule,
 			},
+		}) {
+			return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
 		}
 		if !decision.Allow {
 			tr := core.ToolResult{
@@ -352,7 +403,9 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 				IsError:    true,
 			}
 			results = append(results, tr)
-			events <- AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}
+			if !emit(AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}) {
+				return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+			}
 			continue
 		}
 		var grantOnSuccess bool
@@ -365,7 +418,7 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			if !approved {
 				metadata := a.previewTool(ctx, call)
 				metadata = policy.ApprovalMetadata(call, keys, metadata)
-				events <- AgentEvent{
+				if !emit(AgentEvent{
 					Type: AgentEventTypeToolApprovalRequired,
 					Approval: &ToolApprovalRequired{
 						ToolCallID: call.ID,
@@ -378,6 +431,8 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 						Scope:      policy.ApprovalScope(call),
 						Metadata:   metadata,
 					},
+				}) {
+					return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
 				}
 				approvalDecision := policy.ApprovalDeny
 				if a.approve != nil {
@@ -402,7 +457,9 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 						grantKey = key
 						grantKeys = keys
 					} else {
-						a.grantApprovals(ctx, sessionID, call, key, keys, events)
+						if !a.grantApprovals(ctx, sessionID, call, key, keys, events) {
+							return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+						}
 					}
 				}
 			}
@@ -414,7 +471,9 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 					IsError:    true,
 				}
 				results = append(results, tr)
-				events <- AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}
+				if !emit(AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}) {
+					return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+				}
 				toolMsg, err := a.store.Create(ctx, core.Message{SessionID: sessionID, Role: core.RoleTool, ToolResults: results})
 				if err != nil {
 					return core.Message{}, nil, llm.Usage{}, "", false, fmt.Errorf("create tool message: %w", err)
@@ -425,16 +484,20 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 		}
 
 		if call.Name == "request_user_input" {
-			res, err := a.handleRequestUserInput(call, sessionID, events)
+			res, err := a.handleRequestUserInput(ctx, call, sessionID, events)
 			if err != nil {
 				tr := core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: err.Error(), IsError: true}
 				results = append(results, tr)
-				events <- AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}
+				if !emit(AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}) {
+					return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+				}
 				continue
 			}
 			results = append(results, res)
 			r := res
-			events <- AgentEvent{Type: AgentEventTypeToolResult, Result: &r}
+			if !emit(AgentEvent{Type: AgentEventTypeToolResult, Result: &r}) {
+				return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+			}
 			continue
 		}
 		switch call.Name {
@@ -443,12 +506,16 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			if err != nil {
 				tr := core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: err.Error(), IsError: true}
 				results = append(results, tr)
-				events <- AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}
+				if !emit(AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}) {
+					return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+				}
 				continue
 			}
 			results = append(results, res)
 			r := res
-			events <- AgentEvent{Type: AgentEventTypeToolResult, Result: &r}
+			if !emit(AgentEvent{Type: AgentEventTypeToolResult, Result: &r}) {
+				return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+			}
 			continue
 		}
 
@@ -458,7 +525,9 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 		}
 		if ok {
 			if grantOnSuccess && primarySucceeded {
-				a.grantApprovals(ctx, sessionID, call, grantKey, grantKeys, events)
+				if !a.grantApprovals(ctx, sessionID, call, grantKey, grantKeys, events) {
+					return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+				}
 			}
 			if preHookContext != "" {
 				finalRes.Content = addHookContextToToolContent(finalRes.Content, preHookContext)
@@ -467,7 +536,9 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 				var toolArgs any
 				_ = json.Unmarshal([]byte(call.Input), &toolArgs)
 				report := a.hooks.Run(ctx, NewPostToolUsePayload(sessionID, call, toolArgs, finalRes.Content))
-				a.emitHookReport(events, report)
+				if !a.emitHookReport(ctx, events, report) {
+					return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+				}
 				if strings.TrimSpace(report.AdditionalContext) != "" {
 					finalRes.Content = addHookContextToToolContent(finalRes.Content, report.AdditionalContext)
 				}
@@ -475,9 +546,13 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			results = append(results, finalRes)
 			r := finalRes
 			if taskEvent, ok := taskCompletedEvent(finalRes); ok {
-				events <- taskEvent
+				if !emit(taskEvent) {
+					return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+				}
 			}
-			events <- AgentEvent{Type: AgentEventTypeToolResult, Result: &r}
+			if !emit(AgentEvent{Type: AgentEventTypeToolResult, Result: &r}) {
+				return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
+			}
 		}
 	}
 
@@ -535,18 +610,18 @@ func modeBlockedDetails(mode session.Mode) (code, message, summary string, data 
 	case session.ModeAsk:
 		return "ask_mode_blocked",
 			"tool unavailable in ask mode",
-			"Current mode: ask. Ask mode only allows read-only tools. To execute or modify files, switch to agent mode. To propose a reviewed approach first, switch to plan mode.",
+			"Current mode: ask. Ask mode only allows read-only tools. To execute or modify files, switch to agent mode with /agent or Shift+Tab. To propose a reviewed approach first, switch to plan mode with /plan or Shift+Tab.",
 			map[string]any{
 				"current_mode":    "ask",
-				"suggested_modes": []string{"agent", "plan"},
+				"suggested_modes": []string{"/agent", "/plan", "Shift+Tab"},
 			}
 	case session.ModePlan:
 		return "plan_mode_blocked",
 			"tool unavailable in plan mode",
-			"Current mode: plan. Plan mode is read-only until the plan is approved. Stay here to refine the plan, or switch to agent mode when it's time to implement.",
+			"Current mode: plan. Plan mode is read-only until the plan is approved. Stay here to refine the plan, or switch to agent mode with /agent or Shift+Tab when it's time to implement.",
 			map[string]any{
 				"current_mode":    "plan",
-				"suggested_modes": []string{"agent"},
+				"suggested_modes": []string{"/agent", "Shift+Tab"},
 			}
 	default:
 		return "mode_blocked",

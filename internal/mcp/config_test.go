@@ -40,6 +40,23 @@ func TestLoadConfigSupportsServersAndMCPServers(t *testing.T) {
 	}
 }
 
+func TestLoadConfigAcceptsUTF8BOM(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp.json")
+	b := append([]byte{0xEF, 0xBB, 0xBF}, []byte(`{
+		"mcpServers": {"mem": {"command": "memory"}}
+	}`)...)
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Servers["mem"].Name != "mem" {
+		t.Fatalf("servers: %+v", cfg.Servers)
+	}
+}
+
 func TestLoadConfigSupportsCommonHTTPServerFormats(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mcp.json")
 	if err := os.WriteFile(path, []byte(`{

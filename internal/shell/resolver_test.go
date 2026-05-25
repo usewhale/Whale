@@ -61,7 +61,7 @@ func TestResolveWindowsPrefersPwsh(t *testing.T) {
 	if spec.Bin != `C:\Program Files\PowerShell\7\pwsh.exe` {
 		t.Fatalf("Bin = %q", spec.Bin)
 	}
-	wantArgs := []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-Command", powerShellUTF8OutputPrefix + "& {\nGet-ChildItem\n}"}
+	wantArgs := []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-Command", powerShellUTF8OutputPrefix + "& {\nGet-ChildItem\n}; if ($global:LASTEXITCODE -ne $null) { exit $global:LASTEXITCODE }"}
 	if !reflect.DeepEqual(spec.Args, wantArgs) {
 		t.Fatalf("Args = %#v, want %#v", spec.Args, wantArgs)
 	}
@@ -92,7 +92,7 @@ func TestResolveWindowsFallsBackToComSpec(t *testing.T) {
 		Kind:        KindCmd,
 		DisplayName: "cmd.exe",
 		Bin:         `C:\Windows\System32\cmd.exe`,
-		Args:        []string{"/d", "/s", "/c", "chcp 65001 >nul & dir"},
+		Args:        []string{"/d", "/c", "chcp 65001 >nul & dir"},
 	}
 	if !reflect.DeepEqual(spec, want) {
 		t.Fatalf("spec = %#v, want %#v", spec, want)
@@ -138,7 +138,7 @@ func TestResolveWindowsLastResortCmdExe(t *testing.T) {
 		Kind:        KindCmd,
 		DisplayName: "cmd.exe",
 		Bin:         "cmd.exe",
-		Args:        []string{"/d", "/s", "/c", "chcp 65001 >nul & dir"},
+		Args:        []string{"/d", "/c", "chcp 65001 >nul & dir"},
 	}
 	if !reflect.DeepEqual(spec, want) {
 		t.Fatalf("spec = %#v, want %#v", spec, want)

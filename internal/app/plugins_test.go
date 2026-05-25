@@ -256,6 +256,30 @@ func TestSetPluginEnabledLocalEnableOverridesSharedDisabled(t *testing.T) {
 	}
 }
 
+func TestReloadPluginDisabledConfigReturnsApplyLoadedConfigError(t *testing.T) {
+	dir := t.TempDir()
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	if err := SaveConfigFile(ProjectConfigPath(dir), FileConfig{
+		UI:      FileUIConfig{ViewMode: "invalid-view"},
+		Plugins: FilePluginsConfig{Disabled: []string{"memory"}},
+	}); err != nil {
+		t.Fatalf("save project config: %v", err)
+	}
+	app := &App{workspaceRoot: dir, cfg: Config{DataDir: cfg.DataDir, PluginsDisabled: []string{"keep-plugin"}}}
+
+	err := app.reloadPluginDisabledConfig()
+	if err == nil {
+		t.Fatal("expected reload error")
+	}
+	if !strings.Contains(err.Error(), "invalid ui.view_mode") {
+		t.Fatalf("expected invalid ui.view_mode error, got %v", err)
+	}
+	if len(app.cfg.PluginsDisabled) != 1 || app.cfg.PluginsDisabled[0] != "keep-plugin" {
+		t.Fatalf("expected in-memory plugin disabled list to be preserved, got %+v", app.cfg.PluginsDisabled)
+	}
+}
+
 func TestOfficialPluginCommands(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
 	cfg := DefaultConfig()

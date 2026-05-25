@@ -39,14 +39,25 @@ func TestComposerMultilinePromptOnlyMarksFirstLine(t *testing.T) {
 	}
 }
 
-func TestComposerCtrlUClearsWholeBuffer(t *testing.T) {
+func TestComposerCtrlUKillsToLineStart(t *testing.T) {
+	// readline semantics: Ctrl+U kills from the cursor to the start of the
+	// current line. With cursor at the end of "two" on line 2, only "two"
+	// is removed — "one\n" must survive.
 	c := New()
 	c.SetValue("one\ntwo")
-	if !c.HandleKey(tea.KeyMsg{Type: tea.KeyCtrlU}) {
-		t.Fatal("expected ctrl+u to be handled")
+	c.Update(tea.KeyMsg{Type: tea.KeyCtrlU})
+	if got := c.Value(); got != "one\n" {
+		t.Fatalf("expected ctrl+u to kill only current line, got %q", got)
 	}
-	if got := c.Value(); got != "" {
-		t.Fatalf("expected empty buffer, got %q", got)
+}
+
+func TestComposerCtrlDDeletesCharacterForward(t *testing.T) {
+	c := New()
+	c.SetValue("hello")
+	c.Update(tea.KeyMsg{Type: tea.KeyCtrlA}) // cursor → line start
+	c.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	if got := c.Value(); got != "ello" {
+		t.Fatalf("expected ctrl+d to delete the character at cursor, got %q", got)
 	}
 }
 
@@ -71,6 +82,87 @@ func TestComposerCtrlAAndCtrlEMoveWithinCurrentLine(t *testing.T) {
 	c.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Y")})
 	if got := c.Value(); got != "abc\nXdefY" {
 		t.Fatalf("expected insert at second line end, got %q", got)
+	}
+}
+
+func TestComposerHomeAndEndMoveWithinCurrentLine(t *testing.T) {
+	// Home/End are the keyboard-key counterparts of Ctrl+A/Ctrl+E and must
+	// behave identically — jump to the start/end of the *current visual
+	// line*, not the buffer extremes. Whale used to route Home/End through
+	// the transcript viewport; the readline alignment moves them onto the
+	// composer (see internal/tui/model_keys.go handleChatModeKey).
+	c := New()
+	c.SetValue("abc\ndef")
+	c.Update(tea.KeyMsg{Type: tea.KeyHome})
+	c.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")})
+	if got := c.Value(); got != "abc\nXdef" {
+		t.Fatalf("expected Home to insert at second line start, got %q", got)
+	}
+	c.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	c.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Y")})
+	if got := c.Value(); got != "abc\nXdefY" {
+		t.Fatalf("expected End to insert at second line end, got %q", got)
+	}
+}
+
+func TestComposerCtrlKKillsToEndOfLine(t *testing.T) {
+	c := New()
+	c.SetValue("hello world\nsecond")
+	// Cursor starts at end of "second"; move to the start of that line so
+	// Ctrl+K has something to kill but must stop at the next newline.
+	c.Update(tea.KeyMsg{Type: tea.KeyCtrlA})
+	c.Update(tea.KeyMsg{Type: tea.KeyCtrlK})
+	if got := c.Value(); got != "hello world\n" {
+		t.Fatalf("expected ctrl+k to kill to end of current line, got %q", got)
+	}
+}
+
+func TestComposerCtrlBCtrlFMoveByCharacter(t *testing.T) {
+	c := New()
+	c.SetValue("ab")
+	c.Update(tea.KeyMsg{Type: tea.KeyCtrlB})
+	c.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")})
+	if got := c.Value(); got != "aXb" {
+		t.Fatalf("expected ctrl+b to move one char back, got %q", got)
+	}
+	c.Update(tea.KeyMsg{Type: tea.KeyCtrlF})
+	c.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Y")})
+	if got := c.Value(); got != "aXbY" {
+		t.Fatalf("expected ctrl+f to move one char forward, got %q", got)
+	}
+}
+
+func TestComposerAltBAltFMoveByWord(t *testing.T) {
+	c := New()
+	c.SetValue("hello world")
+	c.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b"), Alt: true})
+	c.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")})
+	if got := c.Value(); got != "hello Xworld" {
+		t.Fatalf("expected alt+b to jump to start of current word, got %q", got)
+	}
+	c.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("f"), Alt: true})
+	c.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Y")})
+	if got := c.Value(); got != "hello XworldY" {
+		t.Fatalf("expected alt+f to jump past current word, got %q", got)
+	}
+}
+
+func TestComposerAltDDeletesWordForward(t *testing.T) {
+	c := New()
+	c.SetValue("hello world")
+	c.Update(tea.KeyMsg{Type: tea.KeyCtrlA}) // line start
+	c.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d"), Alt: true})
+	if got := c.Value(); got != " world" {
+		t.Fatalf("expected alt+d to delete word forward, got %q", got)
+	}
+}
+
+func TestComposerAltBackspaceDeletesWordBackward(t *testing.T) {
+	c := New()
+	c.SetValue("hello world")
+	c.Update(tea.KeyMsg{Type: tea.KeyBackspace, Alt: true})
+	if got := c.Value(); got != "hello " {
+		t.Fatalf("expected alt+backspace to delete previous word, got %q", got)
 	}
 }
 

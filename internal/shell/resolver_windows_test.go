@@ -3,7 +3,10 @@
 package shell
 
 import (
+	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -19,7 +22,7 @@ func TestWindowsResolveRunsCommand(t *testing.T) {
 		t.Fatalf("Kind = %q, want %q or %q", spec.Kind, KindPowerShell, KindCmd)
 	}
 
-	out, err := exec.Command(spec.Bin, spec.Args...).CombinedOutput()
+	out, err := Command(spec).CombinedOutput()
 	if err != nil {
 		t.Fatalf("resolved shell command failed: %v\noutput:\n%s", err, out)
 	}
@@ -44,7 +47,7 @@ func TestWindowsResolveRunsUTF8CommandOutput(t *testing.T) {
 		t.Fatalf("Resolve returned error: %v", err)
 	}
 
-	out, err := exec.Command(spec.Bin, spec.Args...).CombinedOutput()
+	out, err := Command(spec).CombinedOutput()
 	if err != nil {
 		t.Fatalf("resolved shell command failed: %v\noutput:\n%s", err, out)
 	}
@@ -63,11 +66,45 @@ func TestWindowsResolvePreservesPowerShellFirstStatementSemantics(t *testing.T) 
 	}
 	spec := powerShellSpec(bin, `using namespace System.IO; [Path]::GetFileName('C:\tmp\marker.txt')`)
 
-	out, err := exec.Command(spec.Bin, spec.Args...).CombinedOutput()
+	out, err := Command(spec).CombinedOutput()
 	if err != nil {
 		t.Fatalf("resolved PowerShell command failed: %v\noutput:\n%s", err, out)
 	}
 	if !strings.Contains(string(out), "marker.txt") {
 		t.Fatalf("output %q does not contain expected filename", string(out))
+	}
+}
+
+func TestWindowsPowerShellSpecPropagatesNativeExitCode(t *testing.T) {
+	bin, err := exec.LookPath("pwsh")
+	if err != nil {
+		t.Skip("pwsh not available")
+	}
+	spec := powerShellSpec(bin, `cmd.exe /d /c exit 7`)
+
+	err = Command(spec).Run()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("Run error = %v, want ExitError", err)
+	}
+	if exitErr.ExitCode() != 7 {
+		t.Fatalf("exit code = %d, want 7", exitErr.ExitCode())
+	}
+}
+
+func TestWindowsCmdSpecRunsQuotedChineseDirectoryCommand(t *testing.T) {
+	root := t.TempDir()
+	workspace := filepath.Join(root, "ai项目", "whale开发")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	spec := cmdSpec("cmd.exe", `cd /d "`+workspace+`" && cd`)
+
+	out, err := Command(spec).CombinedOutput()
+	if err != nil {
+		t.Fatalf("resolved cmd command failed: %v\nargs=%#v\noutput:\n%s", err, spec.Args, out)
+	}
+	if !strings.Contains(strings.ToLower(string(out)), strings.ToLower(workspace)) {
+		t.Fatalf("output %q does not contain workspace %q", string(out), workspace)
 	}
 }

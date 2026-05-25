@@ -35,7 +35,7 @@ func (s *Service) runInjectedTurnWithOptions(visibleInput, hiddenInput string, o
 func (s *Service) runSideQuestion(question string) {
 	id := int(s.btwNextID.Add(1))
 	s.emit(Event{Kind: EventBtwStarted, Text: question, Count: id})
-	go func() {
+	s.goTracked(func() {
 		events, err := s.app.RunSideQuestion(s.ctx, question)
 		if err != nil {
 			s.emit(Event{Kind: EventBtwError, Text: err.Error(), Count: id})
@@ -57,7 +57,7 @@ func (s *Service) runSideQuestion(question string) {
 				}
 			}
 		}
-	}()
+	})
 }
 
 func (s *Service) runTurnWith(start func(context.Context) (<-chan agent.AgentEvent, error)) {

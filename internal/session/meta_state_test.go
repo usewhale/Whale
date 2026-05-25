@@ -1,11 +1,36 @@
 package session
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 )
+
+func float64Ptr(v float64) *float64 { return &v }
+func intPtr(v int) *int             { return &v }
+
+func TestMetaLocksDoNotGrowWithSessionCount(t *testing.T) {
+	metaLocksMu.Lock()
+	before := len(metaLocks)
+	metaLocksMu.Unlock()
+
+	dir := t.TempDir()
+	const sessions = 128
+	for i := 0; i < sessions; i++ {
+		if err := SaveSessionMeta(dir, fmt.Sprintf("s-%03d", i), SessionMeta{}); err != nil {
+			t.Fatalf("save meta %d: %v", i, err)
+		}
+	}
+
+	metaLocksMu.Lock()
+	after := len(metaLocks)
+	metaLocksMu.Unlock()
+	if after > before+1 {
+		t.Fatalf("metaLocks grew by %d entries after %d sessions; before=%d after=%d", after-before, sessions, before, after)
+	}
+}
 
 func TestUpdateSessionMetaConcurrentCostAndPatch(t *testing.T) {
 	dir := t.TempDir()
@@ -25,7 +50,8 @@ func TestUpdateSessionMetaConcurrentCostAndPatch(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 0; i < iters; i++ {
-			if _, err := PatchSessionMeta(dir, "s1", SessionMeta{TurnCount: i + 1}); err != nil {
+			turnCount := i + 1
+			if _, err := PatchSessionMeta(dir, "s1", SessionMetaPatch{TurnCount: &turnCount}); err != nil {
 				t.Errorf("patch meta: %v", err)
 				return
 			}
@@ -47,11 +73,12 @@ func TestUpdateSessionMetaConcurrentCostAndPatch(t *testing.T) {
 
 func TestSessionMetaPatchAndLoad(t *testing.T) {
 	dir := t.TempDir()
-	_, err := PatchSessionMeta(dir, "s1", SessionMeta{
+	turnCount := 2
+	_, err := PatchSessionMeta(dir, "s1", SessionMetaPatch{
 		Workspace:          "/tmp/work",
 		Branch:             "main",
 		Title:              "first request",
-		TurnCount:          2,
+		TurnCount:          &turnCount,
 		Summary:            "hello",
 		WorktreeName:       "feature",
 		WorktreePath:       "/tmp/worktrees/feature",
@@ -77,10 +104,10 @@ func TestSessionMetaPatchAndLoad(t *testing.T) {
 
 func TestSessionMetaTitleIsSetOnce(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := PatchSessionMeta(dir, "s1", SessionMeta{Title: "first request"}); err != nil {
+	if _, err := PatchSessionMeta(dir, "s1", SessionMetaPatch{Title: "first request"}); err != nil {
 		t.Fatalf("patch title: %v", err)
 	}
-	if _, err := PatchSessionMeta(dir, "s1", SessionMeta{Title: "second request"}); err != nil {
+	if _, err := PatchSessionMeta(dir, "s1", SessionMetaPatch{Title: "second request"}); err != nil {
 		t.Fatalf("patch second title: %v", err)
 	}
 	got, err := LoadSessionMeta(dir, "s1")
@@ -89,6 +116,43 @@ func TestSessionMetaTitleIsSetOnce(t *testing.T) {
 	}
 	if got.Title != "first request" {
 		t.Fatalf("expected first title to be preserved, got %q", got.Title)
+	}
+}
+
+func TestSessionMetaPatchCanSetCostAndTurnCountToZero(t *testing.T) {
+	dir := t.TempDir()
+	if err := SaveSessionMeta(dir, "s1", SessionMeta{TotalCostUSD: 1.25, TurnCount: 3, Summary: "old"}); err != nil {
+		t.Fatalf("save meta: %v", err)
+	}
+	if _, err := PatchSessionMeta(dir, "s1", SessionMetaPatch{TotalCostUSD: float64Ptr(0), TurnCount: intPtr(0)}); err != nil {
+		t.Fatalf("patch meta: %v", err)
+	}
+	got, err := LoadSessionMeta(dir, "s1")
+	if err != nil {
+		t.Fatalf("load meta: %v", err)
+	}
+	if got.TotalCostUSD != 0 || got.TurnCount != 0 {
+		t.Fatalf("expected cost and turn count to be zeroed, got %+v", got)
+	}
+	if got.Summary != "old" {
+		t.Fatalf("expected unrelated fields to be preserved, got %+v", got)
+	}
+}
+
+func TestSessionMetaPatchLeavesCostAndTurnCountWhenUnset(t *testing.T) {
+	dir := t.TempDir()
+	if err := SaveSessionMeta(dir, "s1", SessionMeta{TotalCostUSD: 1.25, TurnCount: 3}); err != nil {
+		t.Fatalf("save meta: %v", err)
+	}
+	if _, err := PatchSessionMeta(dir, "s1", SessionMetaPatch{Summary: "hello"}); err != nil {
+		t.Fatalf("patch meta: %v", err)
+	}
+	got, err := LoadSessionMeta(dir, "s1")
+	if err != nil {
+		t.Fatalf("load meta: %v", err)
+	}
+	if got.TotalCostUSD != 1.25 || got.TurnCount != 3 || got.Summary != "hello" {
+		t.Fatalf("unexpected meta: %+v", got)
 	}
 }
 

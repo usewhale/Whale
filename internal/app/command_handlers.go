@@ -123,7 +123,7 @@ func (a *App) ExecuteSlash(line string) (CommandExecution, error) {
 		}
 		out.Text += fmt.Sprintf("\nresume:   whale resume %s", oldID)
 		out.Text += fmt.Sprintf("\nmode:     %s", a.currentMode)
-		if _, err := session.PatchSessionMeta(a.sessionsDir, a.sessionID, a.baseSessionMeta()); err != nil {
+		if _, err := session.PatchSessionMeta(a.sessionsDir, a.sessionID, session.SessionMetaPatchFromMeta(a.baseSessionMeta())); err != nil {
 			return out, err
 		}
 	}

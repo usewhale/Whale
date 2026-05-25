@@ -92,10 +92,6 @@ func (m *model) handleViewportScrollKey(key string) tea.Cmd {
 			m.viewport.ViewUp()
 		case "pgdown":
 			m.viewport.ViewDown()
-		case "ctrl+u":
-			m.viewport.HalfViewUp()
-		case "ctrl+d":
-			m.viewport.HalfViewDown()
 		case "home":
 			m.viewport.GotoTop()
 		case "end":
@@ -104,9 +100,17 @@ func (m *model) handleViewportScrollKey(key string) tea.Cmd {
 		return nil
 	}
 	switch key {
-	case "pgup", "ctrl+u", "home":
+	case "pgup", "home":
 		if m.followTail && !m.viewportFrozen {
-			m.refreshViewportContentFollow(true)
+			// PgUp/Home are about to scroll the chat list. The normal
+			// follow-tail refresh hands SetMessages the
+			// nativeScrollbackPrinted-trimmed window, which is right for
+			// streaming/append updates but leaves a tiny list under
+			// PgUp — it lands on the startup banner instead of real
+			// history. Reload the full transcript here, anchored at the
+			// bottom, so the upcoming chat.PageUp/ScrollToTop walks the
+			// real history.
+			m.loadFullChatForScroll()
 		} else {
 			m.refreshViewportContent()
 		}
@@ -127,23 +131,6 @@ func (m *model) handleViewportScrollKey(key string) tea.Cmd {
 		m.followTail = false
 	case "pgdown":
 		m.chat.PageDown()
-		m.followTail = m.chat.AtBottom()
-		if m.followTail {
-			return m.resumeChatTail()
-		}
-	case "ctrl+u":
-		if m.busy {
-			wasFollowingLiveTail := m.followTail && !m.viewportFrozen
-			m.freezeChatViewport()
-			if wasFollowingLiveTail {
-				m.followTail = false
-				break
-			}
-		}
-		m.chat.HalfPageUp()
-		m.followTail = false
-	case "ctrl+d":
-		m.chat.HalfPageDown()
 		m.followTail = m.chat.AtBottom()
 		if m.followTail {
 			return m.resumeChatTail()

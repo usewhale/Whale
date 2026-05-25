@@ -1,20 +1,25 @@
 package agent
 
-import "strings"
+import (
+	"context"
+	"strings"
+)
 
-func (a *Agent) emitHookReport(events chan<- AgentEvent, report HookReport) {
+func (a *Agent) emitHookReport(ctx context.Context, events chan<- AgentEvent, report HookReport) bool {
 	for _, oc := range report.Outcomes {
-		events <- AgentEvent{
+		if !sendAgentEvent(ctx, events, AgentEvent{
 			Type: AgentEventTypeHookStarted,
 			Hook: &HookEventInfo{
 				Name:  hookOutcomeName(oc),
 				Event: report.Event,
 			},
+		}) {
+			return false
 		}
 		msg := hookOutcomeMessage(oc)
 		switch oc.Decision {
 		case HookDecisionBlock, HookDecisionHalt:
-			events <- AgentEvent{
+			if !sendAgentEvent(ctx, events, AgentEvent{
 				Type: AgentEventTypeHookBlocked,
 				Hook: &HookEventInfo{
 					Name:       hookOutcomeName(oc),
@@ -25,9 +30,11 @@ func (a *Agent) emitHookReport(events chan<- AgentEvent, report HookReport) {
 					DurationMS: oc.DurationMS,
 					Truncated:  oc.Truncated,
 				},
+			}) {
+				return false
 			}
 		case HookDecisionError, HookDecisionTimeout:
-			events <- AgentEvent{
+			if !sendAgentEvent(ctx, events, AgentEvent{
 				Type: AgentEventTypeHookFailed,
 				Hook: &HookEventInfo{
 					Name:       hookOutcomeName(oc),
@@ -38,9 +45,11 @@ func (a *Agent) emitHookReport(events chan<- AgentEvent, report HookReport) {
 					DurationMS: oc.DurationMS,
 					Truncated:  oc.Truncated,
 				},
+			}) {
+				return false
 			}
 		case HookDecisionWarn:
-			events <- AgentEvent{
+			if !sendAgentEvent(ctx, events, AgentEvent{
 				Type: AgentEventTypeHookWarned,
 				Hook: &HookEventInfo{
 					Name:       hookOutcomeName(oc),
@@ -51,9 +60,11 @@ func (a *Agent) emitHookReport(events chan<- AgentEvent, report HookReport) {
 					DurationMS: oc.DurationMS,
 					Truncated:  oc.Truncated,
 				},
+			}) {
+				return false
 			}
 		}
-		events <- AgentEvent{
+		if !sendAgentEvent(ctx, events, AgentEvent{
 			Type: AgentEventTypeHookCompleted,
 			Hook: &HookEventInfo{
 				Name:       hookOutcomeName(oc),
@@ -64,8 +75,11 @@ func (a *Agent) emitHookReport(events chan<- AgentEvent, report HookReport) {
 				DurationMS: oc.DurationMS,
 				Truncated:  oc.Truncated,
 			},
+		}) {
+			return false
 		}
 	}
+	return true
 }
 
 func hookOutcomeName(oc HookOutcome) string {

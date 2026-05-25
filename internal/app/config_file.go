@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -254,10 +255,11 @@ func ApplyFileConfig(cfg *Config, file FileConfig) error {
 		cfg.APIBaseURL = strings.TrimRight(strings.TrimSpace(file.API.BaseURL), "/")
 	}
 	if file.Retry.MaxAttempts != nil {
-		if *file.Retry.MaxAttempts <= 0 {
-			return fmt.Errorf("invalid retry.max_attempts: must be greater than 0")
+		if *file.Retry.MaxAttempts < 0 {
+			return fmt.Errorf("invalid retry.max_attempts: must be 0 or greater")
 		}
 		cfg.RetryMaxAttempts = *file.Retry.MaxAttempts
+		cfg.RetryMaxAttemptsExplicit = true
 	}
 	if file.Retry.StreamMaxAttempts != nil {
 		if *file.Retry.StreamMaxAttempts <= 0 {
@@ -367,8 +369,9 @@ func overlayExplicitConfig(dst *Config, src Config) {
 	if strings.TrimSpace(src.ViewMode) != "" && src.ViewMode != def.ViewMode {
 		dst.ViewMode = src.ViewMode
 	}
-	if src.RetryMaxAttempts != 0 && src.RetryMaxAttempts != def.RetryMaxAttempts {
+	if src.RetryMaxAttemptsExplicit || (src.RetryMaxAttempts != 0 && src.RetryMaxAttempts != def.RetryMaxAttempts) {
 		dst.RetryMaxAttempts = src.RetryMaxAttempts
+		dst.RetryMaxAttemptsExplicit = src.RetryMaxAttemptsExplicit
 	}
 	if src.RetryStreamMaxAttempts != 0 && src.RetryStreamMaxAttempts != def.RetryStreamMaxAttempts {
 		dst.RetryStreamMaxAttempts = src.RetryStreamMaxAttempts
@@ -509,6 +512,9 @@ func trimList(in []string) []string {
 
 func expandUserPath(path string) string {
 	path = strings.TrimSpace(path)
+	if runtime.GOOS == "windows" {
+		path = expandWindowsPercentEnv(path)
+	}
 	if path == "~" {
 		if home, err := os.UserHomeDir(); err == nil && home != "" {
 			return home
@@ -520,4 +526,35 @@ func expandUserPath(path string) string {
 		}
 	}
 	return path
+}
+
+func expandWindowsPercentEnv(path string) string {
+	var out strings.Builder
+	for i := 0; i < len(path); {
+		if path[i] != '%' {
+			out.WriteByte(path[i])
+			i++
+			continue
+		}
+		end := strings.IndexByte(path[i+1:], '%')
+		if end < 0 {
+			out.WriteByte(path[i])
+			i++
+			continue
+		}
+		end += i + 1
+		name := path[i+1 : end]
+		if name == "" {
+			out.WriteString("%%")
+			i = end + 1
+			continue
+		}
+		if value, ok := os.LookupEnv(name); ok {
+			out.WriteString(value)
+		} else {
+			out.WriteString(path[i : end+1])
+		}
+		i = end + 1
+	}
+	return out.String()
 }

@@ -84,7 +84,7 @@ func (a *App) RunTurn(ctx context.Context, input string, hiddenInput bool) (<-ch
 
 func (a *App) RunTurnWithOptions(ctx context.Context, input string, opts agent.RunOptions) (<-chan agent.AgentEvent, error) {
 	if !opts.HiddenInput && strings.TrimSpace(input) != "" {
-		_, _ = session.PatchSessionMeta(a.sessionsDir, a.sessionID, session.SessionMeta{Title: input})
+		_, _ = session.PatchSessionMeta(a.sessionsDir, a.sessionID, session.SessionMetaPatch{Title: input})
 	}
 	ag, err := a.ensureAgent()
 	if err != nil {
@@ -99,7 +99,7 @@ func (a *App) RunTurnWithInjectedInput(ctx context.Context, visibleInput, hidden
 
 func (a *App) RunTurnWithInjectedInputOptions(ctx context.Context, visibleInput, hiddenInput string, opts agent.RunOptions) (<-chan agent.AgentEvent, error) {
 	if strings.TrimSpace(visibleInput) != "" {
-		_, _ = session.PatchSessionMeta(a.sessionsDir, a.sessionID, session.SessionMeta{Title: visibleInput})
+		_, _ = session.PatchSessionMeta(a.sessionsDir, a.sessionID, session.SessionMetaPatch{Title: visibleInput})
 	}
 	ag, err := a.ensureAgent()
 	if err != nil {
@@ -118,6 +118,6 @@ func (a *App) FinalizeTurn(lastAssistantText string) error {
 	if len(summary) > 240 {
 		summary = summary[:240]
 	}
-	_, err = session.PatchSessionMeta(a.sessionsDir, a.sessionID, session.SessionMeta{Workspace: a.workspaceRoot, Branch: a.branch, TurnCount: nextTurn, Summary: summary})
+	_, err = session.PatchSessionMeta(a.sessionsDir, a.sessionID, session.SessionMetaPatch{Workspace: a.workspaceRoot, Branch: a.branch, TurnCount: &nextTurn, Summary: summary})
 	return err
 }

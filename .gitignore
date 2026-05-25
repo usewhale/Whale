@@ -25,6 +25,9 @@ tmp/
 .whale/worktrees/
 .whale/sessions/
 .whale/usage.jsonl
+.antigravitycli/
+.omx/
+.antigravitycli/
 session.json
 .env
 .env.*
@@ -58,3 +61,6 @@ promo/
 
 # --- Logs ---
 *.log
+
+# --- Tool Artifacts ---
+.omx/

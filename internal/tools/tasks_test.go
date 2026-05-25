@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -25,6 +26,16 @@ func TestShellTaskRegistryPrunesExpiredCompletedTasks(t *testing.T) {
 	if _, ok := r.tasks["running"]; !ok {
 		t.Fatal("expected running task to remain available")
 	}
+}
+
+func TestRunShellBackgroundDoesNotPanic(t *testing.T) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			t.Fatalf("runShellBackground should recover internal panics, got %v", recovered)
+		}
+	}()
+
+	runShellBackground(context.Background(), t.TempDir(), "echo unreachable", nil)
 }
 
 func TestShellTaskRegistryPrunesOldCompletedTasksOverLimit(t *testing.T) {

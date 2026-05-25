@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -109,10 +110,12 @@ func TestTurnDeltaCoalescerDropNoticeIsReliable(t *testing.T) {
 	for i := 0; i < 200; i++ {
 		deltas.add(EventAssistantDelta, strings.Repeat("x", 64))
 	}
-	if deltas.droppedFlushes == 0 {
+	deltas.mu.Lock()
+	dropped := deltas.droppedFlushes
+	deltas.mu.Unlock()
+	if dropped == 0 {
 		t.Fatalf("expected drops under backpressure, got 0")
 	}
-	dropped := deltas.droppedFlushes
 
 	done := make(chan struct{})
 	go func() {
@@ -140,6 +143,26 @@ func TestTurnDeltaCoalescerDropNoticeIsReliable(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("flushReliable did not return after notice was consumed")
 	}
+}
+
+func TestTurnDeltaCoalescerAddIsRaceSafe(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := &Service{ctx: ctx, events: make(chan Event, 1024)}
+	deltas := newTurnDeltaCoalescers(s)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				deltas.add(EventAssistantDelta, strings.Repeat("x", 8))
+			}
+		}()
+	}
+	wg.Wait()
+	deltas.flushReliable()
 }
 
 func TestRunTurnWithStreamResetClearsLastResponse(t *testing.T) {
@@ -795,6 +818,160 @@ func TestLocalSubmitEmitsDone(t *testing.T) {
 		t.Fatalf("unexpected local submit error: status=%q text=%q", errEvent.Status, errEvent.Text)
 	}
 	waitForServiceEvent(t, svc, EventLocalSubmitDone)
+}
+
+func TestDeclinePlanPersistsHiddenMarkerAndStaysInPlanMode(t *testing.T) {
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true, ModeOverride: "plan"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+
+	svc.Dispatch(Intent{Kind: IntentDeclinePlan})
+
+	info := waitForServiceEvent(t, svc, EventInfo)
+	if info.Text != "Plan not approved; staying in Plan mode" {
+		t.Fatalf("unexpected decline info: %q", info.Text)
+	}
+	done := waitForServiceEvent(t, svc, EventTurnDone)
+	if done.LastResponse != info.Text {
+		t.Fatalf("unexpected decline turn response: %q", done.LastResponse)
+	}
+	if got := svc.app.CurrentMode(); got != session.ModePlan {
+		t.Fatalf("decline should stay in plan mode, got %s", got)
+	}
+	msgs, err := svc.app.ListMessages()
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(msgs) == 0 {
+		t.Fatal("expected hidden plan-not-approved marker")
+	}
+	got := msgs[len(msgs)-1]
+	if got.Role != core.RoleUser || !got.Hidden || got.FinishReason != core.FinishReasonCanceled {
+		t.Fatalf("unexpected marker message metadata: %+v", got)
+	}
+	if !strings.Contains(got.Text, "<plan_not_approved>") || !strings.Contains(got.Text, "specific proposal as declined") {
+		t.Fatalf("unexpected marker text: %q", got.Text)
+	}
+	if strings.Contains(got.Text, "Stay in planning mode") {
+		t.Fatalf("decline marker must not force future turns to stay in plan mode: %q", got.Text)
+	}
+}
+
+func TestModeSwitchPersistsHiddenModeChangedMarker(t *testing.T) {
+	tests := []struct {
+		name string
+		from session.Mode
+		to   session.Mode
+	}{
+		{name: "ask to agent", from: session.ModeAsk, to: session.ModeAgent},
+		{name: "plan to agent", from: session.ModePlan, to: session.ModeAgent},
+		{name: "agent to ask", from: session.ModeAgent, to: session.ModeAsk},
+		{name: "agent to plan", from: session.ModeAgent, to: session.ModePlan},
+		{name: "ask reaffirmed", from: session.ModeAsk, to: session.ModeAsk},
+		{name: "plan reaffirmed", from: session.ModePlan, to: session.ModePlan},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := app.DefaultConfig()
+			cfg.DataDir = t.TempDir()
+			svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true, ModeOverride: string(tt.from)})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			defer svc.Close()
+			waitForServiceEvent(t, svc, EventSessionHydrated)
+
+			msg, err := svc.app.SetMode(tt.to)
+			if err != nil {
+				t.Fatalf("SetMode: %v", err)
+			}
+			if !strings.Contains(msg, "mode enabled") {
+				t.Fatalf("unexpected mode message: %q", msg)
+			}
+
+			msgs, err := svc.app.ListMessages()
+			if err != nil {
+				t.Fatalf("ListMessages: %v", err)
+			}
+			if len(msgs) == 0 {
+				t.Fatal("expected hidden mode-changed marker")
+			}
+			got := msgs[len(msgs)-1]
+			if got.Role != core.RoleUser || !got.Hidden || got.FinishReason != core.FinishReasonEndTurn {
+				t.Fatalf("unexpected marker metadata: %+v", got)
+			}
+			if !strings.Contains(got.Text, "<mode_changed>") ||
+				!strings.Contains(got.Text, "active session mode is now "+string(tt.to)) ||
+				!strings.Contains(got.Text, "changed from "+string(tt.from)) ||
+				!strings.Contains(got.Text, "anything other than "+string(tt.to)) ||
+				!strings.Contains(got.Text, "stale") {
+				t.Fatalf("unexpected marker text: %q", got.Text)
+			}
+		})
+	}
+}
+
+func TestPlanDeclineThenAgentModeRecordsOverrideAfterDecline(t *testing.T) {
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true, ModeOverride: "plan"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+
+	svc.Dispatch(Intent{Kind: IntentDeclinePlan})
+	waitForServiceEvent(t, svc, EventInfo)
+	waitForServiceEvent(t, svc, EventTurnDone)
+
+	if _, err := svc.app.SetMode(session.ModeAgent); err != nil {
+		t.Fatalf("SetMode: %v", err)
+	}
+
+	msgs, err := svc.app.ListMessages()
+	if err != nil {
+		t.Fatalf("ListMessages: %v", err)
+	}
+	if len(msgs) < 2 {
+		t.Fatalf("expected decline marker followed by mode marker, got %+v", msgs)
+	}
+	decline := msgs[len(msgs)-2]
+	override := msgs[len(msgs)-1]
+	if !strings.Contains(decline.Text, "<plan_not_approved>") {
+		t.Fatalf("expected decline marker before mode override, got %q", decline.Text)
+	}
+	if strings.Contains(decline.Text, "Stay in planning mode") {
+		t.Fatalf("decline marker must not keep future turns in plan mode: %q", decline.Text)
+	}
+	if override.Role != core.RoleUser || !strings.Contains(override.Text, "<mode_changed>") {
+		t.Fatalf("expected system mode override after decline marker, got %+v", override)
+	}
+	if !strings.Contains(override.Text, "active session mode is now agent") ||
+		!strings.Contains(override.Text, "changed from plan") ||
+		!strings.Contains(override.Text, "anything other than agent") ||
+		!strings.Contains(override.Text, "stale") {
+		t.Fatalf("unexpected mode override text: %q", override.Text)
+	}
+}
+
+func TestBuildImplementPlanPromptDoesNotEmbedStalePlan(t *testing.T) {
+	prompt := buildImplementPlanPrompt("# Old Plan\n- Patch it")
+	if !strings.Contains(prompt, "Implement the plan.") {
+		t.Fatalf("expected generic implement prompt, got %q", prompt)
+	}
+	if !strings.Contains(prompt, "update_plan checklist") {
+		t.Fatalf("expected update_plan guidance, got %q", prompt)
+	}
+	if strings.Contains(prompt, "# Old Plan") || strings.Contains(prompt, "approved plan") {
+		t.Fatalf("implement prompt should not embed stale plan text: %q", prompt)
+	}
 }
 
 func TestLocalSubmitBtwWithoutQuestionEmitsUsage(t *testing.T) {
