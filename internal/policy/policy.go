@@ -624,7 +624,7 @@ func (p RulePolicy) externalDirs(command string) []string {
 				continue
 			}
 			clean := p.resolveShellPathToken(root, arg)
-			if clean == "" || pathInside(clean, root) || strings.HasPrefix(clean, "/tmp/") || strings.HasPrefix(clean, "/private/tmp/") {
+			if clean == "" || pathInside(clean, root) || pathInsideTrustedTemp(clean) {
 				continue
 			}
 			out = append(out, externalDirForToken(clean))
@@ -661,6 +661,17 @@ func shellPathArgBeforeRedirection(arg string) string {
 		return arg
 	}
 	return arg[:idx]
+}
+
+func pathInsideTrustedTemp(clean string) bool {
+	if clean == "" {
+		return false
+	}
+	if temp := cleanAbs(os.TempDir()); temp != "" && pathInside(clean, temp) {
+		return true
+	}
+	return clean == "/tmp" || strings.HasPrefix(clean, "/tmp/") ||
+		clean == "/private/tmp" || strings.HasPrefix(clean, "/private/tmp/")
 }
 
 // externalDirForToken returns the directory a shell path token should be
