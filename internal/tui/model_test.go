@@ -6349,7 +6349,10 @@ func TestChatViewportScrollsTranscript(t *testing.T) {
 	}
 }
 
-func TestChatViewportScrollKeysUseTranscriptBeforeComposer(t *testing.T) {
+func TestPgUpPgDownScrollTranscriptHomeEndStayOnComposer(t *testing.T) {
+	// PgUp/PgDn remain the transcript-scroll keys. Home/End are now readline
+	// line-start/end on the composer (they used to jump the transcript to
+	// the extremes; that behavior moved to the explicit PgUp/PgDn flow).
 	m := newModel(nil, "", "", "")
 	m.width = 80
 	m.height = 8
@@ -6368,6 +6371,7 @@ func TestChatViewportScrollKeysUseTranscriptBeforeComposer(t *testing.T) {
 	if m.viewport.YOffset >= bottomOffset {
 		t.Fatalf("expected PageUp to scroll transcript up, offset=%d bottom=%d", m.viewport.YOffset, bottomOffset)
 	}
+	scrolledOffset := m.viewport.YOffset
 
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
 	m = next.(model)
@@ -6375,20 +6379,37 @@ func TestChatViewportScrollKeysUseTranscriptBeforeComposer(t *testing.T) {
 		t.Fatalf("expected PageDown to return to bottom, offset=%d bottom=%d", m.viewport.YOffset, bottomOffset)
 	}
 
+	// Scroll partway up so we can detect any accidental viewport movement
+	// from Home/End — they should NOT touch the transcript anymore.
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m = next.(model)
+	preHomeOffset := m.viewport.YOffset
+	preHomeFollow := m.followTail
+	m.input.SetValue("draft")
+
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyHome})
 	m = next.(model)
-	if m.viewport.YOffset != 0 {
-		t.Fatalf("expected Home to jump to top, offset=%d", m.viewport.YOffset)
+	if m.viewport.YOffset != preHomeOffset {
+		t.Fatalf("expected Home not to scroll transcript, offset=%d want %d", m.viewport.YOffset, preHomeOffset)
+	}
+	if m.followTail != preHomeFollow {
+		t.Fatalf("expected Home not to toggle followTail, got %v want %v", m.followTail, preHomeFollow)
 	}
 
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnd})
 	m = next.(model)
-	if !m.followTail {
-		t.Fatal("expected End to resume tail following")
+	if m.viewport.YOffset != preHomeOffset {
+		t.Fatalf("expected End not to scroll transcript, offset=%d want %d", m.viewport.YOffset, preHomeOffset)
 	}
-	if m.viewport.YOffset != 0 {
-		t.Fatalf("expected printed transcript to leave an empty tail viewport, offset=%d", m.viewport.YOffset)
+	if m.followTail != preHomeFollow {
+		t.Fatalf("expected End not to toggle followTail, got %v want %v", m.followTail, preHomeFollow)
 	}
+	if m.input.Value() != "draft" {
+		t.Fatalf("expected composer value preserved across Home/End (cursor moves only), got %q", m.input.Value())
+	}
+	// Keep referencing scrolledOffset so the partially-scrolled state above
+	// is acknowledged as the precondition for the no-scroll checks.
+	_ = scrolledOffset
 }
 
 func TestMouseEventsDoNotDriveTerminalNativeTUI(t *testing.T) {
@@ -6666,20 +6687,23 @@ func TestChatViewportHomeFromIdleTailRenderRestoresFullHistory(t *testing.T) {
 	m.refreshViewportContentFollow(false)
 	tailLines := m.viewport.TotalLineCount()
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyHome})
-	m = next.(model)
+	// handleViewportScrollKey is still the underlying scroll-to-top primitive
+	// (used directly by the diff page and intended for future programmatic
+	// callers). The Home key no longer routes here in chat mode after the
+	// readline alignment, but the function's invariants must hold.
+	m.handleViewportScrollKey("home")
 	if m.followTail {
-		t.Fatal("expected Home from idle tail render to disable tail following")
+		t.Fatal("expected scroll-to-top from idle tail render to disable tail following")
 	}
 	if fullLines := m.viewport.TotalLineCount(); fullLines <= tailLines {
-		t.Fatalf("expected Home from idle tail render to restore full scrollable content, tail=%d full=%d", tailLines, fullLines)
+		t.Fatalf("expected scroll-to-top from idle tail render to restore full scrollable content, tail=%d full=%d", tailLines, fullLines)
 	}
 	view := m.View()
 	if !strings.Contains(view, "entry-000") {
-		t.Fatalf("expected Home from idle tail render to restore early history:\n%s", view)
+		t.Fatalf("expected scroll-to-top from idle tail render to restore early history:\n%s", view)
 	}
 	if strings.Contains(view, "entry-199") {
-		t.Fatalf("expected Home from idle tail render to move away from the latest tail:\n%s", view)
+		t.Fatalf("expected scroll-to-top from idle tail render to move away from the latest tail:\n%s", view)
 	}
 }
 
@@ -6752,17 +6776,20 @@ func TestChatViewportEndUnfreezesLiveOutputAndReturnsToTail(t *testing.T) {
 		m.append("assistant", fmt.Sprintf("live-tail-%02d\n", i))
 	}
 
-	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnd})
-	m = next.(model)
+	// handleViewportScrollKey is still the unfreeze-and-resume-tail primitive
+	// for the chat page. The End key no longer routes here in chat mode after
+	// the readline alignment, but the underlying viewport invariants —
+	// unfreezing the frozen state and restoring tail-follow — must hold.
+	m.handleViewportScrollKey("end")
 	if m.viewportFrozen {
-		t.Fatal("expected End to unfreeze chat viewport")
+		t.Fatal("expected scroll-to-tail to unfreeze chat viewport")
 	}
 	if !m.followTail {
-		t.Fatal("expected End to re-enable tail following")
+		t.Fatal("expected scroll-to-tail to re-enable tail following")
 	}
 	view := m.View()
 	if !strings.Contains(view, "live-tail-29") {
-		t.Fatalf("expected End to reveal latest live tail:\n%s", view)
+		t.Fatalf("expected scroll-to-tail to reveal latest live tail:\n%s", view)
 	}
 }
 

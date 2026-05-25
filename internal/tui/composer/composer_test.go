@@ -85,6 +85,26 @@ func TestComposerCtrlAAndCtrlEMoveWithinCurrentLine(t *testing.T) {
 	}
 }
 
+func TestComposerHomeAndEndMoveWithinCurrentLine(t *testing.T) {
+	// Home/End are the keyboard-key counterparts of Ctrl+A/Ctrl+E and must
+	// behave identically — jump to the start/end of the *current visual
+	// line*, not the buffer extremes. Whale used to route Home/End through
+	// the transcript viewport; the readline alignment moves them onto the
+	// composer (see internal/tui/model_keys.go handleChatModeKey).
+	c := New()
+	c.SetValue("abc\ndef")
+	c.Update(tea.KeyMsg{Type: tea.KeyHome})
+	c.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")})
+	if got := c.Value(); got != "abc\nXdef" {
+		t.Fatalf("expected Home to insert at second line start, got %q", got)
+	}
+	c.Update(tea.KeyMsg{Type: tea.KeyEnd})
+	c.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Y")})
+	if got := c.Value(); got != "abc\nXdefY" {
+		t.Fatalf("expected End to insert at second line end, got %q", got)
+	}
+}
+
 func TestComposerCtrlKKillsToEndOfLine(t *testing.T) {
 	c := New()
 	c.SetValue("hello world\nsecond")

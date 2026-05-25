@@ -273,7 +273,7 @@ func (m *model) handleChatModeKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 			m.skills.selected = 0
 			return nil, true
 		}
-	case "pgup", "pgdown", "home", "end":
+	case "pgup", "pgdown":
 		return m.handleViewportScrollKey(msg.String()), true
 	}
 	return nil, false
