@@ -30,6 +30,31 @@ func (m *model) refreshLiveViewportContent() {
 	m.refreshViewportContentFollow(false)
 }
 
+// loadFullChatForScroll prepares the chat list with the complete
+// transcript (bypassing the nativeScrollbackPrinted trim that normal
+// follow-tail refreshes use for performance) and anchors it at the
+// bottom. It is intended for the one-shot pre-scroll refresh before
+// PgUp/Home — every routine append/commit path must keep using
+// refreshViewportContentFollow so the trim stays effective.
+func (m *model) loadFullChatForScroll() {
+	if m.page != pageChat {
+		m.refreshViewportContentFollow(true)
+		return
+	}
+	mainWidth, _ := m.layoutDims()
+	bodyHeight := m.chatViewportBodyHeight(mainWidth, m.viewportBodyHeight(mainWidth))
+	m.unfreezeChatViewport()
+	m.followTail = true
+	m.chat.SetSize(max(10, mainWidth), max(1, bodyHeight))
+	m.chat.SetMessages(m.chatMessages(), max(20, mainWidth-2))
+	m.chat.ScrollToBottom()
+	m.syncViewportFromChat()
+	m.viewportLayoutReady = true
+	m.viewportLayoutPage = m.page
+	m.viewportLayoutWidth = mainWidth
+	m.viewportLayoutHeight = bodyHeight
+}
+
 func (m *model) refreshViewportContentIfBodyHeightChanged(prevMainWidth, prevBodyHeight int) {
 	mainWidth, _ := m.layoutDims()
 	bodyHeight := m.viewportBodyHeight(mainWidth)

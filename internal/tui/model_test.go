@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -6901,6 +6902,46 @@ func TestLongTurnDoneWhileScrolledPreservesViewportAndDefersDurationNotice(t *te
 	}
 	if got := fmt.Sprintf("%#v", cmd()); !strings.Contains(got, "✻ Worked for 3m ") {
 		t.Fatalf("expected deferred native scrollback to include duration notice, got %s", got)
+	}
+}
+
+// When most of the transcript has been emitted to native scrollback
+// (nativeScrollbackPrinted near len(transcript)), PgUp from the live tail
+// must reveal the older transcript that is still semantically part of the
+// session — not just the trimmed transcript[nativeScrollbackPrinted:]
+// window. Previously PgUp scrolled within that trimmed view and landed at
+// the startup banner (when start==0) or at very recent entries only.
+func TestPageUpAtTailRevealsTranscriptAboveScrollbackBoundary(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 80
+	m.height = 20
+	m.transcript = nil
+	for i := 0; i < 40; i++ {
+		m.appendTranscript("info", tuirender.KindText, fmt.Sprintf("entry-%02d", i))
+	}
+	// Simulate that all but the last two entries have already been written
+	// to terminal native scrollback (the common state after a couple of
+	// completed turns).
+	m.nativeScrollbackPrinted = len(m.transcript) - 2
+	m.followTail = true
+	m.refreshViewportContentFollow(true)
+	if !strings.Contains(m.View(), "entry-39") {
+		t.Fatalf("precondition: expected tail view to show latest entry, got:\n%s", m.View())
+	}
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
+	m = next.(model)
+	if m.followTail {
+		t.Fatal("expected PageUp to leave followTail mode")
+	}
+	view := m.View()
+	// PageUp from the tail should expose entries above the scrollback
+	// boundary (entries with index < 38), not just the two trimmed entries.
+	if !regexp.MustCompile(`entry-3[0-7]`).MatchString(view) {
+		t.Fatalf("expected PageUp from tail to expose transcript above the scrollback boundary, got:\n%s", view)
+	}
+	if strings.Contains(view, "WHALE") {
+		t.Fatalf("expected PageUp from tail not to jump to the startup banner, got:\n%s", view)
 	}
 }
 

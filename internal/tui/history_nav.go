@@ -102,7 +102,15 @@ func (m *model) handleViewportScrollKey(key string) tea.Cmd {
 	switch key {
 	case "pgup", "home":
 		if m.followTail && !m.viewportFrozen {
-			m.refreshViewportContentFollow(true)
+			// PgUp/Home are about to scroll the chat list. The normal
+			// follow-tail refresh hands SetMessages the
+			// nativeScrollbackPrinted-trimmed window, which is right for
+			// streaming/append updates but leaves a tiny list under
+			// PgUp — it lands on the startup banner instead of real
+			// history. Reload the full transcript here, anchored at the
+			// bottom, so the upcoming chat.PageUp/ScrollToTop walks the
+			// real history.
+			m.loadFullChatForScroll()
 		} else {
 			m.refreshViewportContent()
 		}
