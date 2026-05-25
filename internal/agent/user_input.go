@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -35,7 +36,7 @@ func validateUserInputRequest(req core.UserInputRequest) error {
 	return nil
 }
 
-func (a *Agent) handleRequestUserInput(call core.ToolCall, sessionID string, events chan<- AgentEvent) (core.ToolResult, error) {
+func (a *Agent) handleRequestUserInput(ctx context.Context, call core.ToolCall, sessionID string, events chan<- AgentEvent) (core.ToolResult, error) {
 	var in core.UserInputRequest
 	if err := json.Unmarshal([]byte(call.Input), &in); err != nil {
 		return core.ToolResult{
@@ -60,17 +61,21 @@ func (a *Agent) handleRequestUserInput(call core.ToolCall, sessionID string, eve
 			Questions:  in.Questions,
 		})
 	}
-	events <- AgentEvent{
+	if !sendAgentEvent(ctx, events, AgentEvent{
 		Type:         AgentEventTypeUserInputRequired,
 		ToolCall:     &call,
 		UserInputReq: &in,
+	}) {
+		return core.ToolResult{}, ctx.Err()
 	}
 
 	if a.userInput == nil {
 		if a.sessionRuntime != nil && a.sessionRuntime.Enabled() {
 			_ = a.sessionRuntime.ClearUserInput(sessionID)
 		}
-		events <- AgentEvent{Type: AgentEventTypeUserInputCancelled, ToolCall: &call}
+		if !sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypeUserInputCancelled, ToolCall: &call}) {
+			return core.ToolResult{}, ctx.Err()
+		}
 		return core.ToolResult{
 			ToolCallID: call.ID,
 			Name:       call.Name,
@@ -87,7 +92,9 @@ func (a *Agent) handleRequestUserInput(call core.ToolCall, sessionID string, eve
 		_ = a.sessionRuntime.ClearUserInput(sessionID)
 	}
 	if !ok {
-		events <- AgentEvent{Type: AgentEventTypeUserInputCancelled, ToolCall: &call}
+		if !sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypeUserInputCancelled, ToolCall: &call}) {
+			return core.ToolResult{}, ctx.Err()
+		}
 		return core.ToolResult{
 			ToolCallID: call.ID,
 			Name:       call.Name,
@@ -95,10 +102,12 @@ func (a *Agent) handleRequestUserInput(call core.ToolCall, sessionID string, eve
 			IsError:    true,
 		}, nil
 	}
-	events <- AgentEvent{
+	if !sendAgentEvent(ctx, events, AgentEvent{
 		Type:          AgentEventTypeUserInputSubmitted,
 		ToolCall:      &call,
 		UserInputResp: &resp,
+	}) {
+		return core.ToolResult{}, ctx.Err()
 	}
 	b, err := json.Marshal(map[string]any{
 		"success": true,

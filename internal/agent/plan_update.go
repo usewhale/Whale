@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -14,7 +15,7 @@ const (
 	planStatusCompleted  = "completed"
 )
 
-func (a *Agent) handleUpdatePlan(call core.ToolCall, events chan<- AgentEvent) (core.ToolResult, error) {
+func (a *Agent) handleUpdatePlan(ctx context.Context, call core.ToolCall, events chan<- AgentEvent) (core.ToolResult, error) {
 	update, err := parsePlanUpdate(call.Input)
 	if err != nil {
 		return core.ToolResult{
@@ -24,7 +25,9 @@ func (a *Agent) handleUpdatePlan(call core.ToolCall, events chan<- AgentEvent) (
 			IsError:    true,
 		}, nil
 	}
-	events <- AgentEvent{Type: AgentEventTypePlanUpdate, PlanUpdate: &update}
+	if !sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypePlanUpdate, PlanUpdate: &update}) {
+		return core.ToolResult{}, ctx.Err()
+	}
 	payload, _ := json.Marshal(map[string]any{
 		"success": true,
 		"data":    update,

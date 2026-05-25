@@ -16,14 +16,15 @@ var (
 	metaLocks   = map[string]*sync.Mutex{}
 )
 
-func metaLock(path string) *sync.Mutex {
+func metaLock(sessionsDir string) *sync.Mutex {
+	key := filepath.Clean(sessionsDir)
 	metaLocksMu.Lock()
 	defer metaLocksMu.Unlock()
-	if m, ok := metaLocks[path]; ok {
+	if m, ok := metaLocks[key]; ok {
 		return m
 	}
 	m := &sync.Mutex{}
-	metaLocks[path] = m
+	metaLocks[key] = m
 	return m
 }
 
@@ -58,7 +59,7 @@ func metaStatePath(sessionsDir, sessionID string) string {
 
 func LoadSessionMeta(sessionsDir, sessionID string) (SessionMeta, error) {
 	path := metaStatePath(sessionsDir, sessionID)
-	lock := metaLock(path)
+	lock := metaLock(sessionsDir)
 	lock.Lock()
 	defer lock.Unlock()
 	return loadSessionMetaAt(path)
@@ -81,7 +82,7 @@ func loadSessionMetaAt(path string) (SessionMeta, error) {
 
 func SaveSessionMeta(sessionsDir, sessionID string, st SessionMeta) error {
 	path := metaStatePath(sessionsDir, sessionID)
-	lock := metaLock(path)
+	lock := metaLock(sessionsDir)
 	lock.Lock()
 	defer lock.Unlock()
 	return saveSessionMetaAt(path, st)
@@ -106,7 +107,7 @@ func saveSessionMetaAt(path string, st SessionMeta) error {
 // a per-file lock so concurrent writers cannot lose each other's updates.
 func UpdateSessionMeta(sessionsDir, sessionID string, mutate func(*SessionMeta)) (SessionMeta, error) {
 	path := metaStatePath(sessionsDir, sessionID)
-	lock := metaLock(path)
+	lock := metaLock(sessionsDir)
 	lock.Lock()
 	defer lock.Unlock()
 	cur, err := loadSessionMetaAt(path)
@@ -122,7 +123,7 @@ func UpdateSessionMeta(sessionsDir, sessionID string, mutate func(*SessionMeta))
 
 func PatchSessionMeta(sessionsDir, sessionID string, patch SessionMeta) (SessionMeta, error) {
 	path := metaStatePath(sessionsDir, sessionID)
-	lock := metaLock(path)
+	lock := metaLock(sessionsDir)
 	lock.Lock()
 	defer lock.Unlock()
 	cur, err := loadSessionMetaAt(path)

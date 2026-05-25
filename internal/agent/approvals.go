@@ -37,11 +37,11 @@ func (a *Agent) persistApprovals(ctx context.Context, sessionID string, keys []s
 	}
 }
 
-func (a *Agent) grantApprovals(ctx context.Context, sessionID string, call core.ToolCall, key string, keys []string, events chan<- AgentEvent) {
+func (a *Agent) grantApprovals(ctx context.Context, sessionID string, call core.ToolCall, key string, keys []string, events chan<- AgentEvent) bool {
 	a.approvalCache.GrantAll(sessionID, keys)
 	a.persistApprovals(ctx, sessionID, keys)
 	if events != nil {
-		events <- AgentEvent{
+		return sendAgentEvent(ctx, events, AgentEvent{
 			Type: AgentEventTypeToolApprovalGranted,
 			ApprovalGrant: &ToolApprovalGranted{
 				SessionID:  sessionID,
@@ -50,6 +50,7 @@ func (a *Agent) grantApprovals(ctx context.Context, sessionID string, call core.
 				Key:        key,
 				Keys:       keys,
 			},
-		}
+		})
 	}
+	return true
 }

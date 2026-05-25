@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/usewhale/whale/internal/llm"
 	llmretry "github.com/usewhale/whale/internal/llm/retry"
@@ -50,6 +51,45 @@ func (p *deltasNoTerminalProvider) StreamResponse(_ context.Context, _ []Message
 	out <- ProviderEvent{Type: EventContentDelta, Content: "answer"}
 	close(out)
 	return out
+}
+
+type manyReasoningDeltasProvider struct{}
+
+func (p *manyReasoningDeltasProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	out := make(chan ProviderEvent, 32)
+	for i := 0; i < 31; i++ {
+		out <- ProviderEvent{Type: EventReasoningDelta, ReasoningDelta: "x"}
+	}
+	out <- endTurnEvent("done")
+	close(out)
+	return out
+}
+
+func TestRunStreamCancelWithoutDrainingEventsReleasesSession(t *testing.T) {
+	store := NewInMemoryStore()
+	a := NewAgent(&manyReasoningDeltasProvider{}, store, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	events, err := a.RunStream(ctx, "s-undrained", "go")
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+	_ = events
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	deadline := time.After(2 * time.Second)
+	for {
+		if _, loaded := a.active.Load("s-undrained"); !loaded {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("expected canceled undrained stream to release active session")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 }
 
 func TestStreamFallthroughPersistsPartialAssistant(t *testing.T) {

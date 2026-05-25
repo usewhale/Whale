@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"time"
 
 	"github.com/usewhale/whale/internal/llm"
@@ -8,27 +9,28 @@ import (
 	"github.com/usewhale/whale/internal/telemetry"
 )
 
-func (a *Agent) emitBudgetWarningIfNeeded(sessionID string, turnCost float64, events chan<- AgentEvent) {
+func (a *Agent) emitBudgetWarningIfNeeded(ctx context.Context, sessionID string, turnCost float64, events chan<- AgentEvent) bool {
 	if a.budgetWarningUSD <= 0 {
-		return
+		return true
 	}
 	if turnCost <= 0 {
-		return
+		return true
 	}
 	meta, err := a.sessionRuntime.LoadMeta(sessionID)
 	if err != nil {
-		return
+		return true
 	}
 	spent := meta.TotalCostUSD
 	percent := int((spent / a.budgetWarningUSD) * 100)
 	if percent >= 100 {
-		events <- AgentEvent{Type: AgentEventTypeBudgetWarning, Budget: &BudgetWarningInfo{CapUSD: a.budgetWarningUSD, SpentUSD: spent, Percent: 100, TurnCostUSD: turnCost}}
+		return sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypeBudgetWarning, Budget: &BudgetWarningInfo{CapUSD: a.budgetWarningUSD, SpentUSD: spent, Percent: 100, TurnCostUSD: turnCost}})
 	} else if percent >= 80 {
 		if _, loaded := a.budgetWarned80.LoadOrStore(sessionID, true); loaded {
-			return
+			return true
 		}
-		events <- AgentEvent{Type: AgentEventTypeBudgetWarning, Budget: &BudgetWarningInfo{CapUSD: a.budgetWarningUSD, SpentUSD: spent, Percent: 80, TurnCostUSD: turnCost}}
+		return sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypeBudgetWarning, Budget: &BudgetWarningInfo{CapUSD: a.budgetWarningUSD, SpentUSD: spent, Percent: 80, TurnCostUSD: turnCost}})
 	}
+	return true
 }
 
 func (a *Agent) recordTurnCost(sessionID string, usage llm.Usage, modelName, prefixFingerprint string) float64 {

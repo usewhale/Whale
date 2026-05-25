@@ -10,6 +10,9 @@ import (
 
 func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMessageID, model string, call core.ToolCall, events chan<- AgentEvent) (core.ToolResult, bool, bool) {
 	attempt := 0
+	emit := func(ev AgentEvent) bool {
+		return sendAgentEvent(ctx, events, ev)
+	}
 	for {
 		attempt++
 		res, err := a.tools.DispatchWithProgress(ctx, call, func(progress core.ToolProgress) {
@@ -24,7 +27,7 @@ func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMe
 				DurationMS: progress.DurationMS,
 				Metadata:   progress.Metadata,
 			}
-			events <- AgentEvent{Type: AgentEventTypeTaskProgress, Task: &info}
+			_ = emit(AgentEvent{Type: AgentEventTypeTaskProgress, Task: &info})
 		})
 		if ctx.Err() != nil {
 			return res, true, false
@@ -41,7 +44,7 @@ func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMe
 		}
 		rule, exists := a.recovery.Rules[class]
 		if !a.recovery.Enabled || !exists {
-			events <- AgentEvent{
+			if !emit(AgentEvent{
 				Type: AgentEventTypeToolRecoveryExhausted,
 				Recovery: &ToolRecoveryInfo{
 					ToolCallID:   call.ID,
@@ -52,13 +55,15 @@ func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMe
 					MaxAttempts:  0,
 					Reason:       "no recovery rule",
 				},
+			}) {
+				return res, true, false
 			}
 			return res, true, false
 		}
 		if rule.Action == RecoveryActionFallbackReadOnly {
 			fallbackRes, ok := a.executeFallbackReadonly(ctx, call, res)
 			if ok {
-				events <- AgentEvent{
+				if !emit(AgentEvent{
 					Type: AgentEventTypeToolRecoveryExhausted,
 					Recovery: &ToolRecoveryInfo{
 						ToolCallID:   call.ID,
@@ -70,13 +75,15 @@ func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMe
 						Reason:       res.Content,
 						Executed:     true,
 					},
+				}) {
+					return res, true, false
 				}
 				return fallbackRes, true, false
 			}
 		}
 		if rule.Action == RecoveryActionRequestReplan {
 			replanRes := buildRequestReplanResult(call, class, attempt, res.Content)
-			events <- AgentEvent{
+			if !emit(AgentEvent{
 				Type: AgentEventTypeReplanRequiredSet,
 				Recovery: &ToolRecoveryInfo{
 					ToolCallID:     call.ID,
@@ -88,8 +95,10 @@ func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMe
 					Reason:         res.Content,
 					ReplanInjected: true,
 				},
+			}) {
+				return res, true, false
 			}
-			events <- AgentEvent{
+			if !emit(AgentEvent{
 				Type: AgentEventTypeToolRecoveryExhausted,
 				Recovery: &ToolRecoveryInfo{
 					ToolCallID:     call.ID,
@@ -102,6 +111,8 @@ func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMe
 					Executed:       true,
 					ReplanInjected: true,
 				},
+			}) {
+				return res, true, false
 			}
 			return replanRes, true, false
 		}
@@ -109,7 +120,7 @@ func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMe
 			return res, true, false
 		}
 		if attempt > rule.MaxAttempts || rule.Action == RecoveryActionHardBlock {
-			events <- AgentEvent{
+			if !emit(AgentEvent{
 				Type: AgentEventTypeToolRecoveryExhausted,
 				Recovery: &ToolRecoveryInfo{
 					ToolCallID:   call.ID,
@@ -120,10 +131,12 @@ func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMe
 					MaxAttempts:  rule.MaxAttempts,
 					Reason:       res.Content,
 				},
+			}) {
+				return res, true, false
 			}
 			return res, true, false
 		}
-		events <- AgentEvent{
+		if !emit(AgentEvent{
 			Type: AgentEventTypeToolRecoveryScheduled,
 			Recovery: &ToolRecoveryInfo{
 				ToolCallID:   call.ID,
@@ -134,6 +147,8 @@ func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMe
 				MaxAttempts:  rule.MaxAttempts,
 				Reason:       res.Content,
 			},
+		}) {
+			return res, true, false
 		}
 		if rule.Action == RecoveryActionRetryWithBackoff && rule.BackoffMS > 0 {
 			timer := time.NewTimer(time.Duration(rule.BackoffMS) * time.Millisecond)
@@ -144,7 +159,7 @@ func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMe
 			case <-timer.C:
 			}
 		}
-		events <- AgentEvent{
+		if !emit(AgentEvent{
 			Type: AgentEventTypeToolRecoveryAttempt,
 			Recovery: &ToolRecoveryInfo{
 				ToolCallID:   call.ID,
@@ -154,6 +169,8 @@ func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMe
 				Attempt:      attempt + 1,
 				MaxAttempts:  rule.MaxAttempts,
 			},
+		}) {
+			return res, true, false
 		}
 	}
 }

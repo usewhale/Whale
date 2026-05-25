@@ -74,6 +74,9 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 		if a.repairer != nil {
 			a.repairer.resetStorm()
 		}
+		emit := func(ev AgentEvent) bool {
+			return sendAgentEvent(ctx, out, ev)
+		}
 		turnPolicy := a.policy
 		if len(opts.ShellAllowPrefixes) > 0 {
 			turnPolicy = policy.ScopedAllowPolicy{
@@ -88,12 +91,14 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 			rt.Scratch.ResetTurn()
 			rt.Prefix.Refresh(a.buildImmutableSystemBlocks())
 			if got := rt.Prefix.Fingerprint(); got != expectedPrefixFingerprint {
-				out <- AgentEvent{
+				if !emit(AgentEvent{
 					Type: AgentEventTypePrefixDrift,
 					PrefixDrift: &PrefixDriftInfo{
 						Expected: expectedPrefixFingerprint,
 						Actual:   got,
 					},
+				}) {
+					return
 				}
 				expectedPrefixFingerprint = got
 			}
@@ -102,7 +107,7 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 				if float64(before)/float64(max(1, a.contextWindow)) > a.compactThresh {
 					replacement, info, err := a.compactHistory(ctx, sessionID, history, true)
 					if err != nil {
-						out <- AgentEvent{Type: AgentEventTypeError, Err: err}
+						emit(AgentEvent{Type: AgentEventTypeError, Err: err})
 						return
 					}
 					if info.Compacted {
@@ -110,16 +115,20 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 						history = replacement
 						info.BeforeEstimate = before
 						info.AfterEstimate = compact.EstimateMessagesTokens(rt.BuildProviderHistory())
-						out <- AgentEvent{
+						if !emit(AgentEvent{
 							Type:    AgentEventTypeContextCompacted,
 							Compact: &info,
+						}) {
+							return
 						}
 					} else {
 						info.BeforeEstimate = before
 						info.AfterEstimate = before
-						out <- AgentEvent{
+						if !emit(AgentEvent{
 							Type:    AgentEventTypeContextCompacted,
 							Compact: &info,
+						}) {
+							return
 						}
 					}
 				}
@@ -128,17 +137,21 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 			if sErr != nil {
 				if errors.Is(sErr, context.Canceled) || errors.Is(sErr, context.DeadlineExceeded) {
 					a.persistInterruptedTurnMarker(sessionID)
-					out <- AgentEvent{Type: AgentEventTypeTurnCancelled, Content: "turn cancelled"}
+					emit(AgentEvent{Type: AgentEventTypeTurnCancelled, Content: "turn cancelled"})
 					return
 				}
-				out <- AgentEvent{Type: AgentEventTypeError, Err: sErr}
+				emit(AgentEvent{Type: AgentEventTypeError, Err: sErr})
 				return
 			}
 			turnCost := a.recordTurnCost(sessionID, usage, modelName, rt.Prefix.Fingerprint())
 			if m := buildPrefixCacheMetrics(modelName, usage, rt.Prefix.Fingerprint()); m != nil {
-				out <- AgentEvent{Type: AgentEventTypePrefixCacheMetrics, CacheMetrics: m}
+				if !emit(AgentEvent{Type: AgentEventTypePrefixCacheMetrics, CacheMetrics: m}) {
+					return
+				}
 			}
-			a.emitBudgetWarningIfNeeded(sessionID, turnCost, out)
+			if !a.emitBudgetWarningIfNeeded(ctx, sessionID, turnCost, out) {
+				return
+			}
 			if abortTurn {
 				if toolMsg != nil {
 					rt.Log.Append(assistant)
@@ -147,7 +160,7 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 				}
 				done := assistant
 				done.FinishReason = core.FinishReasonEndTurn
-				out <- AgentEvent{Type: AgentEventTypeDone, Message: &done}
+				emit(AgentEvent{Type: AgentEventTypeDone, Message: &done})
 				return
 			}
 			if assistant.FinishReason == core.FinishReasonToolUse && toolMsg != nil {
@@ -156,20 +169,26 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 				rt.Log.Append(*toolMsg)
 				history = append(history, assistant, *toolMsg)
 				if a.maxToolIters > 0 && toolIters >= a.maxToolIters {
-					out <- AgentEvent{Type: AgentEventTypeForcedSummaryStarted, Content: "tool iteration cap reached"}
-					sum, serr := a.forceSummary(ctx, sessionID, history, "tool iteration cap reached")
-					if serr != nil {
-						out <- AgentEvent{Type: AgentEventTypeForcedSummaryFailed, Content: serr.Error()}
-						out <- AgentEvent{Type: AgentEventTypeError, Err: serr}
+					if !emit(AgentEvent{Type: AgentEventTypeForcedSummaryStarted, Content: "tool iteration cap reached"}) {
 						return
 					}
-					out <- AgentEvent{Type: AgentEventTypeForcedSummaryDone, Content: "forced summary completed"}
-					out <- AgentEvent{Type: AgentEventTypeDone, Message: &sum}
+					sum, serr := a.forceSummary(ctx, sessionID, history, "tool iteration cap reached")
+					if serr != nil {
+						if !emit(AgentEvent{Type: AgentEventTypeForcedSummaryFailed, Content: serr.Error()}) {
+							return
+						}
+						emit(AgentEvent{Type: AgentEventTypeError, Err: serr})
+						return
+					}
+					if !emit(AgentEvent{Type: AgentEventTypeForcedSummaryDone, Content: "forced summary completed"}) {
+						return
+					}
+					emit(AgentEvent{Type: AgentEventTypeDone, Message: &sum})
 					return
 				}
 				continue
 			}
-			out <- AgentEvent{Type: AgentEventTypeDone, Message: &assistant}
+			emit(AgentEvent{Type: AgentEventTypeDone, Message: &assistant})
 			return
 		}
 	}()

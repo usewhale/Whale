@@ -40,10 +40,10 @@ func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolRe
 		}
 		task := b.tasks.create(in.Command, relCWD)
 		go func() {
+			defer b.tasks.completed(task.ID)
 			cctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
 			runShellBackground(cctx, workdir, in.Command, task)
-			b.tasks.completed(task.ID)
 		}()
 		return marshalToolResult(call, map[string]any{
 			"status": "running",

@@ -1,11 +1,33 @@
 package session
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 )
+
+func TestMetaLocksDoNotGrowWithSessionCount(t *testing.T) {
+	metaLocksMu.Lock()
+	before := len(metaLocks)
+	metaLocksMu.Unlock()
+
+	dir := t.TempDir()
+	const sessions = 128
+	for i := 0; i < sessions; i++ {
+		if err := SaveSessionMeta(dir, fmt.Sprintf("s-%03d", i), SessionMeta{}); err != nil {
+			t.Fatalf("save meta %d: %v", i, err)
+		}
+	}
+
+	metaLocksMu.Lock()
+	after := len(metaLocks)
+	metaLocksMu.Unlock()
+	if after > before+1 {
+		t.Fatalf("metaLocks grew by %d entries after %d sessions; before=%d after=%d", after-before, sessions, before, after)
+	}
+}
 
 func TestUpdateSessionMetaConcurrentCostAndPatch(t *testing.T) {
 	dir := t.TempDir()
