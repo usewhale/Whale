@@ -70,3 +70,26 @@ func TestChatListPreservesWorkSeparatorAcrossThinking(t *testing.T) {
 		t.Fatalf("expected separator before final assistant answer:\n%s", plain)
 	}
 }
+
+func TestChatListRenderCacheTracksCurrentMessagesOnly(t *testing.T) {
+	var l chatList
+	l.SetSize(80, 24)
+
+	base := tuirender.UIMessage{ID: "base", Role: "assistant", Kind: tuirender.KindText, Text: "stable"}
+	live := tuirender.UIMessage{ID: "live", Role: "assistant", Kind: tuirender.KindText, Text: "first live"}
+	l.SetMessages([]tuirender.UIMessage{base, live}, 80)
+
+	live.Text = "second live"
+	l.SetMessages([]tuirender.UIMessage{base, live}, 80)
+
+	plain := xansi.Strip(l.FullContent())
+	if strings.Contains(plain, "first live") {
+		t.Fatalf("expected changed message to be re-rendered, got:\n%s", plain)
+	}
+	if !strings.Contains(plain, "second live") {
+		t.Fatalf("expected changed message to be visible, got:\n%s", plain)
+	}
+	if got := len(l.renderCache); got != 2 {
+		t.Fatalf("expected cache to retain only current messages, got %d entries", got)
+	}
+}
