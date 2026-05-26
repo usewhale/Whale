@@ -125,7 +125,8 @@ func siblingShellExample(raw string) string {
 	if first == "" || first == "." || first == ".." {
 		first = "<project>"
 	}
-	return "`ls ../" + first + "` or `git -C ../" + first + " ...`"
+	siblingPath := shellSingleQuote("../" + first)
+	return "`ls " + siblingPath + "` or `git -C " + siblingPath + " ...`"
 }
 
 func (b *Toolset) safePath(raw string) (string, error) {

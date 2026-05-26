@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -878,6 +879,107 @@ func TestReadFileDefaultsToBoundedResult(t *testing.T) {
 	}
 }
 
+func TestReadFileDefaultNearRegistryCapDoesNotAdvertiseFull(t *testing.T) {
+	dir := t.TempDir()
+	body := strings.Repeat("x", defaultReadFileFullMaxBytes-100)
+	fileName := "near-$(touch pwn)'cap.txt"
+	if err := os.WriteFile(filepath.Join(dir, fileName), []byte(body), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	registry := core.NewToolRegistry(ts.Tools())
+
+	res, err := registry.Dispatch(context.Background(), tc("read_file", map[string]any{
+		"file_path": fileName,
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
+	}
+	if len(res.Content) > core.DefaultMaxToolResultChars {
+		t.Fatalf("registry result len = %d, want <= %d", len(res.Content), core.DefaultMaxToolResultChars)
+	}
+	env, ok := core.ParseToolEnvelope(res.Content)
+	if !ok {
+		t.Fatalf("parse read_file envelope: %s", res.Content)
+	}
+	if outputTruncated, _ := env.Metadata["output_truncated"].(bool); outputTruncated {
+		t.Fatalf("registry should not truncate read_file result: %+v", env.Metadata)
+	}
+	data := env.Data
+	if got := metricString(t, data, "mode"); got != "outline" {
+		t.Fatalf("mode = %q, want outline", got)
+	}
+	if got := metricNumber(t, data, "truncated_line_count"); got != 1 {
+		t.Fatalf("truncated_line_count = %d, want 1", got)
+	}
+	if content := readFileContent(t, data); !strings.Contains(content, "[line truncated]") {
+		t.Fatalf("outline should line-truncate oversized head line: %q", content)
+	}
+	if note, _ := data["note"].(string); !strings.Contains(note, "shell_run") || strings.Contains(note, "offset=0 limit=2000") {
+		t.Fatalf("outline note should point oversized lines to shell_run, got: %#v", data["note"])
+	}
+	if note, _ := data["note"].(string); strings.Contains(note, `"`+fileName+`"`) || !strings.Contains(note, `'near-$(touch pwn)'\''cap.txt'`) {
+		t.Fatalf("outline note should shell-single-quote unsafe path, got: %#v", data["note"])
+	}
+	if content := readFileContent(t, data); !strings.Contains(content, "shell_run") || strings.Contains(content, "offset=0 limit=2000") {
+		t.Fatalf("outline content should point oversized lines to shell_run, got: %q", content)
+	}
+	if content := readFileContent(t, data); strings.Contains(content, `"`+fileName+`"`) || !strings.Contains(content, `'near-$(touch pwn)'\''cap.txt'`) {
+		t.Fatalf("outline content should shell-single-quote unsafe path, got: %q", content)
+	}
+}
+
+func TestReadFileOutlineShrinksToFitRegistryCap(t *testing.T) {
+	dir := t.TempDir()
+	var body strings.Builder
+	for i := 0; i < defaultReadFileOutlineLines; i++ {
+		body.WriteString(strings.Repeat("x", 400))
+		body.WriteByte('\n')
+	}
+	if err := os.WriteFile(filepath.Join(dir, "wide-outline.txt"), []byte(body.String()), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	registry := core.NewToolRegistry(ts.Tools())
+
+	res, err := registry.Dispatch(context.Background(), tc("read_file", map[string]any{
+		"file_path": "wide-outline.txt",
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
+	}
+	if len(res.Content) > core.DefaultMaxToolResultChars {
+		t.Fatalf("registry result len = %d, want <= %d", len(res.Content), core.DefaultMaxToolResultChars)
+	}
+	env, ok := core.ParseToolEnvelope(res.Content)
+	if !ok {
+		t.Fatalf("parse read_file envelope: %s", res.Content)
+	}
+	if outputTruncated, _ := env.Metadata["output_truncated"].(bool); outputTruncated {
+		t.Fatalf("registry should not truncate read_file result: %+v", env.Metadata)
+	}
+	data := env.Data
+	if got := metricString(t, data, "mode"); got != "outline" {
+		t.Fatalf("mode = %q, want outline", got)
+	}
+	returned := metricNumber(t, data, "returned_lines")
+	if returned <= 0 || returned >= defaultReadFileOutlineLines {
+		t.Fatalf("returned_lines = %d, want shrunk outline below %d", returned, defaultReadFileOutlineLines)
+	}
+	if got := rangeNumber(t, data, "end"); got != returned {
+		t.Fatalf("range end = %d, want returned_lines %d", got, returned)
+	}
+	if !payloadBool(t, data, "has_more_after") {
+		t.Fatalf("expected has_more_after in %#v", data["payload"])
+	}
+}
+
 func TestReadFileDefaultByteCap(t *testing.T) {
 	dir := t.TempDir()
 	var body strings.Builder
@@ -925,7 +1027,8 @@ func TestReadFileDefaultByteCap(t *testing.T) {
 func TestReadFileFirstLineExceedsByteCap(t *testing.T) {
 	dir := t.TempDir()
 	body := strings.Repeat("x", defaultReadFileMaxBytes+1) + "\nnext\n"
-	if err := os.WriteFile(filepath.Join(dir, "one-line.txt"), []byte(body), 0o644); err != nil {
+	fileName := "one $(touch pwn)'line.txt"
+	if err := os.WriteFile(filepath.Join(dir, fileName), []byte(body), 0o644); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
 	ts, err := NewToolset(dir)
@@ -934,7 +1037,7 @@ func TestReadFileFirstLineExceedsByteCap(t *testing.T) {
 	}
 
 	res, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
-		"file_path": "one-line.txt",
+		"file_path": fileName,
 		"offset":    0,
 		"limit":     2,
 	}))
@@ -953,6 +1056,9 @@ func TestReadFileFirstLineExceedsByteCap(t *testing.T) {
 	}
 	if note, _ := data["note"].(string); !strings.Contains(note, "line 1 exceeds") || !strings.Contains(note, "head -c") {
 		t.Fatalf("missing first-line note: %#v", data["note"])
+	}
+	if note, _ := data["note"].(string); strings.Contains(note, fileName+" |") || !strings.Contains(note, "< 'one $(touch pwn)'\\''line.txt' | head -c") {
+		t.Fatalf("first-line note should shell-single-quote unsafe path, got: %#v", data["note"])
 	}
 }
 
@@ -1107,8 +1213,8 @@ func TestReadOnlyPathErrorsExplainWorkspaceAndSiblingRecovery(t *testing.T) {
 		"Requested path: codex",
 		"Resolved path: " + filepath.Join(workspace, "codex"),
 		"not a sibling project",
-		"`ls ../codex`",
-		"`git -C ../codex ...`",
+		"`ls '../codex'`",
+		"`git -C '../codex' ...`",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("expected list_dir diagnostic to contain %q:\n%s", want, msg)
@@ -1161,13 +1267,43 @@ func TestReadOnlyPathEscapeErrorsExplainWorkspaceAndSiblingRecovery(t *testing.T
 				"Current workspace root: " + workspace,
 				"Requested path: ../codex",
 				"not a sibling project",
-				"`ls ../codex`",
+				"`ls '../codex'`",
 			} {
 				if !strings.Contains(msg, want) {
 					t.Fatalf("expected %s diagnostic to contain %q:\n%s", tc.name, want, msg)
 				}
 			}
 		})
+	}
+}
+
+func TestReadOnlyPathErrorsShellQuoteSiblingRecovery(t *testing.T) {
+	workspace := t.TempDir()
+	ts, err := NewToolset(workspace)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.listDir(context.Background(), tc("list_dir", map[string]any{"path": "../repo;touch pwn$(boom)'x/file.txt"}))
+	if err != nil {
+		t.Fatalf("list_dir err: %v", err)
+	}
+	msg := toolErrorMessage(t, res)
+	for _, want := range []string{
+		"`ls '../repo;touch pwn$(boom)'\\''x'`",
+		"`git -C '../repo;touch pwn$(boom)'\\''x' ...`",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("expected diagnostic to contain shell-quoted command %q:\n%s", want, msg)
+		}
+	}
+	for _, bad := range []string{
+		"`ls ../repo;touch pwn$(boom)'x`",
+		"`git -C ../repo;touch pwn$(boom)'x ...`",
+	} {
+		if strings.Contains(msg, bad) {
+			t.Fatalf("diagnostic contains unsafe unquoted command %q:\n%s", bad, msg)
+		}
 	}
 }
 
@@ -1633,6 +1769,61 @@ func TestGrepTruncatesLongLines(t *testing.T) {
 	}
 	if got := line[int(start):int(end)]; got != "needle" {
 		t.Fatalf("submatch offsets select %q, want needle in %q", got, line)
+	}
+}
+
+func TestGrepFallsBackWhenRipgrepJSONLineExceedsScannerBuffer(t *testing.T) {
+	if _, err := exec.LookPath("rg"); err != nil {
+		t.Skipf("rg not available: %v", err)
+	}
+	dir := t.TempDir()
+	long := strings.Repeat("x", grepScannerBufferBytes+1024) + "needle\n"
+	if err := os.WriteFile(filepath.Join(dir, "huge.txt"), []byte(long), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	done := make(chan core.ToolResult, 1)
+	errs := make(chan error, 1)
+	go func() {
+		res, err := ts.searchContent(context.Background(), tc("grep", map[string]any{
+			"pattern": "needle",
+			"include": "*.txt",
+			"limit":   10,
+		}))
+		if err != nil {
+			errs <- err
+			return
+		}
+		done <- res
+	}()
+
+	var res core.ToolResult
+	select {
+	case err := <-errs:
+		t.Fatalf("grep returned error: %v", err)
+	case res = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("grep hung after ripgrep scanner error")
+	}
+	if res.IsError {
+		t.Fatalf("grep returned tool error: %+v", res)
+	}
+	data := readFileData(t, res)
+	matches := grepMatches(t, data)
+	if len(matches) != 1 {
+		t.Fatalf("matches len = %d, want 1", len(matches))
+	}
+	match, ok := matches[0].(map[string]any)
+	if !ok {
+		t.Fatalf("match is not an object: %#v", matches[0])
+	}
+	line, _ := match["line"].(string)
+	if !strings.Contains(line, "needle") {
+		t.Fatalf("fallback result did not preserve match text: %q", line)
 	}
 }
 

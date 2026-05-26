@@ -18,7 +18,7 @@ type ToolRegistry struct {
 	maxResultChars int
 }
 
-const defaultMaxToolResultChars = 32 * 1024
+const DefaultMaxToolResultChars = 32 * 1024
 
 func NewToolRegistry(tools []Tool) *ToolRegistry {
 	r, err := NewToolRegistryChecked(tools)
@@ -30,7 +30,7 @@ func NewToolRegistry(tools []Tool) *ToolRegistry {
 
 func NewToolRegistryChecked(tools []Tool) (*ToolRegistry, error) {
 	r := &ToolRegistry{
-		maxResultChars: defaultMaxToolResultChars,
+		maxResultChars: DefaultMaxToolResultChars,
 	}
 	if err := r.replaceToolsLocked(tools); err != nil {
 		return nil, err
@@ -189,7 +189,7 @@ func (r *ToolRegistry) DispatchWithProgress(ctx context.Context, call ToolCall, 
 
 func normalizeRegistryResult(call ToolCall, res ToolResult, maxResultChars int, durationMS int64) ToolResult {
 	if maxResultChars <= 0 {
-		maxResultChars = defaultMaxToolResultChars
+		maxResultChars = DefaultMaxToolResultChars
 	}
 	content, isErr := normalizeToolContent(call.Name, res.Content, res.IsError, maxResultChars, durationMS)
 	res.ToolCallID = call.ID

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -81,30 +82,19 @@ func (b *Toolset) readFile(_ context.Context, call core.ToolCall) (core.ToolResu
 
 	if !explicitRange && totalBytes <= defaultReadFileFullMaxBytes {
 		content := strings.Join(lines, "\n")
-		return marshalToolResult(call, readFileResult(rel, "full", total, totalBytes, len(lines), len([]byte(content)), 0, total, false, "", 0, false, false, content, ""))
+		result := readFileResult(rel, "full", total, totalBytes, len(lines), len([]byte(content)), 0, total, false, "", 0, false, false, content, "")
+		if readFileFullResultFitsRegistryEnvelope(call.Name, result) {
+			return marshalToolResult(call, result)
+		}
 	}
 
 	if !explicitRange {
-		headLines := min(defaultReadFileOutlineLines, total)
-		head := strings.Join(lines[:headLines], "\n")
-		content := formatReadFileOutline(rel, total, totalBytes, headLines, head)
-		result := readFileResult(rel, "outline", total, totalBytes, headLines, len([]byte(content)), 0, headLines, true, "outline", 0, false, headLines < total, content, fmt.Sprintf("large file outline mode; use offset=0 limit=%d to read a bounded range.", defaultReadFileMaxLines))
-		result["outline"] = map[string]any{
-			"head_lines":      headLines,
-			"threshold_bytes": defaultReadFileFullMaxBytes,
-		}
+		result := buildReadFileOutlineResult(call.Name, rel, lines, total, totalBytes)
 		return marshalToolResult(call, result)
 	}
 
 	selected, end, trunc := selectReadFileLines(lines, start, limit, defaultReadFileMaxBytes)
-	truncatedLines := 0
-	for i := range selected {
-		r := []rune(selected[i])
-		if len(r) > maxViewLineChars {
-			selected[i] = string(r[:maxViewLineChars]) + "...[line truncated]"
-			truncatedLines++
-		}
-	}
+	truncatedLines := truncateReadFileDisplayLines(selected)
 	content := strings.Join(selected, "\n")
 	returnedBytes := len([]byte(content))
 	autoTruncated := trunc.Truncated && (trunc.TruncatedBy == "bytes" || limitWasDefaulted)
@@ -115,7 +105,7 @@ func (b *Toolset) readFile(_ context.Context, call core.ToolCall) (core.ToolResu
 			note += " "
 		}
 		if trunc.FirstLineExceedsLimit {
-			note += fmt.Sprintf("line %d exceeds the %d byte read_file limit; retry with a narrower shell command such as sed -n '%dp' %s | head -c %d.", start+1, defaultReadFileMaxBytes, start+1, in.FilePath, defaultReadFileMaxBytes)
+			note += fmt.Sprintf("line %d exceeds the %d byte read_file limit; retry with a narrower shell command such as sed -n '%dp' < %s | head -c %d.", start+1, defaultReadFileMaxBytes, start+1, shellSingleQuote(rel), defaultReadFileMaxBytes)
 		} else {
 			note += fmt.Sprintf("read_file output truncated by %s; use offset=%d limit=%d to continue.", trunc.TruncatedBy, end, defaultReadFileMaxLines)
 		}
@@ -157,7 +147,78 @@ func readFileResult(rel string, mode string, totalLines int, totalBytes int, ret
 	return result
 }
 
-func formatReadFileOutline(rel string, totalLines int, totalBytes int, headLines int, head string) string {
+func buildReadFileOutlineResult(toolName string, rel string, lines []string, total int, totalBytes int) map[string]any {
+	headLines := min(defaultReadFileOutlineLines, total)
+	for {
+		result := readFileOutlineResult(rel, lines, total, totalBytes, headLines)
+		if readFileResultFitsRegistryEnvelope(toolName, result) || headLines <= 1 {
+			return result
+		}
+		headLines = max(headLines/2, 1)
+	}
+}
+
+func readFileOutlineResult(rel string, lines []string, total int, totalBytes int, headLines int) map[string]any {
+	headSelected := append([]string(nil), lines[:headLines]...)
+	truncatedLines := truncateReadFileDisplayLines(headSelected)
+	head := strings.Join(headSelected, "\n")
+	recovery := readFileOutlineRecovery(rel, truncatedLines)
+	content := formatReadFileOutline(rel, total, totalBytes, headLines, head, recovery)
+	result := readFileResult(rel, "outline", total, totalBytes, headLines, len([]byte(content)), 0, headLines, true, "outline", truncatedLines, false, headLines < total, content, "large file outline mode; "+recovery)
+	result["outline"] = map[string]any{
+		"head_lines":      headLines,
+		"threshold_bytes": defaultReadFileFullMaxBytes,
+	}
+	return result
+}
+
+func readFileOutlineRecovery(rel string, truncatedLines int) string {
+	if truncatedLines > 0 {
+		return fmt.Sprintf("one or more displayed lines were shortened; use shell_run with `sed -n '1p' < %s | head -c %d` for the first oversized line, or a narrower shell command for the exact byte range.", shellSingleQuote(rel), defaultReadFileMaxBytes)
+	}
+	return fmt.Sprintf("use offset=0 limit=%d to read a bounded range.", defaultReadFileMaxLines)
+}
+
+func shellSingleQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+func truncateReadFileDisplayLines(lines []string) int {
+	truncatedLines := 0
+	for i := range lines {
+		r := []rune(lines[i])
+		if len(r) > maxViewLineChars {
+			lines[i] = string(r[:maxViewLineChars]) + "...[line truncated]"
+			truncatedLines++
+		}
+	}
+	return truncatedLines
+}
+
+func readFileFullResultFitsRegistryEnvelope(toolName string, result map[string]any) bool {
+	return readFileResultFitsRegistryEnvelope(toolName, result)
+}
+
+func readFileResultFitsRegistryEnvelope(toolName string, result map[string]any) bool {
+	summary, _ := result["summary"].(string)
+	b, err := json.Marshal(core.ToolEnvelope{
+		OK:      true,
+		Success: true,
+		Code:    "ok",
+		Summary: summary,
+		Data:    result,
+		Metadata: map[string]any{
+			"source_tool": toolName,
+			"duration_ms": int64(0),
+		},
+	})
+	return err == nil && len(b) <= core.DefaultMaxToolResultChars-1024
+}
+
+func formatReadFileOutline(rel string, totalLines int, totalBytes int, headLines int, head string, recovery string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[large file: %d bytes, %d lines; outline mode threshold %d bytes]\n\n", totalBytes, totalLines, defaultReadFileFullMaxBytes)
 	fmt.Fprintf(&b, "[head %d lines for orientation]\n", headLines)
@@ -165,7 +226,7 @@ func formatReadFileOutline(rel string, totalLines int, totalBytes int, headLines
 		b.WriteString(head)
 		b.WriteString("\n")
 	}
-	fmt.Fprintf(&b, "\n[to read more, call read_file with file_path:%q offset:0 limit:%d; continue with the next offset from the result]", rel, defaultReadFileMaxLines)
+	fmt.Fprintf(&b, "\n[to read more, %s]", recovery)
 	return b.String()
 }
 

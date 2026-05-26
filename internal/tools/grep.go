@@ -212,6 +212,9 @@ func searchWithRipgrep(pattern, path, include string, literal bool, limit int, d
 		}
 	}
 	if err := sc.Err(); err != nil {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
 		_ = cmd.Wait()
 		<-stderrDone
 		if meta.MatchLimitReached {
