@@ -122,10 +122,11 @@ func (m model) viewCacheSignature() string {
 		}
 	}
 	return fmt.Sprintf(
-		"mode=%d page=%d status=%s busy=%t stopping=%t local=%d chat=%s auto=%t view=%s model=%s effort=%s thinking=%s branch=%s cwd=%s slash=%d/%d/%s skills=%d/%d approval=%s/%s/%s/%d user=%s/%d/%d/%d/%s",
+		"mode=%d page=%d status=%s busy=%t stopping=%t local=%d chat=%s auto=%t view=%s model=%s effort=%s thinking=%s branch=%s cwd=%s slash=%d/%d/%s files=%t/%t/%d/%d/%s skills=%d/%d approval=%s/%s/%s/%d user=%s/%d/%d/%d/%s",
 		m.mode, m.page, m.status, m.busy, m.stopping, m.localSubmitPending, m.chatMode, m.autoAccept, m.viewMode,
 		m.model, m.effort, m.thinking, m.gitBranch, m.cwd,
 		len(m.slash.matches), m.slash.selected, m.slash.argumentHint,
+		m.files.active, m.files.searching, len(m.files.matches), m.files.selected, m.files.query,
 		len(m.skills.matches), m.skills.selected,
 		approvalToolCallID, approvalToolName, approvalReason, approvalSelected,
 		userInputToolCallID, userInputIndex, userInputSelected, userInputOptionCount, userInputQuestion,
@@ -220,7 +221,10 @@ func (m model) bottomPartsBeforeInput(mainWidth int) []string {
 	if m.mode == modeChat && m.hasSlashPanel() {
 		bottomParts = append(bottomParts, m.renderSlashSuggestions())
 	}
-	if m.mode == modeChat && !m.hasSlashPanel() && m.hasSkillSuggestions() {
+	if m.mode == modeChat && !m.hasSlashPanel() && m.hasFilePanel() {
+		bottomParts = append(bottomParts, m.renderFileSuggestions())
+	}
+	if m.mode == modeChat && !m.hasSlashPanel() && !m.hasFilePanel() && m.hasSkillSuggestions() {
 		bottomParts = append(bottomParts, m.renderSkillSuggestions())
 	}
 	if m.mode == modeApproval {

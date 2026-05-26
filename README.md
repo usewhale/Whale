@@ -135,6 +135,7 @@ Whale's goal is to make DeepSeek's pricing, cache behavior, and coding capabilit
 - **Modify code**: generate patches, edit files, add tests, fix bugs, and handle local refactors.
 - **Run commands**: execute shell commands, tests, builds, and diagnostic scripts, then bring results back into the conversation.
 - **Work interactively**: use the local TUI, persist sessions, and resume with `whale resume`.
+- **Reference local paths quickly**: type `@` in the TUI composer to search and insert workspace file or directory paths.
 - **Ask read-only questions**: use `/ask` when you want analysis without file edits.
 - **Plan before execution**: use `/plan` to review a plan before letting the agent implement it.
 - **Extend tools**: connect external tools with MCP and reuse workflows with Skills.

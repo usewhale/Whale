@@ -492,7 +492,9 @@ func (m *model) handleTurnDone(ev service.Event) tea.Cmd {
 	pendingWindowsInput := m.snapshotWindowsBusyInput()
 	if wasStopping {
 		m.deferredPlanPicker = false
-		queuedRestored = m.restoreQueuedPromptsToComposerWithWindowsInput(pendingWindowsInput)
+		var restoreCmd tea.Cmd
+		queuedRestored, restoreCmd = m.restoreQueuedPromptsToComposerWithWindowsInput(pendingWindowsInput)
+		eventCmd = tea.Batch(eventCmd, restoreCmd)
 	} else if m.localSubmitPending > 0 {
 		if shouldOpenPlanPicker {
 			m.deferredPlanPicker = true
@@ -500,8 +502,7 @@ func (m *model) handleTurnDone(ev service.Event) tea.Cmd {
 		m.status = "wait for command to finish"
 	} else if next, ok := m.popQueuedPrompt(); ok {
 		m.deferredPlanPicker = false
-		eventCmd = m.submitPromptWithBinding(next.Text, next.SkillBinding)
-		m.restoreWindowsBusyInput(pendingWindowsInput)
+		eventCmd = tea.Batch(m.submitPromptWithBinding(next.Text, next.SkillBinding), m.restoreWindowsBusyInput(pendingWindowsInput))
 		queuedTurnStarted = true
 	}
 	if !queuedTurnStarted && !queuedRestored && m.localSubmitPending == 0 && !m.hasPendingWindowsBusyInput() && shouldOpenPlanPicker {

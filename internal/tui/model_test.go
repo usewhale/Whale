@@ -49,6 +49,26 @@ func runGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
+func writeFileSuggestionFixture(t *testing.T, path string, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+}
+
+func runFileSuggestionSearchForTest(t *testing.T, m model, cmd tea.Cmd) model {
+	t.Helper()
+	if cmd == nil {
+		t.Fatal("expected file suggestion search command")
+	}
+	msg := cmd()
+	updated, _ := updateTestModel(t, m, msg)
+	return updated
+}
+
 func newModelWithDispatchSpy() (model, *[]service.Intent) {
 	m := newModel(nil, "", "", "")
 	intents := []service.Intent{}
@@ -2884,6 +2904,298 @@ func TestSlashSuggestionsHiddenForAbsolutePathInput(t *testing.T) {
 	m.updateSlashMatches()
 	if len(m.slash.matches) != 0 {
 		t.Fatalf("expected slash suggestions hidden for absolute path prompt, got %+v", m.slash.matches)
+	}
+}
+
+func TestFileSuggestionsShownForAtInput(t *testing.T) {
+	dir := t.TempDir()
+	writeFileSuggestionFixture(t, filepath.Join(dir, "internal", "tui", "model.go"), "package tui\n")
+	writeFileSuggestionFixture(t, filepath.Join(dir, "README.md"), "# test\n")
+	m := newModel(nil, "", "", "")
+	m.cwdPath = dir
+	m.input.SetValue("@mod")
+	m = runFileSuggestionSearchForTest(t, m, m.updateSlashMatches())
+	if !m.hasFileSuggestions() {
+		t.Fatal("expected file suggestions for @mod")
+	}
+	if got := m.files.matches[0].Path; got != "internal/tui/model.go" {
+		t.Fatalf("expected model.go first, got %+v", m.files.matches)
+	}
+	if m.hasSkillSuggestions() {
+		t.Fatalf("expected skill suggestions hidden while file suggestions are visible, got %+v", m.skills.matches)
+	}
+}
+
+func TestBareAtShowsFileHintWithoutScanning(t *testing.T) {
+	dir := t.TempDir()
+	writeFileSuggestionFixture(t, filepath.Join(dir, "README.md"), "# test\n")
+	m, intents := newModelWithDispatchSpy()
+	m.cwdPath = dir
+	m.input.SetValue("@")
+	if cmd := m.updateSlashMatches(); cmd != nil {
+		t.Fatal("bare @ should not start a file suggestion search")
+	}
+	if m.hasFileSuggestions() {
+		t.Fatalf("bare @ should not expand file suggestions, got %+v", m.files.matches)
+	}
+	if !m.hasFilePanel() {
+		t.Fatal("bare @ should show the file hint panel")
+	}
+	if rendered := m.renderFileSuggestions(); !strings.Contains(rendered, "Type to search workspace files") {
+		t.Fatalf("expected idle file-search hint, got:\n%s", rendered)
+	}
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if got := m.input.Value(); got != "@" {
+		t.Fatalf("tab on bare @ should preserve input, got %q", got)
+	}
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("enter on bare @ should submit and clear input, got %q", got)
+	}
+	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSubmit || (*intents)[0].Input != "@" {
+		t.Fatalf("expected bare @ to submit as normal text, got %+v", *intents)
+	}
+}
+
+func TestFindFileSuggestionsEmptyQueryReturnsNoMatches(t *testing.T) {
+	dir := t.TempDir()
+	writeFileSuggestionFixture(t, filepath.Join(dir, "README.md"), "# test\n")
+	if got := findFileSuggestions(dir, ""); len(got) != 0 {
+		t.Fatalf("empty query should not scan and return matches, got %+v", got)
+	}
+}
+
+func TestFindFileSuggestionsRanksLaterWorkspaceMatches(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 600; i++ {
+		writeFileSuggestionFixture(t, filepath.Join(dir, "aaa", fmt.Sprintf("target.go-%03d.md", i)), "noise\n")
+	}
+	writeFileSuggestionFixture(t, filepath.Join(dir, "zzz", "src", "target.go"), "package src\n")
+
+	got := findFileSuggestions(dir, "target.go")
+	if len(got) == 0 {
+		t.Fatal("expected file suggestions")
+	}
+	if got[0].Path != "zzz/src/target.go" {
+		t.Fatalf("expected later exact workspace match first, got %+v", got)
+	}
+}
+
+func TestFileSuggestionEnterInsertsSelectedPath(t *testing.T) {
+	dir := t.TempDir()
+	writeFileSuggestionFixture(t, filepath.Join(dir, "internal", "tui", "model.go"), "package tui\n")
+	m, intents := newModelWithDispatchSpy()
+	m.cwdPath = dir
+	m.input.SetValue("review @mod")
+	m = runFileSuggestionSearchForTest(t, m, m.updateSlashMatches())
+	if !m.hasFileSuggestions() {
+		t.Fatal("expected file suggestions")
+	}
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if got := m.input.Value(); got != "review internal/tui/model.go " {
+		t.Fatalf("expected selected path inserted, got %q", got)
+	}
+	if len(*intents) != 0 {
+		t.Fatalf("expected no dispatch when inserting file suggestion, got %+v", *intents)
+	}
+	if m.hasFileSuggestions() {
+		t.Fatalf("expected file suggestions cleared, got %+v", m.files.matches)
+	}
+	if m.hasFilePanel() {
+		t.Fatal("expected file suggestion panel cleared after insertion")
+	}
+}
+
+func TestFileSuggestionTabQuotesPathsWithSpaces(t *testing.T) {
+	dir := t.TempDir()
+	writeFileSuggestionFixture(t, filepath.Join(dir, "docs", "my file.md"), "# test\n")
+	m := newModel(nil, "", "", "")
+	m.cwdPath = dir
+	m.input.SetValue("@my")
+	m = runFileSuggestionSearchForTest(t, m, m.updateSlashMatches())
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if got := m.input.Value(); got != `"docs/my file.md" ` {
+		t.Fatalf("expected quoted selected path, got %q", got)
+	}
+}
+
+func TestFileSuggestionTabEscapesQuotedPathWithSpaces(t *testing.T) {
+	if got := quoteFileSuggestionPath(`docs/my "file".md`); got != `"docs/my \"file\".md"` {
+		t.Fatalf("expected escaped quoted path, got %q", got)
+	}
+}
+
+func TestFileSuggestionEscClearsSuggestionsWithoutMutatingInput(t *testing.T) {
+	dir := t.TempDir()
+	writeFileSuggestionFixture(t, filepath.Join(dir, "README.md"), "# test\n")
+	m := newModel(nil, "", "", "")
+	m.cwdPath = dir
+	m.input.SetValue("@read")
+	m = runFileSuggestionSearchForTest(t, m, m.updateSlashMatches())
+	if !m.hasFileSuggestions() {
+		t.Fatal("expected file suggestions")
+	}
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+	if got := m.input.Value(); got != "@read" {
+		t.Fatalf("expected esc to preserve input, got %q", got)
+	}
+	if m.hasFileSuggestions() || m.files.selected != 0 {
+		t.Fatalf("expected file suggestions cleared, got matches=%v selected=%d", m.files.matches, m.files.selected)
+	}
+}
+
+func TestFileSuggestionsHiddenForMultilineBusyAndHistory(t *testing.T) {
+	dir := t.TempDir()
+	writeFileSuggestionFixture(t, filepath.Join(dir, "README.md"), "# test\n")
+	m := newModel(nil, "", "", "")
+	m.cwdPath = dir
+	m.input.SetValue("@read\nmore")
+	m.updateSlashMatches()
+	if m.hasFileSuggestions() {
+		t.Fatalf("expected file suggestions hidden for multiline input, got %+v", m.files.matches)
+	}
+	m.input.SetValue("@read")
+	m.busy = true
+	m.updateSlashMatches()
+	if m.hasFileSuggestions() {
+		t.Fatalf("expected file suggestions hidden while busy, got %+v", m.files.matches)
+	}
+	m.busy = false
+	m.inHistoryNav = true
+	m.lastHistoryText = "@read"
+	m.updateSlashMatches()
+	if m.hasFileSuggestions() {
+		t.Fatalf("expected file suggestions hidden during history navigation, got %+v", m.files.matches)
+	}
+}
+
+func TestFileSuggestionsTakePriorityInsideSlashArguments(t *testing.T) {
+	dir := t.TempDir()
+	writeFileSuggestionFixture(t, filepath.Join(dir, "docs", "review.md"), "# test\n")
+	m := newModel(nil, "", "", "")
+	m.cwdPath = dir
+	m.input.SetValue("/review @rev")
+	m = runFileSuggestionSearchForTest(t, m, m.updateSlashMatches())
+	if m.hasSlashPanel() {
+		t.Fatalf("expected file suggestions to suppress slash panel, hint=%q matches=%+v", m.slash.argumentHint, m.slash.matches)
+	}
+	if !m.hasFileSuggestions() {
+		t.Fatal("expected file suggestions inside slash arguments")
+	}
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	if got := m.input.Value(); got != "/review docs/review.md " {
+		t.Fatalf("expected selected path inserted into slash command argument, got %q", got)
+	}
+}
+
+func TestFileSuggestionsWorkInsideOpenSlashArguments(t *testing.T) {
+	dir := t.TempDir()
+	writeFileSuggestionFixture(t, filepath.Join(dir, "README.md"), "# test\n")
+	m := newModel(nil, "", "", "")
+	m.cwdPath = dir
+	m.input.SetValue("/open @read")
+	m = runFileSuggestionSearchForTest(t, m, m.updateSlashMatches())
+	if m.hasSlashPanel() {
+		t.Fatalf("expected file suggestions to suppress /open slash panel, hint=%q matches=%+v", m.slash.argumentHint, m.slash.matches)
+	}
+	if !m.hasFileSuggestions() {
+		t.Fatal("expected file suggestions inside /open arguments")
+	}
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if got := m.input.Value(); got != "/open README.md " {
+		t.Fatalf("expected selected path inserted into /open argument, got %q", got)
+	}
+}
+
+func TestFileSuggestionsQuoteOpenSlashArgumentsWithSpaces(t *testing.T) {
+	dir := t.TempDir()
+	writeFileSuggestionFixture(t, filepath.Join(dir, "docs", "my file.md"), "# test\n")
+	m := newModel(nil, "", "", "")
+	m.cwdPath = dir
+	m.input.SetValue("/open @my")
+	m = runFileSuggestionSearchForTest(t, m, m.updateSlashMatches())
+	if !m.hasFileSuggestions() {
+		t.Fatal("expected file suggestions inside /open arguments")
+	}
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if got := m.input.Value(); got != `/open "docs/my file.md" ` {
+		t.Fatalf("expected quoted selected path inserted into /open argument, got %q", got)
+	}
+}
+
+func TestFileSuggestionsEscapeWorkspaceRelativeTildeForOpen(t *testing.T) {
+	dir := t.TempDir()
+	writeFileSuggestionFixture(t, filepath.Join(dir, "~", "notes.md"), "# test\n")
+	m := newModel(nil, "", "", "")
+	m.cwdPath = dir
+	m.input.SetValue("/open @notes")
+	m = runFileSuggestionSearchForTest(t, m, m.updateSlashMatches())
+	if !m.hasFileSuggestions() {
+		t.Fatal("expected file suggestions inside /open arguments")
+	}
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyTab})
+	if got := m.input.Value(); got != "/open ./~/notes.md " {
+		t.Fatalf("expected workspace-relative tilde path escaped for /open, got %q", got)
+	}
+}
+
+func TestFilePanelNavigationSuppressesHistoryWhenNoMatches(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.input.SetValue("@missing")
+	m.promptHistory = []string{"previous prompt"}
+	m.inHistoryNav = true
+	m.lastHistoryText = "@missing"
+	m.files.active = true
+	m.files.query = "missing"
+	m.files.searching = false
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyUp})
+	if got := m.input.Value(); got != "@missing" {
+		t.Fatalf("expected visible file panel to keep history navigation suppressed, got %q", got)
+	}
+}
+
+func TestFileSuggestionsIgnoreStaleAsyncResults(t *testing.T) {
+	dir := t.TempDir()
+	writeFileSuggestionFixture(t, filepath.Join(dir, "internal", "tui", "model.go"), "package tui\n")
+	writeFileSuggestionFixture(t, filepath.Join(dir, "README.md"), "# test\n")
+	m := newModel(nil, "", "", "")
+	m.cwdPath = dir
+	m.input.SetValue("@mod")
+	staleCmd := m.updateSlashMatches()
+	m.input.SetValue("@read")
+	freshCmd := m.updateSlashMatches()
+	m = runFileSuggestionSearchForTest(t, m, staleCmd)
+	if m.hasFileSuggestions() {
+		t.Fatalf("expected stale results ignored, got %+v", m.files.matches)
+	}
+	m = runFileSuggestionSearchForTest(t, m, freshCmd)
+	if !m.hasFileSuggestions() || m.files.matches[0].Path != "README.md" {
+		t.Fatalf("expected fresh README match, got %+v", m.files.matches)
+	}
+}
+
+func TestFileSuggestionsCancelPreviousAsyncSearch(t *testing.T) {
+	dir := t.TempDir()
+	writeFileSuggestionFixture(t, filepath.Join(dir, "internal", "tui", "model.go"), "package tui\n")
+	writeFileSuggestionFixture(t, filepath.Join(dir, "README.md"), "# test\n")
+	m := newModel(nil, "", "", "")
+	m.cwdPath = dir
+	m.input.SetValue("@mod")
+	staleCmd := m.updateSlashMatches()
+	m.input.SetValue("@read")
+	freshCmd := m.updateSlashMatches()
+
+	msg, ok := staleCmd().(fileSuggestionsLoadedMsg)
+	if !ok {
+		t.Fatalf("expected fileSuggestionsLoadedMsg, got %T", msg)
+	}
+	if len(msg.matches) != 0 {
+		t.Fatalf("expected canceled search to return no matches, got %+v", msg.matches)
+	}
+	m = runFileSuggestionSearchForTest(t, m, freshCmd)
+	if !m.hasFileSuggestions() || m.files.matches[0].Path != "README.md" {
+		t.Fatalf("expected fresh search to remain usable, got %+v", m.files.matches)
 	}
 }
 

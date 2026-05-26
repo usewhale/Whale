@@ -280,6 +280,23 @@ func TestComposerSoftWrapKeepsFirstVisibleLine(t *testing.T) {
 	}
 }
 
+func TestComposerCurrentPrefixedTokenWorksAfterSoftWrap(t *testing.T) {
+	c := New()
+	c.SetWidth(20)
+	prefix := strings.Repeat("a", 30)
+	c.SetValue(prefix + " @read")
+	got, ok := c.CurrentPrefixedToken('@')
+	if !ok || got != "read" {
+		t.Fatalf("expected @read token after soft wrap, got %q ok=%v", got, ok)
+	}
+	if !c.ReplaceCurrentPrefixedToken('@', "README.md ") {
+		t.Fatal("expected soft-wrapped @ token replacement to succeed")
+	}
+	if got := c.Value(); got != prefix+" README.md " {
+		t.Fatalf("unexpected replacement result: %q", got)
+	}
+}
+
 func TestComposerEmptyPlaceholderCollapsesToSingleLine(t *testing.T) {
 	c := New()
 	c.SetWidth(20)

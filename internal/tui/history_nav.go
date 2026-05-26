@@ -20,16 +20,16 @@ func (m *model) shouldHandleHistoryNavigation() bool {
 	return m.input.AtStart() || m.input.AtEnd()
 }
 
-func (m *model) historyPrev() bool {
+func (m *model) historyPrev() (bool, tea.Cmd) {
 	if len(m.promptHistory) == 0 {
-		return false
+		return false, nil
 	}
 	if m.historyIndex == -1 {
 		m.historyDraft = m.input.Value()
 	}
 	next := m.historyIndex + 1
 	if next >= len(m.promptHistory) {
-		return false
+		return false, nil
 	}
 	m.historyIndex = next
 	idx := len(m.promptHistory) - 1 - m.historyIndex
@@ -38,13 +38,12 @@ func (m *model) historyPrev() bool {
 	m.input.SetCursorEnd()
 	m.lastHistoryText = entry
 	m.inHistoryNav = true
-	m.updateSlashMatches()
-	return true
+	return true, m.updateSlashMatches()
 }
 
-func (m *model) historyNext() bool {
+func (m *model) historyNext() (bool, tea.Cmd) {
 	if m.historyIndex < 0 {
-		return false
+		return false, nil
 	}
 	next := m.historyIndex - 1
 	if next < 0 {
@@ -53,8 +52,7 @@ func (m *model) historyNext() bool {
 		m.historyIndex = -1
 		m.lastHistoryText = ""
 		m.inHistoryNav = false
-		m.updateSlashMatches()
-		return true
+		return true, m.updateSlashMatches()
 	}
 	m.historyIndex = next
 	idx := len(m.promptHistory) - 1 - m.historyIndex
@@ -63,8 +61,7 @@ func (m *model) historyNext() bool {
 	m.input.SetCursorEnd()
 	m.lastHistoryText = entry
 	m.inHistoryNav = true
-	m.updateSlashMatches()
-	return true
+	return true, m.updateSlashMatches()
 }
 
 func (m *model) resetHistoryNavigation() {

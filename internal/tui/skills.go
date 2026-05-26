@@ -15,7 +15,7 @@ import (
 
 func (m *model) updateSkillMatches() {
 	m.skills.matches = nil
-	if m.mode != modeChat || m.busy || m.hasSlashSuggestions() {
+	if m.mode != modeChat || m.busy || m.hasSlashSuggestions() || m.hasFilePanel() {
 		m.skills.selected = 0
 		return
 	}
@@ -216,6 +216,7 @@ func (m *model) openSkillsListFromMenu() {
 	m.slash.matches = nil
 	m.slash.selected = 0
 	m.slash.argumentHint = ""
+	clearFileSuggestions(m)
 	m.skills.matches = nil
 	m.skills.selected = 0
 	m.resetHistoryNavigation()

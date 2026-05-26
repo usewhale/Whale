@@ -76,6 +76,28 @@ func (c *Composer) SetCursorEnd() {
 	c.moveToEnd()
 }
 
+func (c *Composer) CurrentPrefixedToken(prefix rune) (string, bool) {
+	c.ensureInitialized()
+	return c.currentPrefixedToken(prefix)
+}
+
+func (c *Composer) ReplaceCurrentPrefixedToken(prefix rune, replacement string) bool {
+	c.ensureInitialized()
+	start, end, ok := c.currentPrefixedTokenRange(prefix)
+	if !ok {
+		return false
+	}
+	value := c.rawValue()
+	runes := []rune(value)
+	replacementRunes := []rune(replacement)
+	next := string(runes[:start]) + replacement + string(runes[end:])
+	c.pendingPastes = nil
+	c.textarea.SetValue(next)
+	c.moveCursorToRuneOffset(start + len(replacementRunes))
+	c.reflow()
+	return true
+}
+
 func (c *Composer) SetWidth(width int) {
 	c.ensureInitialized()
 	c.width = max(20, width)
@@ -190,6 +212,29 @@ func (c *Composer) moveToEnd() {
 		c.textarea.CursorDown()
 	}
 	c.textarea.CursorEnd()
+}
+
+func (c *Composer) moveCursorToRuneOffset(offset int) {
+	if offset < 0 {
+		offset = 0
+	}
+	lines := splitComposerLines(c.rawValue())
+	line := 0
+	col := offset
+	for line < len(lines) {
+		lineLen := len([]rune(lines[line]))
+		if col <= lineLen {
+			break
+		}
+		col -= lineLen + 1
+		line++
+	}
+	if line >= len(lines) {
+		c.moveToEnd()
+		return
+	}
+	c.moveToLine(line)
+	c.textarea.SetCursor(col)
 }
 
 func (c *Composer) moveToLine(line int) {
@@ -533,6 +578,77 @@ func (c Composer) initialized() Composer {
 
 func (c Composer) rawValue() string {
 	return c.textarea.Value()
+}
+
+func (c Composer) currentPrefixedToken(prefix rune) (string, bool) {
+	start, end, ok := c.currentPrefixedTokenRange(prefix)
+	if !ok {
+		return "", false
+	}
+	runes := []rune(c.rawValue())
+	return string(runes[start+1 : end]), true
+}
+
+func (c Composer) currentPrefixedTokenRange(prefix rune) (int, int, bool) {
+	value := c.rawValue()
+	if value == "" || strings.Contains(value, "\n") {
+		return 0, 0, false
+	}
+	runes := []rune(value)
+	cursor := c.cursorRuneOffset()
+	if cursor < 0 {
+		cursor = 0
+	}
+	if cursor > len(runes) {
+		cursor = len(runes)
+	}
+	start := cursor
+	for start > 0 && !unicode.IsSpace(runes[start-1]) {
+		start--
+	}
+	end := cursor
+	for end < len(runes) && !unicode.IsSpace(runes[end]) {
+		end++
+	}
+	if start >= end || runes[start] != prefix {
+		return 0, 0, false
+	}
+	if start > 0 && !unicode.IsSpace(runes[start-1]) {
+		return 0, 0, false
+	}
+	if end > start+1 && strings.ContainsRune(string(runes[start+1:end]), '\t') {
+		return 0, 0, false
+	}
+	return start, end, true
+}
+
+func (c Composer) cursorRuneOffset() int {
+	line := c.textarea.Line()
+	info := c.textarea.LineInfo()
+	lines := splitComposerLines(c.rawValue())
+	if line < 0 {
+		return 0
+	}
+	if line >= len(lines) {
+		total := 0
+		for i, text := range lines {
+			total += len([]rune(text))
+			if i < len(lines)-1 {
+				total++
+			}
+		}
+		return total
+	}
+	offset := 0
+	for i := 0; i < line; i++ {
+		offset += len([]rune(lines[i])) + 1
+	}
+	col := info.StartColumn + info.ColumnOffset
+	lineLen := len([]rune(lines[line]))
+	if col > lineLen {
+		col = lineLen
+	}
+	return offset + col
 }
 
 func (c *Composer) collapseLargeValue(value string) string {

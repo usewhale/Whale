@@ -49,6 +49,7 @@ func (m *model) submitPromptWithBinding(value string, binding *app.SkillBinding)
 	m.slash.matches = nil
 	m.slash.selected = 0
 	m.slash.argumentHint = ""
+	clearFileSuggestions(m)
 	m.startBusy()
 	m.status = "running"
 	m.dispatchIntent(service.Intent{Kind: service.IntentSubmit, Input: value, SkillBinding: binding})
@@ -188,25 +189,25 @@ func (m *model) popQueuedPrompt() (queuedPrompt, bool) {
 	return next, true
 }
 
-func (m *model) restoreQueuedPromptsToComposer() bool {
+func (m *model) restoreQueuedPromptsToComposer() (bool, tea.Cmd) {
 	return m.restoreQueuedPromptsToComposerWithCurrent(m.input.Value())
 }
 
-func (m *model) restoreQueuedPromptsToComposerWithWindowsInput(snapshot windowsBusyInputSnapshot) bool {
+func (m *model) restoreQueuedPromptsToComposerWithWindowsInput(snapshot windowsBusyInputSnapshot) (bool, tea.Cmd) {
 	current := m.input.Value()
 	if snapshot.ok {
 		current = snapshot.composerValue()
 	}
-	restored := m.restoreQueuedPromptsToComposerWithCurrent(current)
+	restored, cmd := m.restoreQueuedPromptsToComposerWithCurrent(current)
 	if restored && snapshot.ok {
 		m.resetWindowsPasteFallbackInputState()
 	}
-	return restored
+	return restored, cmd
 }
 
-func (m *model) restoreQueuedPromptsToComposerWithCurrent(currentValue string) bool {
+func (m *model) restoreQueuedPromptsToComposerWithCurrent(currentValue string) (bool, tea.Cmd) {
 	if len(m.queuedPrompts) == 0 {
-		return false
+		return false, nil
 	}
 	parts := make([]string, 0, len(m.queuedPrompts)+1)
 	for _, prompt := range m.queuedPrompts {
@@ -221,9 +222,9 @@ func (m *model) restoreQueuedPromptsToComposerWithCurrent(currentValue string) b
 	m.skillBinding = nil
 	m.input.SetValue(strings.Join(parts, "\n"))
 	m.resetHistoryNavigation()
-	m.updateSlashMatches()
+	cmd := m.updateSlashMatches()
 	m.refreshViewportContent()
-	return true
+	return true, cmd
 }
 
 type windowsBusyInputSnapshot struct {
@@ -255,12 +256,12 @@ func (s windowsBusyInputSnapshot) composerValue() string {
 	return s.value + model{windowsPaste: s.windowsPaste}.windowsPasteBuffer()
 }
 
-func (m *model) restoreWindowsBusyInput(snapshot windowsBusyInputSnapshot) {
+func (m *model) restoreWindowsBusyInput(snapshot windowsBusyInputSnapshot) tea.Cmd {
 	if !snapshot.ok {
-		return
+		return nil
 	}
 	m.input.SetValue(snapshot.value)
 	m.skillBinding = snapshot.skillBinding
 	m.windowsPaste = snapshot.windowsPaste
-	m.updateSlashMatches()
+	return m.updateSlashMatches()
 }

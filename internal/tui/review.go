@@ -111,8 +111,9 @@ func (m *model) handleReviewMenuKey(msg tea.KeyMsg) tea.Cmd {
 			m.input.SetValue(item.Prefill)
 			m.skillBinding = nil
 			m.resetHistoryNavigation()
-			m.updateSlashMatches()
+			cmd := m.updateSlashMatches()
 			m.refreshViewportContent()
+			return cmd
 		}
 	}
 	return nil
@@ -287,9 +288,9 @@ func (m *model) prefillReviewTarget(suffix string) tea.Cmd {
 	m.input.SetValue(prefix + suffix)
 	m.skillBinding = nil
 	m.resetHistoryNavigation()
-	m.updateSlashMatches()
+	cmd := m.updateSlashMatches()
 	m.refreshViewportContent()
-	return nil
+	return cmd
 }
 
 func (m *model) closeReviewMenu() {
