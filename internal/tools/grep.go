@@ -350,15 +350,16 @@ func grepFile(filePath string, re *regexp.Regexp, displayPath func(string) strin
 }
 
 func truncateGrepLine(line string) (string, bool) {
-	if len(line) <= maxGrepLineChars {
+	if len([]rune(line)) <= maxGrepLineChars {
 		return line, false
 	}
-	end := utf8BoundaryBeforeOrAt(line, maxGrepLineChars)
+	end := runeIndexToByteOffset(line, maxGrepLineChars)
 	return line[:end] + "...", true
 }
 
 func truncateGrepLineAroundMatches(line string, submatches []submatch) (string, []submatch, bool) {
-	if len(line) <= maxGrepLineChars {
+	lineRunes := len([]rune(line))
+	if lineRunes <= maxGrepLineChars {
 		return line, submatches, false
 	}
 	if len(submatches) == 0 {
@@ -382,32 +383,31 @@ func truncateGrepLineAroundMatches(line string, submatches []submatch) (string, 
 	first.Start = utf8BoundaryBeforeOrAt(line, first.Start)
 	first.End = utf8BoundaryAfterOrAt(line, first.End)
 
-	matchLen := max(first.End-first.Start, 0)
+	matchStartRune := byteOffsetToRuneIndex(line, first.Start)
+	matchEndRune := byteOffsetToRuneIndex(line, first.End)
+	matchLen := max(matchEndRune-matchStartRune, 0)
 	windowLen := maxGrepLineChars
-	start := first.Start
+	startRune := matchStartRune
 	if matchLen < windowLen {
-		start = first.Start - (windowLen-matchLen)/2
+		startRune = matchStartRune - (windowLen-matchLen)/2
 	}
-	if start < 0 {
-		start = 0
+	if startRune < 0 {
+		startRune = 0
 	}
-	end := start + windowLen
-	if end > len(line) {
-		end = len(line)
-		start = max(0, end-windowLen)
+	endRune := startRune + windowLen
+	if endRune > lineRunes {
+		endRune = lineRunes
+		startRune = max(0, endRune-windowLen)
 	}
-	start = utf8BoundaryBeforeOrAt(line, start)
-	end = utf8BoundaryAfterOrAt(line, end)
-	if end > len(line) {
-		end = len(line)
-	}
+	start := runeIndexToByteOffset(line, startRune)
+	end := runeIndexToByteOffset(line, endRune)
 
 	prefix := ""
-	if start > 0 {
+	if startRune > 0 {
 		prefix = "..."
 	}
 	suffix := ""
-	if end < len(line) {
+	if endRune < lineRunes {
 		suffix = "..."
 	}
 	snippet := prefix + line[start:end] + suffix
@@ -439,6 +439,37 @@ func utf8BoundaryBeforeOrAt(s string, index int) int {
 		index--
 	}
 	return index
+}
+
+func byteOffsetToRuneIndex(s string, byteOffset int) int {
+	if byteOffset <= 0 {
+		return 0
+	}
+	if byteOffset >= len(s) {
+		return len([]rune(s))
+	}
+	runeIndex := 0
+	for i := range s {
+		if i >= byteOffset {
+			return runeIndex
+		}
+		runeIndex++
+	}
+	return runeIndex
+}
+
+func runeIndexToByteOffset(s string, runeIndex int) int {
+	if runeIndex <= 0 {
+		return 0
+	}
+	current := 0
+	for i := range s {
+		if current == runeIndex {
+			return i
+		}
+		current++
+	}
+	return len(s)
 }
 
 func normalizeGrepLimit(limit int) int {

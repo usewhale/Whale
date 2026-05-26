@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/skills"
@@ -1959,6 +1958,43 @@ func TestGrepTruncatesUnicodeLongLinesAroundByteOffset(t *testing.T) {
 	}
 }
 
+func TestGrepDoesNotTruncateUnicodeLineUnderCharacterLimit(t *testing.T) {
+	dir := t.TempDir()
+	lineText := strings.Repeat("你", 200) + "needle"
+	if err := os.WriteFile(filepath.Join(dir, "unicode.txt"), []byte(lineText), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.searchContent(context.Background(), tc("grep", map[string]any{
+		"pattern":      "needle",
+		"literal_text": true,
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("grep failed: err=%v res=%+v", err, res)
+	}
+	env, ok := core.ParseToolEnvelope(res.Content)
+	if !ok {
+		t.Fatalf("parse envelope: %s", res.Content)
+	}
+	metrics := env.Data["metrics"].(map[string]any)
+	if metrics["lines_truncated"] != false {
+		t.Fatalf("line under character limit should not be truncated: %#v", metrics)
+	}
+	payload := env.Data["payload"].(map[string]any)
+	matches := payload["matches"].([]any)
+	if len(matches) != 1 {
+		t.Fatalf("expected one match, got %#v", matches)
+	}
+	match := matches[0].(map[string]any)
+	if got := match["line"].(string); got != lineText {
+		t.Fatalf("line should be returned whole; got %q want %q", got, lineText)
+	}
+}
+
 func TestTruncateGrepLineAroundMatchesDropsOutsideSubmatches(t *testing.T) {
 	line := strings.Repeat("a", maxGrepLineChars+20) + "needle" + strings.Repeat("b", maxGrepLineChars+20)
 	matches := []submatch{
@@ -2011,8 +2047,8 @@ func TestTruncateGrepLineAroundMatchesCapsOversizedMatch(t *testing.T) {
 	if !truncated {
 		t.Fatal("expected truncation")
 	}
-	if len(got) > maxGrepLineChars+len("...")+utf8.UTFMax {
-		t.Fatalf("snippet is not capped: got %d bytes", len(got))
+	if len([]rune(got)) > maxGrepLineChars+len("...") {
+		t.Fatalf("snippet is not capped: got %d chars", len([]rune(got)))
 	}
 	if !strings.HasSuffix(got, "...") {
 		t.Fatalf("oversized match snippet should indicate omitted tail: %q", got)
@@ -2037,8 +2073,8 @@ func TestGoSearchCapsOversizedMatchLine(t *testing.T) {
 		t.Fatalf("expected one match, got %d", len(matches))
 	}
 	m := matches[0]
-	if len(m.Line) > maxGrepLineChars+len("...")+utf8.UTFMax {
-		t.Fatalf("line is not capped: got %d bytes", len(m.Line))
+	if len([]rune(m.Line)) > maxGrepLineChars+len("...") {
+		t.Fatalf("line is not capped: got %d chars", len([]rune(m.Line)))
 	}
 	if !strings.HasSuffix(m.Line, "...") {
 		t.Fatalf("truncated oversized match should show suffix: %q", m.Line)
@@ -2117,8 +2153,8 @@ func TestGoSearchTruncatesLongLinesBothEnds(t *testing.T) {
 		t.Fatalf("submatch offset points to %q, want ZmiddleZ", got)
 	}
 	// Verify total line length is reasonable
-	if len(m.Line) > maxGrepLineChars+len("......")+utf8.UTFMax {
-		t.Fatalf("final line too long: %d bytes", len(m.Line))
+	if len([]rune(m.Line)) > maxGrepLineChars+len("......") {
+		t.Fatalf("final line too long: %d chars", len([]rune(m.Line)))
 	}
 }
 
