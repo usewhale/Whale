@@ -79,10 +79,15 @@ function Download-File($Url, $Destination) {
   $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
   if ($null -ne $curl) {
     & $curl.Source --fail --location --retry 3 --connect-timeout 20 --output $Destination $Url
-    if ($LASTEXITCODE -ne 0) {
-      throw "curl.exe failed with exit code $LASTEXITCODE"
+    if ($LASTEXITCODE -eq 0) {
+      return
     }
-    return
+
+    $exitCode = $LASTEXITCODE
+    if (Test-Path -LiteralPath $Destination) {
+      Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+    }
+    Write-Warning "curl.exe failed with exit code $exitCode; retrying with Invoke-WebRequest."
   }
 
   Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing -Headers @{ "User-Agent" = "whale-install" }
