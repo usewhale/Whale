@@ -253,6 +253,13 @@ func (m model) startupHeaderMessage() *tuirender.UIMessage {
 	if m.page != pageChat || m.width <= 0 || m.height <= 0 {
 		return nil
 	}
+	// Once the header has been pushed to native scrollback (via
+	// startupHeaderPrintCmd or the first flushNativeScrollbackCmd), it must not
+	// be included in the live View() frame — otherwise every resize tick would
+	// repaint another copy into the chat history.
+	if m.startupHeaderOnce != nil && *m.startupHeaderOnce {
+		return nil
+	}
 	header := m.startupHeaderText()
 	if strings.TrimSpace(header) == "" {
 		return nil

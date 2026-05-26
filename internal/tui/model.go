@@ -379,12 +379,35 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		sizeChanged := msg.Width != m.width || msg.Height != m.height
 		m.width = msg.Width
 		m.height = msg.Height
 		m.input.SetWidth(max(20, m.width-4))
+		var scrollbackReplayCmd tea.Cmd
+		if sizeChanged && m.width > 0 && m.height > 0 {
+			// Bubble Tea's standard (inline) renderer positions the next frame
+			// using a stale lastLinesRendered counter that does not survive
+			// terminal-side reflow on resize, and during rapid resize / live
+			// streaming each frame can leak its previous body into scrollback.
+			// View() is called *before* any returned Cmd runs, so a
+			// tea.ClearScreen Cmd would fire too late. Synchronously reset the
+			// cursor, clear the visible region, AND clear scrollback so the
+			// upcoming View() lands cleanly.
+			fmt.Fprint(os.Stdout, "\x1b[H\x1b[2J\x1b[3J")
+			// We just wiped the scrollback that held the startup banner and
+			// the previously-flushed transcript. Reset the print gates so
+			// startupHeaderPrintCmd / flushNativeScrollbackCmd will re-emit
+			// the whole history into the fresh scrollback.
+			if m.startupHeaderOnce != nil {
+				*m.startupHeaderOnce = false
+			}
+			m.startupHeaderPrinted = false
+			m.nativeScrollbackPrinted = 0
+			scrollbackReplayCmd = m.flushNativeScrollbackCmd()
+		}
 		headerCmd := m.startupHeaderPrintCmd()
 		m.refreshViewportContent()
-		return m, m.sequenceCmds(headerCmd)
+		return m, m.sequenceCmds(headerCmd, scrollbackReplayCmd)
 	case svcMsg:
 		eventCmd, quit, direct := m.handleServiceEvents([]service.Event{service.Event(msg)})
 		if quit {

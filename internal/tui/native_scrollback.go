@@ -20,7 +20,7 @@ func (m *model) startupHeaderPrintCmd() tea.Cmd {
 	m.startupHeaderPrinted = true
 	*m.startupHeaderOnce = true
 	m.viewportLayoutReady = false
-	return nil
+	return tea.Println(header)
 }
 
 func (m model) startupHeaderText() string {
@@ -45,9 +45,14 @@ func (m *model) flushNativeScrollbackCmd() tea.Cmd {
 		return nil
 	}
 	text := m.scrollbackText(m.transcript[start:])
-	if start == 0 {
+	if start == 0 && (m.startupHeaderOnce == nil || !*m.startupHeaderOnce) {
 		if header := strings.TrimSpace(m.startupHeaderText()); header != "" {
 			text = header + "\n\n" + text
+			m.startupHeaderPrinted = true
+			if m.startupHeaderOnce == nil {
+				m.startupHeaderOnce = new(bool)
+			}
+			*m.startupHeaderOnce = true
 		}
 	}
 	m.nativeScrollbackPrinted = len(m.transcript)
