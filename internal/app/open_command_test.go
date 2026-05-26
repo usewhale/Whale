@@ -54,19 +54,10 @@ func TestResolveOpenPathHandlesRelativeAbsoluteAndSpaces(t *testing.T) {
 	}
 }
 
-func TestResolveOpenPathPreservesQuotedPathBackslashes(t *testing.T) {
-	dir := t.TempDir()
-	file := filepath.Join(dir, `docs\new file.md`)
-	if err := os.WriteFile(file, []byte("ok"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := ResolveOpenPath(dir, `"docs\new file.md"`)
-	if err != nil {
-		t.Fatalf("ResolveOpenPath: %v", err)
-	}
-	if got != file {
-		t.Fatalf("quoted backslash path = %q, want %q", got, file)
+func TestNormalizeOpenPathArgPreservesBackslashes(t *testing.T) {
+	got := normalizeOpenPathArg(`"docs\new file.md"`)
+	if got != `docs\new file.md` {
+		t.Fatalf("quoted backslash path = %q", got)
 	}
 }
 

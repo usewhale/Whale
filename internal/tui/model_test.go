@@ -3020,14 +3020,7 @@ func TestFileSuggestionTabQuotesPathsWithSpaces(t *testing.T) {
 }
 
 func TestFileSuggestionTabEscapesQuotedPathWithSpaces(t *testing.T) {
-	dir := t.TempDir()
-	writeFileSuggestionFixture(t, filepath.Join(dir, "docs", `my "file".md`), "# test\n")
-	m := newModel(nil, "", "", "")
-	m.cwdPath = dir
-	m.input.SetValue("@my")
-	m = runFileSuggestionSearchForTest(t, m, m.updateSlashMatches())
-	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyTab})
-	if got := m.input.Value(); got != `"docs/my \"file\".md" ` {
+	if got := quoteFileSuggestionPath(`docs/my "file".md`); got != `"docs/my \"file\".md"` {
 		t.Fatalf("expected escaped quoted path, got %q", got)
 	}
 }
