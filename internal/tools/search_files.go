@@ -40,7 +40,7 @@ func (b *Toolset) searchFiles(_ context.Context, call core.ToolCall) (core.ToolR
 	}
 	abs, err := b.safeReadPath(in.Path)
 	if err != nil {
-		return marshalToolError(call, "permission_denied", err.Error()), nil
+		return b.marshalReadPathError(call, in.Path, err), nil
 	}
 
 	matches := make([]string, 0, minInt(in.Limit, 128))

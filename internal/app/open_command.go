@@ -80,7 +80,7 @@ func ResolveOpenPath(workspaceRoot, raw string) (string, error) {
 		return "", err
 	}
 	baseReal = filepath.Clean(baseReal)
-	target := strings.TrimSpace(raw)
+	target := normalizeOpenPathArg(strings.TrimSpace(raw))
 	target, err = expandOpenHomePath(target)
 	if err != nil {
 		return "", err
@@ -112,6 +112,28 @@ func ResolveOpenPath(workspaceRoot, raw string) (string, error) {
 		return "", openPathOutsideWorkspaceError(baseAbs, abs)
 	}
 	return abs, nil
+}
+
+func normalizeOpenPathArg(raw string) string {
+	if len(raw) < 2 || raw[0] != '"' || raw[len(raw)-1] != '"' {
+		return raw
+	}
+	inner := raw[1 : len(raw)-1]
+	var b strings.Builder
+	b.Grow(len(inner))
+	for i := 0; i < len(inner); i++ {
+		c := inner[i]
+		if c == '\\' && i+1 < len(inner) {
+			next := inner[i+1]
+			if next == '"' || next == '\\' {
+				b.WriteByte(next)
+				i++
+				continue
+			}
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
 }
 
 func expandOpenHomePath(path string) (string, error) {

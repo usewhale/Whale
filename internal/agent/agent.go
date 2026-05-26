@@ -252,6 +252,8 @@ type Agent struct {
 	projectMemoryMaxChars  int
 	projectMemoryFileOrder []string
 	workspaceRoot          string
+	worktreeRoot           string
+	originalWorkspace      string
 	disabledSkills         []string
 	extraSkills            []*skills.Skill
 	extraSystemBlocks      []string
@@ -421,6 +423,13 @@ func WithProjectMemory(enabled bool, maxChars int, fileOrder []string, workspace
 			a.projectMemoryFileOrder = fileOrder
 		}
 		a.workspaceRoot = strings.TrimSpace(workspaceRoot)
+	}
+}
+
+func WithWorktreeContext(worktreeRoot, originalWorkspace string) AgentOption {
+	return func(a *Agent) {
+		a.worktreeRoot = strings.TrimSpace(worktreeRoot)
+		a.originalWorkspace = strings.TrimSpace(originalWorkspace)
 	}
 }
 

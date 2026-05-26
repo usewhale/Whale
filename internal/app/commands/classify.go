@@ -173,7 +173,7 @@ func submitClassFromPluginCommandClass(class plugins.CommandClass) SubmitClass {
 
 func validStatsView(view string) bool {
 	switch view {
-	case "usage", "tools", "repair", "recent", "all":
+	case "usage", "tools", "repair", "recent", "profile", "all":
 		return true
 	default:
 		return false

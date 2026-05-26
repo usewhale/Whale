@@ -5,14 +5,23 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/usewhale/whale/internal/core"
+)
+
+const (
+	defaultGrepLimit       = 100
+	maxGrepLimit           = 2000
+	maxGrepLineChars       = 500
+	grepScannerBufferBytes = 1024 * 1024
 )
 
 func (b *Toolset) searchContent(_ context.Context, call core.ToolCall) (core.ToolResult, error) {
@@ -21,6 +30,7 @@ func (b *Toolset) searchContent(_ context.Context, call core.ToolCall) (core.Too
 		Pattern     string `json:"pattern"`
 		Include     string `json:"include"`
 		LiteralText bool   `json:"literal_text"`
+		Limit       int    `json:"limit"`
 	}
 	if err := decodeInput(call.Input, &in); err != nil {
 		return marshalToolError(call, "invalid_args", err.Error()), nil
@@ -30,12 +40,13 @@ func (b *Toolset) searchContent(_ context.Context, call core.ToolCall) (core.Too
 	}
 	abs, err := b.safeReadPath(in.Path)
 	if err != nil {
-		return marshalToolError(call, "permission_denied", err.Error()), nil
+		return b.marshalReadPathError(call, in.Path, err), nil
 	}
 
-	matches, byFile, searchErr := searchWithRipgrep(in.Pattern, abs, in.Include, in.LiteralText, b.displayPath)
+	limit := normalizeGrepLimit(in.Limit)
+	matches, byFile, meta, searchErr := searchWithRipgrep(in.Pattern, abs, in.Include, in.LiteralText, limit, b.displayPath)
 	if searchErr != nil {
-		matches, byFile, searchErr = searchWithGo(in.Pattern, abs, in.Include, in.LiteralText, b.displayPath)
+		matches, byFile, meta, searchErr = searchWithGo(in.Pattern, abs, in.Include, in.LiteralText, limit, b.displayPath)
 		if searchErr != nil {
 			return marshalToolError(call, "exec_failed", searchErr.Error()), nil
 		}
@@ -48,18 +59,37 @@ func (b *Toolset) searchContent(_ context.Context, call core.ToolCall) (core.Too
 			break
 		}
 	}
+	summary := strings.Join(summaryParts, " | ")
+	if meta.MatchLimitReached {
+		hintLimit := min(limit*2, maxGrepLimit)
+		if summary != "" {
+			summary += " | "
+		}
+		summary += fmt.Sprintf("%d matches limit reached; use limit=%d or refine pattern/path/include", limit, hintLimit)
+	}
+	if meta.LinesTruncated {
+		if summary != "" {
+			summary += " | "
+		}
+		summary += fmt.Sprintf("some lines truncated to %d chars; use read_file for full lines", maxGrepLineChars)
+	}
 	result := map[string]any{
 		"status": "ok",
 		"metrics": map[string]any{
-			"total_matches":  len(matches),
-			"files_matched":  len(byFile),
-			"pattern_length": len([]rune(in.Pattern)),
-			"truncated":      false,
+			"total_matches":       len(matches),
+			"returned_matches":    len(matches),
+			"files_matched":       len(byFile),
+			"pattern_length":      len([]rune(in.Pattern)),
+			"match_limit":         limit,
+			"match_limit_reached": meta.MatchLimitReached,
+			"lines_truncated":     meta.LinesTruncated,
+			"truncated":           meta.Truncated(),
+			"truncated_by":        meta.TruncatedBy(),
 		},
 		"payload": map[string]any{
 			"matches": matches,
 		},
-		"summary": strings.Join(summaryParts, " | "),
+		"summary": summary,
 	}
 	return marshalToolResult(call, result)
 }
@@ -68,6 +98,26 @@ type submatch struct {
 	Match string `json:"match"`
 	Start int    `json:"start"`
 	End   int    `json:"end"`
+}
+
+type grepMeta struct {
+	MatchLimitReached bool
+	LinesTruncated    bool
+}
+
+func (m grepMeta) Truncated() bool {
+	return m.MatchLimitReached || m.LinesTruncated
+}
+
+func (m grepMeta) TruncatedBy() []string {
+	var out []string
+	if m.MatchLimitReached {
+		out = append(out, "matches")
+	}
+	if m.LinesTruncated {
+		out = append(out, "line_length")
+	}
+	return out
 }
 
 type matchRow struct {
@@ -79,9 +129,9 @@ type matchRow struct {
 
 // searchWithRipgrep tries to use ripgrep (rg) for fast searching.
 // Returns an error if rg is not available or fails.
-func searchWithRipgrep(pattern, path, include string, literal bool, displayPath func(string) string) ([]matchRow, map[string]int, error) {
+func searchWithRipgrep(pattern, path, include string, literal bool, limit int, displayPath func(string) string) ([]matchRow, map[string]int, grepMeta, error) {
 	if _, err := exec.LookPath("rg"); err != nil {
-		return nil, nil, fmt.Errorf("rg not found: %w", err)
+		return nil, nil, grepMeta{}, fmt.Errorf("rg not found: %w", err)
 	}
 
 	args := []string{"-n", "--no-heading", "--json"}
@@ -93,14 +143,28 @@ func searchWithRipgrep(pattern, path, include string, literal bool, displayPath 
 	}
 	args = append(args, pattern, path)
 	cmd := exec.Command("rg", args...)
-	out, err := cmd.Output()
-	if err != nil && len(out) == 0 {
-		return nil, nil, err
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, nil, grepMeta{}, err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, nil, grepMeta{}, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, nil, grepMeta{}, err
 	}
 
 	var matches []matchRow
 	byFile := map[string]int{}
-	sc := bufio.NewScanner(strings.NewReader(string(out)))
+	meta := grepMeta{}
+	stderrDone := make(chan string, 1)
+	go func() {
+		data, _ := io.ReadAll(stderr)
+		stderrDone <- strings.TrimSpace(string(data))
+	}()
+	sc := bufio.NewScanner(stdout)
+	sc.Buffer(make([]byte, 64*1024), grepScannerBufferBytes)
 	for sc.Scan() {
 		line := sc.Text()
 		var evt map[string]any
@@ -136,37 +200,66 @@ func searchWithRipgrep(pattern, path, include string, literal bool, displayPath 
 				row.Submatches = append(row.Submatches, submatch{Match: mv, Start: int(sv), End: int(ev)})
 			}
 		}
+		if truncated, ok := truncateGrepMatchRow(row); ok {
+			row = truncated
+			meta.LinesTruncated = true
+		}
 		matches = append(matches, row)
 		byFile[row.File]++
+		if len(matches) >= limit {
+			meta.MatchLimitReached = true
+			_ = cmd.Process.Kill()
+			break
+		}
 	}
 	if err := sc.Err(); err != nil {
-		return nil, nil, err
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+		<-stderrDone
+		if meta.MatchLimitReached {
+			return matches, byFile, meta, nil
+		}
+		return nil, nil, grepMeta{}, err
 	}
-	return matches, byFile, nil
+	err = cmd.Wait()
+	stderrText := <-stderrDone
+	if err != nil && !meta.MatchLimitReached {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return matches, byFile, meta, nil
+		}
+		if stderrText != "" {
+			return nil, nil, grepMeta{}, fmt.Errorf("%w: %s", err, stderrText)
+		}
+		return nil, nil, grepMeta{}, err
+	}
+	return matches, byFile, meta, nil
 }
 
 // searchWithGo is a pure-Go fallback when ripgrep is not available.
 // It walks the directory tree and searches file contents with Go's regexp.
-func searchWithGo(pattern, path, include string, literal bool, displayPath func(string) string) ([]matchRow, map[string]int, error) {
+func searchWithGo(pattern, path, include string, literal bool, limit int, displayPath func(string) string) ([]matchRow, map[string]int, grepMeta, error) {
 	searchPattern := pattern
 	if literal {
 		searchPattern = regexp.QuoteMeta(pattern)
 	}
 	re, err := regexp.Compile(searchPattern)
 	if err != nil {
-		return nil, nil, fmt.Errorf("invalid pattern: %w", err)
+		return nil, nil, grepMeta{}, fmt.Errorf("invalid pattern: %w", err)
 	}
 
 	var includeRe *regexp.Regexp
 	if strings.TrimSpace(include) != "" {
 		includeRe, err = globToRegexp(include)
 		if err != nil {
-			return nil, nil, fmt.Errorf("invalid include pattern: %w", err)
+			return nil, nil, grepMeta{}, fmt.Errorf("invalid include pattern: %w", err)
 		}
 	}
 
 	var matches []matchRow
 	byFile := map[string]int{}
+	meta := grepMeta{}
 
 	err = filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -197,19 +290,23 @@ func searchWithGo(pattern, path, include string, literal bool, displayPath func(
 			return nil
 		}
 		for _, m := range fileMatches {
+			if truncated, ok := truncateGrepMatchRow(m); ok {
+				m = truncated
+				meta.LinesTruncated = true
+			}
 			matches = append(matches, m)
 			byFile[m.File]++
-		}
-		// Cap to avoid unbounded memory
-		if len(matches) >= 200 {
-			return filepath.SkipAll
+			if len(matches) >= limit {
+				meta.MatchLimitReached = true
+				return filepath.SkipAll
+			}
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, grepMeta{}, err
 	}
-	return matches, byFile, nil
+	return matches, byFile, meta, nil
 }
 
 // grepFile searches a single file for regex matches, returning match rows.
@@ -250,6 +347,159 @@ func grepFile(filePath string, re *regexp.Regexp, displayPath func(string) strin
 		matches = append(matches, row)
 	}
 	return matches, nil
+}
+
+func truncateGrepLine(line string) (string, bool) {
+	if len([]rune(line)) <= maxGrepLineChars {
+		return line, false
+	}
+	end := runeIndexToByteOffset(line, maxGrepLineChars)
+	return line[:end] + "...", true
+}
+
+func truncateGrepLineAroundMatches(line string, submatches []submatch) (string, []submatch, bool) {
+	lineRunes := len([]rune(line))
+	if lineRunes <= maxGrepLineChars {
+		return line, submatches, false
+	}
+	if len(submatches) == 0 {
+		truncated, _ := truncateGrepLine(line)
+		return truncated, nil, true
+	}
+
+	first := submatches[0]
+	if first.Start < 0 {
+		first.Start = 0
+	}
+	if first.End < first.Start {
+		first.End = first.Start
+	}
+	if first.Start > len(line) {
+		first.Start = len(line)
+	}
+	if first.End > len(line) {
+		first.End = len(line)
+	}
+	first.Start = utf8BoundaryBeforeOrAt(line, first.Start)
+	first.End = utf8BoundaryAfterOrAt(line, first.End)
+
+	matchStartRune := byteOffsetToRuneIndex(line, first.Start)
+	matchEndRune := byteOffsetToRuneIndex(line, first.End)
+	matchLen := max(matchEndRune-matchStartRune, 0)
+	windowLen := maxGrepLineChars
+	startRune := matchStartRune
+	if matchLen < windowLen {
+		startRune = matchStartRune - (windowLen-matchLen)/2
+	}
+	if startRune < 0 {
+		startRune = 0
+	}
+	endRune := startRune + windowLen
+	if endRune > lineRunes {
+		endRune = lineRunes
+		startRune = max(0, endRune-windowLen)
+	}
+	start := runeIndexToByteOffset(line, startRune)
+	end := runeIndexToByteOffset(line, endRune)
+
+	prefix := ""
+	if startRune > 0 {
+		prefix = "..."
+	}
+	suffix := ""
+	if endRune < lineRunes {
+		suffix = "..."
+	}
+	snippet := prefix + line[start:end] + suffix
+	offset := len(prefix) - start
+	adjusted := make([]submatch, 0, len(submatches))
+	for _, sm := range submatches {
+		if sm.Start < start || sm.End > end || sm.Start > sm.End {
+			continue
+		}
+		next := sm
+		next.Start = sm.Start + offset
+		next.End = sm.End + offset
+		if next.Start < 0 || next.End > len(snippet) || next.Start > next.End {
+			continue
+		}
+		adjusted = append(adjusted, next)
+	}
+	return snippet, adjusted, true
+}
+
+func utf8BoundaryBeforeOrAt(s string, index int) int {
+	if index <= 0 {
+		return 0
+	}
+	if index >= len(s) {
+		return len(s)
+	}
+	for index > 0 && !utf8.RuneStart(s[index]) {
+		index--
+	}
+	return index
+}
+
+func byteOffsetToRuneIndex(s string, byteOffset int) int {
+	if byteOffset <= 0 {
+		return 0
+	}
+	if byteOffset >= len(s) {
+		return len([]rune(s))
+	}
+	runeIndex := 0
+	for i := range s {
+		if i >= byteOffset {
+			return runeIndex
+		}
+		runeIndex++
+	}
+	return runeIndex
+}
+
+func runeIndexToByteOffset(s string, runeIndex int) int {
+	if runeIndex <= 0 {
+		return 0
+	}
+	current := 0
+	for i := range s {
+		if current == runeIndex {
+			return i
+		}
+		current++
+	}
+	return len(s)
+}
+
+func normalizeGrepLimit(limit int) int {
+	if limit <= 0 {
+		return defaultGrepLimit
+	}
+	return min(limit, maxGrepLimit)
+}
+
+func truncateGrepMatchRow(row matchRow) (matchRow, bool) {
+	line, submatches, truncated := truncateGrepLineAroundMatches(row.Line, row.Submatches)
+	if !truncated {
+		return row, false
+	}
+	row.Line = line
+	row.Submatches = submatches
+	return row, true
+}
+
+func utf8BoundaryAfterOrAt(s string, index int) int {
+	if index <= 0 {
+		return 0
+	}
+	if index >= len(s) {
+		return len(s)
+	}
+	for index < len(s) && !utf8.RuneStart(s[index]) {
+		index++
+	}
+	return index
 }
 
 // globToRegexp converts a simple glob pattern to a compiled regexp.

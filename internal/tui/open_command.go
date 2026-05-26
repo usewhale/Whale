@@ -75,10 +75,12 @@ func (m *model) finishLocalSubmit() tea.Cmd {
 		if next, ok := m.popQueuedPrompt(); ok {
 			m.deferredPlanPicker = false
 			eventCmd := m.submitPromptWithBinding(next.Text, next.SkillBinding)
-			m.restoreWindowsBusyInput(pendingWindowsInput)
-			return eventCmd
+			restoreCmd := m.restoreWindowsBusyInput(pendingWindowsInput)
+			return tea.Batch(eventCmd, restoreCmd)
 		}
-		m.restoreWindowsBusyInput(pendingWindowsInput)
+		if restoreCmd := m.restoreWindowsBusyInput(pendingWindowsInput); restoreCmd != nil {
+			return restoreCmd
+		}
 		if m.deferredPlanPicker && m.mode == modeChat {
 			if m.hasPendingWindowsBusyInput() {
 				m.deferredPlanPicker = false

@@ -50,7 +50,8 @@ type windowsPasteFallbackState struct {
 	pendingEnterTail    string
 	burstID             int
 	burstFlushScheduled bool
-	buffer              string
+	bufferChunks        []string
+	bufferLen           int
 	activeUntil         time.Time
 	busyInput           bool
 	busyInputStop       bool
@@ -76,7 +77,9 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 			m.status = "ready"
 		}
 	}
-	m.updateSlashMatches()
+	if !m.shouldDeferSlashMatchRefreshForWindowsPaste(msg) && !m.shouldSkipFileSuggestionRefreshForKey(msg) {
+		_ = m.updateSlashMatches()
+	}
 	if m.mode == modeChat && m.page == pageDiff {
 		if msg.String() == "ctrl+c" && m.busy {
 			return m.interruptBusyTurn(), false, true
@@ -91,8 +94,7 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 		m.input.HandlePaste(string(msg.Runes))
 		m.markWindowsPastedInput()
 		m.resetHistoryNavigation()
-		m.updateSlashMatches()
-		return nil, false, true
+		return m.updateSlashMatches(), false, true
 	}
 	if m.btwPanel.visible {
 		if handled := m.handleBtwPanelKey(msg); handled {
@@ -164,6 +166,20 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 	return cmd, false, handled
 }
 
+func (m model) shouldDeferSlashMatchRefreshForWindowsPaste(msg tea.KeyMsg) bool {
+	return m.mode == modeChat &&
+		m.windowsPasteFallbackEnabled() &&
+		(len(msg.Runes) > 0 || m.hasWindowsPasteBuffer())
+}
+
+func (m model) shouldRouteWindowsPasteFallbackBeforeLayout(msg tea.KeyMsg) bool {
+	return m.mode == modeChat &&
+		m.windowsPasteFallbackEnabled() &&
+		m.hasWindowsPasteBuffer() &&
+		!msg.Paste &&
+		len(msg.Runes) > 0
+}
+
 func (m *model) interruptBusyTurn() tea.Cmd {
 	m.quitArmedUntil = time.Time{}
 	alreadyStopping := m.stopping
@@ -197,25 +213,51 @@ func (m *model) cancelBlockingModalForInterrupt(dispatch bool) {
 	}
 }
 
+func (m model) shouldSkipFileSuggestionRefreshForKey(msg tea.KeyMsg) bool {
+	switch msg.String() {
+	case "up", "down", "tab", "enter", "esc":
+	default:
+		return false
+	}
+	if m.hasFilePanel() {
+		return true
+	}
+	// The file panel can be dismissed (Esc) while the @-token stays in the
+	// composer. These navigation keys never mutate the textarea, so letting
+	// the pre-key updateSlashMatches run would re-activate the panel and
+	// kick off a file search whose returned cmd would be discarded here —
+	// the UI gets stuck "Searching..." and swallows history navigation
+	// until the user edits the input.
+	_, hasAtToken := m.input.CurrentPrefixedToken('@')
+	return hasAtToken
+}
+
 func (m *model) handleChatModeKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	switch msg.String() {
+	case "ctrl+o":
+		if m.toggleFocusView() {
+			return m.redrawTranscriptForFocusToggleCmd(), true
+		}
 	case "shift+tab", "backtab":
 		if m.localSubmitPending > 0 {
 			m.status = "wait for command to finish"
 			m.refreshViewportContent()
 			return m.flushNativeScrollbackCmd(), true
 		}
-		if !m.busy && !m.hasSlashSuggestions() && !m.hasSkillSuggestions() {
+		if !m.busy && !m.hasSlashSuggestions() && !m.hasFilePanel() && !m.hasSkillSuggestions() {
 			m.dispatchIntent(service.Intent{Kind: service.IntentToggleMode})
 			return nil, true
 		}
 	case "up":
-		if m.shouldHandleHistoryNavigation() && m.historyPrev() {
-			return nil, true
-		}
 		if m.hasSlashSuggestions() {
 			if m.slash.selected > 0 {
 				m.slash.selected--
+			}
+			return nil, true
+		}
+		if m.hasFilePanel() {
+			if m.hasFileSuggestions() && m.files.selected > 0 {
+				m.files.selected--
 			}
 			return nil, true
 		}
@@ -225,13 +267,21 @@ func (m *model) handleChatModeKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 			}
 			return nil, true
 		}
-	case "down":
-		if m.shouldHandleHistoryNavigation() && m.historyNext() {
-			return nil, true
+		if m.shouldHandleHistoryNavigation() {
+			if ok, cmd := m.historyPrev(); ok {
+				return cmd, true
+			}
 		}
+	case "down":
 		if m.hasSlashSuggestions() {
 			if m.slash.selected < len(m.slash.matches)-1 {
 				m.slash.selected++
+			}
+			return nil, true
+		}
+		if m.hasFilePanel() {
+			if m.hasFileSuggestions() && m.files.selected < len(m.files.matches)-1 {
+				m.files.selected++
 			}
 			return nil, true
 		}
@@ -241,13 +291,21 @@ func (m *model) handleChatModeKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 			}
 			return nil, true
 		}
+		if m.shouldHandleHistoryNavigation() {
+			if ok, cmd := m.historyNext(); ok {
+				return cmd, true
+			}
+		}
 	case "tab":
 		if m.hasSlashSuggestions() {
 			if suggestion, ok := m.selectedSlashSuggestion(); ok {
 				m.input.SetValue(suggestion.InsertText)
 				m.skillBinding = nil
-				m.updateSlashMatches()
+				return m.updateSlashMatches(), true
 			}
+			return nil, true
+		}
+		if m.insertSelectedFileSuggestion() {
 			return nil, true
 		}
 		if m.insertSelectedSkill() {
@@ -266,6 +324,10 @@ func (m *model) handleChatModeKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 			m.slash.matches = nil
 			m.slash.selected = 0
 			m.slash.argumentHint = ""
+			return nil, true
+		}
+		if m.hasFilePanel() {
+			clearFileSuggestions(m)
 			return nil, true
 		}
 		if m.hasSkillSuggestions() {
@@ -541,9 +603,10 @@ func (m *model) handleGlobalKey(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 			m.skillBinding = nil
 			m.resetWindowsPasteFallbackInputState()
 			m.resetHistoryNavigation()
-			m.updateSlashMatches()
+			_ = m.updateSlashMatches()
 			m.skills.matches = nil
 			m.skills.selected = 0
+			clearFileSuggestions(m)
 			m.status = "input cleared"
 			return nil, false, true
 		}
@@ -570,14 +633,18 @@ func (m *model) handleGlobalKey(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 			m.refreshViewportContent()
 			return m.flushNativeScrollbackCmd(), false, true
 		}
+		if m.insertSelectedFileSuggestion() {
+			return nil, false, true
+		}
 		if m.hasSlashSuggestions() && !m.slashSelectionAlreadyTyped() {
 			if suggestion, ok := m.selectedSlashSuggestion(); ok {
 				m.input.SetValue(suggestion.InsertText)
 				m.skillBinding = nil
-				m.updateSlashMatches()
+				suggestionCmd := m.updateSlashMatches()
 				if suggestion.AutoRun {
-					return tea.Sequence(m.flushNativeScrollbackCmd(), m.submitPrompt(suggestion.InsertText)), false, true
+					return tea.Sequence(suggestionCmd, m.flushNativeScrollbackCmd(), m.submitPrompt(suggestion.InsertText)), false, true
 				}
+				return suggestionCmd, false, true
 			}
 			return nil, false, true
 		}
@@ -593,8 +660,7 @@ func (m *model) handleGlobalKey(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 			m.input.SetValue(strings.TrimSuffix(raw, "\\") + "\n")
 			m.skillBinding = nil
 			m.resetHistoryNavigation()
-			m.updateSlashMatches()
-			return nil, false, true
+			return m.updateSlashMatches(), false, true
 		}
 		value := strings.TrimSpace(m.input.Value())
 		if value == "" {
@@ -614,8 +680,9 @@ func (m *model) handleWindowsDeferredEnter(msg windowsDeferredEnterMsg) tea.Cmd 
 	if tail != "" {
 		m.input.HandlePaste(tail)
 		m.resetHistoryNavigation()
-		m.updateSlashMatches()
+		suggestionCmd := m.updateSlashMatches()
 		m.refreshViewportContent()
+		return tea.Sequence(submitCmd, suggestionCmd)
 	}
 	return submitCmd
 }
@@ -645,7 +712,7 @@ func (m *model) resolvePendingEnterAsSubmit() tea.Cmd {
 	return tea.Sequence(m.flushNativeScrollbackCmd(), m.submitPrompt(value))
 }
 
-func (m *model) handleWindowsPasteFallbackKey(msg tea.KeyMsg) (tea.Cmd, bool) {
+func (m *model) handleWindowsPasteFallbackKey(msg tea.KeyMsg) (cmd tea.Cmd, handled bool) {
 	if !m.windowsPasteFallbackEnabled() {
 		return nil, false
 	}
@@ -657,9 +724,15 @@ func (m *model) handleWindowsPasteFallbackKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	if len(msg.Runes) == 0 {
 		m.windowsPaste.classifier.reset()
 	}
+	var pendingFlushCmd tea.Cmd
 	if m.hasWindowsPasteBuffer() && !m.windowsPaste.activeUntil.IsZero() && now.After(m.windowsPaste.activeUntil) {
-		m.flushWindowsPasteBurstToComposer()
+		pendingFlushCmd = m.flushWindowsPasteBurstToComposer()
 	}
+	defer func() {
+		if pendingFlushCmd != nil {
+			cmd = tea.Batch(pendingFlushCmd, cmd)
+		}
+	}()
 	if msg.String() == "enter" {
 		switch {
 		case m.hasWindowsPasteBuffer():
@@ -691,13 +764,13 @@ func (m *model) handleWindowsPasteFallbackKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		}
 		return m.startWindowsPasteBurstFromComposer(now, suffix, false), true
 	}
-	if msg.String() == "tab" && !m.hasSlashSuggestions() && !m.hasSkillSuggestions() {
+	if msg.String() == "tab" && !m.hasSlashSuggestions() && !m.hasFilePanel() && !m.hasSkillSuggestions() {
 		if m.windowsPaste.pendingEnter || m.hasWindowsPasteBuffer() {
 			return m.appendWindowsPasteFallbackText(now, "    "), true
 		}
-		m.insertWindowsPasteFallbackInactiveText("    ")
+		cmd := m.insertWindowsPasteFallbackInactiveText("    ")
 		m.refreshViewportContent()
-		return nil, true
+		return cmd, true
 	}
 	if len(msg.Runes) > 0 {
 		text := string(msg.Runes)
@@ -717,14 +790,6 @@ func (m *model) handleWindowsPasteFallbackKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 			return m.deferWindowsPendingEnterTail(text), true
 		}
 		if decision == windowsPasteChunkBurst {
-			// When time-escalation triggers, the first chunks of the paste
-			// have already been inserted into the textarea at the cursor.
-			// We deliberately do NOT pull them back out of the composer:
-			// the subsequent flush ends with HandlePaste, which inserts at
-			// the current cursor — immediately after the already-typed
-			// chunks — preserving original character order even when the
-			// cursor sits mid-line (e.g. pasting XYZ into "a|c" yields
-			// "aXYZc", not "aXYcZ").
 			return m.startWindowsPasteBurst(now, text, false), true
 		}
 		m.markWindowsBusyInput(m.busy, m.stopping)
@@ -734,7 +799,7 @@ func (m *model) handleWindowsPasteFallbackKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		m.cancelWindowsDeferredEnter()
 	}
 	if m.hasWindowsPasteBuffer() {
-		m.flushWindowsPasteBurstToComposer()
+		return m.flushWindowsPasteBurstToComposer(), false
 	}
 	return nil, false
 }
@@ -743,7 +808,7 @@ func (m *model) shouldDeferWindowsEnterSubmit() bool {
 	if !m.windowsPasteFallbackEnabled() || m.mode != modeChat || m.windowsPaste.bracketedThisInput {
 		return false
 	}
-	if m.hasSlashSuggestions() || m.hasSkillSuggestions() {
+	if m.hasSlashSuggestions() || m.hasFilePanel() || m.hasSkillSuggestions() {
 		return false
 	}
 	if m.localSubmitPending > 0 {
@@ -798,10 +863,10 @@ func (m *model) appendWindowsPasteFallbackText(now time.Time, text string) tea.C
 	return m.appendWindowsPasteBurst(now, text, false)
 }
 
-func (m *model) insertWindowsPasteFallbackInactiveText(text string) {
+func (m *model) insertWindowsPasteFallbackInactiveText(text string) tea.Cmd {
 	m.input.HandlePaste(text)
 	m.resetHistoryNavigation()
-	m.updateSlashMatches()
+	return m.updateSlashMatches()
 }
 
 func (m *model) cancelWindowsDeferredEnter() {
@@ -845,27 +910,65 @@ func (m *model) handleWindowsPendingEnterTail(msg windowsPendingEnterTailMsg) te
 	submitCmd := m.resolvePendingEnterAsSubmit()
 	m.input.HandlePaste(tail)
 	m.resetHistoryNavigation()
-	m.updateSlashMatches()
+	suggestionCmd := m.updateSlashMatches()
 	m.refreshViewportContent()
-	return submitCmd
+	return tea.Sequence(submitCmd, suggestionCmd)
 }
 
 func (m model) hasWindowsPasteBuffer() bool {
-	return m.windowsPaste.buffer != ""
+	return m.windowsPaste.bufferLen > 0
 }
 
 func (m model) windowsPasteBufferHasLineBreak() bool {
-	return strings.Contains(m.windowsPaste.buffer, "\n")
+	for _, chunk := range m.windowsPaste.bufferChunks {
+		if strings.Contains(chunk, "\n") {
+			return true
+		}
+	}
+	return false
+}
+
+func (m model) windowsPasteBuffer() string {
+	if m.windowsPaste.bufferLen == 0 {
+		return ""
+	}
+	if len(m.windowsPaste.bufferChunks) == 1 {
+		return m.windowsPaste.bufferChunks[0]
+	}
+	var b strings.Builder
+	b.Grow(m.windowsPaste.bufferLen)
+	for _, chunk := range m.windowsPaste.bufferChunks {
+		b.WriteString(chunk)
+	}
+	return b.String()
+}
+
+func (m *model) setWindowsPasteBuffer(text string) {
+	m.clearWindowsPasteBuffer()
+	m.appendWindowsPasteBuffer(text)
+}
+
+func (m *model) appendWindowsPasteBuffer(text string) {
+	if text == "" {
+		return
+	}
+	m.windowsPaste.bufferChunks = append(m.windowsPaste.bufferChunks, text)
+	m.windowsPaste.bufferLen += len(text)
+}
+
+func (m *model) clearWindowsPasteBuffer() {
+	m.windowsPaste.bufferChunks = nil
+	m.windowsPaste.bufferLen = 0
 }
 
 func (m *model) deferWindowsSingleLinePasteSubmit() tea.Cmd {
-	m.flushWindowsPasteBurstToComposer()
+	flushCmd := m.flushWindowsPasteBurstToComposer()
 	if m.localSubmitPending > 0 {
 		m.status = "wait for command to finish"
 		m.refreshViewportContent()
-		return m.flushNativeScrollbackCmd()
+		return tea.Batch(flushCmd, m.flushNativeScrollbackCmd())
 	}
-	return m.deferWindowsEnterSubmit()
+	return tea.Batch(flushCmd, m.deferWindowsEnterSubmit())
 }
 
 func (m *model) startWindowsPasteBurstFromComposer(now time.Time, suffix string, suppressNextCtrlJ bool) tea.Cmd {
@@ -875,12 +978,12 @@ func (m *model) startWindowsPasteBurstFromComposer(now time.Time, suffix string,
 }
 
 func (m *model) startWindowsPasteBurst(now time.Time, text string, suppressNextCtrlJ bool) tea.Cmd {
-	m.windowsPaste.buffer = text
+	m.setWindowsPasteBuffer(text)
 	return m.afterWindowsPasteBurstChanged(now, suppressNextCtrlJ)
 }
 
 func (m *model) appendWindowsPasteBurst(now time.Time, text string, suppressNextCtrlJ bool) tea.Cmd {
-	m.windowsPaste.buffer += text
+	m.appendWindowsPasteBuffer(text)
 	return m.afterWindowsPasteBurstChanged(now, suppressNextCtrlJ)
 }
 
@@ -891,8 +994,6 @@ func (m *model) afterWindowsPasteBurstChanged(now time.Time, suppressNextCtrlJ b
 	m.windowsPaste.bracketedThisInput = false
 	m.windowsPaste.suppressNextCtrlJ = suppressNextCtrlJ
 	m.markWindowsBusyInput(wasBusy, wasStopping)
-	m.resetHistoryNavigation()
-	m.updateSlashMatches()
 	return m.scheduleWindowsPasteBurstFlush(now)
 }
 
@@ -928,30 +1029,30 @@ func (m *model) handleWindowsPasteBurstFlush(msg windowsPasteBurstFlushMsg) tea.
 			})
 		}
 	}
-	m.flushWindowsPasteBurstToComposer()
-	return nil
+	return m.flushWindowsPasteBurstToComposer()
 }
 
-func (m *model) flushWindowsPasteBurstToComposer() {
-	text := m.windowsPaste.buffer
+func (m *model) flushWindowsPasteBurstToComposer() tea.Cmd {
+	text := m.windowsPasteBuffer()
 	if text == "" {
-		return
+		return nil
 	}
-	m.windowsPaste.buffer = ""
+	m.clearWindowsPasteBuffer()
 	m.windowsPaste.activeUntil = time.Time{}
 	m.windowsPaste.burstFlushScheduled = false
 	m.windowsPaste.suppressNextCtrlJ = false
 	m.input.HandlePaste(text)
 	m.resetHistoryNavigation()
-	m.updateSlashMatches()
+	cmd := m.updateSlashMatches()
 	m.refreshViewportContent()
+	return cmd
 }
 
 func (m model) hasPendingWindowsBusyInput() bool {
 	if !m.windowsPasteFallbackEnabled() {
 		return false
 	}
-	if strings.TrimSpace(m.input.Value()) == "" && strings.TrimSpace(m.windowsPaste.buffer) == "" {
+	if strings.TrimSpace(m.input.Value()) == "" && strings.TrimSpace(m.windowsPasteBuffer()) == "" {
 		return false
 	}
 	return (m.windowsPaste.pendingEnter && m.windowsPaste.pendingEnterBusy) || m.windowsPaste.busyInput || m.hasWindowsPasteBuffer()
@@ -984,7 +1085,7 @@ func (m *model) markWindowsBusyInputStopped() {
 }
 
 func (m *model) markWindowsPastedInput() {
-	m.windowsPaste.buffer = ""
+	m.clearWindowsPasteBuffer()
 	m.windowsPaste.bracketedThisInput = true
 	m.windowsPaste.activeUntil = time.Time{}
 	m.windowsPaste.burstFlushScheduled = false
@@ -994,7 +1095,7 @@ func (m *model) markWindowsPastedInput() {
 
 func (m *model) resetWindowsPasteFallbackInputState() {
 	m.clearWindowsDeferredEnter()
-	m.windowsPaste.buffer = ""
+	m.clearWindowsPasteBuffer()
 	m.windowsPaste.bracketedThisInput = false
 	m.windowsPaste.activeUntil = time.Time{}
 	m.windowsPaste.burstFlushScheduled = false
@@ -1021,14 +1122,13 @@ func (m *model) handleComposerKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	case "shift+enter", "ctrl+j":
 		m.input.InsertNewline()
 		m.resetHistoryNavigation()
-		m.updateSlashMatches()
-		return nil, true
+		return m.updateSlashMatches(), true
 	case "ctrl+p":
-		m.historyPrev()
-		return nil, true
+		_, cmd := m.historyPrev()
+		return cmd, true
 	case "ctrl+n":
-		m.historyNext()
-		return nil, true
+		_, cmd := m.historyNext()
+		return cmd, true
 	}
 	if m.input.HandleKey(msg) {
 		if msg.String() == "ctrl+u" {
@@ -1037,8 +1137,7 @@ func (m *model) handleComposerKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		}
 		m.resetWindowsPasteFallbackIfInputEmpty()
 		m.resetHistoryNavigation()
-		m.updateSlashMatches()
-		return nil, true
+		return m.updateSlashMatches(), true
 	}
 	return nil, false
 }

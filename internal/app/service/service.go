@@ -229,6 +229,12 @@ func (s *Service) Model() string           { return s.app.Model() }
 func (s *Service) ReasoningEffort() string { return s.app.ReasoningEffort() }
 func (s *Service) ThinkingEnabled() bool   { return s.app.ThinkingEnabled() }
 func (s *Service) ViewMode() string        { return s.app.ViewMode() }
+func (s *Service) SetViewMode(mode string) error {
+	if s == nil || s.app == nil {
+		return nil
+	}
+	return s.app.SetViewMode(mode)
+}
 func (s *Service) SkillSuggestions() []skills.SkillView {
 	if s == nil || s.app == nil {
 		return nil

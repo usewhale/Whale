@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/usewhale/whale/internal/app"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
@@ -13,10 +15,51 @@ func (m model) focusEnabled() bool {
 }
 
 func (m model) focusMessages(messages []tuirender.UIMessage) []tuirender.UIMessage {
-	if !m.focusEnabled() || len(messages) == 0 {
+	if len(messages) == 0 {
 		return messages
 	}
-	return projectFocusMessages(messages)
+	if m.focusEnabled() {
+		return projectFocusMessages(messages)
+	}
+	return projectExpandedFocusMessages(messages)
+}
+
+func (m *model) toggleFocusView() bool {
+	next := app.ViewModeFocus
+	if m.focusEnabled() {
+		next = app.ViewModeDefault
+	}
+	m.viewMode = next
+	m.persistViewMode(next)
+	m.setEphemeralInfo(app.ViewModeToggleMessage(next))
+	if !m.busy {
+		m.status = "ready"
+	}
+	m.refreshViewportContentFollow(true)
+	return true
+}
+
+func (m *model) persistViewMode(mode string) {
+	if m.svc == nil {
+		return
+	}
+	if err := m.svc.SetViewMode(mode); err != nil {
+		m.append("error", err.Error())
+	}
+}
+
+func (m *model) redrawTranscriptForFocusToggleCmd() tea.Cmd {
+	if m.page != pageChat || len(m.transcript) == 0 {
+		m.refreshViewportContentFollow(true)
+		return nil
+	}
+	m.nativeScrollbackPrinted = 0
+	printCmd := m.flushNativeScrollbackCmd()
+	m.refreshViewportContentFollow(true)
+	if printCmd == nil {
+		return nil
+	}
+	return tea.Sequence(clearScreenCmd(), printCmd)
 }
 
 func projectFocusMessages(messages []tuirender.UIMessage) []tuirender.UIMessage {
@@ -31,7 +74,7 @@ func projectFocusMessages(messages []tuirender.UIMessage) []tuirender.UIMessage 
 			out = append(out, tuirender.UIMessage{
 				Role: "tool_summary",
 				Kind: tuirender.KindToolSummary,
-				Text: text,
+				Text: text + " (ctrl+o to expand)",
 			})
 		}
 		tools = focusToolSummary{}
@@ -51,6 +94,28 @@ func projectFocusMessages(messages []tuirender.UIMessage) []tuirender.UIMessage 
 	return out
 }
 
+func projectExpandedFocusMessages(messages []tuirender.UIMessage) []tuirender.UIMessage {
+	out := make([]tuirender.UIMessage, 0, len(messages))
+	for _, msg := range messages {
+		if isFocusHiddenMessage(msg) || isFocusHiddenToolMessage(msg) {
+			msg.Text = appendFocusToggleHint(msg.Text, "collapse")
+		}
+		out = append(out, msg)
+	}
+	return out
+}
+
+func appendFocusToggleHint(text, action string) string {
+	text = strings.TrimRight(text, "\n")
+	if strings.TrimSpace(text) == "" {
+		return text
+	}
+	hint := " (ctrl+o to " + action + ")"
+	lines := strings.Split(text, "\n")
+	lines[0] = strings.TrimRight(lines[0], " ") + hint
+	return strings.Join(lines, "\n")
+}
+
 func isFocusHiddenMessage(msg tuirender.UIMessage) bool {
 	return msg.Kind == tuirender.KindThinking || msg.Role == "think"
 }
@@ -62,6 +127,7 @@ func isFocusHiddenToolMessage(msg tuirender.UIMessage) bool {
 type focusToolSummary struct {
 	used    bool
 	shell   int
+	shells  []string
 	explore int
 	edit    int
 	task    int
@@ -78,6 +144,9 @@ func (s *focusToolSummary) add(msg tuirender.UIMessage) {
 	switch focusToolKind(msg) {
 	case "shell":
 		s.shell++
+		if detail := focusToolDetail(msg); detail != "" {
+			s.shells = append(s.shells, detail)
+		}
 	case "explore":
 		s.explore++
 	case "edit":
@@ -103,6 +172,24 @@ func (s *focusToolSummary) add(msg tuirender.UIMessage) {
 
 func (s focusToolSummary) text() string {
 	parts := make([]string, 0, 8)
+	addShell := func() {
+		if s.shell == 0 {
+			return
+		}
+		if len(s.shells) == 1 {
+			parts = append(parts, "shell: "+s.shells[0])
+			return
+		}
+		if len(s.shells) > 1 && len(s.shells) == s.shell && len(strings.Join(s.shells, "; ")) <= 120 {
+			parts = append(parts, fmt.Sprintf("%d shell commands: %s", s.shell, strings.Join(s.shells, "; ")))
+			return
+		}
+		label := "shell commands"
+		if s.shell == 1 {
+			label = "shell command"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", s.shell, label))
+	}
 	add := func(n int, singular, plural string) {
 		if n == 0 {
 			return
@@ -113,7 +200,7 @@ func (s focusToolSummary) text() string {
 		}
 		parts = append(parts, fmt.Sprintf("%d %s", n, label))
 	}
-	add(s.shell, "shell command", "shell commands")
+	addShell()
 	add(s.explore, "file/search read", "file/search reads")
 	add(s.edit, "edit", "edits")
 	add(s.task, "subagent task", "subagent tasks")
@@ -138,6 +225,27 @@ func (s focusToolSummary) text() string {
 		text += " (" + strings.Join(status, ", ") + ")"
 	}
 	return text
+}
+
+func focusToolDetail(msg tuirender.UIMessage) string {
+	text := strings.TrimSpace(msg.Text)
+	for _, prefix := range []string{"Running ", "Ran "} {
+		if after, ok := strings.CutPrefix(text, prefix); ok {
+			line := strings.TrimSpace(strings.SplitN(after, "\n", 2)[0])
+			return truncateFocusToolDetail(line)
+		}
+	}
+	return ""
+}
+
+func truncateFocusToolDetail(text string) string {
+	const max = 96
+	text = strings.Join(strings.Fields(text), " ")
+	if len([]rune(text)) <= max {
+		return text
+	}
+	runes := []rune(text)
+	return string(runes[:max-1]) + "..."
 }
 
 func focusToolKind(msg tuirender.UIMessage) string {

@@ -200,6 +200,49 @@ func TestComposerFoldedViewKeepsFullContentHint(t *testing.T) {
 	}
 }
 
+func TestComposerFoldedUpDownJumpVisibleLines(t *testing.T) {
+	c := New()
+	lines := make([]string, 25)
+	for i := range lines {
+		lines[i] = "line"
+	}
+	c.SetValue(strings.Join(lines, "\n"))
+	if got := c.textarea.Line(); got != 24 {
+		t.Fatalf("expected cursor to start at final line, got %d", got)
+	}
+
+	if !c.HandleKey(tea.KeyMsg{Type: tea.KeyUp}) {
+		t.Fatal("expected folded up to be handled")
+	}
+	if got := c.textarea.Line(); got != 23 {
+		t.Fatalf("expected first folded up to move to visible tail line 23, got %d", got)
+	}
+	if !c.HandleKey(tea.KeyMsg{Type: tea.KeyUp}) {
+		t.Fatal("expected folded up from tail to be handled")
+	}
+	if got := c.textarea.Line(); got != 2 {
+		t.Fatalf("expected second folded up to jump to visible head line 2, got %d", got)
+	}
+	if !c.HandleKey(tea.KeyMsg{Type: tea.KeyDown}) {
+		t.Fatal("expected folded down from head to be handled")
+	}
+	if got := c.textarea.Line(); got != 23 {
+		t.Fatalf("expected folded down to jump to visible tail line 23, got %d", got)
+	}
+}
+
+func TestComposerPlainUpDownRemainTextareaKeys(t *testing.T) {
+	c := New()
+	c.SetValue("first\nsecond\nthird")
+	if c.HandleKey(tea.KeyMsg{Type: tea.KeyUp}) {
+		t.Fatal("did not expect plain up to be handled by folded navigation")
+	}
+	c.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if got := c.textarea.Line(); got != 1 {
+		t.Fatalf("expected textarea up to move one physical line, got %d", got)
+	}
+}
+
 func TestComposerTwentyLinesRenderWithoutFoldHint(t *testing.T) {
 	c := New()
 	lines := make([]string, 20)
@@ -234,6 +277,23 @@ func TestComposerSoftWrapKeepsFirstVisibleLine(t *testing.T) {
 	view := c.View()
 	if !strings.Contains(view, "› 1234567890abcdef") {
 		t.Fatalf("expected first wrapped row to remain visible, got %q", view)
+	}
+}
+
+func TestComposerCurrentPrefixedTokenWorksAfterSoftWrap(t *testing.T) {
+	c := New()
+	c.SetWidth(20)
+	prefix := strings.Repeat("a", 30)
+	c.SetValue(prefix + " @read")
+	got, ok := c.CurrentPrefixedToken('@')
+	if !ok || got != "read" {
+		t.Fatalf("expected @read token after soft wrap, got %q ok=%v", got, ok)
+	}
+	if !c.ReplaceCurrentPrefixedToken('@', "README.md ") {
+		t.Fatal("expected soft-wrapped @ token replacement to succeed")
+	}
+	if got := c.Value(); got != prefix+" README.md " {
+		t.Fatalf("unexpected replacement result: %q", got)
 	}
 }
 

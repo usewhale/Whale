@@ -18,6 +18,8 @@ type ToolRegistry struct {
 	maxResultChars int
 }
 
+const DefaultMaxToolResultChars = 32 * 1024
+
 func NewToolRegistry(tools []Tool) *ToolRegistry {
 	r, err := NewToolRegistryChecked(tools)
 	if err != nil {
@@ -28,7 +30,7 @@ func NewToolRegistry(tools []Tool) *ToolRegistry {
 
 func NewToolRegistryChecked(tools []Tool) (*ToolRegistry, error) {
 	r := &ToolRegistry{
-		maxResultChars: 24 * 1024,
+		maxResultChars: DefaultMaxToolResultChars,
 	}
 	if err := r.replaceToolsLocked(tools); err != nil {
 		return nil, err
@@ -187,7 +189,7 @@ func (r *ToolRegistry) DispatchWithProgress(ctx context.Context, call ToolCall, 
 
 func normalizeRegistryResult(call ToolCall, res ToolResult, maxResultChars int, durationMS int64) ToolResult {
 	if maxResultChars <= 0 {
-		maxResultChars = 24 * 1024
+		maxResultChars = DefaultMaxToolResultChars
 	}
 	content, isErr := normalizeToolContent(call.Name, res.Content, res.IsError, maxResultChars, durationMS)
 	res.ToolCallID = call.ID
@@ -286,27 +288,60 @@ func normalizeToolContent(toolName, raw string, fallbackErr bool, maxResultChars
 		return raw, fallbackErr
 	}
 	if maxResultChars > 0 && len(b) > maxResultChars {
-		short := map[string]any{
-			"ok":      false,
-			"error":   "tool output truncated",
-			"code":    "truncated",
-			"summary": "tool output truncated",
-			"data": map[string]any{
-				"head": string(b[:maxResultChars]),
-			},
-			"truncated": true,
-			"metadata": map[string]any{
-				"source_tool": toolName,
-				"duration_ms": durationMS,
-			},
+		errorMsg := env.Error
+		if env.OK {
+			errorMsg = ""
 		}
-		sb, serr := json.Marshal(short)
-		if serr == nil {
-			return string(sb), true
+		for budget := maxResultChars; budget > 0; budget = budget * 3 / 4 {
+			headBudget, tailBudget := splitToolResultBudget(budget)
+			if headBudget > len(b) {
+				headBudget = len(b)
+			}
+			tailStart := len(b) - tailBudget
+			if tailStart < headBudget {
+				tailStart = headBudget
+			}
+			short := map[string]any{
+				"ok":      env.OK,
+				"success": env.Success,
+				"code":    env.Code,
+				"error":   errorMsg,
+				"summary": fmt.Sprintf("%s (tool output truncated)", env.Summary),
+				"data": map[string]any{
+					"head":       string(b[:headBudget]),
+					"tail":       string(b[tailStart:]),
+					"original":   len(b),
+					"head_bytes": headBudget,
+					"tail_bytes": len(b) - tailStart,
+				},
+				"truncated": true,
+				"metadata": map[string]any{
+					"source_tool":      toolName,
+					"duration_ms":      durationMS,
+					"output_truncated": true,
+					"original_bytes":   len(b),
+				},
+			}
+			sb, serr := json.Marshal(short)
+			if serr == nil && len(sb) <= maxResultChars {
+				return string(sb), !env.OK
+			}
+			if budget < 1024 {
+				break
+			}
 		}
-		return string(b[:maxResultChars]), true
+		return string(b[:maxResultChars]), !env.OK
 	}
 	return string(b), !env.OK
+}
+
+func splitToolResultBudget(maxResultChars int) (int, int) {
+	if maxResultChars <= 0 {
+		return 0, 0
+	}
+	tailBudget := min(1024, maxResultChars/10)
+	headBudget := max(0, maxResultChars-tailBudget)
+	return headBudget, tailBudget
 }
 
 func deriveSummary(data any, errMsg string) string {

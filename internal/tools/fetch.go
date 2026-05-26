@@ -34,11 +34,8 @@ func (b *Toolset) fetch(ctx context.Context, call core.ToolCall) (core.ToolResul
 		return marshalToolError(call, "invalid_args", "url scheme must be http or https"), nil
 	}
 
-	format := strings.ToLower(strings.TrimSpace(in.Format))
-	if format == "" {
-		format = "text"
-	}
-	if format != "text" && format != "markdown" && format != "html" {
+	format, ok := parseWebFetchFormat(in.Format, webFetchFormatText)
+	if !ok {
 		return marshalToolError(call, "invalid_args", "format must be one of: text, markdown, html"), nil
 	}
 
@@ -76,22 +73,28 @@ func (b *Toolset) fetch(ctx context.Context, call core.ToolCall) (core.ToolResul
 		raw = raw[:maxFetchBytes]
 	}
 	body := string(raw)
+	text := htmlToText(body)
 	content := body
 	switch format {
-	case "text", "markdown":
-		content = htmlToText(body)
-	case "html":
+	case webFetchFormatText, webFetchFormatMarkdown:
+		content = text
+	case webFetchFormatHTML:
 		content = body
 	}
 	if truncated {
 		content += "\n\n[truncated]"
 	}
+	title := extractHTMLTitle(body)
+	lowContent := detectLowWebContent(u.String(), title, body, text)
 
 	return marshalToolResult(call, map[string]any{
-		"url":         u.String(),
-		"status_code": resp.StatusCode,
-		"content":     content,
-		"format":      format,
-		"truncated":   truncated,
+		"url":                u.String(),
+		"status_code":        resp.StatusCode,
+		"content":            content,
+		"format":             string(format),
+		"truncated":          truncated,
+		"low_content":        lowContent.LowContent,
+		"low_content_reason": lowContent.Reason,
+		"next_steps":         lowContent.NextSteps,
 	})
 }

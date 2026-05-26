@@ -10,7 +10,7 @@ import (
 )
 
 func TestRuntimeEnvironmentBlockIncludesWorkspaceAndShellRunCWD(t *testing.T) {
-	block := renderRuntimeBlock("/repo", shell.RuntimeDescription{
+	block := renderRuntimeBlock("/repo", runtimeWorktreeContext{}, shell.RuntimeDescription{
 		GOOS: "linux",
 		Spec: shell.Spec{Kind: shell.KindPOSIX, DisplayName: "/bin/sh"},
 	})
@@ -22,6 +22,8 @@ func TestRuntimeEnvironmentBlockIncludesWorkspaceAndShellRunCWD(t *testing.T) {
 		"Shell: /bin/sh (/bin/sh -lc)",
 		"Shell commands run from the current Whale workspace by default",
 		"shell_run cwd parameter",
+		"path:\"codex\" means a codex entry under this workspace",
+		"git -C ../codex",
 	} {
 		if !strings.Contains(block, want) {
 			t.Fatalf("runtime block missing %q:\n%s", want, block)
@@ -30,7 +32,7 @@ func TestRuntimeEnvironmentBlockIncludesWorkspaceAndShellRunCWD(t *testing.T) {
 }
 
 func TestRuntimeEnvironmentBlockWindowsUsesCurrentShellRunName(t *testing.T) {
-	block := renderRuntimeBlock(`C:\repo`, shell.RuntimeDescription{
+	block := renderRuntimeBlock(`C:\repo`, runtimeWorktreeContext{}, shell.RuntimeDescription{
 		GOOS: "windows",
 		Spec: shell.Spec{Kind: shell.KindPowerShell, DisplayName: "PowerShell"},
 	})
@@ -66,6 +68,28 @@ func TestImmutableSystemBlocksIncludeRuntimeEnvironment(t *testing.T) {
 	}
 	if !strings.Contains(joined, "shell_run cwd parameter") {
 		t.Fatalf("system blocks missing shell_run cwd guidance:\n%s", joined)
+	}
+}
+
+func TestRuntimeEnvironmentBlockIncludesWorktreeContext(t *testing.T) {
+	block := renderRuntimeBlock("/repo/.whale/worktrees/feature", runtimeWorktreeContext{
+		WorktreeRoot:      "/repo/.whale/worktrees/feature",
+		OriginalWorkspace: "/repo",
+	}, shell.RuntimeDescription{
+		GOOS: "linux",
+		Spec: shell.Spec{Kind: shell.KindPOSIX, DisplayName: "/bin/sh"},
+	})
+
+	for _, want := range []string{
+		"Current worktree root: /repo/.whale/worktrees/feature",
+		"Original workspace: /repo",
+		"original workspace as reference-only",
+		"do not cd to it",
+		"run git -C against it",
+	} {
+		if !strings.Contains(block, want) {
+			t.Fatalf("worktree runtime block missing %q:\n%s", want, block)
+		}
 	}
 }
 

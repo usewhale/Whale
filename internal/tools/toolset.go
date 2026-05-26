@@ -15,13 +15,15 @@ import (
 )
 
 type Toolset struct {
-	root          string
-	httpClient    *http.Client
-	ddgSearchURL  string
-	bingSearchURL string
-	tasks         *shellTaskRegistry
-	skillDisabled []string
-	extraSkills   []*skills.Skill
+	root              string
+	worktreeRoot      string
+	originalWorkspace string
+	httpClient        *http.Client
+	ddgSearchURL      string
+	bingSearchURL     string
+	tasks             *shellTaskRegistry
+	skillDisabled     []string
+	extraSkills       []*skills.Skill
 }
 
 func NewToolset(root string) (*Toolset, error) {
@@ -49,6 +51,22 @@ func (b *Toolset) SetExtraSkills(extra []*skills.Skill) {
 	b.extraSkills = append([]*skills.Skill(nil), extra...)
 }
 
+func (b *Toolset) SetWorktreeContext(worktreeRoot, originalWorkspace string) {
+	b.worktreeRoot = cleanOptionalAbsPath(worktreeRoot)
+	b.originalWorkspace = cleanOptionalAbsPath(originalWorkspace)
+}
+
+func cleanOptionalAbsPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		return filepath.Clean(abs)
+	}
+	return filepath.Clean(path)
+}
+
 func marshalToolResult(call core.ToolCall, data any) (core.ToolResult, error) {
 	return marshalToolResultWithMetadata(call, data, nil)
 }
@@ -71,6 +89,62 @@ func marshalToolError(call core.ToolCall, code, msg string) core.ToolResult {
 		content = fmt.Sprintf(`{"success":false,"code":%q,"message":%q}`, code, msg)
 	}
 	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}
+}
+
+func (b *Toolset) marshalReadPathError(call core.ToolCall, raw string, err error) core.ToolResult {
+	return marshalToolError(call, "permission_denied", b.pathDiagnosticMessage(raw, "", err.Error()))
+}
+
+func (b *Toolset) marshalPathNotFound(call core.ToolCall, raw, resolved, msg string) core.ToolResult {
+	return marshalToolError(call, "not_found", b.pathDiagnosticMessage(raw, resolved, msg))
+}
+
+func (b *Toolset) pathDiagnosticMessage(raw, resolved, reason string) string {
+	requested := strings.TrimSpace(raw)
+	if requested == "" {
+		requested = "."
+	}
+	if strings.TrimSpace(resolved) == "" {
+		resolved = cleanTargetPath(requested, b.root)
+	}
+	var parts []string
+	if strings.TrimSpace(reason) != "" {
+		parts = append(parts, strings.TrimSpace(reason))
+	}
+	parts = append(parts,
+		"Current workspace root: "+b.root,
+		"Requested path: "+requested,
+		"Resolved path: "+resolved,
+		"Filesystem tools resolve relative paths inside the current workspace. A path like \"codex\" means a \"codex\" entry under this workspace, not a sibling project.",
+		"If you meant a sibling project outside this workspace, use shell_run with a shell path such as "+siblingShellExample(requested)+" or restart Whale from the parent workspace.",
+	)
+	return strings.Join(parts, "\n")
+}
+
+func siblingShellExample(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "." {
+		return "`ls ../<project>`"
+	}
+	cleaned := filepath.Clean(raw)
+	for strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		cleaned = strings.TrimPrefix(cleaned, ".."+string(filepath.Separator))
+	}
+	for strings.HasPrefix(cleaned, "."+string(filepath.Separator)) {
+		cleaned = strings.TrimPrefix(cleaned, "."+string(filepath.Separator))
+	}
+	for strings.HasPrefix(cleaned, string(filepath.Separator)) {
+		cleaned = strings.TrimPrefix(cleaned, string(filepath.Separator))
+	}
+	first := cleaned
+	if idx := strings.IndexAny(first, `/\`); idx >= 0 {
+		first = first[:idx]
+	}
+	if first == "" || first == "." || first == ".." {
+		first = "<project>"
+	}
+	siblingPath := shellSingleQuote("../" + first)
+	return "`ls " + siblingPath + "` or `git -C " + siblingPath + " ...`"
 }
 
 func (b *Toolset) safePath(raw string) (string, error) {

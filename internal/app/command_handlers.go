@@ -201,11 +201,11 @@ func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 		fields := strings.Fields(trimmed)
 		if len(fields) == 2 {
 			switch fields[1] {
-			case "usage", "tools", "repair", "recent", "all":
+			case "usage", "tools", "repair", "recent", "profile", "all":
 				return CommandExecution{Handled: true, Text: a.buildStatsView(fields[1])}, nil
 			}
 		}
-		return CommandExecution{Handled: true}, errors.New("usage: /stats [usage|tools|repair|recent|all]")
+		return CommandExecution{Handled: true}, errors.New("usage: /stats [usage|tools|repair|recent|profile|all]")
 	}
 	if strings.HasPrefix(line, "/compact") {
 		fields := strings.Fields(line)

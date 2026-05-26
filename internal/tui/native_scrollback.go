@@ -20,7 +20,7 @@ func (m *model) startupHeaderPrintCmd() tea.Cmd {
 	m.startupHeaderPrinted = true
 	*m.startupHeaderOnce = true
 	m.viewportLayoutReady = false
-	return nil
+	return tea.Println(header)
 }
 
 func (m model) startupHeaderText() string {
@@ -36,6 +36,42 @@ func (m model) startupHeaderText() string {
 	return header
 }
 
+// replayNativeScrollbackCmd is the resize-driven cousin of
+// flushNativeScrollbackCmd: it emits the header and the full transcript into
+// native scrollback regardless of follow-tail or viewport-freeze state. After
+// we wipe the terminal scrollback on resize, those normal gates would
+// otherwise drop the replay and leave the user with no accessible history
+// until they returned to the tail.
+func (m *model) replayNativeScrollbackCmd() tea.Cmd {
+	if m.page != pageChat {
+		return nil
+	}
+	start := min(max(m.nativeScrollbackPrinted, 0), len(m.transcript))
+	text := ""
+	if start < len(m.transcript) {
+		text = m.scrollbackText(m.transcript[start:])
+	}
+	if start == 0 && (m.startupHeaderOnce == nil || !*m.startupHeaderOnce) {
+		if header := strings.TrimSpace(m.startupHeaderText()); header != "" {
+			if text != "" {
+				text = header + "\n\n" + text
+			} else {
+				text = header
+			}
+			m.startupHeaderPrinted = true
+			if m.startupHeaderOnce == nil {
+				m.startupHeaderOnce = new(bool)
+			}
+			*m.startupHeaderOnce = true
+		}
+	}
+	m.nativeScrollbackPrinted = len(m.transcript)
+	if strings.TrimSpace(text) == "" {
+		return nil
+	}
+	return tea.Println(text)
+}
+
 func (m *model) flushNativeScrollbackCmd() tea.Cmd {
 	if m.page != pageChat || m.viewportFrozen || !m.followTail {
 		return nil
@@ -45,9 +81,14 @@ func (m *model) flushNativeScrollbackCmd() tea.Cmd {
 		return nil
 	}
 	text := m.scrollbackText(m.transcript[start:])
-	if start == 0 {
+	if start == 0 && (m.startupHeaderOnce == nil || !*m.startupHeaderOnce) {
 		if header := strings.TrimSpace(m.startupHeaderText()); header != "" {
 			text = header + "\n\n" + text
+			m.startupHeaderPrinted = true
+			if m.startupHeaderOnce == nil {
+				m.startupHeaderOnce = new(bool)
+			}
+			*m.startupHeaderOnce = true
 		}
 	}
 	m.nativeScrollbackPrinted = len(m.transcript)

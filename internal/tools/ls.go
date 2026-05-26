@@ -19,12 +19,12 @@ func (b *Toolset) listDir(_ context.Context, call core.ToolCall) (core.ToolResul
 	}
 	abs, err := b.safeReadPath(in.Path)
 	if err != nil {
-		return marshalToolError(call, "permission_denied", err.Error()), nil
+		return b.marshalReadPathError(call, in.Path, err), nil
 	}
 	entries, err := os.ReadDir(abs)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return marshalToolError(call, "not_found", err.Error()), nil
+			return b.marshalPathNotFound(call, in.Path, abs, err.Error()), nil
 		}
 		return marshalToolError(call, "read_failed", err.Error()), nil
 	}

@@ -105,7 +105,7 @@ func TestImmutableSystemPromptIncludesRuntimeContext(t *testing.T) {
 }
 
 func TestRenderRuntimeBlockDescribesPowerShellSyntax(t *testing.T) {
-	block := renderRuntimeBlock(`C:\repo`, shell.RuntimeDescription{
+	block := renderRuntimeBlock(`C:\repo`, runtimeWorktreeContext{}, shell.RuntimeDescription{
 		GOOS: "windows",
 		Spec: shell.Spec{Kind: shell.KindPowerShell, DisplayName: "PowerShell"},
 	})

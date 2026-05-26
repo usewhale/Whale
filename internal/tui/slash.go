@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	appcommands "github.com/usewhale/whale/internal/app/commands"
 	tuitheme "github.com/usewhale/whale/internal/tui/theme"
@@ -32,27 +33,32 @@ func safeChoice(xs []string, idx int) string {
 	return xs[idx]
 }
 
-func (m *model) updateSlashMatches() {
-	defer m.updateSkillMatches()
+func (m *model) updateSlashMatches() tea.Cmd {
 	m.slash.argumentHint = ""
 	if m.mode != modeChat {
-		return
+		return m.updateSecondaryMatches()
 	}
 	raw := m.input.Value()
 	if m.inHistoryNav && raw == m.lastHistoryText {
 		m.slash.matches = nil
 		m.slash.selected = 0
-		return
+		return m.updateSecondaryMatches()
 	}
 	if strings.Contains(raw, "\n") {
 		m.slash.matches = nil
 		m.slash.selected = 0
-		return
+		return m.updateSecondaryMatches()
+	}
+	if _, ok := m.input.CurrentPrefixedToken('@'); ok {
+		m.slash.matches = nil
+		m.slash.selected = 0
+		m.slash.argumentHint = ""
+		return m.updateSecondaryMatches()
 	}
 	if !appcommands.LooksLikeSlashCommand(raw) {
 		m.slash.matches = nil
 		m.slash.selected = 0
-		return
+		return m.updateSecondaryMatches()
 	}
 	// Trigger full slash list on "/" or "/ ", prefix match on "/xxx",
 	// and command-specific option hints on "/cmd ...".
@@ -64,7 +70,7 @@ func (m *model) updateSlashMatches() {
 		prefix = ""
 	case strings.Contains(raw, " "):
 		m.updateSlashArgumentMatches(raw)
-		return
+		return m.updateSecondaryMatches()
 	default:
 		prefix = strings.ToLower(strings.TrimPrefix(raw, "/"))
 	}
@@ -90,6 +96,13 @@ func (m *model) updateSlashMatches() {
 	if m.slash.selected >= len(m.slash.matches) {
 		m.slash.selected = max(0, len(m.slash.matches)-1)
 	}
+	return m.updateSecondaryMatches()
+}
+
+func (m *model) updateSecondaryMatches() tea.Cmd {
+	cmd := m.updateFileMatches()
+	m.updateSkillMatches()
+	return cmd
 }
 
 func (m *model) updateSlashArgumentMatches(raw string) {

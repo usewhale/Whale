@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -76,6 +77,12 @@ func TestReadFileNormalizesCRLFContent(t *testing.T) {
 		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
 	}
 	data := readFileData(t, res)
+	if got := metricString(t, data, "mode"); got != "full" {
+		t.Fatalf("mode = %q, want full", got)
+	}
+	if metricBool(t, data, "truncated") {
+		t.Fatalf("small file should not be truncated: %#v", data["metrics"])
+	}
 	if content := readFileContent(t, data); content != "zero\none\ntwo" {
 		t.Fatalf("content = %q, want normalized LF content", content)
 	}
@@ -303,6 +310,70 @@ func TestEditFileMatchesLFSearchAndPreservesCRLF(t *testing.T) {
 	}
 	if string(got) != "alpha\r\nwhale\r\ngamma\r\n" {
 		t.Fatalf("content = %q, want CRLF preserved", string(got))
+	}
+}
+
+func TestEditFileRepairsJSONEscapedControlCharacters(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("\tbody := string(raw)\n\tcontent := body\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.editFile(context.Background(), tc("edit", map[string]any{
+		"file_path": "a.txt",
+		"search":    `\tbody := string(raw)\n\tcontent := body`,
+		"replace":   `\tbody := string(raw)\n\ttext := htmlToText(body)\n\tcontent := text`,
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("edit failed: err=%v res=%+v", err, res)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	want := "\tbody := string(raw)\n\ttext := htmlToText(body)\n\tcontent := text\n"
+	if string(got) != want {
+		t.Fatalf("content = %q, want %q", string(got), want)
+	}
+	var out struct {
+		Data struct {
+			Repair string `json:"repair"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if out.Data.Repair != "json_escape_unwrapped" {
+		t.Fatalf("repair = %q, want json_escape_unwrapped", out.Data.Repair)
+	}
+}
+
+func TestEditFileRejectsAmbiguousJSONEscapedRepair(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("alpha\nbeta\nalpha\nbeta\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.editFile(context.Background(), tc("edit", map[string]any{
+		"file_path": "a.txt",
+		"search":    `alpha\nbeta`,
+		"replace":   `alpha\nwhale`,
+	}))
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Content, "JSON-escaped") || !strings.Contains(res.Content, "multiple") {
+		t.Fatalf("expected ambiguous escaped-search error, got: %s", res.Content)
 	}
 }
 
@@ -755,6 +826,242 @@ func TestReadFileRangeDefaults(t *testing.T) {
 	}
 }
 
+func TestReadFileDefaultsToBoundedResult(t *testing.T) {
+	dir := t.TempDir()
+	var body strings.Builder
+	for i := 0; i < 1200; i++ {
+		body.WriteString("large outline line ")
+		body.WriteString(strings.Repeat("x", 40))
+		body.WriteByte('\n')
+	}
+	if err := os.WriteFile(filepath.Join(dir, "large.txt"), []byte(body.String()), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
+		"file_path": "large.txt",
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
+	}
+	data := readFileData(t, res)
+	if got := rangeNumber(t, data, "start"); got != 0 {
+		t.Fatalf("start = %d, want 0", got)
+	}
+	if got := rangeNumber(t, data, "end"); got != defaultReadFileOutlineLines {
+		t.Fatalf("end = %d, want %d", got, defaultReadFileOutlineLines)
+	}
+	if got := metricString(t, data, "mode"); got != "outline" {
+		t.Fatalf("mode = %q, want outline", got)
+	}
+	if got := metricNumber(t, data, "returned_lines"); got != defaultReadFileOutlineLines {
+		t.Fatalf("returned_lines = %d, want %d", got, defaultReadFileOutlineLines)
+	}
+	if !metricBool(t, data, "truncated") {
+		t.Fatalf("expected truncated metrics in %#v", data["metrics"])
+	}
+	if got := metricString(t, data, "truncated_by"); got != "outline" {
+		t.Fatalf("truncated_by = %q, want outline", got)
+	}
+	if !payloadBool(t, data, "has_more_after") {
+		t.Fatalf("expected has_more_after in %#v", data["payload"])
+	}
+	content := readFileContent(t, data)
+	if !strings.Contains(content, "outline mode") || !strings.Contains(content, "[head 80 lines for orientation]") {
+		t.Fatalf("missing outline content: %q", content)
+	}
+	if note, _ := data["note"].(string); !strings.Contains(note, "offset=0 limit=2000") {
+		t.Fatalf("missing continuation note: %#v", data["note"])
+	}
+}
+
+func TestReadFileDefaultNearRegistryCapDoesNotAdvertiseFull(t *testing.T) {
+	dir := t.TempDir()
+	body := strings.Repeat("x", defaultReadFileFullMaxBytes-100)
+	fileName := "near-$(touch pwn)'cap.txt"
+	if err := os.WriteFile(filepath.Join(dir, fileName), []byte(body), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	registry := core.NewToolRegistry(ts.Tools())
+
+	res, err := registry.Dispatch(context.Background(), tc("read_file", map[string]any{
+		"file_path": fileName,
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
+	}
+	if len(res.Content) > core.DefaultMaxToolResultChars {
+		t.Fatalf("registry result len = %d, want <= %d", len(res.Content), core.DefaultMaxToolResultChars)
+	}
+	env, ok := core.ParseToolEnvelope(res.Content)
+	if !ok {
+		t.Fatalf("parse read_file envelope: %s", res.Content)
+	}
+	if outputTruncated, _ := env.Metadata["output_truncated"].(bool); outputTruncated {
+		t.Fatalf("registry should not truncate read_file result: %+v", env.Metadata)
+	}
+	data := env.Data
+	if got := metricString(t, data, "mode"); got != "outline" {
+		t.Fatalf("mode = %q, want outline", got)
+	}
+	if got := metricNumber(t, data, "truncated_line_count"); got != 1 {
+		t.Fatalf("truncated_line_count = %d, want 1", got)
+	}
+	if content := readFileContent(t, data); !strings.Contains(content, "[line truncated]") {
+		t.Fatalf("outline should line-truncate oversized head line: %q", content)
+	}
+	if note, _ := data["note"].(string); !strings.Contains(note, "shell_run") || strings.Contains(note, "offset=0 limit=2000") {
+		t.Fatalf("outline note should point oversized lines to shell_run, got: %#v", data["note"])
+	}
+	if note, _ := data["note"].(string); strings.Contains(note, `"`+fileName+`"`) || !strings.Contains(note, `'near-$(touch pwn)'\''cap.txt'`) {
+		t.Fatalf("outline note should shell-single-quote unsafe path, got: %#v", data["note"])
+	}
+	if content := readFileContent(t, data); !strings.Contains(content, "shell_run") || strings.Contains(content, "offset=0 limit=2000") {
+		t.Fatalf("outline content should point oversized lines to shell_run, got: %q", content)
+	}
+	if content := readFileContent(t, data); strings.Contains(content, `"`+fileName+`"`) || !strings.Contains(content, `'near-$(touch pwn)'\''cap.txt'`) {
+		t.Fatalf("outline content should shell-single-quote unsafe path, got: %q", content)
+	}
+}
+
+func TestReadFileOutlineShrinksToFitRegistryCap(t *testing.T) {
+	dir := t.TempDir()
+	var body strings.Builder
+	for i := 0; i < defaultReadFileOutlineLines; i++ {
+		body.WriteString(strings.Repeat("x", 400))
+		body.WriteByte('\n')
+	}
+	if err := os.WriteFile(filepath.Join(dir, "wide-outline.txt"), []byte(body.String()), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	registry := core.NewToolRegistry(ts.Tools())
+
+	res, err := registry.Dispatch(context.Background(), tc("read_file", map[string]any{
+		"file_path": "wide-outline.txt",
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
+	}
+	if len(res.Content) > core.DefaultMaxToolResultChars {
+		t.Fatalf("registry result len = %d, want <= %d", len(res.Content), core.DefaultMaxToolResultChars)
+	}
+	env, ok := core.ParseToolEnvelope(res.Content)
+	if !ok {
+		t.Fatalf("parse read_file envelope: %s", res.Content)
+	}
+	if outputTruncated, _ := env.Metadata["output_truncated"].(bool); outputTruncated {
+		t.Fatalf("registry should not truncate read_file result: %+v", env.Metadata)
+	}
+	data := env.Data
+	if got := metricString(t, data, "mode"); got != "outline" {
+		t.Fatalf("mode = %q, want outline", got)
+	}
+	returned := metricNumber(t, data, "returned_lines")
+	if returned <= 0 || returned >= defaultReadFileOutlineLines {
+		t.Fatalf("returned_lines = %d, want shrunk outline below %d", returned, defaultReadFileOutlineLines)
+	}
+	if got := rangeNumber(t, data, "end"); got != returned {
+		t.Fatalf("range end = %d, want returned_lines %d", got, returned)
+	}
+	if !payloadBool(t, data, "has_more_after") {
+		t.Fatalf("expected has_more_after in %#v", data["payload"])
+	}
+}
+
+func TestReadFileDefaultByteCap(t *testing.T) {
+	dir := t.TempDir()
+	var body strings.Builder
+	for i := 0; i < 100; i++ {
+		body.WriteString(strings.Repeat("x", 1024))
+		body.WriteByte('\n')
+	}
+	if err := os.WriteFile(filepath.Join(dir, "wide.txt"), []byte(body.String()), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
+		"file_path": "wide.txt",
+		"offset":    0,
+		"limit":     100,
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
+	}
+	data := readFileData(t, res)
+	if got := metricString(t, data, "mode"); got != "range" {
+		t.Fatalf("mode = %q, want range", got)
+	}
+	if !metricBool(t, data, "truncated") {
+		t.Fatalf("expected truncated metrics in %#v", data["metrics"])
+	}
+	if got := metricString(t, data, "truncated_by"); got != "bytes" {
+		t.Fatalf("truncated_by = %q, want bytes", got)
+	}
+	if got := metricNumber(t, data, "returned_bytes"); got > defaultReadFileMaxBytes {
+		t.Fatalf("returned_bytes = %d, want <= %d", got, defaultReadFileMaxBytes)
+	}
+	if got := metricNumber(t, data, "returned_lines"); got >= 100 {
+		t.Fatalf("returned_lines = %d, want byte-capped result", got)
+	}
+	if note, _ := data["note"].(string); !strings.Contains(note, "truncated by bytes") {
+		t.Fatalf("missing byte truncation note: %#v", data["note"])
+	}
+}
+
+func TestReadFileFirstLineExceedsByteCap(t *testing.T) {
+	dir := t.TempDir()
+	body := strings.Repeat("x", defaultReadFileMaxBytes+1) + "\nnext\n"
+	fileName := "one $(touch pwn)'line.txt"
+	if err := os.WriteFile(filepath.Join(dir, fileName), []byte(body), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
+		"file_path": fileName,
+		"offset":    0,
+		"limit":     2,
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
+	}
+	data := readFileData(t, res)
+	if content := readFileContent(t, data); content != "" {
+		t.Fatalf("content = %q, want empty content for over-limit first line", content)
+	}
+	if got := rangeNumber(t, data, "end"); got != 0 {
+		t.Fatalf("end = %d, want 0", got)
+	}
+	if !metricBool(t, data, "truncated") {
+		t.Fatalf("expected truncated metrics in %#v", data["metrics"])
+	}
+	if note, _ := data["note"].(string); !strings.Contains(note, "line 1 exceeds") || !strings.Contains(note, "head -c") {
+		t.Fatalf("missing first-line note: %#v", data["note"])
+	}
+	if note, _ := data["note"].(string); strings.Contains(note, fileName+" |") || !strings.Contains(note, "< 'one $(touch pwn)'\\''line.txt' | head -c") {
+		t.Fatalf("first-line note should shell-single-quote unsafe path, got: %#v", data["note"])
+	}
+}
+
 func TestWriteAndEditReturnDiffMetadata(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello\nworld\n"), 0o644); err != nil {
@@ -878,6 +1185,125 @@ func TestPathEscapeDenied(t *testing.T) {
 	}
 	if !res.IsError || !strings.Contains(res.Content, "permission_denied") {
 		t.Fatalf("expected absolute outside path to be denied, got: %+v", res)
+	}
+}
+
+func TestReadOnlyPathErrorsExplainWorkspaceAndSiblingRecovery(t *testing.T) {
+	parent := t.TempDir()
+	workspace := filepath.Join(parent, "workspace")
+	sibling := filepath.Join(parent, "codex")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	if err := os.MkdirAll(sibling, 0o755); err != nil {
+		t.Fatalf("mkdir sibling: %v", err)
+	}
+	ts, err := NewToolset(workspace)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.listDir(context.Background(), tc("list_dir", map[string]any{"path": "codex"}))
+	if err != nil {
+		t.Fatalf("list_dir err: %v", err)
+	}
+	msg := toolErrorMessage(t, res)
+	for _, want := range []string{
+		"Current workspace root: " + workspace,
+		"Requested path: codex",
+		"Resolved path: " + filepath.Join(workspace, "codex"),
+		"not a sibling project",
+		"`ls '../codex'`",
+		"`git -C '../codex' ...`",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("expected list_dir diagnostic to contain %q:\n%s", want, msg)
+		}
+	}
+}
+
+func TestReadOnlyPathEscapeErrorsExplainWorkspaceAndSiblingRecovery(t *testing.T) {
+	workspace := t.TempDir()
+	ts, err := NewToolset(workspace)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	cases := []struct {
+		name string
+		call core.ToolCall
+		run  func(context.Context, core.ToolCall) (core.ToolResult, error)
+	}{
+		{
+			name: "read_file",
+			call: tc("read_file", map[string]any{"file_path": "../codex/README.md"}),
+			run:  ts.readFile,
+		},
+		{
+			name: "list_dir",
+			call: tc("list_dir", map[string]any{"path": "../codex"}),
+			run:  ts.listDir,
+		},
+		{
+			name: "grep",
+			call: tc("grep", map[string]any{"path": "../codex", "pattern": "hook"}),
+			run:  ts.searchContent,
+		},
+		{
+			name: "search_files",
+			call: tc("search_files", map[string]any{"path": "../codex", "pattern": "hook"}),
+			run:  ts.searchFiles,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, err := tc.run(context.Background(), tc.call)
+			if err != nil {
+				t.Fatalf("%s err: %v", tc.name, err)
+			}
+			msg := toolErrorMessage(t, res)
+			for _, want := range []string{
+				"path escapes workspace",
+				"Current workspace root: " + workspace,
+				"Requested path: ../codex",
+				"not a sibling project",
+				"`ls '../codex'`",
+			} {
+				if !strings.Contains(msg, want) {
+					t.Fatalf("expected %s diagnostic to contain %q:\n%s", tc.name, want, msg)
+				}
+			}
+		})
+	}
+}
+
+func TestReadOnlyPathErrorsShellQuoteSiblingRecovery(t *testing.T) {
+	workspace := t.TempDir()
+	ts, err := NewToolset(workspace)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.listDir(context.Background(), tc("list_dir", map[string]any{"path": "../repo;touch pwn$(boom)'x/file.txt"}))
+	if err != nil {
+		t.Fatalf("list_dir err: %v", err)
+	}
+	msg := toolErrorMessage(t, res)
+	for _, want := range []string{
+		"`ls '../repo;touch pwn$(boom)'\\''x'`",
+		"`git -C '../repo;touch pwn$(boom)'\\''x' ...`",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("expected diagnostic to contain shell-quoted command %q:\n%s", want, msg)
+		}
+	}
+	for _, bad := range []string{
+		"`ls ../repo;touch pwn$(boom)'x`",
+		"`git -C ../repo;touch pwn$(boom)'x ...`",
+	} {
+		if strings.Contains(msg, bad) {
+			t.Fatalf("diagnostic contains unsafe unquoted command %q:\n%s", bad, msg)
+		}
 	}
 }
 
@@ -1243,6 +1669,164 @@ func TestSearchFiles(t *testing.T) {
 	}
 }
 
+func TestGrepAcceptsLimitAndCapsMatches(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 5; i++ {
+		name := filepath.Join(dir, "file"+string(rune('a'+i))+".txt")
+		if err := os.WriteFile(name, []byte("needle\n"), 0o644); err != nil {
+			t.Fatalf("write fixture: %v", err)
+		}
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	registry := core.NewToolRegistry(ts.Tools())
+	res, err := registry.Dispatch(context.Background(), tc("grep", map[string]any{
+		"pattern": "needle",
+		"include": "*.txt",
+		"limit":   3,
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("grep failed: err=%v res=%+v", err, res)
+	}
+	data := readFileData(t, res)
+	if got := metricNumber(t, data, "returned_matches"); got != 3 {
+		t.Fatalf("returned_matches = %d, want 3", got)
+	}
+	if got := metricNumber(t, data, "match_limit"); got != 3 {
+		t.Fatalf("match_limit = %d, want 3", got)
+	}
+	if !metricBool(t, data, "match_limit_reached") || !metricBool(t, data, "truncated") {
+		t.Fatalf("expected match limit truncation in %#v", data["metrics"])
+	}
+	if matches := grepMatches(t, data); len(matches) != 3 {
+		t.Fatalf("matches len = %d, want 3: %#v", len(matches), matches)
+	}
+	if summary, _ := data["summary"].(string); !strings.Contains(summary, "3 matches limit reached") {
+		t.Fatalf("missing limit summary: %q", summary)
+	}
+}
+
+func TestGrepDefaultsAndClampsLimit(t *testing.T) {
+	if got := normalizeGrepLimit(0); got != defaultGrepLimit {
+		t.Fatalf("default limit = %d, want %d", got, defaultGrepLimit)
+	}
+	if got := normalizeGrepLimit(maxGrepLimit + 1); got != maxGrepLimit {
+		t.Fatalf("clamped limit = %d, want %d", got, maxGrepLimit)
+	}
+}
+
+func TestGrepTruncatesLongLines(t *testing.T) {
+	dir := t.TempDir()
+	long := strings.Repeat("x", maxGrepLineChars+50) + "needle\n"
+	if err := os.WriteFile(filepath.Join(dir, "long.txt"), []byte(long), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	res, err := ts.searchContent(context.Background(), tc("grep", map[string]any{
+		"pattern": "needle",
+		"include": "*.txt",
+		"limit":   10,
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("grep failed: err=%v res=%+v", err, res)
+	}
+	data := readFileData(t, res)
+	if !metricBool(t, data, "lines_truncated") || !metricBool(t, data, "truncated") {
+		t.Fatalf("expected line truncation in %#v", data["metrics"])
+	}
+	matches := grepMatches(t, data)
+	if len(matches) != 1 {
+		t.Fatalf("matches len = %d, want 1", len(matches))
+	}
+	match, ok := matches[0].(map[string]any)
+	if !ok {
+		t.Fatalf("match is not an object: %#v", matches[0])
+	}
+	line, _ := match["line"].(string)
+	if len([]rune(line)) != maxGrepLineChars+3 || !strings.HasPrefix(line, "...") {
+		t.Fatalf("line was not truncated correctly: len=%d line=%q", len([]rune(line)), line)
+	}
+	if !strings.Contains(line, "needle") {
+		t.Fatalf("truncated line must preserve matched text: %q", line)
+	}
+	submatches, ok := match["submatches"].([]any)
+	if !ok || len(submatches) != 1 {
+		t.Fatalf("missing submatches: %#v", match["submatches"])
+	}
+	submatch, ok := submatches[0].(map[string]any)
+	if !ok {
+		t.Fatalf("submatch is not an object: %#v", submatches[0])
+	}
+	start, _ := submatch["start"].(float64)
+	end, _ := submatch["end"].(float64)
+	if int(start) < 0 || int(end) > len(line) || int(start) >= int(end) {
+		t.Fatalf("submatch offsets out of range: start=%v end=%v line_len=%d", start, end, len(line))
+	}
+	if got := line[int(start):int(end)]; got != "needle" {
+		t.Fatalf("submatch offsets select %q, want needle in %q", got, line)
+	}
+}
+
+func TestGrepFallsBackWhenRipgrepJSONLineExceedsScannerBuffer(t *testing.T) {
+	if _, err := exec.LookPath("rg"); err != nil {
+		t.Skipf("rg not available: %v", err)
+	}
+	dir := t.TempDir()
+	long := strings.Repeat("x", grepScannerBufferBytes+1024) + "needle\n"
+	if err := os.WriteFile(filepath.Join(dir, "huge.txt"), []byte(long), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	done := make(chan core.ToolResult, 1)
+	errs := make(chan error, 1)
+	go func() {
+		res, err := ts.searchContent(context.Background(), tc("grep", map[string]any{
+			"pattern": "needle",
+			"include": "*.txt",
+			"limit":   10,
+		}))
+		if err != nil {
+			errs <- err
+			return
+		}
+		done <- res
+	}()
+
+	var res core.ToolResult
+	select {
+	case err := <-errs:
+		t.Fatalf("grep returned error: %v", err)
+	case res = <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("grep hung after ripgrep scanner error")
+	}
+	if res.IsError {
+		t.Fatalf("grep returned tool error: %+v", res)
+	}
+	data := readFileData(t, res)
+	matches := grepMatches(t, data)
+	if len(matches) != 1 {
+		t.Fatalf("matches len = %d, want 1", len(matches))
+	}
+	match, ok := matches[0].(map[string]any)
+	if !ok {
+		t.Fatalf("match is not an object: %#v", matches[0])
+	}
+	line, _ := match["line"].(string)
+	if !strings.Contains(line, "needle") {
+		t.Fatalf("fallback result did not preserve match text: %q", line)
+	}
+}
+
 func TestGoSearchFallbackDoesNotMatchSyntheticFinalLine(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "trailing.txt"), []byte("one\n"), 0o644); err != nil {
@@ -1252,7 +1836,7 @@ func TestGoSearchFallbackDoesNotMatchSyntheticFinalLine(t *testing.T) {
 		t.Fatalf("write empty fixture: %v", err)
 	}
 
-	matches, _, err := searchWithGo("^$", dir, "*.txt", false, nil)
+	matches, _, _, err := searchWithGo("^$", dir, "*.txt", false, defaultGrepLimit, nil)
 	if err != nil {
 		t.Fatalf("searchWithGo: %v", err)
 	}
@@ -1267,7 +1851,7 @@ func TestGoSearchFallbackMatchesRealEmptyLine(t *testing.T) {
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	matches, _, err := searchWithGo("^$", dir, "*.txt", false, nil)
+	matches, _, _, err := searchWithGo("^$", dir, "*.txt", false, defaultGrepLimit, nil)
 	if err != nil {
 		t.Fatalf("searchWithGo: %v", err)
 	}
@@ -1276,6 +1860,301 @@ func TestGoSearchFallbackMatchesRealEmptyLine(t *testing.T) {
 	}
 	if matches[0].LineNumber != 2 || matches[0].Line != "" {
 		t.Fatalf("unexpected empty-line match: %+v", matches[0])
+	}
+}
+
+func TestGrepTruncatesLongLinesAroundMatch(t *testing.T) {
+	dir := t.TempDir()
+	longLine := strings.Repeat("a", maxGrepLineChars+50) + "needle" + strings.Repeat("b", maxGrepLineChars+50)
+	if err := os.WriteFile(filepath.Join(dir, "long.txt"), []byte(longLine), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.searchContent(context.Background(), tc("grep", map[string]any{
+		"pattern":      "needle",
+		"literal_text": true,
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("grep failed: err=%v res=%+v", err, res)
+	}
+	env, ok := core.ParseToolEnvelope(res.Content)
+	if !ok {
+		t.Fatalf("parse envelope: %s", res.Content)
+	}
+	payload := env.Data["payload"].(map[string]any)
+	matches := payload["matches"].([]any)
+	if len(matches) != 1 {
+		t.Fatalf("expected one match, got %#v", matches)
+	}
+	match := matches[0].(map[string]any)
+	line := match["line"].(string)
+	if !strings.Contains(line, "needle") || !strings.HasPrefix(line, "...") {
+		t.Fatalf("line truncation did not preserve match context: %q", line)
+	}
+	submatches := match["submatches"].([]any)
+	if len(submatches) != 1 {
+		t.Fatalf("expected one visible submatch, got %#v", submatches)
+	}
+	submatch := submatches[0].(map[string]any)
+	start := int(submatch["start"].(float64))
+	end := int(submatch["end"].(float64))
+	if start < 0 || end > len(line) || start >= end {
+		t.Fatalf("submatch offsets outside returned line: start=%d end=%d len=%d line=%q", start, end, len(line), line)
+	}
+	if got := line[start:end]; got != "needle" {
+		t.Fatalf("submatch offset points to %q, want needle in line %q", got, line)
+	}
+}
+
+func TestGrepTruncatesUnicodeLongLinesAroundByteOffset(t *testing.T) {
+	dir := t.TempDir()
+	prefix := strings.Repeat("你", maxGrepLineChars)
+	longLine := prefix + "needle" + strings.Repeat("界", maxGrepLineChars)
+	if err := os.WriteFile(filepath.Join(dir, "unicode.txt"), []byte(longLine), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.searchContent(context.Background(), tc("grep", map[string]any{
+		"pattern":      "needle",
+		"literal_text": true,
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("grep failed: err=%v res=%+v", err, res)
+	}
+	env, ok := core.ParseToolEnvelope(res.Content)
+	if !ok {
+		t.Fatalf("parse envelope: %s", res.Content)
+	}
+	payload := env.Data["payload"].(map[string]any)
+	matches := payload["matches"].([]any)
+	if len(matches) != 1 {
+		t.Fatalf("expected one match, got %#v", matches)
+	}
+	match := matches[0].(map[string]any)
+	line := match["line"].(string)
+	if !strings.Contains(line, "needle") {
+		t.Fatalf("unicode line truncation dropped match: %q", line)
+	}
+	submatches := match["submatches"].([]any)
+	if len(submatches) != 1 {
+		t.Fatalf("expected one visible submatch, got %#v", submatches)
+	}
+	submatch := submatches[0].(map[string]any)
+	start := int(submatch["start"].(float64))
+	end := int(submatch["end"].(float64))
+	if start < 0 || end > len(line) || start >= end {
+		t.Fatalf("submatch offsets outside returned line: start=%d end=%d len=%d line=%q", start, end, len(line), line)
+	}
+	if got := line[start:end]; got != "needle" {
+		t.Fatalf("submatch byte offsets point to %q, want needle in line %q", got, line)
+	}
+}
+
+func TestGrepDoesNotTruncateUnicodeLineUnderCharacterLimit(t *testing.T) {
+	dir := t.TempDir()
+	lineText := strings.Repeat("你", 200) + "needle"
+	if err := os.WriteFile(filepath.Join(dir, "unicode.txt"), []byte(lineText), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.searchContent(context.Background(), tc("grep", map[string]any{
+		"pattern":      "needle",
+		"literal_text": true,
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("grep failed: err=%v res=%+v", err, res)
+	}
+	env, ok := core.ParseToolEnvelope(res.Content)
+	if !ok {
+		t.Fatalf("parse envelope: %s", res.Content)
+	}
+	metrics := env.Data["metrics"].(map[string]any)
+	if metrics["lines_truncated"] != false {
+		t.Fatalf("line under character limit should not be truncated: %#v", metrics)
+	}
+	payload := env.Data["payload"].(map[string]any)
+	matches := payload["matches"].([]any)
+	if len(matches) != 1 {
+		t.Fatalf("expected one match, got %#v", matches)
+	}
+	match := matches[0].(map[string]any)
+	if got := match["line"].(string); got != lineText {
+		t.Fatalf("line should be returned whole; got %q want %q", got, lineText)
+	}
+}
+
+func TestTruncateGrepLineAroundMatchesDropsOutsideSubmatches(t *testing.T) {
+	line := strings.Repeat("a", maxGrepLineChars+20) + "needle" + strings.Repeat("b", maxGrepLineChars+20)
+	matches := []submatch{
+		{Match: "needle", Start: maxGrepLineChars + 20, End: maxGrepLineChars + 26},
+		{Match: "late", Start: len([]rune(line)) - 10, End: len([]rune(line)) - 6},
+	}
+
+	got, submatches, truncated := truncateGrepLineAroundMatches(line, matches)
+	if !truncated {
+		t.Fatal("expected truncation")
+	}
+	if !strings.Contains(got, "needle") {
+		t.Fatalf("snippet does not contain matched text: %q", got)
+	}
+	if len(submatches) != 1 || submatches[0].Match != "needle" {
+		t.Fatalf("expected only visible submatch to remain, got %#v", submatches)
+	}
+	sm := submatches[0]
+	if sm.Start < 0 || sm.End > len(got) || got[sm.Start:sm.End] != "needle" {
+		t.Fatalf("adjusted submatch invalid: %#v in %q", sm, got)
+	}
+}
+
+func TestTruncateGrepLineAroundMatchesUsesByteOffsetsForUnicode(t *testing.T) {
+	line := strings.Repeat("你", maxGrepLineChars) + "needle" + strings.Repeat("界", maxGrepLineChars)
+	start := len(strings.Repeat("你", maxGrepLineChars))
+	got, submatches, truncated := truncateGrepLineAroundMatches(line, []submatch{
+		{Match: "needle", Start: start, End: start + len("needle")},
+	})
+	if !truncated {
+		t.Fatal("expected truncation")
+	}
+	if !strings.Contains(got, "needle") {
+		t.Fatalf("snippet does not contain matched text: %q", got)
+	}
+	if len(submatches) != 1 {
+		t.Fatalf("expected visible submatch, got %#v", submatches)
+	}
+	sm := submatches[0]
+	if sm.Start < 0 || sm.End > len(got) || got[sm.Start:sm.End] != "needle" {
+		t.Fatalf("adjusted byte offset invalid: %#v in %q", sm, got)
+	}
+}
+
+func TestTruncateGrepLineAroundMatchesCapsOversizedMatch(t *testing.T) {
+	line := strings.Repeat("a", maxGrepLineChars*4)
+	got, submatches, truncated := truncateGrepLineAroundMatches(line, []submatch{
+		{Match: line, Start: 0, End: len(line)},
+	})
+	if !truncated {
+		t.Fatal("expected truncation")
+	}
+	if len([]rune(got)) > maxGrepLineChars+len("...") {
+		t.Fatalf("snippet is not capped: got %d chars", len([]rune(got)))
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Fatalf("oversized match snippet should indicate omitted tail: %q", got)
+	}
+	if len(submatches) != 0 {
+		t.Fatalf("oversized submatch should be omitted when not fully visible, got %#v", submatches)
+	}
+}
+
+func TestGoSearchCapsOversizedMatchLine(t *testing.T) {
+	dir := t.TempDir()
+	longLine := strings.Repeat("a", maxGrepLineChars*4)
+	if err := os.WriteFile(filepath.Join(dir, "long.txt"), []byte(longLine), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	matches, _, _, err := searchWithGo(".+", dir, "", false, defaultGrepLimit, nil)
+	if err != nil {
+		t.Fatalf("searchWithGo failed: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected one match, got %d", len(matches))
+	}
+	m := matches[0]
+	if len([]rune(m.Line)) > maxGrepLineChars+len("...") {
+		t.Fatalf("line is not capped: got %d chars", len([]rune(m.Line)))
+	}
+	if !strings.HasSuffix(m.Line, "...") {
+		t.Fatalf("truncated oversized match should show suffix: %q", m.Line)
+	}
+	if len(m.Submatches) != 0 {
+		t.Fatalf("oversized submatch should be omitted when not fully visible, got %#v", m.Submatches)
+	}
+}
+
+func TestGoSearchTruncatesLongLinesAroundMatch(t *testing.T) {
+	dir := t.TempDir()
+	longLine := strings.Repeat("a", maxGrepLineChars+50) + "needle" + strings.Repeat("b", maxGrepLineChars+50)
+	if err := os.WriteFile(filepath.Join(dir, "long.txt"), []byte(longLine), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	matches, _, _, err := searchWithGo("needle", dir, "", true, defaultGrepLimit, nil)
+	if err != nil {
+		t.Fatalf("searchWithGo failed: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected one match, got %d", len(matches))
+	}
+	m := matches[0]
+	if !strings.Contains(m.Line, "needle") {
+		t.Fatalf("truncated line does not contain needle: %q", m.Line)
+	}
+	if !strings.HasPrefix(m.Line, "...") {
+		t.Fatalf("truncated line should start with ...: %q", m.Line)
+	}
+	if len(m.Submatches) != 1 {
+		t.Fatalf("expected one submatch, got %d", len(m.Submatches))
+	}
+	sm := m.Submatches[0]
+	if sm.Start < 0 || sm.End > len(m.Line) || sm.Start >= sm.End {
+		t.Fatalf("submatch offsets outside line: start=%d end=%d len=%d", sm.Start, sm.End, len(m.Line))
+	}
+	if got := m.Line[sm.Start:sm.End]; got != "needle" {
+		t.Fatalf("submatch offset points to %q, want needle in line %q", got, m.Line)
+	}
+}
+
+func TestGoSearchTruncatesLongLinesBothEnds(t *testing.T) {
+	dir := t.TempDir()
+	// Match is in the middle far from both edges, so both ... prefix and suffix appear
+	longLine := strings.Repeat("a", maxGrepLineChars+20) + "ZmiddleZ" + strings.Repeat("c", maxGrepLineChars+20)
+	if err := os.WriteFile(filepath.Join(dir, "long.txt"), []byte(longLine), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	matches, _, _, err := searchWithGo("ZmiddleZ", dir, "", true, defaultGrepLimit, nil)
+	if err != nil {
+		t.Fatalf("searchWithGo failed: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected one match, got %d", len(matches))
+	}
+	m := matches[0]
+	if !strings.Contains(m.Line, "ZmiddleZ") {
+		t.Fatalf("truncated line does not contain match: %q", m.Line)
+	}
+	if !strings.HasPrefix(m.Line, "...") {
+		t.Fatalf("truncated line should start with ...: %q", m.Line)
+	}
+	if !strings.HasSuffix(m.Line, "...") {
+		t.Fatalf("truncated line should end with ...: %q", m.Line)
+	}
+	if len(m.Submatches) != 1 {
+		t.Fatalf("expected one submatch, got %d", len(m.Submatches))
+	}
+	sm := m.Submatches[0]
+	if sm.Start < 0 || sm.End > len(m.Line) || sm.Start >= sm.End {
+		t.Fatalf("submatch offsets outside line: start=%d end=%d len=%d", sm.Start, sm.End, len(m.Line))
+	}
+	if got := m.Line[sm.Start:sm.End]; got != "ZmiddleZ" {
+		t.Fatalf("submatch offset points to %q, want ZmiddleZ", got)
+	}
+	// Verify total line length is reasonable
+	if len([]rune(m.Line)) > maxGrepLineChars+len("......") {
+		t.Fatalf("final line too long: %d chars", len([]rune(m.Line)))
 	}
 }
 
@@ -1463,6 +2342,21 @@ func TestShellRunCWDStaysInsideWorkspace(t *testing.T) {
 	}
 }
 
+func toolErrorMessage(t *testing.T, res core.ToolResult) string {
+	t.Helper()
+	if !res.IsError {
+		t.Fatalf("expected tool error, got %+v", res)
+	}
+	env, ok := core.ParseToolEnvelope(res.Content)
+	if !ok {
+		t.Fatalf("parse tool envelope: %s", res.Content)
+	}
+	if env.Message == "" {
+		t.Fatalf("expected error message in envelope: %+v", env)
+	}
+	return env.Message
+}
+
 func readFileData(t *testing.T, res core.ToolResult) map[string]any {
 	t.Helper()
 	env, ok := core.ParseToolEnvelope(res.Content)
@@ -1500,4 +2394,69 @@ func readFileContent(t *testing.T, data map[string]any) string {
 		t.Fatalf("missing content in %#v", payload)
 	}
 	return content
+}
+
+func grepMatches(t *testing.T, data map[string]any) []any {
+	t.Helper()
+	payload, ok := data["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing payload in %#v", data)
+	}
+	matches, ok := payload["matches"].([]any)
+	if !ok {
+		t.Fatalf("missing matches in %#v", payload)
+	}
+	return matches
+}
+
+func metricNumber(t *testing.T, data map[string]any, key string) int {
+	t.Helper()
+	metrics, ok := data["metrics"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing metrics in %#v", data)
+	}
+	v, ok := metrics[key].(float64)
+	if !ok {
+		t.Fatalf("missing metric %s in %#v", key, metrics)
+	}
+	return int(v)
+}
+
+func metricBool(t *testing.T, data map[string]any, key string) bool {
+	t.Helper()
+	metrics, ok := data["metrics"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing metrics in %#v", data)
+	}
+	v, ok := metrics[key].(bool)
+	if !ok {
+		t.Fatalf("missing metric %s in %#v", key, metrics)
+	}
+	return v
+}
+
+func metricString(t *testing.T, data map[string]any, key string) string {
+	t.Helper()
+	metrics, ok := data["metrics"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing metrics in %#v", data)
+	}
+	v, ok := metrics[key].(string)
+	if !ok {
+		t.Fatalf("missing metric %s in %#v", key, metrics)
+	}
+	return v
+}
+
+func payloadBool(t *testing.T, data map[string]any, key string) bool {
+	t.Helper()
+	payload, ok := data["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing payload in %#v", data)
+	}
+	v, ok := payload[key].(bool)
+	if !ok {
+		t.Fatalf("missing payload bool %s in %#v", key, payload)
+	}
+	return v
 }

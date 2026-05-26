@@ -199,6 +199,7 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("init tools failed: %w", err)
 	}
+	toolset.SetWorktreeContext(start.Worktree.Path, start.Worktree.OriginalWorkspace)
 	toolset.SetSkillDisabled(cfg.SkillsDisabled)
 	mcpConfigPath := strings.TrimSpace(cfg.MCPConfigPath)
 	if mcpConfigPath == "" {

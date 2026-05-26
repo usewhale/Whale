@@ -44,6 +44,61 @@ func TestResolveOpenPathHandlesRelativeAbsoluteAndSpaces(t *testing.T) {
 	if got != file {
 		t.Fatalf("absolute path = %q, want %q", got, file)
 	}
+
+	got, err = ResolveOpenPath(dir, `"My Folder/file.txt"`)
+	if err != nil {
+		t.Fatalf("quoted relative ResolveOpenPath: %v", err)
+	}
+	if got != file {
+		t.Fatalf("quoted relative path = %q, want %q", got, file)
+	}
+}
+
+func TestNormalizeOpenPathArgPreservesBackslashes(t *testing.T) {
+	got := normalizeOpenPathArg(`"docs\new file.md"`)
+	if got != `docs\new file.md` {
+		t.Fatalf("quoted backslash path = %q", got)
+	}
+}
+
+func TestResolveOpenPathPreservesQuotedPathTabs(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "docs", "a\tb.md")
+	if err := os.WriteFile(file, []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ResolveOpenPath(dir, "\"docs/a\tb.md\"")
+	if err != nil {
+		t.Fatalf("ResolveOpenPath: %v", err)
+	}
+	if got != file {
+		t.Fatalf("quoted tab path = %q, want %q", got, file)
+	}
+}
+
+func TestResolveOpenPathPreservesWorkspaceRelativeTilde(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "~"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "~", "notes.md")
+	if err := os.WriteFile(file, []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := ResolveOpenPath(dir, "./~/notes.md")
+	if err != nil {
+		t.Fatalf("ResolveOpenPath: %v", err)
+	}
+	if got != file {
+		t.Fatalf("workspace tilde path = %q, want %q", got, file)
+	}
 }
 
 func TestResolveOpenPathExpandsHomePathInsideWorkspace(t *testing.T) {
