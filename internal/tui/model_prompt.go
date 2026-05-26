@@ -249,10 +249,10 @@ func (s windowsBusyInputSnapshot) composerValue() string {
 	if !s.ok {
 		return ""
 	}
-	if s.windowsPaste.buffer == "" {
+	if s.windowsPaste.bufferLen == 0 {
 		return s.value
 	}
-	return s.value + s.windowsPaste.buffer
+	return s.value + model{windowsPaste: s.windowsPaste}.windowsPasteBuffer()
 }
 
 func (m *model) restoreWindowsBusyInput(snapshot windowsBusyInputSnapshot) {

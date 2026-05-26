@@ -191,6 +191,16 @@ type model struct {
 	nativeScrollbackPrinted        int
 	pendingMouseCSIFragment        bool
 	windowsPaste                   windowsPasteFallbackState
+	viewCache                      *modelViewCache
+}
+
+type modelViewCache struct {
+	valid     bool
+	page      page
+	width     int
+	height    int
+	signature string
+	view      string
 }
 
 type queuedPrompt struct {
@@ -288,6 +298,7 @@ func newModel(svc *service.Service, modelName, effort, thinking string) model {
 		cwd:               resolveWorkingDirectory(),
 		cwdPath:           resolveWorkingDirectoryPath(),
 		historyIndex:      -1,
+		viewCache:         &modelViewCache{},
 	}
 	if svc != nil {
 		m.dispatch = svc.Dispatch
@@ -445,19 +456,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.handleReviewPRsLoaded(msg)
 		return m, m.sequenceCmds()
 	case tea.KeyMsg:
-		prevMainWidth, _ := m.layoutDims()
-		prevBodyHeight := m.viewportBodyHeight(prevMainWidth)
 		if !msg.Paste && m.consumeMouseCSIFragment(msg) {
 			m.refreshViewportContent()
 			return m, m.sequenceCmds()
 		}
-		cmd, quit, handled := m.handleKeyMsg(msg)
-		if quit {
-			return m, m.sequenceCmds(tea.Quit)
+		preRoutedWindowsPaste := false
+		if m.shouldRouteWindowsPasteFallbackBeforeLayout(msg) {
+			preRoutedWindowsPaste = true
+			cmd, quit, handled := m.handleKeyMsg(msg)
+			if quit {
+				return m, m.sequenceCmds(tea.Quit)
+			}
+			if handled {
+				return m, m.sequenceCmds(cmd)
+			}
 		}
-		if handled {
-			m.refreshViewportContentIfBodyHeightChanged(prevMainWidth, prevBodyHeight)
-			return m, m.sequenceCmds(cmd)
+		prevMainWidth, _ := m.layoutDims()
+		prevBodyHeight := m.viewportBodyHeight(prevMainWidth)
+		if !preRoutedWindowsPaste {
+			cmd, quit, handled := m.handleKeyMsg(msg)
+			if quit {
+				return m, m.sequenceCmds(tea.Quit)
+			}
+			if handled {
+				m.refreshViewportContentIfBodyHeightChanged(prevMainWidth, prevBodyHeight)
+				return m, m.sequenceCmds(cmd)
+			}
 		}
 	}
 	prevMainWidth, _ := m.layoutDims()

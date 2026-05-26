@@ -200,6 +200,49 @@ func TestComposerFoldedViewKeepsFullContentHint(t *testing.T) {
 	}
 }
 
+func TestComposerFoldedUpDownJumpVisibleLines(t *testing.T) {
+	c := New()
+	lines := make([]string, 25)
+	for i := range lines {
+		lines[i] = "line"
+	}
+	c.SetValue(strings.Join(lines, "\n"))
+	if got := c.textarea.Line(); got != 24 {
+		t.Fatalf("expected cursor to start at final line, got %d", got)
+	}
+
+	if !c.HandleKey(tea.KeyMsg{Type: tea.KeyUp}) {
+		t.Fatal("expected folded up to be handled")
+	}
+	if got := c.textarea.Line(); got != 23 {
+		t.Fatalf("expected first folded up to move to visible tail line 23, got %d", got)
+	}
+	if !c.HandleKey(tea.KeyMsg{Type: tea.KeyUp}) {
+		t.Fatal("expected folded up from tail to be handled")
+	}
+	if got := c.textarea.Line(); got != 2 {
+		t.Fatalf("expected second folded up to jump to visible head line 2, got %d", got)
+	}
+	if !c.HandleKey(tea.KeyMsg{Type: tea.KeyDown}) {
+		t.Fatal("expected folded down from head to be handled")
+	}
+	if got := c.textarea.Line(); got != 23 {
+		t.Fatalf("expected folded down to jump to visible tail line 23, got %d", got)
+	}
+}
+
+func TestComposerPlainUpDownRemainTextareaKeys(t *testing.T) {
+	c := New()
+	c.SetValue("first\nsecond\nthird")
+	if c.HandleKey(tea.KeyMsg{Type: tea.KeyUp}) {
+		t.Fatal("did not expect plain up to be handled by folded navigation")
+	}
+	c.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if got := c.textarea.Line(); got != 1 {
+		t.Fatalf("expected textarea up to move one physical line, got %d", got)
+	}
+}
+
 func TestComposerTwentyLinesRenderWithoutFoldHint(t *testing.T) {
 	c := New()
 	lines := make([]string, 20)

@@ -50,7 +50,8 @@ type windowsPasteFallbackState struct {
 	pendingEnterTail    string
 	burstID             int
 	burstFlushScheduled bool
-	buffer              string
+	bufferChunks        []string
+	bufferLen           int
 	activeUntil         time.Time
 	busyInput           bool
 	busyInputStop       bool
@@ -76,7 +77,9 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 			m.status = "ready"
 		}
 	}
-	m.updateSlashMatches()
+	if !m.shouldDeferSlashMatchRefreshForWindowsPaste(msg) {
+		m.updateSlashMatches()
+	}
 	if m.mode == modeChat && m.page == pageDiff {
 		if msg.String() == "ctrl+c" && m.busy {
 			return m.interruptBusyTurn(), false, true
@@ -162,6 +165,20 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 	}
 	cmd, handled = m.handleComposerKey(msg)
 	return cmd, false, handled
+}
+
+func (m model) shouldDeferSlashMatchRefreshForWindowsPaste(msg tea.KeyMsg) bool {
+	return m.mode == modeChat &&
+		m.windowsPasteFallbackEnabled() &&
+		(len(msg.Runes) > 0 || m.hasWindowsPasteBuffer())
+}
+
+func (m model) shouldRouteWindowsPasteFallbackBeforeLayout(msg tea.KeyMsg) bool {
+	return m.mode == modeChat &&
+		m.windowsPasteFallbackEnabled() &&
+		m.hasWindowsPasteBuffer() &&
+		!msg.Paste &&
+		len(msg.Runes) > 0
 }
 
 func (m *model) interruptBusyTurn() tea.Cmd {
@@ -721,14 +738,6 @@ func (m *model) handleWindowsPasteFallbackKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 			return m.deferWindowsPendingEnterTail(text), true
 		}
 		if decision == windowsPasteChunkBurst {
-			// When time-escalation triggers, the first chunks of the paste
-			// have already been inserted into the textarea at the cursor.
-			// We deliberately do NOT pull them back out of the composer:
-			// the subsequent flush ends with HandlePaste, which inserts at
-			// the current cursor — immediately after the already-typed
-			// chunks — preserving original character order even when the
-			// cursor sits mid-line (e.g. pasting XYZ into "a|c" yields
-			// "aXYZc", not "aXYcZ").
 			return m.startWindowsPasteBurst(now, text, false), true
 		}
 		m.markWindowsBusyInput(m.busy, m.stopping)
@@ -855,11 +864,49 @@ func (m *model) handleWindowsPendingEnterTail(msg windowsPendingEnterTailMsg) te
 }
 
 func (m model) hasWindowsPasteBuffer() bool {
-	return m.windowsPaste.buffer != ""
+	return m.windowsPaste.bufferLen > 0
 }
 
 func (m model) windowsPasteBufferHasLineBreak() bool {
-	return strings.Contains(m.windowsPaste.buffer, "\n")
+	for _, chunk := range m.windowsPaste.bufferChunks {
+		if strings.Contains(chunk, "\n") {
+			return true
+		}
+	}
+	return false
+}
+
+func (m model) windowsPasteBuffer() string {
+	if m.windowsPaste.bufferLen == 0 {
+		return ""
+	}
+	if len(m.windowsPaste.bufferChunks) == 1 {
+		return m.windowsPaste.bufferChunks[0]
+	}
+	var b strings.Builder
+	b.Grow(m.windowsPaste.bufferLen)
+	for _, chunk := range m.windowsPaste.bufferChunks {
+		b.WriteString(chunk)
+	}
+	return b.String()
+}
+
+func (m *model) setWindowsPasteBuffer(text string) {
+	m.clearWindowsPasteBuffer()
+	m.appendWindowsPasteBuffer(text)
+}
+
+func (m *model) appendWindowsPasteBuffer(text string) {
+	if text == "" {
+		return
+	}
+	m.windowsPaste.bufferChunks = append(m.windowsPaste.bufferChunks, text)
+	m.windowsPaste.bufferLen += len(text)
+}
+
+func (m *model) clearWindowsPasteBuffer() {
+	m.windowsPaste.bufferChunks = nil
+	m.windowsPaste.bufferLen = 0
 }
 
 func (m *model) deferWindowsSingleLinePasteSubmit() tea.Cmd {
@@ -879,12 +926,12 @@ func (m *model) startWindowsPasteBurstFromComposer(now time.Time, suffix string,
 }
 
 func (m *model) startWindowsPasteBurst(now time.Time, text string, suppressNextCtrlJ bool) tea.Cmd {
-	m.windowsPaste.buffer = text
+	m.setWindowsPasteBuffer(text)
 	return m.afterWindowsPasteBurstChanged(now, suppressNextCtrlJ)
 }
 
 func (m *model) appendWindowsPasteBurst(now time.Time, text string, suppressNextCtrlJ bool) tea.Cmd {
-	m.windowsPaste.buffer += text
+	m.appendWindowsPasteBuffer(text)
 	return m.afterWindowsPasteBurstChanged(now, suppressNextCtrlJ)
 }
 
@@ -895,8 +942,6 @@ func (m *model) afterWindowsPasteBurstChanged(now time.Time, suppressNextCtrlJ b
 	m.windowsPaste.bracketedThisInput = false
 	m.windowsPaste.suppressNextCtrlJ = suppressNextCtrlJ
 	m.markWindowsBusyInput(wasBusy, wasStopping)
-	m.resetHistoryNavigation()
-	m.updateSlashMatches()
 	return m.scheduleWindowsPasteBurstFlush(now)
 }
 
@@ -937,11 +982,11 @@ func (m *model) handleWindowsPasteBurstFlush(msg windowsPasteBurstFlushMsg) tea.
 }
 
 func (m *model) flushWindowsPasteBurstToComposer() {
-	text := m.windowsPaste.buffer
+	text := m.windowsPasteBuffer()
 	if text == "" {
 		return
 	}
-	m.windowsPaste.buffer = ""
+	m.clearWindowsPasteBuffer()
 	m.windowsPaste.activeUntil = time.Time{}
 	m.windowsPaste.burstFlushScheduled = false
 	m.windowsPaste.suppressNextCtrlJ = false
@@ -955,7 +1000,7 @@ func (m model) hasPendingWindowsBusyInput() bool {
 	if !m.windowsPasteFallbackEnabled() {
 		return false
 	}
-	if strings.TrimSpace(m.input.Value()) == "" && strings.TrimSpace(m.windowsPaste.buffer) == "" {
+	if strings.TrimSpace(m.input.Value()) == "" && strings.TrimSpace(m.windowsPasteBuffer()) == "" {
 		return false
 	}
 	return (m.windowsPaste.pendingEnter && m.windowsPaste.pendingEnterBusy) || m.windowsPaste.busyInput || m.hasWindowsPasteBuffer()
@@ -988,7 +1033,7 @@ func (m *model) markWindowsBusyInputStopped() {
 }
 
 func (m *model) markWindowsPastedInput() {
-	m.windowsPaste.buffer = ""
+	m.clearWindowsPasteBuffer()
 	m.windowsPaste.bracketedThisInput = true
 	m.windowsPaste.activeUntil = time.Time{}
 	m.windowsPaste.burstFlushScheduled = false
@@ -998,7 +1043,7 @@ func (m *model) markWindowsPastedInput() {
 
 func (m *model) resetWindowsPasteFallbackInputState() {
 	m.clearWindowsDeferredEnter()
-	m.windowsPaste.buffer = ""
+	m.clearWindowsPasteBuffer()
 	m.windowsPaste.bracketedThisInput = false
 	m.windowsPaste.activeUntil = time.Time{}
 	m.windowsPaste.burstFlushScheduled = false

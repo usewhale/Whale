@@ -172,7 +172,7 @@ func TestWindowsUnbracketedPasteFallbackKeepsLinesInOnePrompt(t *testing.T) {
 	if got := m.input.Value(); got != "" {
 		t.Fatalf("paste burst should stay buffered before flush, input=%q", got)
 	}
-	if got := m.windowsPaste.buffer; got != "line one\nline two" {
+	if got := m.windowsPasteBuffer(); got != "line one\nline two" {
 		t.Fatalf("buffer after second pasted line = %q", got)
 	}
 
@@ -182,7 +182,7 @@ func TestWindowsUnbracketedPasteFallbackKeepsLinesInOnePrompt(t *testing.T) {
 	}
 
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
-	if got := m.windowsPaste.buffer; got != "line one\nline two\n" {
+	if got := m.windowsPasteBuffer(); got != "line one\nline two\n" {
 		t.Fatalf("trailing pasted newline buffer = %q", got)
 	}
 	if len(*intents) != 0 {
@@ -226,7 +226,7 @@ func TestWindowsUnbracketedLargeMultilinePasteBurstUsesPlaceholder(t *testing.T)
 	if got := m.input.Value(); got != "" {
 		t.Fatalf("first pasted line should stay buffered before flush, got input %q", got)
 	}
-	if got := m.windowsPaste.buffer; got != firstLine {
+	if got := m.windowsPasteBuffer(); got != firstLine {
 		t.Fatalf("first pasted line should enter paste buffer, got %q", got)
 	}
 	m, cmd = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
@@ -252,12 +252,12 @@ func TestWindowsUnbracketedLargeMultilinePasteBurstUsesPlaceholder(t *testing.T)
 func TestWindowsPasteBufferSurvivesUnhandledMessagesBeforeFlush(t *testing.T) {
 	m, _ := newModelWithDispatchSpy()
 	m.windowsPaste.enabled = true
-	m.windowsPaste.buffer = "line one\nline two"
+	m.setWindowsPasteBuffer("line one\nline two")
 	m.windowsPaste.activeUntil = time.Now().Add(windowsPasteQuietDelay)
 	m.windowsPaste.burstID = 7
 
 	m, _ = updateTestModel(t, m, struct{}{})
-	if got := m.windowsPaste.buffer; got != "line one\nline two" {
+	if got := m.windowsPasteBuffer(); got != "line one\nline two" {
 		t.Fatalf("unhandled message should not clear active paste buffer, got %q", got)
 	}
 	if got := m.input.Value(); got != "" {
@@ -265,7 +265,7 @@ func TestWindowsPasteBufferSurvivesUnhandledMessagesBeforeFlush(t *testing.T) {
 	}
 
 	m, _ = updateTestModel(t, m, windowsPasteBurstFlushMsg{id: 7})
-	if got := m.windowsPaste.buffer; got != "line one\nline two" {
+	if got := m.windowsPasteBuffer(); got != "line one\nline two" {
 		t.Fatalf("early flush timer should keep paste buffer until quiet window, got %q", got)
 	}
 	if got := m.input.Value(); got != "" {
@@ -333,7 +333,7 @@ func TestWindowsPasteFallbackFastEnterSubmitsTypedCharacter(t *testing.T) {
 	if got := m.input.Value(); got != "hello" {
 		t.Fatalf("expected typed character to render immediately, got %q", got)
 	}
-	if got := m.windowsPaste.buffer; got != "" {
+	if got := m.windowsPasteBuffer(); got != "" {
 		t.Fatalf("ordinary typed character should not enter paste buffer, got %q", got)
 	}
 
@@ -344,7 +344,7 @@ func TestWindowsPasteFallbackFastEnterSubmitsTypedCharacter(t *testing.T) {
 	if got := m.input.Value(); got != "hello" {
 		t.Fatalf("fast enter should keep typed prompt intact, got %q", got)
 	}
-	if got := m.windowsPaste.buffer; got != "" {
+	if got := m.windowsPasteBuffer(); got != "" {
 		t.Fatalf("fast enter should not create paste buffer, got %q", got)
 	}
 	submitID := m.windowsPaste.pendingEnterID
@@ -388,7 +388,7 @@ func TestWindowsPasteFallbackEnterThenHumanTypingSubmitsAndKeepsRune(t *testing.
 	if m.windowsPaste.pendingEnter {
 		t.Fatal("typing without paste continuation should resolve the deferred enter")
 	}
-	if got := m.windowsPaste.buffer; got != "" {
+	if got := m.windowsPasteBuffer(); got != "" {
 		t.Fatalf("typed rune should not enter paste buffer, got %q", got)
 	}
 	if got := m.input.Value(); got != "x" {
@@ -416,7 +416,7 @@ func TestWindowsPasteFallbackEnterThenRapidRunesBecomeContinuation(t *testing.T)
 
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
-	if got := m.windowsPaste.buffer; got != "hello\nwo" {
+	if got := m.windowsPasteBuffer(); got != "hello\nwo" {
 		t.Fatalf("rapid runes should upgrade to paste continuation, got buffer %q", got)
 	}
 	if got := m.input.Value(); got != "" {
@@ -505,7 +505,7 @@ func TestWindowsPasteFallbackEnterSegmentsPasteCadence(t *testing.T) {
 	clock.advance(30 * time.Millisecond)
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
 	if m.hasWindowsPasteBuffer() {
-		t.Fatalf("post-Enter keystroke escalated into burst buffer: %q", m.windowsPaste.buffer)
+		t.Fatalf("post-Enter keystroke escalated into burst buffer: %q", m.windowsPasteBuffer())
 	}
 
 	// Resolve the deferred Enter as a real submit; "ab" should ship as
@@ -537,9 +537,9 @@ func TestWindowsPasteFallbackEscalatesFastSingleRuneStream(t *testing.T) {
 	}
 	if !m.hasWindowsPasteBuffer() {
 		t.Fatalf("expected fast single-rune stream to populate paste buffer; composer=%q buffer=%q",
-			m.input.Value(), m.windowsPaste.buffer)
+			m.input.Value(), m.windowsPasteBuffer())
 	}
-	combined := m.input.Value() + m.windowsPaste.buffer
+	combined := m.input.Value() + m.windowsPasteBuffer()
 	if combined != streamed {
 		t.Fatalf("expected combined composer+buffer to equal stream, got %q", combined)
 	}
@@ -592,7 +592,7 @@ func TestWindowsPasteFallbackFastEnterSubmitsShortBurst(t *testing.T) {
 	if got := m.input.Value(); got != "hi" {
 		t.Fatalf("expected short typed burst to render immediately, got %q", got)
 	}
-	if got := m.windowsPaste.buffer; got != "" {
+	if got := m.windowsPasteBuffer(); got != "" {
 		t.Fatalf("ordinary typed burst should not enter paste buffer, got %q", got)
 	}
 
@@ -604,7 +604,7 @@ func TestWindowsPasteFallbackFastEnterSubmitsShortBurst(t *testing.T) {
 	if got := m.input.Value(); got != "hi" {
 		t.Fatalf("expected fast enter to keep prompt intact, got %q", got)
 	}
-	if got := m.windowsPaste.buffer; got != "" {
+	if got := m.windowsPasteBuffer(); got != "" {
 		t.Fatalf("fast enter should not create paste buffer, got %q", got)
 	}
 	submitID := m.windowsPaste.pendingEnterID
@@ -631,7 +631,7 @@ func TestWindowsPasteFallbackFastEnterSubmitsLongTypedPrompt(t *testing.T) {
 	if got := m.input.Value(); got != line {
 		t.Fatalf("expected typed prompt to render immediately, got %q", got)
 	}
-	if got := m.windowsPaste.buffer; got != "" {
+	if got := m.windowsPasteBuffer(); got != "" {
 		t.Fatalf("typed prompt should not enter paste buffer, got %q", got)
 	}
 
@@ -665,7 +665,7 @@ func TestWindowsPasteFallbackSingleLinePasteThenEnterSubmits(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected single-line pasted burst to schedule flush")
 	}
-	if got := m.windowsPaste.buffer; got != "fix bug" {
+	if got := m.windowsPasteBuffer(); got != "fix bug" {
 		t.Fatalf("expected single-line paste to stay buffered, got %q", got)
 	}
 
@@ -676,7 +676,7 @@ func TestWindowsPasteFallbackSingleLinePasteThenEnterSubmits(t *testing.T) {
 	if got := m.input.Value(); got != "fix bug" {
 		t.Fatalf("expected single-line paste to flush before deferred submit, got %q", got)
 	}
-	if got := m.windowsPaste.buffer; got != "" {
+	if got := m.windowsPasteBuffer(); got != "" {
 		t.Fatalf("expected paste buffer to flush before deferred submit, got %q", got)
 	}
 	submitID := m.windowsPaste.pendingEnterID
@@ -706,7 +706,7 @@ func TestWindowsPasteFallbackMultiRunePastedLineUpgradesDeferredEnterOnContinuat
 	if got := m.input.Value(); got != "line one" {
 		t.Fatalf("expected first pasted line to flush while enter is deferred, got input %q", got)
 	}
-	if got := m.windowsPaste.buffer; got != "" {
+	if got := m.windowsPasteBuffer(); got != "" {
 		t.Fatalf("expected buffer to flush while enter is deferred, got %q", got)
 	}
 	if !m.windowsPaste.pendingEnter {
@@ -715,7 +715,7 @@ func TestWindowsPasteFallbackMultiRunePastedLineUpgradesDeferredEnterOnContinuat
 	deferredID := m.windowsPaste.pendingEnterID
 
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line two")})
-	if got := m.windowsPaste.buffer; got != "line one\nline two" {
+	if got := m.windowsPasteBuffer(); got != "line one\nline two" {
 		t.Fatalf("expected continued paste buffer, got %q", got)
 	}
 	if got := m.input.Value(); got != "" {
@@ -744,12 +744,12 @@ func TestWindowsUnbracketedPasteFallbackNormalizesCRLF(t *testing.T) {
 	deferredID := m.windowsPaste.pendingEnterID
 
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlJ})
-	if got := m.windowsPaste.buffer; got != "foo\n" {
+	if got := m.windowsPasteBuffer(); got != "foo\n" {
 		t.Fatalf("buffer after CRLF pasted newline = %q", got)
 	}
 
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("bar")})
-	if got := m.windowsPaste.buffer; got != "foo\nbar" {
+	if got := m.windowsPasteBuffer(); got != "foo\nbar" {
 		t.Fatalf("buffer after CRLF pasted text = %q", got)
 	}
 
@@ -792,7 +792,7 @@ func TestWindowsUnbracketedPasteFallbackNormalizesCRLFBlankLine(t *testing.T) {
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlJ})
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
-	if got := m.windowsPaste.buffer; got != "a\n\nb" {
+	if got := m.windowsPasteBuffer(); got != "a\n\nb" {
 		t.Fatalf("buffer after CRLF blank line paste = %q", got)
 	}
 
@@ -835,7 +835,7 @@ func TestWindowsUnbracketedPasteFallbackAllowsSubsequentPasteBlocks(t *testing.T
 	}
 
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("second")})
-	if got := m.windowsPaste.buffer; got != "first\nblock\nsecond" {
+	if got := m.windowsPasteBuffer(); got != "first\nblock\nsecond" {
 		t.Fatalf("buffer after subsequent pasted block = %q", got)
 	}
 	m, _ = updateTestModel(t, m, windowsDeferredEnterMsg{id: secondDeferredID})
@@ -871,7 +871,7 @@ func TestWindowsUnbracketedPasteFallbackPreservesTabIndentAsSpaces(t *testing.T)
 	deferredID := m.windowsPaste.pendingEnterID
 
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyTab})
-	if got := m.windowsPaste.buffer; got != "foo\n    " {
+	if got := m.windowsPasteBuffer(); got != "foo\n    " {
 		t.Fatalf("buffer after pasted tab indentation = %q", got)
 	}
 	m, _ = updateTestModel(t, m, windowsDeferredEnterMsg{id: deferredID})
@@ -880,7 +880,7 @@ func TestWindowsUnbracketedPasteFallbackPreservesTabIndentAsSpaces(t *testing.T)
 	}
 
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("bar")})
-	if got := m.windowsPaste.buffer; got != "foo\n    bar" {
+	if got := m.windowsPasteBuffer(); got != "foo\n    bar" {
 		t.Fatalf("buffer after tab-indented pasted text = %q", got)
 	}
 
@@ -916,13 +916,13 @@ func TestWindowsUnbracketedPasteFallbackPreservesTabBeforeFirstNewline(t *testin
 	if got := m.input.Value(); got != "    foo" {
 		t.Fatalf("input after tab-indented first pasted line = %q", got)
 	}
-	if got := m.windowsPaste.buffer; got != "" {
+	if got := m.windowsPasteBuffer(); got != "" {
 		t.Fatalf("buffer after tab-indented first pasted line = %q", got)
 	}
 	deferredID := m.windowsPaste.pendingEnterID
 
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("bar")})
-	if got := m.windowsPaste.buffer; got != "    foo\nbar" {
+	if got := m.windowsPasteBuffer(); got != "    foo\nbar" {
 		t.Fatalf("buffer after tab-indented first pasted text = %q", got)
 	}
 
@@ -981,7 +981,7 @@ func TestWindowsUnbracketedPasteFallbackPreservesBlankLines(t *testing.T) {
 	deferredID := m.windowsPaste.pendingEnterID
 
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
-	if got := m.windowsPaste.buffer; got != "a\n\n" {
+	if got := m.windowsPasteBuffer(); got != "a\n\n" {
 		t.Fatalf("buffer after blank pasted line = %q", got)
 	}
 	if len(*intents) != 0 {
@@ -994,7 +994,7 @@ func TestWindowsUnbracketedPasteFallbackPreservesBlankLines(t *testing.T) {
 	}
 
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
-	if got := m.windowsPaste.buffer; got != "a\n\nb" {
+	if got := m.windowsPasteBuffer(); got != "a\n\nb" {
 		t.Fatalf("buffer after pasted text following blank line = %q", got)
 	}
 
@@ -1034,7 +1034,7 @@ func TestWindowsUnbracketedPasteFallbackQueuesWhileBusy(t *testing.T) {
 	}
 
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line two")})
-	if got := m.windowsPaste.buffer; got != "line one\nline two" {
+	if got := m.windowsPasteBuffer(); got != "line one\nline two" {
 		t.Fatalf("buffer after second pasted line while busy = %q", got)
 	}
 	if len(m.queuedPrompts) != 0 {
@@ -1075,14 +1075,14 @@ func TestWindowsPasteFallbackCtrlCResetsQuietWindow(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.windowsPaste.enabled = true
 	m.input.SetValue("old")
-	m.windowsPaste.buffer = "pending paste"
+	m.setWindowsPasteBuffer("pending paste")
 	m.windowsPaste.activeUntil = time.Now().Add(windowsPasteQuietDelay)
 
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
 	if got := m.input.Value(); got != "" {
 		t.Fatalf("expected Ctrl+C to clear composer, got %q", got)
 	}
-	if m.windowsPaste.pendingEnter || m.windowsPaste.buffer != "" || !m.windowsPaste.activeUntil.IsZero() {
+	if m.windowsPaste.pendingEnter || m.windowsPasteBuffer() != "" || !m.windowsPaste.activeUntil.IsZero() {
 		t.Fatalf("expected Ctrl+C to reset paste fallback state, got %+v", m.windowsPaste)
 	}
 
@@ -1427,7 +1427,7 @@ func TestWindowsActiveBusyPasteSuppressesPlanPickerWhenTurnDoneArrivesFirst(t *t
 	deferredID := m.windowsPaste.pendingEnterID
 
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line two")})
-	if got := m.windowsPaste.buffer; got != "line one\nline two" {
+	if got := m.windowsPasteBuffer(); got != "line one\nline two" {
 		t.Fatalf("buffer after pasted continuation = %q", got)
 	}
 
@@ -1479,7 +1479,7 @@ func TestWindowsActiveBusyPasteSuppressesPlanPickerAfterQuietWindow(t *testing.T
 	if m.mode == modePlanImplementation {
 		t.Fatal("expired quiet window should not let plan implementation picker cover busy pasted input")
 	}
-	if got := m.windowsPaste.buffer; got != "line one\nline two" {
+	if got := m.windowsPasteBuffer(); got != "line one\nline two" {
 		t.Fatalf("expected pasted input to remain buffered, got %q", got)
 	}
 	if !m.hasPendingWindowsBusyInput() {
@@ -1510,7 +1510,7 @@ func TestWindowsActiveBusyPasteSurvivesQueuedDrainBeforeFinalEnter(t *testing.T)
 	deferredID := m.windowsPaste.pendingEnterID
 
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line two")})
-	if got := m.windowsPaste.buffer; got != "line one\nline two" {
+	if got := m.windowsPasteBuffer(); got != "line one\nline two" {
 		t.Fatalf("buffer after pasted continuation = %q", got)
 	}
 
@@ -1518,7 +1518,7 @@ func TestWindowsActiveBusyPasteSurvivesQueuedDrainBeforeFinalEnter(t *testing.T)
 	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSubmit || (*intents)[0].Input != "older queued" {
 		t.Fatalf("expected older queued prompt to start, got %+v", *intents)
 	}
-	if got := m.windowsPaste.buffer; got != "line one\nline two" {
+	if got := m.windowsPasteBuffer(); got != "line one\nline two" {
 		t.Fatalf("expected active Windows paste to survive queued drain, got %q", got)
 	}
 	if m.windowsPaste.activeUntil.IsZero() {
@@ -1566,7 +1566,7 @@ func TestWindowsExpiredActiveBusyPasteSurvivesQueuedDrainBeforeFinalEnter(t *tes
 	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSubmit || (*intents)[0].Input != "older queued" {
 		t.Fatalf("expected older queued prompt to start, got %+v", *intents)
 	}
-	if got := m.windowsPaste.buffer; got != "line one\nline two" {
+	if got := m.windowsPasteBuffer(); got != "line one\nline two" {
 		t.Fatalf("expected expired active Windows paste to survive queued drain, got %q", got)
 	}
 	if !m.hasPendingWindowsBusyInput() {
@@ -1607,7 +1607,7 @@ func TestWindowsActiveBusyPasteSurvivesLocalSubmitDeferredQueuedDrain(t *testing
 	deferredID := m.windowsPaste.pendingEnterID
 
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line two")})
-	if got := m.windowsPaste.buffer; got != "line one\nline two" {
+	if got := m.windowsPasteBuffer(); got != "line one\nline two" {
 		t.Fatalf("buffer after pasted continuation = %q", got)
 	}
 
@@ -1617,7 +1617,7 @@ func TestWindowsActiveBusyPasteSurvivesLocalSubmitDeferredQueuedDrain(t *testing
 	if len(*intents) != 0 {
 		t.Fatalf("queued prompt should wait for local submit done, got %+v", *intents)
 	}
-	if got := m.windowsPaste.buffer; got != "line one\nline two" {
+	if got := m.windowsPasteBuffer(); got != "line one\nline two" {
 		t.Fatalf("expected active Windows paste to remain while local submit is pending, got %q", got)
 	}
 
@@ -1625,7 +1625,7 @@ func TestWindowsActiveBusyPasteSurvivesLocalSubmitDeferredQueuedDrain(t *testing
 	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSubmit || (*intents)[0].Input != "older queued" {
 		t.Fatalf("expected older queued prompt to start after local submit done, got %+v", *intents)
 	}
-	if got := m.windowsPaste.buffer; got != "line one\nline two" {
+	if got := m.windowsPasteBuffer(); got != "line one\nline two" {
 		t.Fatalf("expected active Windows paste to survive deferred queued drain, got %q", got)
 	}
 	if !m.hasPendingWindowsBusyInput() {
@@ -1667,7 +1667,7 @@ func TestWindowsActiveBusyPasteSuppressesDeferredPlanPickerAfterLocalSubmitDone(
 	if m.deferredPlanPicker {
 		t.Fatal("expected pending Windows paste to clear deferred picker flag")
 	}
-	if got := m.windowsPaste.buffer; got != "line one\nline two" {
+	if got := m.windowsPasteBuffer(); got != "line one\nline two" {
 		t.Fatalf("expected active Windows paste to remain after local submit done, got %q", got)
 	}
 	if len(*intents) != 0 {
@@ -1918,7 +1918,7 @@ func TestWindowsBracketedPasteContainingMouseCSIFragmentIsNotSwallowed(t *testin
 	if got := m.input.Value(); got == "" || !strings.Contains(got, "[<64;10;10M\npayload") {
 		t.Fatalf("expected bracketed paste content not swallowed, got %q", got)
 	}
-	if got := m.windowsPaste.buffer; got != "" {
+	if got := m.windowsPasteBuffer(); got != "" {
 		t.Fatalf("expected bracketed paste not to enter fallback buffer, got %q", got)
 	}
 }
@@ -1932,7 +1932,7 @@ func TestWindowsPasteFallbackIMECommitSubmitsNormally(t *testing.T) {
 	if got := m.input.Value(); got != "你好" {
 		t.Fatalf("expected IME commit to render normally, got %q", got)
 	}
-	if got := m.windowsPaste.buffer; got != "" {
+	if got := m.windowsPasteBuffer(); got != "" {
 		t.Fatalf("expected IME commit not to enter paste buffer, got %q", got)
 	}
 
@@ -3881,6 +3881,31 @@ func TestPickerAndModalViewsHideComposer(t *testing.T) {
 	}
 }
 
+func TestWindowsPasteViewCacheInvalidatesForApprovalModal(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 100
+	m.height = 30
+	chatView := m.View()
+	if strings.Contains(chatView, "Approval required") {
+		t.Fatalf("chat view unexpectedly contained approval prompt:\n%s", chatView)
+	}
+
+	m.setWindowsPasteBuffer("pasted text still streaming")
+	m.mode = modeApproval
+	m.status = "approval required"
+	m.approval.toolCallID = "tool-1"
+	m.approval.toolName = "shell_run"
+	m.approval.reason = "shell_run: date"
+
+	view := m.View()
+	if !strings.Contains(view, "Approval required") {
+		t.Fatalf("paste view cache hid approval prompt:\n%s", view)
+	}
+	if view == chatView {
+		t.Fatal("expected modal transition to invalidate cached paste frame")
+	}
+}
+
 func TestSkillLoadedEventUpdatesStatusAndLogOnly(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.handleServiceEvent(service.Event{Kind: service.EventSkillLoaded, Text: "loaded skill: code-review"})
@@ -4625,7 +4650,7 @@ func TestStoppingTurnDoneRestoresQueuedPromptsWithPendingWindowsPaste(t *testing
 	m.busy = true
 	m.stopping = true
 	m.queuedPrompts = []queuedPrompt{{Text: "older queued"}}
-	m.windowsPaste.buffer = "pasted follow up"
+	m.setWindowsPasteBuffer("pasted follow up")
 	m.windowsPaste.activeUntil = time.Now().Add(windowsPasteQuietDelay)
 	m.windowsPaste.busyInput = true
 	m.windowsPaste.busyInputStop = true
@@ -4643,7 +4668,7 @@ func TestStoppingTurnDoneRestoresQueuedPromptsWithPendingWindowsPaste(t *testing
 	if got := m.input.Value(); got != "older queued\npasted follow up" {
 		t.Fatalf("expected queued prompt and pending paste restored to composer, got %q", got)
 	}
-	if m.windowsPaste.buffer != "" || !m.windowsPaste.activeUntil.IsZero() || m.windowsPaste.busyInput || m.windowsPaste.busyInputStop {
+	if m.windowsPasteBuffer() != "" || !m.windowsPaste.activeUntil.IsZero() || m.windowsPaste.busyInput || m.windowsPaste.busyInputStop {
 		t.Fatalf("expected pending paste state cleared after restore, got %+v", m.windowsPaste)
 	}
 
@@ -6560,7 +6585,7 @@ func TestWindowsPasteFallbackDoesNotCaptureMouseCSIFragments(t *testing.T) {
 	if got := m.input.Value(); got != "" {
 		t.Fatalf("expected mouse CSI fragment not to enter composer, got %q", got)
 	}
-	if got := m.windowsPaste.buffer; got != "" {
+	if got := m.windowsPasteBuffer(); got != "" {
 		t.Fatalf("expected mouse CSI fragment not to enter Windows paste buffer, got %q", got)
 	}
 
@@ -6571,7 +6596,7 @@ func TestWindowsPasteFallbackDoesNotCaptureMouseCSIFragments(t *testing.T) {
 	if got := m.input.Value(); got != "" {
 		t.Fatalf("expected split mouse CSI fragment not to enter composer, got %q", got)
 	}
-	if got := m.windowsPaste.buffer; got != "" {
+	if got := m.windowsPasteBuffer(); got != "" {
 		t.Fatalf("expected split mouse CSI fragment not to enter Windows paste buffer, got %q", got)
 	}
 }
@@ -7402,7 +7427,7 @@ func TestCtrlCWhileBusyClearsWhitespaceOnlyDraft(t *testing.T) {
 }
 
 func TestCtrlCWhileBusyClearsPendingWindowsPasteBuffer(t *testing.T) {
-	// Windows paste fallback buffers burst chunks in m.windowsPaste.buffer
+	// Windows paste fallback buffers burst chunks in m.windowsPasteBuffer()
 	// for windowsPasteQuietDelay (80ms) before flushing into the textarea.
 	// In that window m.input.Value() is still empty, so the busy gate must
 	// also consult hasWindowsPasteBuffer() to avoid interrupting the turn
@@ -7410,12 +7435,12 @@ func TestCtrlCWhileBusyClearsPendingWindowsPasteBuffer(t *testing.T) {
 	m, _ := newModelWithDispatchSpy()
 	m.windowsPaste.enabled = true
 	m.busy = true
-	m.windowsPaste.buffer = "buffered paste chunk"
+	m.setWindowsPasteBuffer("buffered paste chunk")
 	m.windowsPaste.activeUntil = time.Now().Add(windowsPasteQuietDelay)
 
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
 	if m.hasWindowsPasteBuffer() {
-		t.Fatalf("expected Ctrl+C to drop pending paste buffer, got %q", m.windowsPaste.buffer)
+		t.Fatalf("expected Ctrl+C to drop pending paste buffer, got %q", m.windowsPasteBuffer())
 	}
 	if got := m.input.Value(); got != "" {
 		t.Fatalf("expected composer to stay empty after clearing pending paste, got %q", got)
@@ -7431,12 +7456,12 @@ func TestCtrlCClearsPendingWindowsPasteBufferNotBusy(t *testing.T) {
 	// to quit" prompt while their just-pasted draft is still pending.
 	m, _ := newModelWithDispatchSpy()
 	m.windowsPaste.enabled = true
-	m.windowsPaste.buffer = "buffered chunk"
+	m.setWindowsPasteBuffer("buffered chunk")
 	m.windowsPaste.activeUntil = time.Now().Add(windowsPasteQuietDelay)
 
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyCtrlC})
 	if m.hasWindowsPasteBuffer() {
-		t.Fatalf("expected Ctrl+C to drop pending paste buffer outside busy, got %q", m.windowsPaste.buffer)
+		t.Fatalf("expected Ctrl+C to drop pending paste buffer outside busy, got %q", m.windowsPasteBuffer())
 	}
 	if !m.quitArmedUntil.IsZero() {
 		t.Fatal("expected Ctrl+C with pending paste buffer to clear (not arm quit)")
@@ -7609,6 +7634,43 @@ func TestComposerHeightGrowthAtTailUpdatesLayoutWithoutRerender(t *testing.T) {
 	}
 	if view := m.View(); !strings.Contains(view, "entry-59") {
 		t.Fatalf("expected tail view to keep latest entry visible after composer growth:\n%s", view)
+	}
+}
+
+func TestWindowsFallbackTypedRuneHeightGrowthUpdatesLayout(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.windowsPaste.enabled = true
+	m.width = 32
+	m.height = 10
+	m.transcript = nil
+	for i := 0; i < 60; i++ {
+		m.appendTranscript("info", tuirender.KindText, fmt.Sprintf("entry-%02d", i))
+	}
+	m.input.SetValue("seed")
+	clock := newFakeClock()
+	m.windowsPaste.nowFunc = clock.now
+	m.refreshViewportContentFollow(true)
+	mainWidth, _ := m.layoutDims()
+	initialBodyHeight := m.viewportBodyHeight(mainWidth)
+	initialGeneration := m.chat.generation
+
+	for i := 0; i < 80; i++ {
+		clock.advance(100 * time.Millisecond)
+		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
+		m = next.(model)
+	}
+	mainWidth, _ = m.layoutDims()
+	if got := m.input.Value(); got != "seed"+strings.Repeat("b", 80) {
+		t.Fatalf("expected typed runes to enter composer, got %q", got)
+	}
+	if m.hasWindowsPasteBuffer() {
+		t.Fatalf("ordinary typed runes should not enter Windows paste buffer, got %q", m.windowsPasteBuffer())
+	}
+	if got := m.viewportBodyHeight(mainWidth); got >= initialBodyHeight {
+		t.Fatalf("expected typed rune wrapping to reduce chat body height, got %d want < %d", got, initialBodyHeight)
+	}
+	if m.chat.generation != initialGeneration {
+		t.Fatalf("expected typed rune height growth not to rerender chat, gen=%d want=%d", m.chat.generation, initialGeneration)
 	}
 }
 

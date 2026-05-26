@@ -124,6 +124,10 @@ func (c *Composer) HandleKey(msg tea.KeyMsg) bool {
 	case "ctrl+j", "shift+enter":
 		c.InsertNewline()
 		return true
+	case "up":
+		return c.moveFoldedVisibleLine(-1)
+	case "down":
+		return c.moveFoldedVisibleLine(1)
 	case "pgup":
 		for c.textarea.Line() > 0 {
 			c.textarea.CursorUp()
@@ -188,6 +192,44 @@ func (c *Composer) moveToEnd() {
 	c.textarea.CursorEnd()
 }
 
+func (c *Composer) moveToLine(line int) {
+	line = max(0, min(line, c.textarea.LineCount()-1))
+	for c.textarea.Line() > line {
+		c.textarea.CursorUp()
+	}
+	for c.textarea.Line() < line {
+		c.textarea.CursorDown()
+	}
+}
+
+func (c *Composer) moveFoldedVisibleLine(direction int) bool {
+	lines := splitComposerLines(c.rawValue())
+	if len(lines) <= composerCollapseThreshold {
+		return false
+	}
+	visible := foldedVisibleLineIndexes(len(lines), c.textarea.Line())
+	current := c.textarea.Line()
+	switch {
+	case direction < 0:
+		for i := len(visible) - 1; i >= 0; i-- {
+			if visible[i] < current {
+				c.moveToLine(visible[i])
+				c.reflow()
+				return true
+			}
+		}
+	case direction > 0:
+		for _, line := range visible {
+			if line > current {
+				c.moveToLine(line)
+				c.reflow()
+				return true
+			}
+		}
+	}
+	return true
+}
+
 func (c *Composer) reflow() {
 	height := c.visualLineCount()
 	if height < 1 {
@@ -204,14 +246,8 @@ func (c *Composer) reflow() {
 func (c Composer) foldedView(lines []string) string {
 	cursorLine := c.textarea.Line()
 	keep := map[int]bool{}
-	for i := 0; i < composerHeadLines && i < len(lines); i++ {
-		keep[i] = true
-	}
-	for i := max(0, len(lines)-composerTailLines); i < len(lines); i++ {
-		keep[i] = true
-	}
-	if cursorLine >= 0 && cursorLine < len(lines) {
-		keep[cursorLine] = true
+	for _, line := range foldedVisibleLineIndexes(len(lines), cursorLine) {
+		keep[line] = true
 	}
 
 	out := make([]string, 0, composerHeadLines+composerTailLines+4)
@@ -228,6 +264,30 @@ func (c Composer) foldedView(lines []string) string {
 	}
 	out = append(out, c.hintLine(len(lines)))
 	return strings.Join(out, "\n")
+}
+
+func foldedVisibleLineIndexes(lineCount int, cursorLine int) []int {
+	if lineCount <= 0 {
+		return nil
+	}
+	keep := map[int]bool{}
+	for i := 0; i < composerHeadLines && i < lineCount; i++ {
+		keep[i] = true
+	}
+	for i := max(0, lineCount-composerTailLines); i < lineCount; i++ {
+		keep[i] = true
+	}
+	if cursorLine >= 0 && cursorLine < lineCount {
+		keep[cursorLine] = true
+	}
+
+	out := make([]int, 0, len(keep))
+	for i := 0; i < lineCount; i++ {
+		if keep[i] {
+			out = append(out, i)
+		}
+	}
+	return out
 }
 
 func (c Composer) plainView(lines []string) string {
