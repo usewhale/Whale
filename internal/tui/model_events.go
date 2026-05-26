@@ -474,7 +474,9 @@ func (m *model) handleTurnDone(ev service.Event) tea.Cmd {
 		reconciledAssistant = m.reconcileFinalAssistant(ev.LastResponse)
 	}
 	m.markMissingProposedPlanIfNeeded(wasBusy)
-	m.markNoFinalAnswerIfNeeded()
+	if !wasStopping {
+		m.markNoFinalAnswerIfNeeded()
+	}
 	m.commitLiveTranscript(reconciledAssistant && !wasFrozen)
 	m.appendTurnDurationNotice(wasBusy, wasStopping, turnDuration)
 	if wasFrozen {

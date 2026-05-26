@@ -4899,6 +4899,36 @@ func TestEscWhileBusyKeepsTurnBusyUntilTurnDone(t *testing.T) {
 	}
 }
 
+func TestEscInterruptDuringThinkingDoesNotShowReasoningOnly(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 80, height: 24, busy: true}
+
+	// Simulate receiving reasoning (thinking) content
+	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventReasoningDelta, Text: "thinking..."}))
+	m = next.(model)
+
+	// User presses Esc to interrupt
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(model)
+	if !m.stopping {
+		t.Fatal("expected stopping state after Esc interrupt")
+	}
+
+	// Stream ends
+	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+	m = next.(model)
+	if m.busy || m.stopping {
+		t.Fatalf("expected turn done to clear state, busy=%v stopping=%v", m.busy, m.stopping)
+	}
+
+	rendered := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
+	if !strings.Contains(rendered, "Conversation interrupted") {
+		t.Fatalf("expected interrupted notice in transcript:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "Reasoning only") || strings.Contains(rendered, "did not produce a visible answer") {
+		t.Fatalf("should not show reasoning-only message after intentional Esc interrupt:\n%s", rendered)
+	}
+}
+
 func TestCtrlCWhileBusyClearsDraftAndPendingWindowsEnter(t *testing.T) {
 	// After PR 2's Ctrl+C-precedence change, a non-empty composer while busy
 	// resolves Ctrl+C to "clear the draft" rather than "interrupt the turn".
