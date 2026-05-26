@@ -33,7 +33,7 @@ func (b *Toolset) fileDiscoveryTools() []core.Tool {
 	return []core.Tool{
 		toolFn{
 			name:        "read_file",
-			description: "Read file content under workspace root or discovered local skill directories. Use this before edit/write to confirm exact text. Prefer scoped reads with offset/limit for large files instead of loading entire files.",
+			description: "Read file content under workspace root or discovered local skill directories. Use this before edit/write to confirm exact text. Files up to 32KB return full content by default; larger files return an outline with head lines and continuation hints. Use offset/limit to read bounded ranges.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,

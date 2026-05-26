@@ -85,22 +85,39 @@ func (l longOutputTool) Run(_ context.Context, call ToolCall) (ToolResult, error
 	return ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
-		Content:    strings.Repeat("a", 64),
+		Content:    strings.Repeat("a", 4096),
 	}, nil
 }
 
 func TestToolRegistryTruncatesLargeResult(t *testing.T) {
 	r := NewToolRegistry([]Tool{longOutputTool{}})
-	r.SetMaxResultChars(16)
+	r.SetMaxResultChars(2048)
 	res, err := r.Dispatch(context.Background(), ToolCall{ID: "tc-1", Name: "long_out"})
 	if err != nil {
 		t.Fatalf("dispatch err: %v", err)
+	}
+	if len(res.Content) > 2048 {
+		t.Fatalf("truncated result length = %d, want <= 2048: %s", len(res.Content), res.Content)
 	}
 	var out map[string]any
 	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
 		t.Fatalf("unexpected json: %v", err)
 	}
+	if res.IsError {
+		t.Fatalf("truncated successful result should not be an error: %+v", res)
+	}
+	if out["ok"] != true || out["success"] != true || out["code"] != "ok" {
+		t.Fatalf("truncated result should preserve success envelope, got: %s", res.Content)
+	}
 	if out["truncated"] != true {
 		t.Fatalf("expected truncated payload, got: %s", res.Content)
+	}
+	data, ok := out["data"].(map[string]any)
+	if !ok || data["head"] == "" || data["tail"] == "" {
+		t.Fatalf("expected truncated head/tail data, got: %s", res.Content)
+	}
+	metadata, ok := out["metadata"].(map[string]any)
+	if !ok || metadata["output_truncated"] != true {
+		t.Fatalf("expected output_truncated metadata, got: %s", res.Content)
 	}
 }

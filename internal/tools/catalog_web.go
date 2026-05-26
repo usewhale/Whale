@@ -35,13 +35,13 @@ func (b *Toolset) webTools() []core.Tool {
 		},
 		toolFn{
 			name:        "fetch",
-			description: "Fetch a URL and return content. Supports text|markdown|html output formats with timeout and truncation control.",
+			description: "Fetch a URL and return content. Supports text|markdown|html output formats with aliases and timeout/truncation control.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
 				"properties": map[string]any{
 					"url":        map[string]any{"type": "string", "description": "Target URL (http/https)"},
-					"format":     map[string]any{"type": "string", "enum": []string{"text", "markdown", "html"}},
+					"format":     map[string]any{"type": "string", "enum": []string{"text", "txt", "plain", "markdown", "md", "html", "raw", "bytes"}},
 					"timeout_ms": map[string]any{"type": "integer", "minimum": 1, "maximum": 60000},
 				},
 				"required": []string{"url"},
@@ -51,12 +51,13 @@ func (b *Toolset) webTools() []core.Tool {
 		},
 		toolFn{
 			name:        "web_fetch",
-			description: "Fetch a web page and extract readable text content plus page title.",
+			description: "Fetch a web page and extract readable content plus page title. Supports text|markdown|html output formats with aliases.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
 				"properties": map[string]any{
 					"url":        map[string]any{"type": "string", "description": "Target URL (http/https)"},
+					"format":     map[string]any{"type": "string", "enum": []string{"text", "txt", "plain", "markdown", "md", "html", "raw", "bytes"}},
 					"timeout_ms": map[string]any{"type": "integer", "minimum": 1, "maximum": 60000},
 				},
 				"required": []string{"url"},

@@ -3028,6 +3028,7 @@ func TestLocalImmediateSlashCommandsDoNotStartWorkingState(t *testing.T) {
 		"/stats tools",
 		"/stats repair",
 		"/stats recent",
+		"/stats profile",
 		"/stats all",
 		"/mcp",
 		"/resume",

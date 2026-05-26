@@ -38,25 +38,30 @@ func (b *Toolset) editFile(_ context.Context, call core.ToolCall) (core.ToolResu
 	}
 	search := normalizeLineEndingText(in.Search)
 	replace := normalizeLineEndingText(in.Replace)
-	if !strings.Contains(before, search) {
-		return marshalToolError(call, "search_not_found", "search text not found"), nil
+	resolved, ok, errMsg := resolveEditSearch(before, search, replace, in.All)
+	if !ok {
+		return marshalToolError(call, "search_not_found", errMsg), nil
 	}
 	after := ""
 	replacements := 1
 	if in.All {
-		replacements = strings.Count(before, search)
-		after = strings.ReplaceAll(before, search, replace)
+		replacements = strings.Count(before, resolved.search)
+		after = strings.ReplaceAll(before, resolved.search, resolved.replace)
 	} else {
-		after = strings.Replace(before, search, replace, 1)
+		after = strings.Replace(before, resolved.search, resolved.replace, 1)
 	}
 	if err := os.WriteFile(abs, restoreTextFileBytes(after, lineEndings), 0o644); err != nil {
 		return marshalToolError(call, "write_failed", err.Error()), nil
 	}
 	metadata := fileDiffMetadata([]fileChangePreview{{path: in.FilePath, before: before, after: after}})
-	return marshalToolResultWithMetadata(call, map[string]any{
+	dataMap := map[string]any{
 		"file_path":    in.FilePath,
 		"replacements": replacements,
-	}, metadata)
+	}
+	if resolved.repair != "" {
+		dataMap["repair"] = resolved.repair
+	}
+	return marshalToolResultWithMetadata(call, dataMap, metadata)
 }
 
 func (b *Toolset) previewEditFile(_ context.Context, call core.ToolCall) (map[string]any, error) {
@@ -86,12 +91,60 @@ func (b *Toolset) previewEditFile(_ context.Context, call core.ToolCall) (map[st
 	}
 	search := normalizeLineEndingText(in.Search)
 	replace := normalizeLineEndingText(in.Replace)
-	if !strings.Contains(before, search) {
+	resolved, ok, _ := resolveEditSearch(before, search, replace, in.All)
+	if !ok {
 		return nil, os.ErrNotExist
 	}
-	after := strings.Replace(before, search, replace, 1)
+	after := strings.Replace(before, resolved.search, resolved.replace, 1)
 	if in.All {
-		after = strings.ReplaceAll(before, search, replace)
+		after = strings.ReplaceAll(before, resolved.search, resolved.replace)
 	}
 	return fileDiffMetadata([]fileChangePreview{{path: in.FilePath, before: before, after: after}}), nil
+}
+
+type resolvedEditSearch struct {
+	search  string
+	replace string
+	repair  string
+}
+
+func resolveEditSearch(before, search, replace string, all bool) (resolvedEditSearch, bool, string) {
+	if strings.Contains(before, search) {
+		return resolvedEditSearch{search: search, replace: replace}, true, ""
+	}
+	if !hasLiteralEscapedControls(search) {
+		return resolvedEditSearch{}, false, "search text not found"
+	}
+
+	unescapedSearch := normalizeLineEndingText(unescapeLiteralControls(search))
+	unescapedReplace := normalizeLineEndingText(unescapeLiteralControls(replace))
+	if unescapedSearch == search {
+		return resolvedEditSearch{}, false, "search text not found"
+	}
+	count := strings.Count(before, unescapedSearch)
+	if count == 0 {
+		return resolvedEditSearch{}, false, "search text not found; search appears JSON-escaped, but the unescaped search text was also not found"
+	}
+	if !all && count > 1 {
+		return resolvedEditSearch{}, false, "search text not found; search appears JSON-escaped, but the unescaped search text matched multiple locations"
+	}
+	return resolvedEditSearch{
+		search:  unescapedSearch,
+		replace: unescapedReplace,
+		repair:  "json_escape_unwrapped",
+	}, true, ""
+}
+
+func hasLiteralEscapedControls(s string) bool {
+	return strings.Contains(s, `\n`) || strings.Contains(s, `\t`) || strings.Contains(s, `\r`)
+}
+
+func unescapeLiteralControls(s string) string {
+	replacer := strings.NewReplacer(
+		`\r\n`, "\n",
+		`\n`, "\n",
+		`\r`, "\r",
+		`\t`, "\t",
+	)
+	return replacer.Replace(s)
 }

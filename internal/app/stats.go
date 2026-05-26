@@ -10,10 +10,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/telemetry"
 )
 
 const statsRecentLimit = 5
+const statsProfileSessionLimit = 50
+const statsProfileToolHeavyChars = 12_000
 
 type usageStats struct {
 	Turns            int
@@ -61,6 +65,58 @@ type toolInputModelStats struct {
 	Invalid  int
 }
 
+type profileStats struct {
+	Limit                int
+	Sessions             []profileSessionStats
+	MainWorkSessions     int
+	TrivialSessions      int
+	ToolHeavySessions    int
+	PromptTokens         int
+	CompletionTokens     int
+	CacheHit             int
+	CacheMiss            int
+	CostUSD              float64
+	MaxPromptTokens      int
+	PrefixFingerprints   map[string]bool
+	ToolCalls            int
+	ToolResultChars      int
+	ReasoningChars       int
+	VisibleTextChars     int
+	ByTool               map[string]*profileToolStats
+	TopSessions          []profileSessionStats
+	UsageMatchedSessions int
+}
+
+type profileSessionStats struct {
+	ID                 string
+	ModTime            time.Time
+	Messages           int
+	UserMessages       int
+	AssistantMessages  int
+	ToolMessages       int
+	ToolCalls          int
+	ToolResultChars    int
+	ReasoningChars     int
+	VisibleTextChars   int
+	FirstUserText      string
+	HasHiddenUserTask  bool
+	Trivial            bool
+	PromptTokens       int
+	CompletionTokens   int
+	CacheHit           int
+	CacheMiss          int
+	CostUSD            float64
+	MaxPromptTokens    int
+	PrefixFingerprints map[string]bool
+	ByTool             map[string]*profileToolStats
+}
+
+type profileToolStats struct {
+	Tool        string
+	Calls       int
+	ResultChars int
+}
+
 func (a *App) buildStats() string {
 	return a.buildStatsViewAt("overview", time.Now())
 }
@@ -84,6 +140,10 @@ func (a *App) buildStatsViewAt(view string, now time.Time) string {
 	case "recent":
 		lines = []string{"Stats"}
 		lines = append(lines, formatRecentStats(usage, toolInput)...)
+	case "profile":
+		profile := readProfileStats(a.sessionsDir, filepath.Join(a.cfg.DataDir, "usage.jsonl"), statsProfileSessionLimit)
+		lines = []string{"Stats", "", "Profile"}
+		lines = append(lines, formatProfileStats(profile)...)
 	case "all":
 		lines = []string{"Stats", "", "Usage"}
 		lines = append(lines, formatUsageStats(usage)...)
@@ -146,6 +206,266 @@ func readUsageStats(path string, now time.Time) usageStats {
 		stats.Recent = appendRecentUsage(stats.Recent, rec)
 	}
 	return stats
+}
+
+func readProfileStats(sessionsDir, usagePath string, limit int) profileStats {
+	if limit <= 0 {
+		limit = statsProfileSessionLimit
+	}
+	stats := profileStats{
+		Limit:              limit,
+		PrefixFingerprints: map[string]bool{},
+		ByTool:             map[string]*profileToolStats{},
+	}
+	files := latestProfileSessionFiles(sessionsDir, limit)
+	sessionIndex := map[string]int{}
+	for _, file := range files {
+		sp := readProfileSessionFile(file.Path, file.ID, file.ModTime)
+		stats.Sessions = append(stats.Sessions, sp)
+		sessionIndex[sp.ID] = len(stats.Sessions) - 1
+		stats.ToolCalls += sp.ToolCalls
+		stats.ToolResultChars += sp.ToolResultChars
+		stats.ReasoningChars += sp.ReasoningChars
+		stats.VisibleTextChars += sp.VisibleTextChars
+		for _, tool := range sp.ByTool {
+			dst := stats.ByTool[tool.Tool]
+			if dst == nil {
+				dst = &profileToolStats{Tool: tool.Tool}
+				stats.ByTool[tool.Tool] = dst
+			}
+			dst.Calls += tool.Calls
+			dst.ResultChars += tool.ResultChars
+		}
+		if sp.Trivial {
+			stats.TrivialSessions++
+		}
+		if sp.ToolResultChars >= statsProfileToolHeavyChars {
+			stats.ToolHeavySessions++
+		}
+	}
+
+	readProfileUsage(usagePath, sessionIndex, &stats)
+	for _, sp := range stats.Sessions {
+		for fp := range sp.PrefixFingerprints {
+			stats.PrefixFingerprints[fp] = true
+		}
+		if sp.MaxPromptTokens > stats.MaxPromptTokens {
+			stats.MaxPromptTokens = sp.MaxPromptTokens
+		}
+		stats.PromptTokens += sp.PromptTokens
+		stats.CompletionTokens += sp.CompletionTokens
+		stats.CacheHit += sp.CacheHit
+		stats.CacheMiss += sp.CacheMiss
+		stats.CostUSD += sp.CostUSD
+		if sp.PromptTokens > 0 || sp.CompletionTokens > 0 || sp.CostUSD > 0 {
+			stats.UsageMatchedSessions++
+		}
+	}
+	stats.MainWorkSessions = len(stats.Sessions) - stats.TrivialSessions
+	stats.TopSessions = topProfileSessions(stats.Sessions, statsRecentLimit, false)
+	return stats
+}
+
+type profileSessionFile struct {
+	ID      string
+	Path    string
+	ModTime time.Time
+}
+
+func latestProfileSessionFiles(sessionsDir string, limit int) []profileSessionFile {
+	entries, err := os.ReadDir(strings.TrimSpace(sessionsDir))
+	if err != nil {
+		return nil
+	}
+	files := make([]profileSessionFile, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !isProfileSessionJSONL(entry.Name()) {
+			continue
+		}
+		id := strings.TrimSuffix(entry.Name(), ".jsonl")
+		if isSubagentSession(sessionsDir, id) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, profileSessionFile{
+			ID:      id,
+			Path:    filepath.Join(sessionsDir, entry.Name()),
+			ModTime: info.ModTime(),
+		})
+	}
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].ModTime.Equal(files[j].ModTime) {
+			return files[i].ID > files[j].ID
+		}
+		return files[i].ModTime.After(files[j].ModTime)
+	})
+	return limitSlice(files, limit)
+}
+
+func isProfileSessionJSONL(name string) bool {
+	if !strings.HasSuffix(name, ".jsonl") || strings.HasSuffix(name, telemetry.ToolInputEventsSuffix) {
+		return false
+	}
+	id := strings.TrimSuffix(name, ".jsonl")
+	return !strings.Contains(id, "--subagent-") && !strings.HasPrefix(id, "e2e-") && !strings.HasPrefix(id, "rt-")
+}
+
+func isSubagentSession(sessionsDir, id string) bool {
+	meta, err := session.LoadSessionMeta(sessionsDir, id)
+	return err == nil && strings.EqualFold(strings.TrimSpace(meta.Kind), "subagent")
+}
+
+func readProfileSessionFile(path, id string, modTime time.Time) profileSessionStats {
+	stats := profileSessionStats{
+		ID:                 id,
+		ModTime:            modTime,
+		PrefixFingerprints: map[string]bool{},
+		ByTool:             map[string]*profileToolStats{},
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return stats
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 2*1024*1024)
+	var messages []core.Message
+	for scanner.Scan() {
+		var msg core.Message
+		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
+			continue
+		}
+		messages = append(messages, msg)
+		stats.Messages++
+		stats.VisibleTextChars += len(msg.Text)
+		stats.ReasoningChars += len(msg.Reasoning)
+		if msg.Role == core.RoleUser {
+			stats.UserMessages++
+			if msg.Hidden && strings.TrimSpace(msg.Text) != "" {
+				stats.HasHiddenUserTask = true
+			}
+			if stats.FirstUserText == "" && !msg.Hidden {
+				stats.FirstUserText = previewText(msg.Text, 80)
+			}
+		}
+		if msg.Role == core.RoleAssistant {
+			stats.AssistantMessages++
+		}
+		if msg.Role == core.RoleTool {
+			stats.ToolMessages++
+		}
+		stats.ToolCalls += len(msg.ToolCalls)
+		for _, tc := range msg.ToolCalls {
+			addProfileToolCall(stats.ByTool, tc.Name)
+		}
+		for _, tr := range msg.ToolResults {
+			stats.ToolResultChars += len(tr.Content)
+			addProfileToolResult(stats.ByTool, tr.Name, len(tr.Content))
+		}
+	}
+	if stats.HasHiddenUserTask && isTrivialProfileUserText(stats.FirstUserText) {
+		stats.FirstUserText = "(hidden user task)"
+	}
+	stats.Trivial = isTrivialProfileSession(messages)
+	return stats
+}
+
+func readProfileUsage(path string, sessionIndex map[string]int, stats *profileStats) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		var rec telemetry.UsageRecord
+		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
+			continue
+		}
+		idx, ok := sessionIndex[rec.Session]
+		if !ok {
+			continue
+		}
+		sp := &stats.Sessions[idx]
+		sp.PromptTokens += rec.PromptTokens
+		sp.CompletionTokens += rec.CompletionTokens
+		sp.CacheHit += rec.PromptCacheHit
+		sp.CacheMiss += rec.PromptCacheMiss
+		sp.CostUSD += rec.CostUSD
+		if rec.PromptTokens > sp.MaxPromptTokens {
+			sp.MaxPromptTokens = rec.PromptTokens
+		}
+		if fp := strings.TrimSpace(rec.PrefixFingerprint); fp != "" {
+			sp.PrefixFingerprints[fp] = true
+		}
+	}
+}
+
+func isTrivialProfileSession(messages []core.Message) bool {
+	visible := make([]core.Message, 0, len(messages))
+	for _, msg := range messages {
+		if !msg.Hidden {
+			visible = append(visible, msg)
+		}
+		if strings.TrimSpace(msg.Reasoning) != "" || len(msg.ToolCalls)+len(msg.ToolResults) > 0 {
+			return false
+		}
+		if msg.Role == core.RoleTool {
+			return false
+		}
+	}
+	if len(visible) == 0 || len(visible) > 2 {
+		return false
+	}
+	user := visible[0]
+	if user.Role != core.RoleUser {
+		return false
+	}
+	if len(visible) == 2 {
+		assistant := visible[1]
+		if assistant.Role != core.RoleAssistant || len([]rune(strings.TrimSpace(assistant.Text))) > 200 {
+			return false
+		}
+	}
+	return isTrivialProfileUserText(user.Text)
+}
+
+func isTrivialProfileUserText(text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if strings.HasPrefix(text, "/") {
+		return true
+	}
+	switch text {
+	case "hi", "hello", "hey", "几点了", "现在几点", "现在几点了", "what time is it", "time":
+		return true
+	default:
+		return false
+	}
+}
+
+func addProfileToolCall(stats map[string]*profileToolStats, tool string) {
+	tool = nonEmpty(tool, "(unknown)")
+	ts := stats[tool]
+	if ts == nil {
+		ts = &profileToolStats{Tool: tool}
+		stats[tool] = ts
+	}
+	ts.Calls++
+}
+
+func addProfileToolResult(stats map[string]*profileToolStats, tool string, resultChars int) {
+	tool = nonEmpty(tool, "(unknown)")
+	ts := stats[tool]
+	if ts == nil {
+		ts = &profileToolStats{Tool: tool}
+		stats[tool] = ts
+	}
+	ts.ResultChars += resultChars
 }
 
 func readToolInputStats(sessionsDir string) toolInputStats {
@@ -248,6 +568,45 @@ func formatUsageStats(stats usageStats) []string {
 	return lines
 }
 
+func formatProfileStats(stats profileStats) []string {
+	totalTokens := stats.PromptTokens + stats.CompletionTokens
+	lines := []string{
+		fmt.Sprintf("- scanned sessions: %d latest main sessions (limit %d)", len(stats.Sessions), stats.Limit),
+		fmt.Sprintf("- main work sessions: %d", stats.MainWorkSessions),
+		fmt.Sprintf("- trivial/local sessions: %d", stats.TrivialSessions),
+		fmt.Sprintf("- tool-heavy sessions: %d (>= %s tool-result chars)", stats.ToolHeavySessions, formatCount(statsProfileToolHeavyChars)),
+		fmt.Sprintf("- usage matched sessions: %d", stats.UsageMatchedSessions),
+		fmt.Sprintf("- tokens: %s total · %s input · %s output", formatCount(totalTokens), formatCount(stats.PromptTokens), formatCount(stats.CompletionTokens)),
+		fmt.Sprintf("- cache: %s hit · %s miss · %.1f%%", formatCount(stats.CacheHit), formatCount(stats.CacheMiss), ratioPercent(stats.CacheHit, stats.CacheHit+stats.CacheMiss)),
+		fmt.Sprintf("- estimated cost: $%.4f", stats.CostUSD),
+		fmt.Sprintf("- max prompt: %s", formatCount(stats.MaxPromptTokens)),
+		fmt.Sprintf("- prefix fingerprints: %d", len(stats.PrefixFingerprints)),
+		fmt.Sprintf("- tools: %d calls · %s result chars", stats.ToolCalls, formatCount(stats.ToolResultChars)),
+		fmt.Sprintf("- reasoning/text: %s reasoning chars · %s visible text chars", formatCount(stats.ReasoningChars), formatCount(stats.VisibleTextChars)),
+	}
+	if len(stats.ByTool) > 0 {
+		lines = append(lines, "", "Top tools")
+		for _, ts := range topProfileTools(stats.ByTool, statsRecentLimit) {
+			lines = append(lines, fmt.Sprintf("- %s: %d calls · %s result chars", ts.Tool, ts.Calls, formatCount(ts.ResultChars)))
+		}
+	}
+	if len(stats.TopSessions) > 0 {
+		lines = append(lines, "", "Top work sessions")
+		for _, sp := range stats.TopSessions {
+			lines = append(lines, fmt.Sprintf(
+				"- %s: $%.4f · max prompt %s · tools %s chars · %.1f%% cache · %s",
+				sp.ID,
+				sp.CostUSD,
+				formatCount(sp.MaxPromptTokens),
+				formatCount(sp.ToolResultChars),
+				ratioPercent(sp.CacheHit, sp.CacheHit+sp.CacheMiss),
+				nonEmpty(sp.FirstUserText, "(no user text)"),
+			))
+		}
+	}
+	return lines
+}
+
 func formatToolInputStats(stats toolInputStats) []string {
 	total := stats.Repaired + stats.Invalid
 	lines := []string{
@@ -309,7 +668,7 @@ func formatStatsOverview(usage usageStats, toolInput toolInputStats) []string {
 	if tool := topInvalidTool(toolInput.ByTool); tool != nil {
 		lines = append(lines, fmt.Sprintf("- top invalid tool: %s · %d", tool.Tool, tool.Invalid))
 	}
-	lines = append(lines, "", "More: /stats usage, /stats tools, /stats repair, /stats recent, /stats all")
+	lines = append(lines, "", "More: /stats usage, /stats tools, /stats repair, /stats recent, /stats profile, /stats all")
 	return lines
 }
 
@@ -384,6 +743,43 @@ func topUsageModel(in map[string]*usageModelStats) *usageModelStats {
 		return nil
 	}
 	return top[0]
+}
+
+func topProfileTools(in map[string]*profileToolStats, limit int) []*profileToolStats {
+	out := make([]*profileToolStats, 0, len(in))
+	for _, v := range in {
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ResultChars == out[j].ResultChars {
+			if out[i].Calls == out[j].Calls {
+				return out[i].Tool < out[j].Tool
+			}
+			return out[i].Calls > out[j].Calls
+		}
+		return out[i].ResultChars > out[j].ResultChars
+	})
+	return limitSlice(out, limit)
+}
+
+func topProfileSessions(in []profileSessionStats, limit int, includeTrivial bool) []profileSessionStats {
+	out := make([]profileSessionStats, 0, len(in))
+	for _, sp := range in {
+		if !includeTrivial && sp.Trivial {
+			continue
+		}
+		out = append(out, sp)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CostUSD == out[j].CostUSD {
+			if out[i].ToolResultChars == out[j].ToolResultChars {
+				return out[i].ID < out[j].ID
+			}
+			return out[i].ToolResultChars > out[j].ToolResultChars
+		}
+		return out[i].CostUSD > out[j].CostUSD
+	})
+	return limitSlice(out, limit)
 }
 
 func topToolInputTools(in map[string]*toolInputToolStats, limit int) []*toolInputToolStats {
@@ -496,6 +892,21 @@ func formatTS(ts int64) string {
 		return "(unknown time)"
 	}
 	return time.UnixMilli(ts).Format("2006-01-02 15:04")
+}
+
+func previewText(v string, maxRunes int) string {
+	v = strings.Join(strings.Fields(v), " ")
+	if maxRunes <= 0 {
+		return v
+	}
+	runes := []rune(v)
+	if len(runes) <= maxRunes {
+		return v
+	}
+	if maxRunes <= 1 {
+		return string(runes[:1]) + "…"
+	}
+	return string(runes[:maxRunes-1]) + "…"
 }
 
 func nonEmpty(v, fallback string) string {

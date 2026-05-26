@@ -6,7 +6,7 @@ func (b *Toolset) searchTools() []core.Tool {
 	return []core.Tool{
 		toolFn{
 			name:        "grep",
-			description: "Search file contents recursively under workspace root or discovered local skill directories. Use for symbol/reference discovery before read_file/edit. For literal matching set literal_text=true; use include to narrow file patterns.",
+			description: "Search file contents recursively under workspace root or discovered local skill directories. Use for symbol/reference discovery before read_file/edit. For literal matching set literal_text=true; use include to narrow file patterns. Output is capped by limit, default 100 matches.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
@@ -15,6 +15,7 @@ func (b *Toolset) searchTools() []core.Tool {
 					"path":         map[string]any{"type": "string", "description": "Search root relative to workspace, an absolute path inside workspace root, or an absolute path inside a discovered local skill directory"},
 					"include":      map[string]any{"type": "string", "description": "Glob include filter, e.g. *.go"},
 					"literal_text": map[string]any{"type": "boolean", "description": "When true, treat pattern as plain text"},
+					"limit":        map[string]any{"type": "integer", "minimum": 1, "maximum": 2000, "description": "Maximum matches to return, default 100"},
 				},
 				"required": []string{"pattern"},
 			},

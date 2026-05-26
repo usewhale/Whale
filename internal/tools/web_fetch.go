@@ -14,6 +14,7 @@ import (
 func (b *Toolset) webFetch(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
 	var in struct {
 		URL       string `json:"url"`
+		Format    string `json:"format"`
 		TimeoutMS int    `json:"timeout_ms"`
 	}
 	if err := decodeInput(call.Input, &in); err != nil {
@@ -25,6 +26,10 @@ func (b *Toolset) webFetch(ctx context.Context, call core.ToolCall) (core.ToolRe
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
 		return marshalToolError(call, "invalid_args", "url scheme must be http or https"), nil
+	}
+	format, ok := parseWebFetchFormat(in.Format, webFetchFormatText)
+	if !ok {
+		return marshalToolError(call, "invalid_args", "format must be one of: text, markdown, html"), nil
 	}
 	timeoutMS := in.TimeoutMS
 	if timeoutMS <= 0 {
@@ -63,15 +68,27 @@ func (b *Toolset) webFetch(ctx context.Context, call core.ToolCall) (core.ToolRe
 	html := string(raw)
 	title := extractHTMLTitle(html)
 	text := htmlToText(html)
-	if truncated {
-		text += "\n\n[truncated]"
+	content := text
+	switch format {
+	case webFetchFormatText, webFetchFormatMarkdown:
+		content = text
+	case webFetchFormatHTML:
+		content = html
 	}
+	if truncated {
+		content += "\n\n[truncated]"
+	}
+	lowContent := detectLowWebContent(u.String(), title, html, text)
 
 	return marshalToolResult(call, map[string]any{
-		"url":         u.String(),
-		"status_code": resp.StatusCode,
-		"title":       title,
-		"content":     text,
-		"truncated":   truncated,
+		"url":                u.String(),
+		"status_code":        resp.StatusCode,
+		"title":              title,
+		"content":            content,
+		"format":             string(format),
+		"truncated":          truncated,
+		"low_content":        lowContent.LowContent,
+		"low_content_reason": lowContent.Reason,
+		"next_steps":         lowContent.NextSteps,
 	})
 }

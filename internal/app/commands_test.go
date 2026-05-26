@@ -141,6 +141,7 @@ func TestClassifySubmitSlashCommands(t *testing.T) {
 		{line: "/stats tools", want: appcommands.SubmitLocalReadOnly},
 		{line: "/stats repair", want: appcommands.SubmitLocalReadOnly},
 		{line: "/stats recent", want: appcommands.SubmitLocalReadOnly},
+		{line: "/stats profile", want: appcommands.SubmitLocalReadOnly},
 		{line: "/stats all", want: appcommands.SubmitLocalReadOnly},
 		{line: "/mcp", want: appcommands.SubmitLocalReadOnly},
 		{line: "/feedback", want: appcommands.SubmitLocalReadOnly},
@@ -382,14 +383,51 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		t.Fatalf("mkdir sessions: %v", err)
 	}
 	writeUsageRecord(t, filepath.Join(dir, "usage.jsonl"), telemetry.UsageRecord{
-		TS:               time.Date(2026, 5, 12, 10, 0, 0, 0, time.Local).UnixMilli(),
-		Session:          "s1",
-		Model:            "deepseek-v4-flash",
-		PromptTokens:     1000,
-		CompletionTokens: 200,
-		PromptCacheHit:   800,
-		PromptCacheMiss:  200,
-		CostUSD:          0.0123,
+		TS:                time.Date(2026, 5, 12, 10, 0, 0, 0, time.Local).UnixMilli(),
+		Session:           "s1",
+		Model:             "deepseek-v4-flash",
+		PrefixFingerprint: "fp-1",
+		PromptTokens:      1000,
+		CompletionTokens:  200,
+		PromptCacheHit:    800,
+		PromptCacheMiss:   200,
+		CostUSD:           0.0123,
+	})
+	writeUsageRecord(t, filepath.Join(dir, "usage.jsonl"), telemetry.UsageRecord{
+		TS:                time.Date(2026, 5, 12, 10, 3, 0, 0, time.Local).UnixMilli(),
+		Session:           "s2",
+		Model:             "deepseek-v4-flash",
+		PrefixFingerprint: "fp-2",
+		PromptTokens:      2000,
+		CompletionTokens:  300,
+		PromptCacheHit:    1000,
+		PromptCacheMiss:   1000,
+		CostUSD:           0.0456,
+	})
+	writeSessionMessages(t, sessionsDir, "s1", []core.Message{
+		{ID: "m-1", SessionID: "s1", Role: core.RoleUser, Text: "please inspect the workspace"},
+		{ID: "m-2", SessionID: "s1", Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "c1", Name: "read_file", Input: `{"path":"big.go"}`}}},
+		{ID: "m-3", SessionID: "s1", Role: core.RoleTool, ToolResults: []core.ToolResult{{ToolCallID: "c1", Name: "read_file", Content: strings.Repeat("x", 13000)}}},
+		{ID: "m-4", SessionID: "s1", Role: core.RoleAssistant, Text: "done", Reasoning: "thinking"},
+	})
+	writeSessionMessages(t, sessionsDir, "s2", []core.Message{
+		{ID: "m-1", SessionID: "s2", Role: core.RoleUser, Text: "hi"},
+		{ID: "m-2", SessionID: "s2", Role: core.RoleAssistant, Text: "hello world", FinishReason: core.FinishReasonEndTurn},
+	})
+	writeSessionMessages(t, sessionsDir, "s-local", []core.Message{
+		{ID: "m-1", SessionID: "s-local", Role: core.RoleUser, Text: "/stats profile"},
+	})
+	writeSessionMessages(t, sessionsDir, "s3--subagent-worker", []core.Message{
+		{ID: "m-1", SessionID: "s3--subagent-worker", Role: core.RoleUser, Text: "subagent"},
+	})
+	writeSessionMessages(t, sessionsDir, "s4", []core.Message{
+		{ID: "m-1", SessionID: "s4", Role: core.RoleUser, Text: "metadata subagent"},
+	})
+	if err := session.SaveSessionMeta(sessionsDir, "s4", session.SessionMeta{Kind: "subagent", ParentSessionID: "s1"}); err != nil {
+		t.Fatalf("save subagent meta: %v", err)
+	}
+	writeSessionMessages(t, sessionsDir, "e2e-fixture", []core.Message{
+		{ID: "m-1", SessionID: "e2e-fixture", Role: core.RoleUser, Text: "fixture"},
 	})
 	writeToolInputEvent(t, sessionsDir, "s1", telemetry.ToolInputEvent{
 		TS:         time.Date(2026, 5, 12, 10, 1, 0, 0, time.Local).UnixMilli(),
@@ -423,17 +461,17 @@ func TestHandleLocalCommandStats(t *testing.T) {
 	for _, want := range []string{
 		"Stats",
 		"Usage",
-		"- turns: 1",
-		"- tokens: 1.2K total",
-		"- estimated cost: $0.0123 total",
-		"- top model: deepseek-v4-flash · 1 turns",
+		"- turns: 2",
+		"- tokens: 3.5K total",
+		"- estimated cost: $0.0579 total",
+		"- top model: deepseek-v4-flash · 2 turns",
 		"Tool input",
 		"- repaired: 1",
 		"- invalid: 1",
 		"- repair rate: 50.0%",
 		"- top repair: markdown_autolink_path · 1",
 		"- top invalid tool: write · 1",
-		"More: /stats usage, /stats tools, /stats repair, /stats recent, /stats all",
+		"More: /stats usage, /stats tools, /stats repair, /stats recent, /stats profile, /stats all",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected stats to contain %q, got:\n%s", want, out)
@@ -457,8 +495,8 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		t.Fatalf("stats usage command handled=%v err=%v", handled, err)
 	}
 	for _, want := range []string{
-		"- sessions: 1",
-		"deepseek-v4-flash: 1 turns",
+		"- sessions: 2",
+		"deepseek-v4-flash: 2 turns",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected usage stats to contain %q, got:\n%s", want, out)
@@ -466,6 +504,45 @@ func TestHandleLocalCommandStats(t *testing.T) {
 	}
 	if strings.Contains(out, "Tool input") {
 		t.Fatalf("expected usage stats to omit tool input section:\n%s", out)
+	}
+
+	handled, out, _, err = a.HandleLocalCommand("/stats profile")
+	if err != nil || !handled {
+		t.Fatalf("stats profile command handled=%v err=%v", handled, err)
+	}
+	for _, want := range []string{
+		"Profile",
+		"- scanned sessions: 3 latest main sessions (limit 50)",
+		"- main work sessions: 1",
+		"- trivial/local sessions: 2",
+		"- tool-heavy sessions: 1",
+		"- usage matched sessions: 2",
+		"- max prompt: 2K",
+		"- prefix fingerprints: 2",
+		"- tools: 1 calls · 13K result chars",
+		"- reasoning/text: 8 reasoning chars",
+		"Top tools",
+		"read_file: 1 calls · 13K result chars",
+		"Top work sessions",
+		"s1: $0.0123",
+		"please inspect the workspace",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected profile stats to contain %q, got:\n%s", want, out)
+		}
+	}
+	for _, dontWant := range []string{
+		`{"path":"big.go"}`,
+		strings.Repeat("x", 200),
+		"s2: $0.0456",
+		"s-local",
+		"subagent-worker",
+		"metadata subagent",
+		"e2e-fixture",
+	} {
+		if strings.Contains(out, dontWant) {
+			t.Fatalf("expected profile stats to omit %q, got:\n%s", dontWant, out)
+		}
 	}
 
 	handled, out, _, err = a.HandleLocalCommand("/stats tools")
@@ -516,10 +593,32 @@ func TestHandleLocalCommandStats(t *testing.T) {
 			t.Fatalf("expected all stats to contain %q, got:\n%s", want, out)
 		}
 	}
+	if strings.Contains(out, "Profile") {
+		t.Fatalf("expected all stats to omit profile section:\n%s", out)
+	}
 
 	handled, _, _, err = a.HandleLocalCommand("/stats extra")
-	if !handled || err == nil || !strings.Contains(err.Error(), "usage: /stats [usage|tools|repair|recent|all]") {
+	if !handled || err == nil || !strings.Contains(err.Error(), "usage: /stats [usage|tools|repair|recent|profile|all]") {
 		t.Fatalf("expected /stats usage error, handled=%v err=%v", handled, err)
+	}
+}
+
+func TestProfileSessionHiddenTaskDoesNotPreviewGreeting(t *testing.T) {
+	dir := t.TempDir()
+	sessionID := "s-hidden-task"
+	writeSessionMessages(t, dir, sessionID, []core.Message{
+		{ID: "m-1", SessionID: sessionID, Role: core.RoleUser, Text: "hi"},
+		{ID: "m-2", SessionID: sessionID, Role: core.RoleAssistant, Text: "hello", FinishReason: core.FinishReasonEndTurn},
+		{ID: "m-3", SessionID: sessionID, Role: core.RoleUser, Text: "review the local changes", Hidden: true},
+		{ID: "m-4", SessionID: sessionID, Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "c1", Name: "shell_run"}}},
+	})
+
+	got := readProfileSessionFile(filepath.Join(dir, sessionID+".jsonl"), sessionID, time.Time{})
+	if got.Trivial {
+		t.Fatalf("hidden work task should not be classified as trivial/local: %+v", got)
+	}
+	if got.FirstUserText != "(hidden user task)" {
+		t.Fatalf("hidden work task should not preview greeting, got %q", got.FirstUserText)
 	}
 }
 
@@ -617,7 +716,7 @@ func TestHandleLocalCommandHelp(t *testing.T) {
 		"/compact",
 		"/review [local|branch|pr|commit|<instructions>]",
 		"/status",
-		"/stats [usage|tools|repair|recent|all]",
+		"/stats [usage|tools|repair|recent|profile|all]",
 		"/plugins",
 		"/feedback",
 		"For more help:",
@@ -1523,6 +1622,28 @@ func writeUsageRecord(t *testing.T, path string, rec telemetry.UsageRecord) {
 	defer f.Close()
 	if _, err := f.Write(append(b, '\n')); err != nil {
 		t.Fatalf("write usage log: %v", err)
+	}
+}
+
+func writeSessionMessages(t *testing.T, sessionsDir, sessionID string, msgs []core.Message) {
+	t.Helper()
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("mkdir sessions dir: %v", err)
+	}
+	path := filepath.Join(sessionsDir, sessionID+".jsonl")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("open session log: %v", err)
+	}
+	defer f.Close()
+	for _, msg := range msgs {
+		b, err := json.Marshal(msg)
+		if err != nil {
+			t.Fatalf("marshal session message: %v", err)
+		}
+		if _, err := f.Write(append(b, '\n')); err != nil {
+			t.Fatalf("write session message: %v", err)
+		}
 	}
 }
 
