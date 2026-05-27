@@ -11,15 +11,16 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/usewhale/whale/internal/securefs"
 )
 
 const (
-	PluginID        = "memory"
-	IndexFileName   = "MEMORY.md"
-	indexMaxBytes   = 4 * 1024
-	globalScope     = "global"
-	projectScope    = "project"
-	defaultFileMode = 0o600
+	PluginID      = "memory"
+	IndexFileName = "MEMORY.md"
+	indexMaxBytes = 4 * 1024
+	globalScope   = "global"
+	projectScope  = "project"
 )
 
 var validMemoryName = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]{1,38}[A-Za-z0-9]$`)
@@ -110,7 +111,7 @@ func (s *Store) Write(in WriteInput) (Entry, error) {
 	if err != nil {
 		return Entry{}, err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := securefs.MkdirPrivate(dir); err != nil {
 		return Entry{}, fmt.Errorf("create memory dir: %w", err)
 	}
 	path := filepath.Join(dir, name+".md")
@@ -131,7 +132,7 @@ func (s *Store) Write(in WriteInput) (Entry, error) {
 		Path:            path,
 		UpdatedExisting: updatedExisting,
 	}
-	if err := os.WriteFile(path, []byte(formatEntry(entry)), defaultFileMode); err != nil {
+	if err := securefs.WritePrivateFile(path, []byte(formatEntry(entry))); err != nil {
 		return Entry{}, fmt.Errorf("write memory: %w", err)
 	}
 	if err := s.rebuildIndex(scope); err != nil {
@@ -266,7 +267,7 @@ func (s *Store) rebuildIndex(scope string) error {
 		_ = os.Remove(indexPath)
 		return nil
 	}
-	return os.WriteFile(indexPath, []byte(index+"\n"), defaultFileMode)
+	return securefs.WritePrivateFile(indexPath, []byte(index+"\n"))
 }
 
 func (s *Store) today() string {

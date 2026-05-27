@@ -137,6 +137,7 @@ Review rules:
 - Do not include praise sections by default.
 - Shell commands already run from the workspace root. Do not prefix commands with cd; use the shell_run cwd parameter for subdirectories.
 - For review shell commands, run one plain read-only command at a time. Do not add redirects, pipes, command substitutions, semicolon chains, && chains, || fallbacks, or temp/workspace diff capture files.
+- If a local git diff output is truncated, do not fetch the rest of the same full diff. Use git diff --stat, git diff --name-only, and then path-scoped commands such as git diff -- <path> or git diff --cached -- <path> for the files most likely to contain findings.
 - If a PR diff is truncated, use the PR file list to identify relevant files. If the PR head branch is present locally, inspect large files with git diff <base>...<head> -- <path>. Do not assume gh pr diff supports path filtering.
 - Do not use read_file for PR-added files unless you have confirmed the PR head is checked out locally. For PR files that are not present in the workspace, rely on the PR diff output you have and clearly state any remaining visibility limits.
 

@@ -6,13 +6,13 @@ func (b *Toolset) searchTools() []core.Tool {
 	return []core.Tool{
 		toolFn{
 			name:        "grep",
-			description: "Search file contents recursively under workspace root or discovered local skill directories. Relative paths are workspace-relative; use shell_run for sibling projects outside the workspace. Use for symbol/reference discovery before read_file/edit. For literal matching set literal_text=true; use include to narrow file patterns. Output is capped by limit, default 100 matches.",
+			description: "Search file contents recursively under workspace root or discovered local skill directories. Omit path or pass an empty path to search the workspace root. Relative paths are workspace-relative; use shell_run for sibling projects outside the workspace. Use for symbol/reference discovery before read_file/edit. For literal matching set literal_text=true; use include to narrow file patterns. Output is capped by limit, default 100 matches.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
 				"properties": map[string]any{
 					"pattern":      map[string]any{"type": "string", "description": "Pattern or literal query"},
-					"path":         map[string]any{"type": "string", "description": "Search root relative to workspace, an absolute path inside workspace root, or an absolute path inside a discovered local skill directory. A sibling repo name alone is treated as a workspace child, not a parent-directory repo."},
+					"path":         map[string]any{"type": "string", "description": "Optional search root. Omit or pass an empty string to search the workspace root. Otherwise use a path relative to workspace, an absolute path inside workspace root, or an absolute path inside a discovered local skill directory. A sibling repo name alone is treated as a workspace child, not a parent-directory repo."},
 					"include":      map[string]any{"type": "string", "description": "Glob include filter, e.g. *.go"},
 					"literal_text": map[string]any{"type": "boolean", "description": "When true, treat pattern as plain text"},
 					"limit":        map[string]any{"type": "integer", "minimum": 1, "maximum": 2000, "description": "Maximum matches to return, default 100"},
@@ -24,12 +24,12 @@ func (b *Toolset) searchTools() []core.Tool {
 		},
 		toolFn{
 			name:        "search_files",
-			description: "Search file names and relative paths recursively under workspace root or discovered local skill directories. Relative paths are workspace-relative; use shell_run for sibling projects outside the workspace. Best for locating candidate files before read_file.",
+			description: "Search file names and relative paths recursively under workspace root or discovered local skill directories. Omit path or pass an empty path to search the workspace root. Relative paths are workspace-relative; use shell_run for sibling projects outside the workspace. Best for locating candidate files before read_file.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
 				"properties": map[string]any{
-					"path":    map[string]any{"type": "string", "description": "Search root relative to workspace, or an absolute path inside workspace or a discovered local skill directory. A sibling repo name alone is treated as a workspace child, not a parent-directory repo."},
+					"path":    map[string]any{"type": "string", "description": "Optional search root. Omit or pass an empty string to search the workspace root. Otherwise use a path relative to workspace, or an absolute path inside workspace or a discovered local skill directory. A sibling repo name alone is treated as a workspace child, not a parent-directory repo."},
 					"pattern": map[string]any{"type": "string", "description": "Case-insensitive file/path pattern"},
 					"limit":   map[string]any{"type": "integer", "minimum": 1, "maximum": 2000},
 				},

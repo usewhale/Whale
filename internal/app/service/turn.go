@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/usewhale/whale/internal/agent"
+	"github.com/usewhale/whale/internal/app"
 	"github.com/usewhale/whale/internal/core"
 	llmretry "github.com/usewhale/whale/internal/llm/retry"
 )
@@ -17,6 +18,7 @@ func (s *Service) runTurn(line string, hiddenInput bool) {
 }
 
 func (s *Service) runTurnWithOptions(line string, opts agent.RunOptions) {
+	opts = s.tuiRunOptions(opts)
 	s.runTurnWith(func(ctx context.Context) (<-chan agent.AgentEvent, error) {
 		return s.app.RunTurnWithOptions(ctx, line, opts)
 	})
@@ -27,16 +29,27 @@ func (s *Service) runInjectedTurn(visibleInput, hiddenInput string) {
 }
 
 func (s *Service) runInjectedTurnWithOptions(visibleInput, hiddenInput string, opts agent.RunOptions) {
+	opts = s.tuiRunOptions(opts)
 	s.runTurnWith(func(ctx context.Context) (<-chan agent.AgentEvent, error) {
 		return s.app.RunTurnWithInjectedInputOptions(ctx, visibleInput, hiddenInput, opts)
 	})
+}
+
+func (s *Service) tuiRunOptions(opts agent.RunOptions) agent.RunOptions {
+	if strings.TrimSpace(opts.ViewMode) == "" && s != nil && s.app != nil {
+		opts.ViewMode = s.app.ViewMode()
+	}
+	if strings.TrimSpace(opts.ViewMode) == "" {
+		opts.ViewMode = app.ViewModeDefault
+	}
+	return opts
 }
 
 func (s *Service) runSideQuestion(question string) {
 	id := int(s.btwNextID.Add(1))
 	s.emit(Event{Kind: EventBtwStarted, Text: question, Count: id})
 	s.goTracked(func() {
-		events, err := s.app.RunSideQuestion(s.ctx, question)
+		events, err := s.app.RunSideQuestionWithOptions(s.ctx, question, s.tuiRunOptions(agent.RunOptions{}))
 		if err != nil {
 			s.emit(Event{Kind: EventBtwError, Text: err.Error(), Count: id})
 			return

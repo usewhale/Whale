@@ -732,6 +732,9 @@ func readScopeTarget(call core.ToolCall) string {
 }
 
 func permissionTarget(call core.ToolCall) string {
+	if strings.HasPrefix(call.Name, "mcp__") {
+		return call.Name
+	}
 	var body map[string]any
 	if err := json.Unmarshal([]byte(call.Input), &body); err == nil {
 		for _, key := range []string{"file_path", "path", "pattern", "url", "query", "name"} {

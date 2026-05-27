@@ -98,30 +98,27 @@ func TestToolRunRejectsInvalidJSON(t *testing.T) {
 	}
 }
 
-func TestToolDescriptionIncludesFilesystemAllowedDirsAndWorkspaceGuidance(t *testing.T) {
+func TestToolDescriptionIncludesServerAndTool(t *testing.T) {
 	tool := &Tool{
 		registeredName: "mcp__fs__search_files",
 		serverName:     "fs",
 		toolName:       "search_files",
 		spec:           &sdk.Tool{Name: "search_files", Description: "Search files"},
-		allowedDirs:    []string{"/tmp"},
-		workspaceRoot:  "/Users/goranka/Engineer/ai/dsk/whale",
 	}
 	desc := tool.Description()
-	if !strings.Contains(desc, "Allowed directories: /tmp") {
-		t.Fatalf("expected allowed dirs in description: %s", desc)
-	}
-	if !strings.Contains(desc, "Current workspace is outside those directories") {
-		t.Fatalf("expected workspace guidance in description: %s", desc)
+	for _, want := range []string{"Search files", "MCP server: fs", "tool: search_files"} {
+		if !strings.Contains(desc, want) {
+			t.Fatalf("expected %q in description: %s", want, desc)
+		}
 	}
 }
 
-func TestToolRunPreflightsFilesystemPathOutsideAllowedDirs(t *testing.T) {
+func TestToolRunDoesNotPreflightFilesystemPaths(t *testing.T) {
 	tool := &Tool{
 		registeredName: "mcp__fs__search_files",
 		serverName:     "fs",
 		toolName:       "search_files",
-		allowedDirs:    []string{"/tmp"},
+		manager:        NewManager(Config{}),
 	}
 	res, err := tool.Run(context.Background(), core.ToolCall{
 		ID:    "call",
@@ -131,10 +128,7 @@ func TestToolRunPreflightsFilesystemPathOutsideAllowedDirs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, `"code":"permission_denied"`) {
-		t.Fatalf("expected permission_denied result, got %+v", res)
-	}
-	if !strings.Contains(res.Content, "allowed directories") || !strings.Contains(res.Content, "/tmp") {
-		t.Fatalf("expected allowed-dir explanation, got %s", res.Content)
+	if !res.IsError || !strings.Contains(res.Content, `"code":"mcp_call_failed"`) {
+		t.Fatalf("expected call to reach manager and fail there, got %+v", res)
 	}
 }

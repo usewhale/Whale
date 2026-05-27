@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -98,6 +99,43 @@ func TestFetchFormatAliases(t *testing.T) {
 	}
 	if !strings.Contains(out.Data.Content, "<h1>Hello</h1>") {
 		t.Fatalf("expected raw html content, got: %s", out.Data.Content)
+	}
+}
+
+func TestFetchDecodesHTTPCharset(t *testing.T) {
+	raw := []byte("<html><head><title>Caf\xe9</title></head><body><p>Caf\xe9</p></body></html>")
+	ts, err := NewToolset(t.TempDir())
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	ts.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(raw)),
+			Header:     http.Header{"Content-Type": []string{"text/html; charset=iso-8859-1"}},
+			Request:    req,
+		}, nil
+	})}
+
+	res, err := ts.fetch(context.Background(), core.ToolCall{
+		ID:    "1",
+		Name:  "fetch",
+		Input: `{"url":"https://example.com","format":"html"}`,
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("fetch failed err=%v res=%+v", err, res)
+	}
+
+	var out struct {
+		Data struct {
+			Content string `json:"content"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if !strings.Contains(out.Data.Content, "Café") {
+		t.Fatalf("expected decoded ISO-8859-1 content, got: %q", out.Data.Content)
 	}
 }
 

@@ -10,12 +10,13 @@ import (
 
 func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMessageID, model string, call core.ToolCall, events chan<- AgentEvent) (core.ToolResult, bool, bool) {
 	attempt := 0
+	dispatchCtx := core.WithToolResultArchive(ctx, a.toolResultArchiveDir, sessionID)
 	emit := func(ev AgentEvent) bool {
 		return sendAgentEvent(ctx, events, ev)
 	}
 	for {
 		attempt++
-		res, err := a.tools.DispatchWithProgress(ctx, call, func(progress core.ToolProgress) {
+		res, err := a.tools.DispatchWithProgress(dispatchCtx, call, func(progress core.ToolProgress) {
 			info := TaskActivityInfo{
 				ToolCallID: firstNonEmptyString(progress.ToolCallID, call.ID),
 				ToolName:   firstNonEmptyString(progress.ToolName, call.Name),
@@ -61,7 +62,7 @@ func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMe
 			return res, true, false
 		}
 		if rule.Action == RecoveryActionFallbackReadOnly {
-			fallbackRes, ok := a.executeFallbackReadonly(ctx, call, res)
+			fallbackRes, ok := a.executeFallbackReadonly(dispatchCtx, call, res)
 			if ok {
 				if !emit(AgentEvent{
 					Type: AgentEventTypeToolRecoveryExhausted,

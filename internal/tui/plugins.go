@@ -144,16 +144,14 @@ func (m *model) toggleSelectedManagedPlugin() {
 }
 
 func (m model) renderPluginsManager() string {
-	title := lipgloss.NewStyle().Foreground(tuitheme.Default.InfoSoft).Bold(true)
-	muted := lipgloss.NewStyle().Foreground(tuitheme.Default.Muted)
 	rows := []string{
-		title.Render("Plugins"),
-		muted.Render("Installed plugins"),
+		pickerTitle("Plugins"),
+		pickerHint("Installed plugins"),
 		"",
 	}
 	const maxRows = 8
 	if len(m.pluginsManager.all) == 0 {
-		rows = append(rows, muted.Italic(true).Render("  no plugins found"))
+		rows = append(rows, pickerHint("  no plugins found"))
 	} else {
 		start := 0
 		if len(m.pluginsManager.matches) > maxRows {
@@ -174,7 +172,7 @@ func (m model) renderPluginsManager() string {
 			rows = append(rows, renderPluginsManagerRow(item, visible == m.pluginsManager.selected, m.width)...)
 		}
 	}
-	rows = append(rows, "", muted.Render("  ↑/↓ select · Space enable/disable · Esc close"))
+	rows = append(rows, "", pickerHint("  ↑/↓ select · Space enable/disable · Esc close"))
 	return strings.Join(rows, "\n")
 }
 

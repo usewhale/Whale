@@ -199,6 +199,23 @@ func TestListSessionsHidesSubagentSessions(t *testing.T) {
 	}
 }
 
+func TestListSessionsHidesLegacySubagentSessionNames(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"parent.jsonl", "parent--subagent-call-1.jsonl", "subagent-call-2.jsonl"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}\n"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
+	out, err := ListSessions(dir, 10)
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(out) != 1 || out[0].ID != "parent" {
+		t.Fatalf("expected only parent session, got %+v", out)
+	}
+}
+
 func TestListSessionsConversationTitlePriorityAndFallback(t *testing.T) {
 	dir := t.TempDir()
 	if err := SaveSessionMeta(dir, "titled", SessionMeta{Title: "Saved title"}); err != nil {

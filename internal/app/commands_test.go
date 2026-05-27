@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,8 +16,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/usewhale/whale/internal/agent"
 	appcommands "github.com/usewhale/whale/internal/app/commands"
 	"github.com/usewhale/whale/internal/core"
+	whalemcp "github.com/usewhale/whale/internal/mcp"
+	"github.com/usewhale/whale/internal/plugins/memoryplugin"
 	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/store"
@@ -39,6 +43,36 @@ func TestResolveInitialSessionID(t *testing.T) {
 	}
 	if got != "recent" {
 		t.Fatalf("want recent, got %s", got)
+	}
+}
+
+func TestResolveInitialSessionIDIgnoresRecentSubagentSession(t *testing.T) {
+	dir := t.TempDir()
+	sessionsDir := filepath.Join(dir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	parentPath := filepath.Join(sessionsDir, "parent.jsonl")
+	childPath := filepath.Join(sessionsDir, "parent--subagent-call-1.jsonl")
+	if err := os.WriteFile(parentPath, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write parent: %v", err)
+	}
+	if err := os.WriteFile(childPath, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write child: %v", err)
+	}
+	if err := session.SaveSessionMeta(sessionsDir, "parent--subagent-call-1", session.SessionMeta{Kind: "subagent", ParentSessionID: "parent"}); err != nil {
+		t.Fatalf("save child meta: %v", err)
+	}
+	now := time.Now()
+	_ = os.Chtimes(parentPath, now.Add(-time.Hour), now.Add(-time.Hour))
+	_ = os.Chtimes(childPath, now, now)
+
+	got, err := resolveInitialSessionID(sessionsDir)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if got != "parent" {
+		t.Fatalf("want parent, got %s", got)
 	}
 }
 
@@ -383,26 +417,42 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		t.Fatalf("mkdir sessions: %v", err)
 	}
 	writeUsageRecord(t, filepath.Join(dir, "usage.jsonl"), telemetry.UsageRecord{
-		TS:                time.Date(2026, 5, 12, 10, 0, 0, 0, time.Local).UnixMilli(),
-		Session:           "s1",
-		Model:             "deepseek-v4-flash",
-		PrefixFingerprint: "fp-1",
-		PromptTokens:      1000,
-		CompletionTokens:  200,
-		PromptCacheHit:    800,
-		PromptCacheMiss:   200,
-		CostUSD:           0.0123,
+		TS:                     time.Date(2026, 5, 12, 10, 0, 0, 0, time.Local).UnixMilli(),
+		Session:                "s1",
+		Model:                  "deepseek-v4-flash",
+		PrefixFingerprint:      "fp-1",
+		PromptTokens:           1000,
+		CompletionTokens:       200,
+		PromptCacheHit:         800,
+		PromptCacheMiss:        200,
+		ReasoningReplayTok:     250,
+		ToolResultRawChars:     13000,
+		ToolResultReplayChars:  4000,
+		ToolResultRawTokens:    3250,
+		ToolResultReplayTokens: 1000,
+		ToolResultTokensSaved:  2250,
+		ToolResultsCompacted:   1,
+		CostUSD:                0.0123,
 	})
 	writeUsageRecord(t, filepath.Join(dir, "usage.jsonl"), telemetry.UsageRecord{
-		TS:                time.Date(2026, 5, 12, 10, 3, 0, 0, time.Local).UnixMilli(),
-		Session:           "s2",
-		Model:             "deepseek-v4-flash",
-		PrefixFingerprint: "fp-2",
-		PromptTokens:      2000,
-		CompletionTokens:  300,
-		PromptCacheHit:    1000,
-		PromptCacheMiss:   1000,
-		CostUSD:           0.0456,
+		TS:                 time.Date(2026, 5, 12, 10, 3, 0, 0, time.Local).UnixMilli(),
+		Session:            "s2",
+		Model:              "deepseek-v4-flash",
+		PrefixFingerprint:  "fp-2",
+		PromptTokens:       2000,
+		CompletionTokens:   300,
+		PromptCacheHit:     1000,
+		PromptCacheMiss:    1000,
+		ReasoningReplayTok: 100,
+		CostUSD:            0.0456,
+	})
+	writeUsageRecord(t, filepath.Join(dir, "usage.jsonl"), telemetry.UsageRecord{
+		TS:               time.Date(2026, 5, 12, 10, 4, 0, 0, time.Local).UnixMilli(),
+		Session:          "legacy-chat",
+		Model:            "deepseek-chat",
+		PromptTokens:     100_000,
+		CompletionTokens: 10_000,
+		CostUSD:          99,
 	})
 	writeSessionMessages(t, sessionsDir, "s1", []core.Message{
 		{ID: "m-1", SessionID: "s1", Role: core.RoleUser, Text: "please inspect the workspace"},
@@ -463,7 +513,8 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		"Usage",
 		"- turns: 2",
 		"- tokens: 3.5K total",
-		"- estimated cost: $0.0579 total",
+		"- reasoning replay: 350 tokens",
+		"- estimated cost: $0.0003 total",
 		"- top model: deepseek-v4-flash · 2 turns",
 		"Tool input",
 		"- repaired: 1",
@@ -481,6 +532,8 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		"Recent tool-input events",
 		"Invalid codes",
 		"Top tools",
+		"deepseek-chat",
+		"legacy-chat",
 	} {
 		if strings.Contains(out, dontWant) {
 			t.Fatalf("expected overview stats to omit %q, got:\n%s", dontWant, out)
@@ -496,7 +549,9 @@ func TestHandleLocalCommandStats(t *testing.T) {
 	}
 	for _, want := range []string{
 		"- sessions: 2",
+		"- reasoning replay: 350 tokens · 11.7% of input",
 		"deepseek-v4-flash: 2 turns",
+		"350 reasoning replay",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected usage stats to contain %q, got:\n%s", want, out)
@@ -518,13 +573,19 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		"- tool-heavy sessions: 1",
 		"- usage matched sessions: 2",
 		"- max prompt: 2K",
+		"- reasoning replay: 350 main · 0 subagent · 350 all-in",
+		"- tool replay: 1K sent · 3.2K raw · 2.2K saved · 1 compacted",
 		"- prefix fingerprints: 2",
 		"- tools: 1 calls · 13K result chars",
 		"- reasoning/text: 8 reasoning chars",
 		"Top tools",
 		"read_file: 1 calls · 13K result chars",
+		"Top tool replay sessions",
+		"s1: 1K sent · 3.2K raw · 2.2K saved · 1 compacted",
+		"Top reasoning replay sessions",
+		"s1: 250 tokens",
 		"Top work sessions",
-		"s1: $0.0123",
+		"s1: $0.0001",
 		"please inspect the workspace",
 	} {
 		if !strings.Contains(out, want) {
@@ -542,6 +603,20 @@ func TestHandleLocalCommandStats(t *testing.T) {
 	} {
 		if strings.Contains(out, dontWant) {
 			t.Fatalf("expected profile stats to omit %q, got:\n%s", dontWant, out)
+		}
+	}
+	profileLocal := a.buildStatsLocalResultAt("profile", time.Date(2026, 5, 12, 10, 5, 0, 0, time.Local))
+	for _, want := range []struct {
+		section string
+		field   string
+	}{
+		{"Profile", "Reasoning replay"},
+		{"Profile", "Tool replay"},
+		{"Top tool replay sessions", "s1"},
+		{"Top reasoning replay sessions", "s1"},
+	} {
+		if !localResultHasSectionField(profileLocal, want.section, want.field) {
+			t.Fatalf("expected stats profile local result section %q field %q, got %+v", want.section, want.field, profileLocal.Sections)
 		}
 	}
 
@@ -619,6 +694,201 @@ func TestProfileSessionHiddenTaskDoesNotPreviewGreeting(t *testing.T) {
 	}
 	if got.FirstUserText != "(hidden user task)" {
 		t.Fatalf("hidden work task should not preview greeting, got %q", got.FirstUserText)
+	}
+}
+
+func TestProfileStatsIncludesSubagentUsage(t *testing.T) {
+	dir := t.TempDir()
+	sessionsDir := filepath.Join(dir, "sessions")
+	usagePath := filepath.Join(dir, "usage.jsonl")
+	parentID := "parent"
+	namedChildID := parentID + "--subagent-call_00"
+	metaChildID := "metadata-child"
+
+	writeSessionMessages(t, sessionsDir, parentID, []core.Message{
+		{ID: "m-1", SessionID: parentID, Role: core.RoleUser, Text: "inspect the repository"},
+		{ID: "m-2", SessionID: parentID, Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "c1", Name: "spawn_subagent"}}},
+	})
+	writeSessionMessages(t, sessionsDir, namedChildID, []core.Message{
+		{ID: "m-1", SessionID: namedChildID, Role: core.RoleUser, Text: "child by name"},
+	})
+	writeSessionMessages(t, sessionsDir, metaChildID, []core.Message{
+		{ID: "m-1", SessionID: metaChildID, Role: core.RoleUser, Text: "child by metadata"},
+	})
+	if err := session.SaveSessionMeta(sessionsDir, metaChildID, session.SessionMeta{Kind: "subagent", ParentSessionID: parentID}); err != nil {
+		t.Fatalf("save child meta: %v", err)
+	}
+	writeUsageRecord(t, usagePath, telemetry.UsageRecord{
+		Session:                parentID,
+		Model:                  "deepseek-v4-flash",
+		PromptTokens:           1000,
+		CompletionTokens:       100,
+		PromptCacheHit:         800,
+		PromptCacheMiss:        200,
+		ReasoningReplayTok:     120,
+		ToolResultRawChars:     1000,
+		ToolResultReplayChars:  600,
+		ToolResultRawTokens:    250,
+		ToolResultReplayTokens: 150,
+		ToolResultTokensSaved:  100,
+		CostUSD:                0.0100,
+	})
+	writeUsageRecord(t, usagePath, telemetry.UsageRecord{
+		Session:                namedChildID,
+		Model:                  "deepseek-v4-flash",
+		PromptTokens:           4000,
+		CompletionTokens:       500,
+		PromptCacheHit:         3000,
+		PromptCacheMiss:        1000,
+		ReasoningReplayTok:     300,
+		ToolResultRawChars:     8000,
+		ToolResultReplayChars:  2000,
+		ToolResultRawTokens:    2000,
+		ToolResultReplayTokens: 500,
+		ToolResultTokensSaved:  1500,
+		ToolResultsCompacted:   1,
+		CostUSD:                0.0200,
+	})
+	writeUsageRecord(t, usagePath, telemetry.UsageRecord{
+		Session:                metaChildID,
+		Model:                  "deepseek-v4-flash",
+		PromptTokens:           1000,
+		CompletionTokens:       100,
+		PromptCacheHit:         900,
+		PromptCacheMiss:        100,
+		ReasoningReplayTok:     200,
+		ToolResultRawChars:     4000,
+		ToolResultReplayChars:  1000,
+		ToolResultRawTokens:    1000,
+		ToolResultReplayTokens: 250,
+		ToolResultTokensSaved:  750,
+		ToolResultsCompacted:   1,
+		CostUSD:                0.0300,
+	})
+
+	stats := readProfileStats(sessionsDir, usagePath, 50)
+	if len(stats.Sessions) != 1 {
+		t.Fatalf("expected only parent main session, got %d sessions: %+v", len(stats.Sessions), stats.Sessions)
+	}
+	if stats.SubagentSessions != 2 || stats.SubagentPromptTokens != 5000 || stats.SubagentCompletionTokens != 600 || math.Abs(stats.SubagentCostUSD-0.00033292) > 0.000001 || stats.SubagentMaxPromptTokens != 4000 {
+		t.Fatalf("unexpected subagent totals: %+v", stats)
+	}
+	if stats.Sessions[0].SubagentSessions != 2 || stats.Sessions[0].SubagentPromptTokens != 5000 || stats.Sessions[0].SubagentCompletionTokens != 600 || math.Abs(stats.Sessions[0].SubagentCostUSD-0.00033292) > 0.000001 {
+		t.Fatalf("unexpected parent subagent totals: %+v", stats.Sessions[0])
+	}
+	if stats.ReasoningReplayTokens != 120 || stats.SubagentReasoningReplay != 500 || stats.Sessions[0].ReasoningReplayTokens != 120 || stats.Sessions[0].SubagentReasoningReplay != 500 {
+		t.Fatalf("unexpected reasoning replay totals: %+v", stats)
+	}
+	if stats.ToolResultReplayTokens != 150 || stats.SubagentToolResultReplayTokens != 750 || stats.ToolResultTokensSaved != 100 || stats.SubagentToolResultTokensSaved != 2250 || stats.Sessions[0].SubagentToolResultsCompacted != 2 {
+		t.Fatalf("unexpected tool replay totals: %+v", stats)
+	}
+
+	out := strings.Join(formatProfileStats(stats), "\n")
+	for _, want := range []string{
+		"- tokens: 1.1K total · 1K input · 100 output",
+		"- subagents: 2 child sessions · 5.6K total · 5K input · 600 output · $0.0003 · max prompt 4K · 78.0% cache",
+		"- all-in tokens: 6.7K total · $0.0004",
+		"- reasoning replay: 120 main · 500 subagent · 620 all-in",
+		"- tool replay: 900 sent · 3.2K raw · 2.4K saved · 2 compacted",
+		"Top tool replay sessions",
+		"parent: 900 sent · 3.2K raw · 2.4K saved · 2 compacted",
+		"Top reasoning replay sessions",
+		"parent: 620 tokens · +500 subagents · 10.3% of input",
+		"parent: $0.0001 · subagents 2 · +$0.0003 · +5.6K tokens",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected profile output to contain %q, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestTopReasoningReplaySessionsIncludesSubagentOnlyReplay(t *testing.T) {
+	sessions := []profileSessionStats{
+		{ID: "main-500", ReasoningReplayTokens: 500, CostUSD: 0.50},
+		{ID: "main-400", ReasoningReplayTokens: 400, CostUSD: 0.40},
+		{ID: "main-300", ReasoningReplayTokens: 300, CostUSD: 0.30},
+		{ID: "main-200", ReasoningReplayTokens: 200, CostUSD: 0.20},
+		{ID: "main-100", ReasoningReplayTokens: 100, CostUSD: 0.10},
+		{ID: "subagent-only", SubagentReasoningReplay: 600, SubagentCostUSD: 0.01},
+		{ID: "trivial-subagent", Trivial: true, SubagentReasoningReplay: 700},
+	}
+
+	top := topReasoningReplaySessions(sessions, 5)
+	if len(top) != 5 {
+		t.Fatalf("expected 5 top sessions, got %d: %+v", len(top), top)
+	}
+	if top[0].ID != "subagent-only" {
+		t.Fatalf("expected subagent-only replay session to rank first, got %+v", top)
+	}
+	for _, sp := range top {
+		if sp.ID == "main-100" || sp.ID == "trivial-subagent" {
+			t.Fatalf("unexpected session in top replay list: %+v", top)
+		}
+	}
+}
+
+func TestFormatProfileStatsUsesAllInTopReasoningReplayRows(t *testing.T) {
+	stats := profileStats{
+		Limit:                   5,
+		Sessions:                []profileSessionStats{{ID: "subagent-only", SubagentPromptTokens: 2000, SubagentReasoningReplay: 600, FirstUserText: "delegate analysis"}},
+		SubagentPromptTokens:    2000,
+		SubagentReasoningReplay: 600,
+		PrefixFingerprints:      map[string]bool{},
+		ByTool:                  map[string]*profileToolStats{},
+	}
+
+	out := strings.Join(formatProfileStats(stats), "\n")
+	want := "subagent-only: 600 tokens · +600 subagents · 30.0% of input"
+	if !strings.Contains(out, want) {
+		t.Fatalf("expected top replay row to use all-in replay values %q, got:\n%s", want, out)
+	}
+	if strings.Contains(out, "subagent-only: 0 tokens") {
+		t.Fatalf("top replay row should not show parent-only replay tokens:\n%s", out)
+	}
+}
+
+func TestProfileStatsIncludesSubagentUsageFromDefaultLogForCustomDataDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", filepath.Join(dir, "home"))
+	sessionsDir := filepath.Join(dir, "custom", "sessions")
+	usagePath := filepath.Join(dir, "custom", "usage.jsonl")
+	parentID := "parent-" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	childID := parentID + "--subagent-call_00"
+
+	writeSessionMessages(t, sessionsDir, parentID, []core.Message{
+		{ID: "m-1", SessionID: parentID, Role: core.RoleUser, Text: "inspect the repository"},
+		{ID: "m-2", SessionID: parentID, Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "c1", Name: "spawn_subagent"}}},
+	})
+	writeSessionMessages(t, sessionsDir, childID, []core.Message{
+		{ID: "m-1", SessionID: childID, Role: core.RoleUser, Text: "child by name"},
+	})
+	writeUsageRecord(t, usagePath, telemetry.UsageRecord{
+		Session:          parentID,
+		Model:            "deepseek-v4-flash",
+		PromptTokens:     100,
+		CompletionTokens: 10,
+		CostUSD:          0.0010,
+	})
+	writeUsageRecord(t, telemetry.DefaultUsageLogPath(), telemetry.UsageRecord{
+		Session:          childID,
+		Model:            "deepseek-v4-flash",
+		PromptTokens:     200,
+		CompletionTokens: 20,
+		CostUSD:          0.0020,
+	})
+
+	stats := readProfileStats(sessionsDir, usagePath, 50)
+	if len(stats.Sessions) != 1 {
+		t.Fatalf("expected only parent main session, got %d sessions: %+v", len(stats.Sessions), stats.Sessions)
+	}
+	if stats.PromptTokens != 100 || stats.CompletionTokens != 10 || math.Abs(stats.CostUSD-0.0000168) > 0.000001 {
+		t.Fatalf("unexpected parent usage totals: %+v", stats)
+	}
+	if stats.SubagentSessions != 1 || stats.SubagentPromptTokens != 200 || stats.SubagentCompletionTokens != 20 || math.Abs(stats.SubagentCostUSD-0.0000336) > 0.000001 {
+		t.Fatalf("unexpected subagent totals from default log: %+v", stats)
+	}
+	if stats.Sessions[0].SubagentSessions != 1 || stats.Sessions[0].SubagentPromptTokens != 200 || stats.Sessions[0].SubagentCompletionTokens != 20 || math.Abs(stats.Sessions[0].SubagentCostUSD-0.0000336) > 0.000001 {
+		t.Fatalf("unexpected parent subagent totals from default log: %+v", stats.Sessions[0])
 	}
 }
 
@@ -858,6 +1128,296 @@ func TestBuildStatusIncludesContextAndBudget(t *testing.T) {
 	}
 }
 
+func TestBuildStatusLocalResultIncludesStructuredFields(t *testing.T) {
+	dir := t.TempDir()
+	sessionsDir := filepath.Join(dir, "sessions")
+	msgStore, err := store.NewJSONLStore(sessionsDir)
+	if err != nil {
+		t.Fatalf("store init: %v", err)
+	}
+	app := &App{
+		ctx:              context.Background(),
+		workspaceRoot:    dir,
+		sessionID:        "sess-1",
+		msgStore:         msgStore,
+		contextWindow:    1000,
+		currentMode:      "agent",
+		model:            "deepseek-v4-pro",
+		reasoningEffort:  "max",
+		thinkingEnabled:  false,
+		budgetWarningUSD: 0,
+		cfg:              DefaultConfig(),
+	}
+
+	result := app.buildStatusLocalResult()
+	if result == nil || result.Kind != "status" || result.Title != "Status" {
+		t.Fatalf("unexpected status local result: %+v", result)
+	}
+	for _, want := range []string{"Session", "Mode", "Permissions", "Model", "Effort", "Thinking", "Context window", "Budget limit"} {
+		if !localResultHasField(result, want) {
+			t.Fatalf("expected local result field %q, got %+v", want, result.Fields)
+		}
+	}
+	if !strings.Contains(result.PlainText, "- session: sess-1") {
+		t.Fatalf("expected plain text fallback, got:\n%s", result.PlainText)
+	}
+}
+
+func TestExecuteSlashStatusReturnsStructuredLocalResult(t *testing.T) {
+	dir := t.TempDir()
+	msgStore, err := store.NewJSONLStore(filepath.Join(dir, "sessions"))
+	if err != nil {
+		t.Fatalf("store init: %v", err)
+	}
+	app := &App{
+		ctx:             context.Background(),
+		workspaceRoot:   dir,
+		sessionID:       "sess-1",
+		msgStore:        msgStore,
+		contextWindow:   1000,
+		currentMode:     "agent",
+		model:           "deepseek-v4-pro",
+		reasoningEffort: "max",
+		cfg:             DefaultConfig(),
+	}
+
+	out, err := app.ExecuteSlash("/status")
+	if err != nil {
+		t.Fatalf("execute /status: %v", err)
+	}
+	if !out.Handled || out.LocalResult == nil || out.LocalResult.Kind != "status" {
+		t.Fatalf("expected structured status result, got %+v", out)
+	}
+	if out.Text == "" || out.Text != out.LocalResult.PlainText {
+		t.Fatalf("expected text fallback to match plain result, text=%q local=%q", out.Text, out.LocalResult.PlainText)
+	}
+}
+
+func TestBuildMCPLocalResultIncludesStructuredFields(t *testing.T) {
+	mgr := whalemcp.NewManager(whalemcp.Config{
+		Path: "/tmp/mcp.json",
+		Servers: map[string]whalemcp.ServerConfig{
+			"disabled-fs": {Disabled: true},
+		},
+	})
+	mgr.Initialize(t.Context())
+	app := &App{mcpManager: mgr}
+
+	result := app.buildMCPLocalResult()
+	if result == nil || result.Kind != "mcp" || result.Title != "MCP" {
+		t.Fatalf("unexpected mcp local result: %+v", result)
+	}
+	if result.PlainText == "" || !strings.Contains(result.PlainText, "disabled-fs") {
+		t.Fatalf("expected plain text fallback with server, got:\n%s", result.PlainText)
+	}
+	for _, want := range []string{"Config", "Servers"} {
+		if !localResultHasField(result, want) {
+			t.Fatalf("expected local result field %q, got %+v", want, result.Fields)
+		}
+	}
+	if len(result.Sections) != 1 || result.Sections[0].Title != "disabled-fs" {
+		t.Fatalf("expected disabled-fs section, got %+v", result.Sections)
+	}
+	for _, want := range []string{"Status", "Tools"} {
+		if !localResultSectionHasField(result.Sections[0], want) {
+			t.Fatalf("expected mcp section field %q, got %+v", want, result.Sections[0].Fields)
+		}
+	}
+}
+
+func TestExecuteLocalMCPReturnsStructuredLocalResult(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	app, err := New(t.Context(), cfg, StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer app.Close()
+
+	out, err := app.ExecuteLocalCommand("/mcp")
+	if err != nil {
+		t.Fatalf("ExecuteLocalCommand: %v", err)
+	}
+	if !out.Handled || out.LocalResult == nil || out.LocalResult.Kind != "mcp" {
+		t.Fatalf("expected structured mcp result, got %+v", out)
+	}
+	if out.Text == "" || out.Text != out.LocalResult.PlainText {
+		t.Fatalf("expected text fallback to match plain result, text=%q local=%q", out.Text, out.LocalResult.PlainText)
+	}
+}
+
+func TestExecuteLocalStatsReturnsStructuredLocalResult(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	app, err := New(t.Context(), cfg, StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer app.Close()
+
+	out, err := app.ExecuteLocalCommand("/stats usage")
+	if err != nil {
+		t.Fatalf("ExecuteLocalCommand: %v", err)
+	}
+	if !out.Handled || out.LocalResult == nil || out.LocalResult.Kind != "stats" || out.LocalResult.Title != "Stats: usage" {
+		t.Fatalf("expected structured stats result, got %+v", out)
+	}
+	if out.Text == "" || out.Text != out.LocalResult.PlainText {
+		t.Fatalf("expected text fallback to match local result, text=%q local=%q", out.Text, out.LocalResult.PlainText)
+	}
+	if !localResultHasField(out.LocalResult, "View") || len(out.LocalResult.Sections) == 0 {
+		t.Fatalf("expected stats fields and sections, got %+v", out.LocalResult)
+	}
+}
+
+func TestExecuteLocalHelpReturnsStructuredLocalResult(t *testing.T) {
+	app := &App{}
+	out, err := app.ExecuteLocalCommand("/help")
+	if err != nil {
+		t.Fatalf("ExecuteLocalCommand: %v", err)
+	}
+	if !out.Handled || out.LocalResult == nil || out.LocalResult.Kind != "help" {
+		t.Fatalf("expected structured help result, got %+v", out)
+	}
+	if out.Text == "" || out.Text != out.LocalResult.PlainText {
+		t.Fatalf("expected text fallback to match local result, text=%q local=%q", out.Text, out.LocalResult.PlainText)
+	}
+	if len(out.LocalResult.Sections) < 3 {
+		t.Fatalf("expected grouped help sections, got %+v", out.LocalResult.Sections)
+	}
+}
+
+func TestExecuteLocalMemoryReturnsStructuredLocalResult(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	workspace := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	app, err := New(t.Context(), cfg, StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer app.Close()
+	memStore := memoryplugin.NewStore(filepath.Join(app.cfg.DataDir, "plugins", "memory"), app.workspaceRoot)
+	if _, err := memStore.Write(memoryplugin.WriteInput{Scope: "global", Type: "user", Name: "style", Description: "concise Chinese", Content: "Answer concisely in Chinese."}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	out, err := app.ExecuteLocalCommand("/memory show global/style")
+	if err != nil {
+		t.Fatalf("ExecuteLocalCommand: %v", err)
+	}
+	if !out.Handled || out.LocalResult == nil || out.LocalResult.Kind != "memory" || out.LocalResult.Title != "Memory entry" {
+		t.Fatalf("expected structured memory result, got %+v", out)
+	}
+	for _, want := range []string{"Name", "Scope", "Type", "Path", "Description", "Content"} {
+		if !localResultHasField(out.LocalResult, want) {
+			t.Fatalf("expected memory field %q, got %+v", want, out.LocalResult.Fields)
+		}
+	}
+}
+
+func TestBuildMemoryShowLocalResultDoesNotParseBodyAsMetadata(t *testing.T) {
+	text := strings.Join([]string{
+		"# style (global/user)",
+		"",
+		"> concise Chinese",
+		"",
+		"path: /tmp/memory/style.md",
+		"",
+		"Keep this body.",
+		"> This is a real body quote.",
+		"path: this is body content",
+	}, "\n")
+	result := buildMemoryShowLocalResult(text)
+	if result == nil || result.Kind != "memory" {
+		t.Fatalf("expected memory local result, got %+v", result)
+	}
+	if got := localResultFieldValue(result, "Description"); got != "concise Chinese" {
+		t.Fatalf("unexpected description %q", got)
+	}
+	if got := localResultFieldValue(result, "Path"); got != "/tmp/memory/style.md" {
+		t.Fatalf("unexpected path %q", got)
+	}
+	content := localResultFieldValue(result, "Content")
+	for _, want := range []string{"Keep this body.", "> This is a real body quote.", "path: this is body content"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected content to keep %q, got:\n%s", want, content)
+		}
+	}
+}
+
+func TestBuildCompactLocalResultIncludesStructuredFields(t *testing.T) {
+	text := "compacted conversation: 10 -> 2 messages; ~1000 -> ~200 tokens"
+	result := buildCompactLocalResult(agent.CompactInfo{
+		Compacted:      true,
+		MessagesBefore: 10,
+		MessagesAfter:  2,
+		BeforeEstimate: 1000,
+		AfterEstimate:  200,
+	}, text)
+	if result == nil || result.Kind != "compact" || result.PlainText != text {
+		t.Fatalf("expected structured compact result, got %+v", result)
+	}
+	for _, want := range []string{"Result", "Messages", "Tokens"} {
+		if !localResultHasField(result, want) {
+			t.Fatalf("expected compact field %q, got %+v", want, result.Fields)
+		}
+	}
+}
+
+func localResultHasField(result *LocalResult, label string) bool {
+	if result == nil {
+		return false
+	}
+	for _, field := range result.Fields {
+		if field.Label == label {
+			return true
+		}
+	}
+	return false
+}
+
+func localResultFieldValue(result *LocalResult, label string) string {
+	if result == nil {
+		return ""
+	}
+	for _, field := range result.Fields {
+		if field.Label == label {
+			return field.Value
+		}
+	}
+	return ""
+}
+
+func localResultSectionHasField(section LocalResultSection, label string) bool {
+	for _, field := range section.Fields {
+		if field.Label == label {
+			return true
+		}
+	}
+	return false
+}
+
+func localResultHasSectionField(result *LocalResult, sectionTitle, fieldLabel string) bool {
+	if result == nil {
+		return false
+	}
+	for _, section := range result.Sections {
+		if section.Title == sectionTitle && localResultSectionHasField(section, fieldLabel) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestStartupLinesIncludeEffectiveThinkingAndEffort(t *testing.T) {
 	app := &App{
 		sessionID:        "sess-1",
@@ -1023,7 +1583,7 @@ func TestHandleSlashReviewBuildsHiddenPrompt(t *testing.T) {
 	if !handled || out != "" || shouldExit || clearScreen {
 		t.Fatalf("unexpected /review flags handled=%v out=%q shouldExit=%v clearScreen=%v", handled, out, shouldExit, clearScreen)
 	}
-	for _, want := range []string{"You are an expert code reviewer", "Target: local changes", "git diff --cached", "git diff", "inspect the contents of each relevant untracked file", "git symbolic-ref --short refs/remotes/origin/HEAD", "Avoid shell pipelines, redirects", "Do not prefix commands with cd", "Start with findings"} {
+	for _, want := range []string{"You are an expert code reviewer", "Target: local changes", "git diff --cached", "git diff", "inspect the contents of each relevant untracked file", "git symbolic-ref --short refs/remotes/origin/HEAD", "Avoid shell pipelines, redirects", "Do not prefix commands with cd", "If a local git diff output is truncated", "git diff --stat", "git diff --name-only", "Start with findings"} {
 		if !strings.Contains(synthetic, want) {
 			t.Fatalf("review prompt missing %q:\n%s", want, synthetic)
 		}
@@ -1395,6 +1955,20 @@ func TestHandleSlashNewIncludesResumeHint(t *testing.T) {
 	if !strings.Contains(out, "whale resume sess-1") {
 		t.Fatalf("expected output to include resume hint, got: %q", out)
 	}
+
+	app.sessionID = "sess-1"
+	res, err := app.ExecuteSlash("/new\tfresh-structured")
+	if err != nil {
+		t.Fatalf("ExecuteSlash /new: %v", err)
+	}
+	if !res.Handled || res.LocalResult == nil || res.LocalResult.Kind != "new_session" {
+		t.Fatalf("expected structured new-session result, got %+v", res)
+	}
+	for _, want := range []string{"Session", "Previous", "Resume previous", "Mode"} {
+		if !localResultHasField(res.LocalResult, want) {
+			t.Fatalf("expected new-session field %q, got %+v", want, res.LocalResult.Fields)
+		}
+	}
 }
 
 func TestHandleSlashForkCopiesConversationAndSwitchesSession(t *testing.T) {
@@ -1446,6 +2020,13 @@ func TestHandleSlashForkCopiesConversationAndSwitchesSession(t *testing.T) {
 	}
 	if !strings.Contains(out, `Forked conversation "Custom (Branch)"`) || !strings.Contains(out, "To resume the original:") || !strings.Contains(out, "sess-1") {
 		t.Fatalf("unexpected fork output: %q", out)
+	}
+	structured, err := app.ExecuteSlash("/fork\tCustomAgain")
+	if err != nil {
+		t.Fatalf("ExecuteSlash /fork: %v", err)
+	}
+	if structured.LocalResult == nil || structured.LocalResult.Kind != "fork" {
+		t.Fatalf("expected structured fork result, got %+v", structured)
 	}
 
 	got, err := st.List(context.Background(), forkID)

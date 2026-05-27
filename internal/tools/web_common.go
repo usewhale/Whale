@@ -3,6 +3,8 @@ package tools
 import (
 	"regexp"
 	"strings"
+
+	"golang.org/x/net/html/charset"
 )
 
 var (
@@ -46,6 +48,18 @@ func parseWebFetchFormat(raw string, defaultFormat webFetchFormat) (webFetchForm
 	default:
 		return "", false
 	}
+}
+
+func decodeWebBody(raw []byte, contentType string) string {
+	enc, _, _ := charset.DetermineEncoding(raw, contentType)
+	if enc == nil {
+		return string(raw)
+	}
+	decoded, err := enc.NewDecoder().Bytes(raw)
+	if err != nil {
+		return string(raw)
+	}
+	return string(decoded)
 }
 
 func decodeHTMLBasic(s string) string {

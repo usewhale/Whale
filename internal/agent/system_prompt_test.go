@@ -109,3 +109,25 @@ func TestImmutableSystemBlocksDeclareCurrentModeAuthoritatively(t *testing.T) {
 		}
 	}
 }
+
+func TestImmutableSystemBlocksIncludeFocusOutputStyleOnlyInFocusView(t *testing.T) {
+	a := NewAgentWithRegistry(nil, nil, core.NewToolRegistry(nil))
+
+	defaultPrompt := strings.Join(a.buildImmutableSystemBlocks(RunOptions{ViewMode: "default"}), "\n\n")
+	if strings.Contains(defaultPrompt, "Focus view is active") {
+		t.Fatalf("default view should not include focus output style:\n%s", defaultPrompt)
+	}
+
+	focusPrompt := strings.Join(a.buildImmutableSystemBlocks(RunOptions{ViewMode: "focus"}), "\n\n")
+	for _, want := range []string{
+		"Focus view is active in the terminal.",
+		"Emit text only when it changes what the user needs to know",
+		"result, finding, blocker, risk, decision point",
+		"Do not write assistant text merely to announce routine tool use",
+		"file inspection, searching, reading, or continuing with the next obvious step",
+	} {
+		if !strings.Contains(focusPrompt, want) {
+			t.Fatalf("focus output style missing %q:\n%s", want, focusPrompt)
+		}
+	}
+}

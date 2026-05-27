@@ -9,6 +9,7 @@ import (
 
 	"github.com/usewhale/whale/internal/agent"
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/defaults"
 	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/store"
@@ -128,8 +129,9 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 			return policy.ApprovalAllow
 		}),
 		agent.WithSessionsDir(r.sessionsDir),
+		agent.WithAutoCompact(r.autoCompact, r.autoCompactThreshold, r.contextWindowForModel(model)),
 		agent.WithProjectMemory(r.memoryEnabled, r.memoryMaxChars, r.memoryFileOrder, r.workspaceRoot),
-		agent.WithUsageLogPath(""),
+		agent.WithUsageLogPath(r.usageLogPath),
 		agent.WithMaxToolIters(maxToolIters),
 		agent.WithExtraSystemBlocks(subagentSystemBlock(role)),
 	)
@@ -139,6 +141,7 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 		return SpawnSubagentResponse{}, &SpawnSubagentError{SessionID: sessionID, Code: "spawn_subagent_failed", Message: err.Error(), Err: err}
 	}
 	var summary string
+	var truncated bool
 	var toolCalls []string
 	childActions := map[string]childToolAction{}
 	progressCount := 0
@@ -181,9 +184,14 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 			}
 		case agent.AgentEventTypeDone:
 			if ev.Message != nil {
-				summary = ev.Message.Text
-				emitSubagentProgress(progress, role, model, progressCount, "summarizing", "child produced final summary", map[string]any{
+				summary, truncated = truncateString(strings.TrimSpace(ev.Message.Text), r.summaryMaxChars)
+				progressSummary := summary
+				if progressSummary == "" {
+					progressSummary = "child completed"
+				}
+				emitSubagentProgress(progress, role, model, progressCount, "completed", progressSummary, map[string]any{
 					"child_session_id": sessionID,
+					"truncated":        truncated,
 				})
 			}
 		case agent.AgentEventTypeError:
@@ -193,12 +201,23 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 			return fail("failed", errors.New("subagent failed"))
 		case agent.AgentEventTypeTurnCancelled:
 			return fail("cancelled", ctx.Err())
+		default:
+			if status, eventSummary, metadata, ok := summarizeChildAgentEvent(ev); ok {
+				progressCount++
+				if metadata == nil {
+					metadata = map[string]any{}
+				}
+				metadata["child_session_id"] = sessionID
+				emitSubagentProgress(progress, role, model, progressCount, status, eventSummary, metadata)
+			}
+			// Other child events are intentionally drained here. The parent only
+			// exposes stable subagent lifecycle/progress updates, not every
+			// internal child-agent stream event.
 		}
 		if err := ctx.Err(); err != nil {
 			return fail("cancelled", err)
 		}
 	}
-	summary, truncated := truncateString(strings.TrimSpace(summary), r.summaryMaxChars)
 	completedAt := time.Now().UTC()
 	r.patchSubagentMeta(sessionID, session.SessionMeta{Status: "completed", Summary: summary, CompletedAt: completedAt})
 	return SpawnSubagentResponse{
@@ -213,6 +232,10 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 		DurationMS:        time.Since(start).Milliseconds(),
 		CompletedAt:       completedAt.Format(time.RFC3339),
 	}, nil
+}
+
+func (r *Runner) contextWindowForModel(model string) int {
+	return defaults.ContextWindowForModel(model)
 }
 
 func (r *Runner) childSessionID(parentToolCallID string) string {

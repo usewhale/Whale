@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/usewhale/whale/internal/agent"
 	"github.com/usewhale/whale/internal/app"
@@ -98,23 +99,87 @@ func TestReviewMenuEventDeliversUnderBackpressure(t *testing.T) {
 	}
 }
 
-func TestTurnDeltaCoalescerDropNoticeIsReliable(t *testing.T) {
+func TestTurnDeltaCoalescerOverflowTrimsOnRuneBoundary(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	// cap=1 channel pre-filled so the coalescer's best-effort flushes hit
-	// the default branch and increment droppedFlushes.
+	// Channel cap=1 prefilled forces every best-effort send to fail and
+	// re-queue, which exercises the hardCap overflow trim.
 	s := &Service{ctx: ctx, events: make(chan Event, 1)}
 	s.events <- Event{Kind: EventInfo, Text: "fill buffer"}
 
 	deltas := newTurnDeltaCoalescers(s)
-	for i := 0; i < 200; i++ {
-		deltas.add(EventAssistantDelta, strings.Repeat("x", 64))
+	// "中" is 3 bytes (E4 B8 AD). Push enough multibyte text past hardCap so
+	// the trim point is overwhelmingly likely to land mid-rune if unguarded.
+	const chunkSize = 1023 // not a multiple of 3 → boundary stress
+	totalBytes := deltas.hardCap*2 + chunkSize
+	payload := strings.Repeat("中", chunkSize/3) + strings.Repeat("x", chunkSize%3)
+	for sent := 0; sent < totalBytes; sent += len(payload) {
+		deltas.add(EventAssistantDelta, payload)
+	}
+
+	<-s.Events() // drain sentinel so flushReliable can drive output
+
+	done := make(chan struct{})
+	go func() {
+		deltas.flushReliable()
+		close(done)
+	}()
+
+	deadline := time.After(2 * time.Second)
+	sawNotice := false
+collect:
+	for {
+		select {
+		case ev := <-s.Events():
+			if ev.Kind == EventAssistantDelta && !utf8.ValidString(ev.Text) {
+				t.Fatalf("delta event contains invalid UTF-8 after overflow trim: %q", ev.Text)
+			}
+			if ev.Kind == EventInfo && strings.Contains(ev.Text, "omitted") {
+				sawNotice = true
+			}
+		case <-done:
+			for {
+				select {
+				case ev := <-s.Events():
+					if ev.Kind == EventAssistantDelta && !utf8.ValidString(ev.Text) {
+						t.Fatalf("delta event contains invalid UTF-8 after overflow trim: %q", ev.Text)
+					}
+					if ev.Kind == EventInfo && strings.Contains(ev.Text, "omitted") {
+						sawNotice = true
+					}
+				default:
+					break collect
+				}
+			}
+		case <-deadline:
+			t.Fatal("timed out draining deltas after overflow")
+		}
+	}
+	if !sawNotice {
+		t.Fatal("expected overflow-drop notice; test did not exercise the trim path")
+	}
+}
+
+func TestTurnDeltaCoalescerDropNoticeIsReliable(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// cap=1 channel pre-filled, and we push more than hardCap bytes so the
+	// re-queue path overflows into the bounded-drop branch.
+	s := &Service{ctx: ctx, events: make(chan Event, 1)}
+	s.events <- Event{Kind: EventInfo, Text: "fill buffer"}
+
+	deltas := newTurnDeltaCoalescers(s)
+	// hardCap defaults to 256KB; send 512KB so half is forced to drop.
+	const chunkSize = 1024
+	totalChunks := (deltas.hardCap * 2) / chunkSize
+	for i := 0; i < totalChunks; i++ {
+		deltas.add(EventAssistantDelta, strings.Repeat("x", chunkSize))
 	}
 	deltas.mu.Lock()
-	dropped := deltas.droppedFlushes
+	droppedBytes := deltas.droppedBytes
 	deltas.mu.Unlock()
-	if dropped == 0 {
-		t.Fatalf("expected drops under backpressure, got 0")
+	if droppedBytes == 0 {
+		t.Fatalf("expected dropped bytes once hardCap exceeded, got 0")
 	}
 
 	done := make(chan struct{})
@@ -131,7 +196,7 @@ func TestTurnDeltaCoalescerDropNoticeIsReliable(t *testing.T) {
 		select {
 		case ev := <-s.Events():
 			if ev.Kind == EventInfo && strings.Contains(ev.Text, "omitted") &&
-				strings.Contains(ev.Text, fmt.Sprintf("%d", dropped)) {
+				strings.Contains(ev.Text, "bytes") {
 				sawNotice = true
 			}
 		case <-deadline:
@@ -547,6 +612,84 @@ func TestLocalSubmitDoesNotEmitTurnDone(t *testing.T) {
 			t.Fatal("local submit emitted delayed EventTurnDone")
 		}
 	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestStatusLocalSubmitEmitsStructuredLocalResult(t *testing.T) {
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+
+	svc.Dispatch(Intent{Kind: IntentSubmitLocal, Input: "/status"})
+	for {
+		ev := nextServiceEvent(t, svc)
+		if ev.Kind != EventLocalSubmitResult {
+			continue
+		}
+		if ev.LocalResult == nil || ev.LocalResult.Kind != "status" {
+			t.Fatalf("expected structured status local result, got %+v", ev)
+		}
+		if ev.Text == "" || ev.Text != ev.LocalResult.PlainText {
+			t.Fatalf("expected text fallback to match local result, text=%q local=%q", ev.Text, ev.LocalResult.PlainText)
+		}
+		return
+	}
+}
+
+func TestStatsLocalSubmitEmitsStructuredLocalResult(t *testing.T) {
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+
+	svc.Dispatch(Intent{Kind: IntentSubmitLocal, Input: "/stats"})
+	for {
+		ev := nextServiceEvent(t, svc)
+		if ev.Kind != EventLocalSubmitResult {
+			continue
+		}
+		if ev.LocalResult == nil || ev.LocalResult.Kind != "stats" {
+			t.Fatalf("expected structured stats local result, got %+v", ev)
+		}
+		if ev.Text == "" || ev.Text != ev.LocalResult.PlainText {
+			t.Fatalf("expected text fallback to match local result, text=%q local=%q", ev.Text, ev.LocalResult.PlainText)
+		}
+		return
+	}
+}
+
+func TestMCPLocalSubmitEmitsStructuredLocalResult(t *testing.T) {
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+
+	svc.Dispatch(Intent{Kind: IntentSubmitLocal, Input: "/mcp"})
+	for {
+		ev := nextServiceEvent(t, svc)
+		if ev.Kind != EventLocalSubmitResult {
+			continue
+		}
+		if ev.LocalResult == nil || ev.LocalResult.Kind != "mcp" {
+			t.Fatalf("expected structured mcp local result, got %+v", ev)
+		}
+		if ev.Text == "" || ev.Text != ev.LocalResult.PlainText {
+			t.Fatalf("expected text fallback to match local result, text=%q local=%q", ev.Text, ev.LocalResult.PlainText)
+		}
+		return
 	}
 }
 

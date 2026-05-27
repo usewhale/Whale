@@ -6,7 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -247,6 +249,36 @@ func TestWriteFileKeepsNewFileContentExact(t *testing.T) {
 	}
 }
 
+func TestWriteFilePreservesExistingExecutableMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix execute bits are not portable to Windows")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "script.sh")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\necho before\n"), 0o755); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.writeFile(context.Background(), tc("write", map[string]any{
+		"file_path": "script.sh",
+		"content":   "#!/bin/sh\necho after\n",
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("write failed: err=%v res=%+v", err, res)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat script: %v", err)
+	}
+	if got := info.Mode().Perm() & 0o111; got == 0 {
+		t.Fatalf("existing executable bits were not preserved: mode=%#o", info.Mode().Perm())
+	}
+}
+
 func TestWriteFileKeepsExistingFileContentExactWhenNoLineEndingStyle(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
@@ -282,6 +314,80 @@ func TestWriteFileKeepsExistingFileContentExactWhenNoLineEndingStyle(t *testing.
 				t.Fatalf("content = %q, want exact requested content %q", string(got), tt.content)
 			}
 		})
+	}
+}
+
+func TestWriteFileConcurrentCreateConflictDoesNotOverwrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "new.txt")
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	var mu sync.Mutex
+	reads := 0
+	ready := make(chan struct{})
+	release := make(chan struct{})
+	ts.afterFileRead = func(abs string) {
+		if abs != path {
+			return
+		}
+		mu.Lock()
+		reads++
+		if reads == 2 {
+			close(ready)
+		}
+		mu.Unlock()
+		<-release
+	}
+
+	calls := []core.ToolCall{
+		tc("write", map[string]any{"file_path": "new.txt", "content": "one\n"}),
+		tc("write", map[string]any{"file_path": "new.txt", "content": "two\n"}),
+	}
+	results := make([]core.ToolResult, len(calls))
+	errs := make([]error, len(calls))
+	var wg sync.WaitGroup
+	for i := range calls {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i], errs[i] = ts.writeFile(context.Background(), calls[i])
+		}(i)
+	}
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatalf("writes did not both reach read barrier")
+	}
+	close(release)
+	wg.Wait()
+
+	successes, conflicts := 0, 0
+	for i, res := range results {
+		if errs[i] != nil {
+			t.Fatalf("write %d returned dispatch error: %v", i, errs[i])
+		}
+		if res.IsError {
+			if got := toolErrorCode(t, res); got != "write_conflict" {
+				t.Fatalf("write %d error code = %q, want write_conflict; content=%s", i, got, res.Content)
+			}
+			conflicts++
+			continue
+		}
+		successes++
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("successes=%d conflicts=%d results=%+v", successes, conflicts, results)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	if string(got) != "one\n" && string(got) != "two\n" {
+		t.Fatalf("unexpected final content after conflict-safe writes: %q", string(got))
 	}
 }
 
@@ -462,6 +568,125 @@ func TestEditFileDuplicateReplacementKeepsMixedLineEndings(t *testing.T) {
 	}
 }
 
+func TestEditFileConcurrentConflictDoesNotLoseUpdate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("alpha\nbeta\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	var mu sync.Mutex
+	reads := 0
+	ready := make(chan struct{})
+	release := make(chan struct{})
+	ts.afterFileRead = func(abs string) {
+		if abs != path {
+			return
+		}
+		mu.Lock()
+		reads++
+		if reads == 2 {
+			close(ready)
+		}
+		mu.Unlock()
+		<-release
+	}
+
+	calls := []core.ToolCall{
+		tc("edit", map[string]any{"file_path": "a.txt", "search": "alpha", "replace": "ALPHA"}),
+		tc("edit", map[string]any{"file_path": "a.txt", "search": "beta", "replace": "BETA"}),
+	}
+	results := make([]core.ToolResult, len(calls))
+	errs := make([]error, len(calls))
+	var wg sync.WaitGroup
+	for i := range calls {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i], errs[i] = ts.editFile(context.Background(), calls[i])
+		}(i)
+	}
+	select {
+	case <-ready:
+	case <-time.After(2 * time.Second):
+		close(release)
+		t.Fatalf("edits did not both reach read barrier")
+	}
+	close(release)
+	wg.Wait()
+
+	successes, conflicts := 0, 0
+	for i, res := range results {
+		if errs[i] != nil {
+			t.Fatalf("edit %d returned dispatch error: %v", i, errs[i])
+		}
+		if res.IsError {
+			if got := toolErrorCode(t, res); got != "write_conflict" {
+				t.Fatalf("edit %d error code = %q, want write_conflict; content=%s", i, got, res.Content)
+			}
+			conflicts++
+			continue
+		}
+		successes++
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("successes=%d conflicts=%d results=%+v", successes, conflicts, results)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	if string(got) != "ALPHA\nbeta\n" && string(got) != "alpha\nBETA\n" {
+		t.Fatalf("unexpected final content after conflict-safe edits: %q", string(got))
+	}
+}
+
+func TestEditFileDetectsExternalChangeBeforeWrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("alpha\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	var once sync.Once
+	ts.beforeFileCommit = func(abs string) {
+		if abs != path {
+			return
+		}
+		once.Do(func() {
+			if err := os.WriteFile(path, []byte("external\n"), 0o644); err != nil {
+				t.Errorf("external write: %v", err)
+			}
+		})
+	}
+
+	res, err := ts.editFile(context.Background(), tc("edit", map[string]any{
+		"file_path": "a.txt",
+		"search":    "alpha",
+		"replace":   "whale",
+	}))
+	if err != nil {
+		t.Fatalf("edit returned dispatch error: %v", err)
+	}
+	if got := toolErrorCode(t, res); got != "write_conflict" {
+		t.Fatalf("code = %q, want write_conflict; content=%s", got, res.Content)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	if string(got) != "external\n" {
+		t.Fatalf("content = %q, want external write preserved", string(got))
+	}
+}
+
 func TestApplyPatchMatchesLFHunksAndPreservesCRLF(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a.txt")
@@ -572,6 +797,78 @@ func TestApplyPatchPreservesMixedLineEndings(t *testing.T) {
 	}
 }
 
+func TestApplyPatchMultipleHunksUseOriginalForwardPositions(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("A\nA\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	patch := strings.Join([]string{
+		"*** Begin Patch",
+		"*** Update File: a.txt",
+		"@@",
+		"-A",
+		"+X",
+		"+A",
+		"@@",
+		"-A",
+		"+Y",
+		"*** End Patch",
+	}, "\n")
+
+	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
+	if err != nil || res.IsError {
+		t.Fatalf("apply patch failed: err=%v res=%+v", err, res)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	if string(got) != "X\nA\nY\n" {
+		t.Fatalf("content = %q, want later hunk to match the later original line", string(got))
+	}
+}
+
+func TestApplyPatchMultipleHunksUseOriginalForwardPositionsWithMixedLineEndings(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("A\r\nA\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	patch := strings.Join([]string{
+		"*** Begin Patch",
+		"*** Update File: a.txt",
+		"@@",
+		"-A",
+		"+X",
+		"+A",
+		"@@",
+		"-A",
+		"+Y",
+		"*** End Patch",
+	}, "\n")
+
+	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
+	if err != nil || res.IsError {
+		t.Fatalf("apply patch failed: err=%v res=%+v", err, res)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	if string(got) != "X\r\nA\nY\n" {
+		t.Fatalf("content = %q, want later hunk to match the later original line and preserve separators", string(got))
+	}
+}
+
 func TestApplyPatchDuplicateInsertionBeforeContextKeepsMixedLineEndings(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a.txt")
@@ -636,6 +933,67 @@ func TestApplyPatchDoesNotCarryDeletedSeparatorAcrossContext(t *testing.T) {
 	}
 	if string(got) != "b\nx\nc\r\n" {
 		t.Fatalf("content = %q, want deletion separator not to cross context", string(got))
+	}
+}
+
+func TestApplyPatchConflictLeavesFilesUntouched(t *testing.T) {
+	dir := t.TempDir()
+	aPath := filepath.Join(dir, "a.txt")
+	bPath := filepath.Join(dir, "b.txt")
+	if err := os.WriteFile(aPath, []byte("one\n"), 0o644); err != nil {
+		t.Fatalf("write fixture a: %v", err)
+	}
+	if err := os.WriteFile(bPath, []byte("two\n"), 0o644); err != nil {
+		t.Fatalf("write fixture b: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	var once sync.Once
+	ts.beforeFileCommit = func(abs string) {
+		if abs != bPath {
+			return
+		}
+		once.Do(func() {
+			if err := os.WriteFile(bPath, []byte("external\n"), 0o644); err != nil {
+				t.Errorf("external write: %v", err)
+			}
+		})
+	}
+	patch := strings.Join([]string{
+		"*** Begin Patch",
+		"*** Update File: a.txt",
+		"@@",
+		"-one",
+		"+ONE",
+		"*** Update File: b.txt",
+		"@@",
+		"-two",
+		"+TWO",
+		"*** End Patch",
+	}, "\n")
+
+	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
+	if err != nil {
+		t.Fatalf("apply_patch returned dispatch error: %v", err)
+	}
+	if got := toolErrorCode(t, res); got != "patch_conflict" {
+		t.Fatalf("code = %q, want patch_conflict; content=%s", got, res.Content)
+	}
+	gotA, err := os.ReadFile(aPath)
+	if err != nil {
+		t.Fatalf("read a: %v", err)
+	}
+	if string(gotA) != "one\n" {
+		t.Fatalf("a.txt = %q, want original content preserved", string(gotA))
+	}
+	gotB, err := os.ReadFile(bPath)
+	if err != nil {
+		t.Fatalf("read b: %v", err)
+	}
+	if string(gotB) != "external\n" {
+		t.Fatalf("b.txt = %q, want external write preserved", string(gotB))
 	}
 }
 
@@ -1591,6 +1949,122 @@ func TestListDirAndShellRun(t *testing.T) {
 	}
 }
 
+func TestListDirIgnoresLegacyIgnoreInput(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{".gitignore", "node_modules", "x.txt"} {
+		path := filepath.Join(dir, name)
+		if name == "node_modules" {
+			if err := os.Mkdir(path, 0o755); err != nil {
+				t.Fatalf("mkdir fixture: %v", err)
+			}
+			continue
+		}
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatalf("write fixture: %v", err)
+		}
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	registry := core.NewToolRegistry(ts.Tools())
+	lsRes, err := registry.Dispatch(context.Background(), tc("list_dir", map[string]any{
+		"ignore": []string{".git", "node"},
+	}))
+	if err != nil || lsRes.IsError {
+		t.Fatalf("list_dir failed: err=%v res=%+v", err, lsRes)
+	}
+	for _, want := range []string{".gitignore", "node_modules/", "x.txt"} {
+		if !strings.Contains(lsRes.Content, want) {
+			t.Fatalf("list_dir should not filter %q with legacy ignore input: %s", want, lsRes.Content)
+		}
+	}
+}
+
+func TestListDirSchemaDocumentsDefaultRootAndToleratesDeprecatedIgnore(t *testing.T) {
+	ts, err := NewToolset(t.TempDir())
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	for _, tool := range ts.Tools() {
+		if tool.Name() != "list_dir" {
+			continue
+		}
+		spec := core.DescribeTool(tool)
+		props, ok := spec.Parameters["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("list_dir properties have unexpected shape: %#v", spec.Parameters["properties"])
+		}
+		ignore, ok := props["ignore"].(map[string]any)
+		if !ok {
+			t.Fatalf("list_dir schema should tolerate deprecated ignore: %#v", props)
+		}
+		if desc, _ := ignore["description"].(string); !strings.Contains(desc, "Deprecated") || !strings.Contains(desc, "ignored") {
+			t.Fatalf("list_dir deprecated ignore should be documented as ignored: %#v", ignore)
+		}
+		path, ok := props["path"].(map[string]any)
+		if !ok {
+			t.Fatalf("list_dir schema should expose path: %#v", props)
+		}
+		if desc, _ := path["description"].(string); !strings.Contains(desc, "Omit") || !strings.Contains(desc, "workspace root") {
+			t.Fatalf("list_dir path should document default workspace root: %#v", path)
+		}
+		return
+	}
+	t.Fatal("list_dir not registered")
+}
+
+func TestSearchToolSchemasDocumentDefaultRoot(t *testing.T) {
+	ts, err := NewToolset(t.TempDir())
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	wantTools := map[string]bool{"grep": false, "search_files": false}
+	for _, tool := range ts.Tools() {
+		if _, ok := wantTools[tool.Name()]; !ok {
+			continue
+		}
+		spec := core.DescribeTool(tool)
+		props, ok := spec.Parameters["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s properties have unexpected shape: %#v", tool.Name(), spec.Parameters["properties"])
+		}
+		path, ok := props["path"].(map[string]any)
+		if !ok {
+			t.Fatalf("%s schema should expose path: %#v", tool.Name(), props)
+		}
+		if desc, _ := path["description"].(string); !strings.Contains(desc, "Omit") || !strings.Contains(desc, "workspace root") {
+			t.Fatalf("%s path should document default workspace root: %#v", tool.Name(), path)
+		}
+		wantTools[tool.Name()] = true
+	}
+	for name, found := range wantTools {
+		if !found {
+			t.Fatalf("%s not registered", name)
+		}
+	}
+}
+
+func TestWriteSchemaDocumentsRegularFilePermissions(t *testing.T) {
+	ts, err := NewToolset(t.TempDir())
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	for _, tool := range ts.Tools() {
+		if tool.Name() != "write" {
+			continue
+		}
+		spec := core.DescribeTool(tool)
+		for _, want := range []string{"regular non-executable files", "chmod"} {
+			if !strings.Contains(spec.Description, want) {
+				t.Fatalf("write description missing %q:\n%s", want, spec.Description)
+			}
+		}
+		return
+	}
+	t.Fatal("write not registered")
+}
+
 func TestApplyPatchUpdateAddDelete(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello\nworld\n"), 0o644); err != nil {
@@ -2355,6 +2829,21 @@ func toolErrorMessage(t *testing.T, res core.ToolResult) string {
 		t.Fatalf("expected error message in envelope: %+v", env)
 	}
 	return env.Message
+}
+
+func toolErrorCode(t *testing.T, res core.ToolResult) string {
+	t.Helper()
+	if !res.IsError {
+		t.Fatalf("expected tool error, got %+v", res)
+	}
+	env, ok := core.ParseToolEnvelope(res.Content)
+	if !ok {
+		t.Fatalf("parse tool envelope: %s", res.Content)
+	}
+	if env.Code == "" {
+		t.Fatalf("expected error code in envelope: %+v", env)
+	}
+	return env.Code
 }
 
 func readFileData(t *testing.T, res core.ToolResult) map[string]any {

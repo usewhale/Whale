@@ -1,6 +1,10 @@
 package render
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/usewhale/whale/internal/app"
+)
 
 type MessageKind string
 
@@ -11,9 +15,12 @@ const (
 	KindThinking    MessageKind = "thinking"
 	KindPlan        MessageKind = "plan"
 	KindPlanUpdate  MessageKind = "plan_update"
+	KindLocalStatus MessageKind = "local_status"
+	KindLocalMCP    MessageKind = "local_mcp"
 	KindToolCall    MessageKind = "tool_call"
 	KindToolResult  MessageKind = "tool_result"
 	KindToolSummary MessageKind = "tool_summary"
+	KindSubagent    MessageKind = "subagent"
 )
 
 type UIMessage struct {
@@ -22,6 +29,7 @@ type UIMessage struct {
 	Kind     MessageKind
 	Text     string
 	ToolName string
+	Local    *app.LocalResult
 }
 
 type Assembler struct {
@@ -125,6 +133,23 @@ func (a *Assembler) AddToolCall(toolCallID, toolName, text string) {
 	}
 }
 
+func (a *Assembler) AddSubagent(toolCallID, text string) {
+	t := strings.TrimSpace(strings.TrimRight(text, "\n"))
+	if t == "" {
+		return
+	}
+	a.messages = append(a.messages, UIMessage{
+		ID:       toolCallID,
+		Role:     "tool",
+		Kind:     KindSubagent,
+		Text:     t,
+		ToolName: "spawn_subagent",
+	})
+	if toolCallID != "" {
+		a.toolEntryByID[toolCallID] = len(a.messages) - 1
+	}
+}
+
 func (a *Assembler) AddNotice(text string) {
 	t := strings.TrimSpace(strings.TrimRight(text, "\n"))
 	if t == "" {
@@ -146,6 +171,35 @@ func (a *Assembler) AddStatus(text string) {
 		Role: "status",
 		Kind: KindStatus,
 		Text: t,
+	})
+}
+
+func (a *Assembler) AddLocalResult(result *app.LocalResult) {
+	if result == nil || strings.TrimSpace(result.Kind) == "" {
+		return
+	}
+	text := strings.TrimSpace(strings.TrimRight(result.PlainText, "\n"))
+	if text == "" {
+		text = strings.TrimSpace(strings.TrimRight(result.Title, "\n"))
+	}
+	if text == "" {
+		return
+	}
+	kind := KindText
+	role := "info"
+	switch result.Kind {
+	case "status":
+		kind = KindLocalStatus
+		role = "local_status"
+	case "mcp":
+		kind = KindLocalMCP
+		role = "local_mcp"
+	}
+	a.messages = append(a.messages, UIMessage{
+		Role:  role,
+		Kind:  kind,
+		Text:  text,
+		Local: result,
 	})
 }
 
@@ -306,10 +360,14 @@ func (a *Assembler) BackfillToolCall(toolCallID, replacement string) {
 func (a *Assembler) rebuildToolEntryIndex() {
 	a.toolEntryByID = map[string]int{}
 	for i, msg := range a.messages {
-		if msg.ID != "" && msg.Kind == KindToolCall {
+		if msg.ID != "" && isIndexableToolMessage(msg.Kind) {
 			a.toolEntryByID[msg.ID] = i
 		}
 	}
+}
+
+func isIndexableToolMessage(kind MessageKind) bool {
+	return kind == KindToolCall || kind == KindSubagent
 }
 
 func canCoalesce(role string, last UIMessage) bool {

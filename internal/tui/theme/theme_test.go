@@ -6,7 +6,7 @@ func TestRoleBorderColors(t *testing.T) {
 	cases := map[string]string{
 		"you":            "63",
 		"assistant":      "39",
-		"plan":           "45",
+		"plan":           "75",
 		"tool":           "220",
 		"result_ok":      "78",
 		"result_failed":  "203",
@@ -34,6 +34,12 @@ func TestDefaultSemanticColors(t *testing.T) {
 	}
 	if string(Default.UserBackground) != "236" {
 		t.Fatalf("user background: want 236, got %s", Default.UserBackground)
+	}
+	if string(Default.Plan) != "75" {
+		t.Fatalf("plan: want 75, got %s", Default.Plan)
+	}
+	if string(Default.PlanBackground) != "236" {
+		t.Fatalf("plan background: want 236, got %s", Default.PlanBackground)
 	}
 	if string(Default.Muted) != "245" {
 		t.Fatalf("muted: want 245, got %s", Default.Muted)

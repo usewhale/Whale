@@ -11,16 +11,19 @@ import (
 	"github.com/usewhale/whale/internal/agent"
 	appcommands "github.com/usewhale/whale/internal/app/commands"
 	"github.com/usewhale/whale/internal/compact"
+	whalemcp "github.com/usewhale/whale/internal/mcp"
 	"github.com/usewhale/whale/internal/plugins"
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/skills"
-	"github.com/usewhale/whale/internal/store"
 )
 
 func resolveInitialSessionID(sessionsDir string) (string, error) {
-	recent, err := store.MostRecentSessionID(sessionsDir)
-	if err == nil && recent != "" {
-		return recent, nil
+	sessions, err := session.ListSessions(sessionsDir, 1)
+	if err != nil {
+		return "", err
+	}
+	if len(sessions) > 0 && strings.TrimSpace(sessions[0].ID) != "" {
+		return sessions[0].ID, nil
 	}
 	return "default", nil
 }
@@ -67,6 +70,37 @@ func (a *App) buildStatus() string {
 	return strings.Join(parts, "\n")
 }
 
+func (a *App) buildStatusLocalResult() *LocalResult {
+	text := a.buildStatus()
+	fields := []LocalResultField{
+		{Label: "Session", Value: a.sessionID},
+		{Label: "Mode", Value: modeDisplay(a.currentMode), Tone: "info"},
+		{Label: "Permissions", Value: string(a.permissionPolicy.Default)},
+		{Label: "Model", Value: a.model, Tone: "info"},
+		{Label: "Effort", Value: a.reasoningEffort},
+		{Label: "Thinking", Value: onOff(a.thinkingEnabled)},
+	}
+	if strings.TrimSpace(a.worktree.Name) != "" {
+		fields = append(fields,
+			LocalResultField{Label: "Worktree", Value: a.worktree.Name, Tone: "info"},
+			LocalResultField{Label: "Worktree branch", Value: valueOrDash(a.worktree.Branch)},
+			LocalResultField{Label: "Worktree path", Value: valueOrDash(a.worktree.Path)},
+			LocalResultField{Label: "Original workspace", Value: valueOrDash(a.worktree.OriginalWorkspace)},
+			LocalResultField{Label: "Original branch", Value: valueOrDash(a.worktree.OriginalBranch)},
+		)
+	}
+	fields = append(fields,
+		LocalResultField{Label: "Context window", Value: contextWindowStatusValue(a)},
+		LocalResultField{Label: "Budget limit", Value: budgetStatusValue(a)},
+	)
+	return &LocalResult{
+		Kind:      "status",
+		Title:     "Status",
+		Fields:    fields,
+		PlainText: text,
+	}
+}
+
 func (a *App) formatCurrentWorktreeStatusLines() []string {
 	if strings.TrimSpace(a.worktree.Name) == "" {
 		return nil
@@ -92,6 +126,13 @@ func (a *App) formatBudgetStatusLine() string {
 		return "- budget limit: disabled"
 	}
 	return fmt.Sprintf("- budget limit: $%.4f", a.budgetWarningUSD)
+}
+
+func budgetStatusValue(a *App) string {
+	if a == nil || a.budgetWarningUSD <= 0 {
+		return "disabled"
+	}
+	return fmt.Sprintf("$%.4f", a.budgetWarningUSD)
 }
 
 func (a *App) buildMCPStatus() string {
@@ -127,6 +168,96 @@ func (a *App) buildMCPStatus() string {
 	return strings.Join(lines, "\n")
 }
 
+func (a *App) buildMCPLocalResult() *LocalResult {
+	text := a.buildMCPStatus()
+	fields := []LocalResultField{
+		{Label: "Config", Value: "unavailable", Tone: "muted"},
+		{Label: "Servers", Value: "none", Tone: "muted"},
+	}
+	var sections []LocalResultSection
+	if a != nil && a.mcpManager != nil {
+		states := a.mcpManager.States()
+		fields = []LocalResultField{
+			{Label: "Config", Value: valueOrDash(a.mcpManager.ConfigPath())},
+			{Label: "Servers", Value: mcpServerCountValue(len(states)), Tone: mcpServersTone(states)},
+		}
+		sections = make([]LocalResultSection, 0, len(states))
+		for _, st := range states {
+			status := mcpStatusValue(st)
+			serverFields := []LocalResultField{
+				{Label: "Status", Value: status, Tone: mcpStatusTone(status)},
+				{Label: "Tools", Value: fmt.Sprintf("%d", st.Tools)},
+			}
+			if strings.TrimSpace(st.Error) != "" {
+				serverFields = append(serverFields, LocalResultField{Label: "Error", Value: st.Error, Tone: "error"})
+			}
+			sections = append(sections, LocalResultSection{
+				Title:  valueOrDash(st.Name),
+				Fields: serverFields,
+			})
+		}
+	}
+	return &LocalResult{
+		Kind:      "mcp",
+		Title:     "MCP",
+		Fields:    fields,
+		Sections:  sections,
+		PlainText: text,
+	}
+}
+
+func mcpServerCountValue(count int) string {
+	if count == 0 {
+		return "none"
+	}
+	return fmt.Sprintf("%d", count)
+}
+
+func mcpServersTone(states []whalemcp.ServerState) string {
+	if len(states) == 0 {
+		return "muted"
+	}
+	for _, st := range states {
+		status := mcpStatusValue(st)
+		if status == whalemcp.StatusFailed || status == whalemcp.StatusCancelled {
+			return "error"
+		}
+	}
+	return "info"
+}
+
+func mcpStatusValue(st whalemcp.ServerState) string {
+	status := strings.TrimSpace(st.Status)
+	if status != "" {
+		return status
+	}
+	if st.Disabled {
+		return whalemcp.StatusDisabled
+	}
+	if st.Connected {
+		return whalemcp.StatusConnected
+	}
+	if strings.TrimSpace(st.Error) != "" {
+		return whalemcp.StatusFailed
+	}
+	return whalemcp.StatusDisabled
+}
+
+func mcpStatusTone(status string) string {
+	switch status {
+	case whalemcp.StatusConnected:
+		return "info"
+	case whalemcp.StatusStarting:
+		return "warn"
+	case whalemcp.StatusFailed, whalemcp.StatusCancelled:
+		return "error"
+	case whalemcp.StatusDisabled:
+		return "muted"
+	default:
+		return ""
+	}
+}
+
 func (a *App) PluginStatuses() []plugins.PluginStatus {
 	if a == nil || a.pluginManager == nil {
 		return nil
@@ -155,9 +286,16 @@ func modeTitle(mode session.Mode) string {
 }
 
 func formatContextWindowStatus(a *App) string {
+	return "- context window: " + contextWindowStatusValue(a)
+}
+
+func contextWindowStatusValue(a *App) string {
+	if a == nil || a.msgStore == nil {
+		return "unavailable"
+	}
 	msgs, err := a.msgStore.List(a.ctx, a.sessionID)
 	if err != nil {
-		return "- context window: unavailable"
+		return "unavailable"
 	}
 	used := compact.EstimateMessagesTokens(msgs)
 	window := a.contextWindow
@@ -168,7 +306,7 @@ func formatContextWindowStatus(a *App) string {
 	if leftPct < 0 {
 		leftPct = 0
 	}
-	return fmt.Sprintf("- context window: %d%% left (%s used / %s)", leftPct, formatTokenCount(used), formatTokenCount(window))
+	return fmt.Sprintf("%d%% left (%s used / %s)", leftPct, formatTokenCount(used), formatTokenCount(window))
 }
 
 func formatTokenCount(v int) string {

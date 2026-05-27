@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/usewhale/whale/internal/agent"
 	"github.com/usewhale/whale/internal/core"
 )
 
@@ -21,6 +22,72 @@ func emitSubagentProgress(progress func(core.ToolProgress), role, model string, 
 		Summary:  strings.TrimSpace(summary),
 		Metadata: metadata,
 	})
+}
+
+func summarizeChildAgentEvent(ev agent.AgentEvent) (status, summary string, metadata map[string]any, ok bool) {
+	switch ev.Type {
+	case agent.AgentEventTypeContextCompacted:
+		if ev.Compact == nil {
+			return "", "", nil, false
+		}
+		if ev.Compact.Compacted {
+			return "compacted", fmt.Sprintf("Compacted child context (%d -> %d messages)", ev.Compact.MessagesBefore, ev.Compact.MessagesAfter), map[string]any{
+				"before_estimate": ev.Compact.BeforeEstimate,
+				"after_estimate":  ev.Compact.AfterEstimate,
+			}, true
+		}
+		return "compacted", "Checked child context compaction", map[string]any{
+			"before_estimate": ev.Compact.BeforeEstimate,
+			"after_estimate":  ev.Compact.AfterEstimate,
+		}, true
+	case agent.AgentEventTypeToolRecoveryExhausted:
+		if ev.Recovery == nil {
+			return "", "", nil, false
+		}
+		target := firstNonEmptyString(ev.Recovery.ToolName, "tool")
+		action := strings.TrimSpace(ev.Recovery.Action)
+		reason := strings.TrimSpace(ev.Recovery.Reason)
+		if reason == "" {
+			reason = ev.Recovery.FailureClass
+		}
+		metadata := map[string]any{
+			"child_tool":      ev.Recovery.ToolName,
+			"failure_class":   ev.Recovery.FailureClass,
+			"recovery_action": action,
+			"attempt":         ev.Recovery.Attempt,
+			"max_attempts":    ev.Recovery.MaxAttempts,
+			"executed":        ev.Recovery.Executed,
+			"replan_injected": ev.Recovery.ReplanInjected,
+		}
+		if ev.Recovery.Executed {
+			if ev.Recovery.ReplanInjected {
+				if action != "" {
+					return "tool_recovery_replanned", fmt.Sprintf("Requested replan for %s via %s", target, action), metadata, true
+				}
+				return "tool_recovery_replanned", fmt.Sprintf("Requested replan for %s", target), metadata, true
+			}
+			if action != "" {
+				return "tool_recovered", fmt.Sprintf("Recovered %s via %s", target, action), metadata, true
+			}
+			return "tool_recovered", fmt.Sprintf("Recovered %s", target), metadata, true
+		}
+		if reason != "" {
+			return "tool_recovery_failed", fmt.Sprintf("Recovery exhausted for %s: %s", target, reason), metadata, true
+		}
+		return "tool_recovery_failed", fmt.Sprintf("Recovery exhausted for %s", target), metadata, true
+	case agent.AgentEventTypeBudgetWarning:
+		if ev.Budget == nil {
+			return "", "", nil, false
+		}
+		return "budget_warning", fmt.Sprintf("Child budget warning: %d%% of $%.2f cap", ev.Budget.Percent, ev.Budget.CapUSD), map[string]any{
+			"budget_percent": ev.Budget.Percent,
+			"budget_cap_usd": ev.Budget.CapUSD,
+			"spent_usd":      ev.Budget.SpentUSD,
+			"turn_cost_usd":  ev.Budget.TurnCostUSD,
+		}, true
+	default:
+		return "", "", nil, false
+	}
 }
 
 type childToolAction struct {

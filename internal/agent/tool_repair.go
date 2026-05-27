@@ -9,7 +9,11 @@ import (
 	"github.com/usewhale/whale/internal/core"
 )
 
-var trailingCommaBeforeCloser = regexp.MustCompile(`,(\s*[}\]])`)
+var (
+	trailingCommaBeforeCloser = regexp.MustCompile(`,(\s*[}\]])`)
+	truncatedJSONColonEnding  = regexp.MustCompile(`"\s*:\s*$`)
+	topLevelJSONPair          = regexp.MustCompile(`"([A-Za-z0-9_\-\.]+)"\s*:\s*("([^"\\]|\\.)*"|-?\d+(\.\d+)?|true|false|null)`)
+)
 
 type stormConfig struct {
 	WindowSize int
@@ -116,7 +120,7 @@ func repairTruncatedJSON(raw string) truncationRepairResult {
 	if s, ok := closeLikelyJSON(candidate); ok {
 		candidate = s
 	}
-	if regexp.MustCompile(`"\s*:\s*$`).MatchString(candidate) {
+	if truncatedJSONColonEnding.MatchString(candidate) {
 		candidate += " null"
 	}
 	candidate = trailingCommaBeforeCloser.ReplaceAllString(candidate, "$1")
@@ -315,8 +319,7 @@ func salvageTopLevelPairs(raw string) (string, bool) {
 	if start >= 0 {
 		r = r[start+1:]
 	}
-	pairs := regexp.MustCompile(`"([A-Za-z0-9_\-\.]+)"\s*:\s*("([^"\\]|\\.)*"|-?\d+(\.\d+)?|true|false|null)`)
-	matches := pairs.FindAllStringSubmatch(r, 12)
+	matches := topLevelJSONPair.FindAllStringSubmatch(r, 12)
 	if len(matches) == 0 {
 		return "", false
 	}

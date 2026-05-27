@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 
+	"github.com/usewhale/whale/internal/app"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
@@ -34,6 +35,32 @@ func (m *model) appendTranscript(role string, kind tuirender.MessageKind, text s
 		Kind: kind,
 		Text: t,
 	})
+	m.refreshViewportContentFollow(true)
+}
+
+func (m *model) appendLocalResult(result *app.LocalResult) {
+	if result == nil {
+		return
+	}
+	msg := tuirender.UIMessage{
+		Role:  "local_" + strings.TrimSpace(result.Kind),
+		Kind:  tuirender.KindText,
+		Text:  strings.TrimSpace(strings.TrimRight(result.PlainText, "\n")),
+		Local: result,
+	}
+	switch result.Kind {
+	case "status":
+		msg.Kind = tuirender.KindLocalStatus
+	case "mcp":
+		msg.Kind = tuirender.KindLocalMCP
+	}
+	if msg.Text == "" {
+		msg.Text = strings.TrimSpace(strings.TrimRight(result.Title, "\n"))
+	}
+	if msg.Text == "" {
+		return
+	}
+	m.transcript = append(m.transcript, msg)
 	m.refreshViewportContentFollow(true)
 }
 

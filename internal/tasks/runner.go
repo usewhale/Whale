@@ -19,37 +19,43 @@ const (
 type ProviderFactory func(model string, maxTokens int) (llm.Provider, error)
 
 type RunnerConfig struct {
-	ProviderFactory     ProviderFactory
-	ParentTools         *core.ToolRegistry
-	MessageStore        store.MessageStore
-	SessionsDir         string
-	ParentSessionID     string
-	ParentSessionIDFunc func() string
-	WorkspaceRoot       string
-	MemoryEnabled       bool
-	MemoryMaxChars      int
-	MemoryFileOrder     []string
-	DefaultModel        string
-	DefaultMaxTokens    int
-	DefaultMaxToolIters int
-	SummaryMaxChars     int
+	ProviderFactory      ProviderFactory
+	ParentTools          *core.ToolRegistry
+	MessageStore         store.MessageStore
+	SessionsDir          string
+	ParentSessionID      string
+	ParentSessionIDFunc  func() string
+	WorkspaceRoot        string
+	MemoryEnabled        bool
+	MemoryMaxChars       int
+	MemoryFileOrder      []string
+	AutoCompact          bool
+	AutoCompactThreshold float64
+	DefaultModel         string
+	DefaultMaxTokens     int
+	DefaultMaxToolIters  int
+	SummaryMaxChars      int
+	UsageLogPath         string
 }
 
 type Runner struct {
-	providerFactory     ProviderFactory
-	parentTools         *core.ToolRegistry
-	messageStore        store.MessageStore
-	sessionsDir         string
-	parentSessionID     string
-	parentSessionIDFunc func() string
-	workspaceRoot       string
-	memoryEnabled       bool
-	memoryMaxChars      int
-	memoryFileOrder     []string
-	defaultModel        string
-	defaultMaxTokens    int
-	defaultMaxToolIters int
-	summaryMaxChars     int
+	providerFactory      ProviderFactory
+	parentTools          *core.ToolRegistry
+	messageStore         store.MessageStore
+	sessionsDir          string
+	parentSessionID      string
+	parentSessionIDFunc  func() string
+	workspaceRoot        string
+	memoryEnabled        bool
+	memoryMaxChars       int
+	memoryFileOrder      []string
+	autoCompact          bool
+	autoCompactThreshold float64
+	defaultModel         string
+	defaultMaxTokens     int
+	defaultMaxToolIters  int
+	summaryMaxChars      int
+	usageLogPath         string
 }
 
 func NewRunner(cfg RunnerConfig) *Runner {
@@ -70,19 +76,22 @@ func NewRunner(cfg RunnerConfig) *Runner {
 		summaryMaxChars = DefaultSummaryMaxChar
 	}
 	return &Runner{
-		providerFactory:     cfg.ProviderFactory,
-		parentTools:         cfg.ParentTools,
-		messageStore:        cfg.MessageStore,
-		sessionsDir:         strings.TrimSpace(cfg.SessionsDir),
-		parentSessionID:     strings.TrimSpace(cfg.ParentSessionID),
-		parentSessionIDFunc: cfg.ParentSessionIDFunc,
-		workspaceRoot:       strings.TrimSpace(cfg.WorkspaceRoot),
-		memoryEnabled:       cfg.MemoryEnabled,
-		memoryMaxChars:      cfg.MemoryMaxChars,
-		memoryFileOrder:     append([]string(nil), cfg.MemoryFileOrder...),
-		defaultModel:        model,
-		defaultMaxTokens:    maxTokens,
-		defaultMaxToolIters: maxToolIters,
-		summaryMaxChars:     summaryMaxChars,
+		providerFactory:      cfg.ProviderFactory,
+		parentTools:          cfg.ParentTools,
+		messageStore:         cfg.MessageStore,
+		sessionsDir:          strings.TrimSpace(cfg.SessionsDir),
+		parentSessionID:      strings.TrimSpace(cfg.ParentSessionID),
+		parentSessionIDFunc:  cfg.ParentSessionIDFunc,
+		workspaceRoot:        strings.TrimSpace(cfg.WorkspaceRoot),
+		memoryEnabled:        cfg.MemoryEnabled,
+		memoryMaxChars:       cfg.MemoryMaxChars,
+		memoryFileOrder:      append([]string(nil), cfg.MemoryFileOrder...),
+		autoCompact:          cfg.AutoCompact,
+		autoCompactThreshold: cfg.AutoCompactThreshold,
+		defaultModel:         model,
+		defaultMaxTokens:     maxTokens,
+		defaultMaxToolIters:  maxToolIters,
+		summaryMaxChars:      summaryMaxChars,
+		usageLogPath:         strings.TrimSpace(cfg.UsageLogPath),
 	}
 }

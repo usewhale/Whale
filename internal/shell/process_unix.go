@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -32,6 +33,26 @@ func RunCommand(ctx context.Context, cmd *exec.Cmd) error {
 		return err
 	}
 	return waitCommandContext(ctx, cmd, cancel)
+}
+
+type CommandCleanup struct {
+	cmd  *exec.Cmd
+	once sync.Once
+	err  error
+}
+
+func AttachCommandCleanup(cmd *exec.Cmd) *CommandCleanup {
+	return &CommandCleanup{cmd: cmd}
+}
+
+func (c *CommandCleanup) Cleanup() error {
+	if c == nil {
+		return os.ErrProcessDone
+	}
+	c.once.Do(func() {
+		c.err = killCommandGroup(c.cmd)
+	})
+	return c.err
 }
 
 func killCommandGroup(cmd *exec.Cmd) error {

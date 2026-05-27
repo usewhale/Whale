@@ -13,7 +13,11 @@ func (m *model) appendToolCall(toolCallID, toolName, text string) {
 		m.assembler = tuirender.NewAssembler()
 	}
 	m.markToolCallPending(toolCallID)
-	m.assembler.AddToolCall(toolCallID, toolName, summarizeToolCallForChat(toolName, text))
+	if strings.TrimSpace(toolName) == "spawn_subagent" {
+		m.assembler.AddSubagent(toolCallID, subagentStartedText(text))
+	} else {
+		m.assembler.AddToolCall(toolCallID, toolName, summarizeToolCallForChat(toolName, text))
+	}
 	m.refreshLiveViewportContent()
 }
 
@@ -26,6 +30,10 @@ func (m *model) updateToolCallFromResult(toolCallID, toolName, result, role, sum
 		previous = m.assembler.ToolCallText(toolCallID)
 	}
 	title := completedToolTitle(toolName, result, previous)
+	if strings.TrimSpace(toolName) == "spawn_subagent" {
+		title = subagentCompletedText(result, previous)
+		summary = ""
+	}
 	if summary != "" && summary != "✓" {
 		title += "\n" + summary
 	}
@@ -43,12 +51,18 @@ func (m *model) updateToolCallFromResult(toolCallID, toolName, result, role, sum
 	return ok
 }
 
-func (m *model) updateTaskProgress(toolCallID, toolName, text string) bool {
+func (m *model) updateTaskProgress(toolCallID, toolName, text, status string, metadata map[string]any) bool {
 	if toolCallID == "" || m.assembler == nil {
 		return false
 	}
 	title := summarizeTaskProgressForChat(toolName, text)
-	ok := m.assembler.UpdateToolCall(toolCallID, title, "result_running")
+	role := "result_running"
+	if strings.TrimSpace(toolName) == "spawn_subagent" {
+		previous := m.assembler.ToolCallText(toolCallID)
+		title = subagentProgressText(text, status, metadata, previous)
+		role = subagentProgressRole(status, text)
+	}
+	ok := m.assembler.UpdateToolCall(toolCallID, title, role)
 	if ok {
 		m.refreshLiveViewportContent()
 	}
@@ -164,6 +178,136 @@ func taskRoleFromText(text string) string {
 func taskProgressFailed(text string) bool {
 	first := strings.TrimSpace(strings.SplitN(text, "·", 2)[0])
 	return strings.Contains(first, "failed")
+}
+
+func subagentStartedText(text string) string {
+	role := taskRoleFromText(text)
+	detail := firstNonEmpty(taskProgressDetail(text), toolCallDetail(text), "starting")
+	return subagentText(role, "running", "pending", "starting", detail, "", "")
+}
+
+func subagentProgressText(text, eventStatus string, metadata map[string]any, previous string) string {
+	role := firstNonEmpty(asString(metadata["role"]), taskRoleFromText(text), previousSubagentField(previous, "role"), "explore")
+	status := firstNonEmpty(eventStatus, asString(metadata["status"]))
+	if status == "" {
+		status = "running"
+	}
+	if taskProgressFailed(text) {
+		status = "failed"
+	}
+	sessionID := firstNonEmpty(asString(metadata["child_session_id"]), previousSubagentField(previous, "session"), "pending")
+	current := firstNonEmpty(asString(metadata["child_tool"]), previousSubagentField(previous, "current"), "starting")
+	detail := firstNonEmpty(taskProgressDetail(text), previousSubagentField(previous, "detail"), "running")
+	return subagentText(role, status, sessionID, current, detail, "", "")
+}
+
+func subagentProgressRole(status, text string) string {
+	if taskProgressFailed(text) {
+		return "result_failed"
+	}
+	switch strings.TrimSpace(status) {
+	case "completed", "done", "success", "succeeded":
+		return "result_ok"
+	case "failed", "error", "tool_recovery_failed":
+		return "result_failed"
+	case "denied", "canceled", "cancelled":
+		return "result_denied"
+	default:
+		return "result_running"
+	}
+}
+
+func subagentCompletedText(raw, previous string) string {
+	env, ok := parseToolEnvelopeOK(raw)
+	if !ok {
+		return subagentText(
+			previousSubagentField(previous, "role"),
+			"failed",
+			previousSubagentField(previous, "session"),
+			firstNonEmpty(previousSubagentField(previous, "current"), "done"),
+			"",
+			"",
+			"malformed tool result",
+		)
+	}
+	role := firstNonEmpty(asString(env.data["role"]), previousSubagentField(previous, "role"), "explore")
+	status := "completed"
+	if !toolEnvelopeSucceeded(env) {
+		status = "failed"
+	}
+	sessionID := firstNonEmpty(asString(env.data["child_session_id"]), asString(env.data["session_id"]), previousSubagentField(previous, "session"), "pending")
+	current := firstNonEmpty(previousSubagentField(previous, "current"), "done")
+	duration := formatDurationMS(firstNonZeroInt64(asInt64(env.metadata["duration_ms"]), asInt64(env.data["duration_ms"])))
+	summary := firstNonEmpty(asString(env.data["summary"]), env.summary, env.message)
+	if summary == "" {
+		if status == "failed" {
+			summary = "subagent failed"
+		} else {
+			summary = "subagent completed"
+		}
+	}
+	return subagentText(role, status, sessionID, current, "", duration, firstLine(summary))
+}
+
+func subagentText(role, status, sessionID, current, detail, duration, summary string) string {
+	role = firstNonEmpty(strings.TrimSpace(role), "explore")
+	status = firstNonEmpty(strings.TrimSpace(status), "running")
+	lines := []string{"Subagent " + role + " " + status}
+	lines = append(lines, "session: "+firstNonEmpty(strings.TrimSpace(sessionID), "pending"))
+	if current != "" {
+		lines = append(lines, "current: "+strings.TrimSpace(current))
+	}
+	if detail != "" {
+		lines = append(lines, "detail: "+strings.TrimSpace(detail))
+	}
+	if duration != "" {
+		lines = append(lines, "duration: "+duration)
+	}
+	if summary != "" {
+		lines = append(lines, "summary: "+strings.TrimSpace(summary))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func previousSubagentField(previous, field string) string {
+	field = strings.TrimSpace(field)
+	if field == "role" {
+		first := strings.TrimSpace(strings.SplitN(previous, "\n", 2)[0])
+		parts := strings.Fields(first)
+		if len(parts) >= 2 && parts[0] == "Subagent" {
+			return parts[1]
+		}
+		return ""
+	}
+	prefix := field + ":"
+	for _, line := range strings.Split(previous, "\n") {
+		if _, rest, ok := strings.Cut(strings.TrimSpace(line), prefix); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
+	return ""
+}
+
+func toolEnvelopeSucceeded(env toolResultEnvelope) bool {
+	if env.hasSuccess {
+		return env.success
+	}
+	if env.hasOK {
+		return env.ok
+	}
+	if env.code != "" {
+		return env.code == "ok"
+	}
+	return env.status == "" || env.status == "ok" || env.status == "done" || env.status == "completed" || env.status == "success"
+}
+
+func firstNonZeroInt64(values ...int64) int64 {
+	for _, v := range values {
+		if v != 0 {
+			return v
+		}
+	}
+	return 0
 }
 
 func completedToolTitle(toolName, raw, previous string) string {

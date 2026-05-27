@@ -116,6 +116,7 @@ func (b *Toolset) searchWithFallback(ctx context.Context, query string, maxResul
 		return ddgResults, "duckduckgo", "", nil
 	}
 	ddgBlocked := isDuckDuckGoChallenge(ddgHTML)
+	ddgNoResults := ddgErr == nil && isDuckDuckGoNoResults(ddgHTML)
 
 	bingHTML, bingErr := b.fetchSearchHTML(ctx, fmt.Sprintf(b.bingSearchURL, url.QueryEscape(query)), timeoutMS)
 	if bingErr == nil {
@@ -135,7 +136,23 @@ func (b *Toolset) searchWithFallback(ctx context.Context, query string, maxResul
 	if ddgErr != nil && bingErr != nil {
 		return nil, "", "", fmt.Errorf("duckduckgo failed: %v; bing failed: %v", ddgErr, bingErr)
 	}
-	return []webSearchEntry{}, "duckduckgo", "", nil
+	if ddgNoResults {
+		return []webSearchEntry{}, "duckduckgo", "", nil
+	}
+	if bingErr == nil {
+		note := "DuckDuckGo returned no parseable results; Bing fallback returned no results"
+		if ddgBlocked {
+			note = "DuckDuckGo returned a bot challenge; Bing fallback returned no results"
+		}
+		if isBingNoResults(bingHTML) {
+			return []webSearchEntry{}, "bing", note, nil
+		}
+		if isBingChallenge(bingHTML) {
+			return nil, "", "", fmt.Errorf("%s; bing fallback returned a bot challenge", duckDuckGoFallbackFailure(ddgErr, ddgBlocked, ddgHTML))
+		}
+		return nil, "", "", fmt.Errorf("%s; bing fallback returned no parseable results (%s)", duckDuckGoFallbackFailure(ddgErr, ddgBlocked, ddgHTML), webSearchHTMLPreview(bingHTML))
+	}
+	return nil, "", "", fmt.Errorf("%s; bing fallback failed: %v", duckDuckGoFallbackFailure(ddgErr, ddgBlocked, ddgHTML), bingErr)
 }
 
 func (b *Toolset) fetchSearchHTML(ctx context.Context, fullURL string, timeoutMS int) (string, error) {
@@ -263,6 +280,46 @@ func normalizeBingURL(raw string) string {
 func isDuckDuckGoChallenge(html string) bool {
 	lower := strings.ToLower(html)
 	return strings.Contains(lower, "anomaly-modal") || strings.Contains(lower, "bots use duckduckgo too")
+}
+
+func isDuckDuckGoNoResults(html string) bool {
+	lower := strings.ToLower(html)
+	return strings.Contains(lower, "no results found") ||
+		strings.Contains(lower, "no results for") ||
+		strings.Contains(lower, "not find any results")
+}
+
+func isBingChallenge(html string) bool {
+	lower := strings.ToLower(html)
+	return strings.Contains(lower, "captcha") ||
+		strings.Contains(lower, "verify you are human") ||
+		strings.Contains(lower, "access denied") ||
+		strings.Contains(lower, "forbidden")
+}
+
+func isBingNoResults(html string) bool {
+	lower := strings.ToLower(html)
+	return strings.Contains(lower, "no results found") ||
+		strings.Contains(lower, "did not match any documents") ||
+		strings.Contains(lower, "there are no results for")
+}
+
+func duckDuckGoFallbackFailure(err error, blocked bool, html string) string {
+	if blocked {
+		return "duckduckgo returned a bot challenge"
+	}
+	if err != nil {
+		return fmt.Sprintf("duckduckgo failed: %v", err)
+	}
+	return fmt.Sprintf("duckduckgo returned no parseable results (%s)", webSearchHTMLPreview(html))
+}
+
+func webSearchHTMLPreview(html string) string {
+	preview := strings.Join(strings.Fields(html), " ")
+	if len(preview) > 120 {
+		preview = preview[:120]
+	}
+	return fmt.Sprintf("%d chars, first 120: %q", len(html), preview)
 }
 
 func timeDurationMS(ms int) time.Duration { return time.Duration(ms) * time.Millisecond }

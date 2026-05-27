@@ -27,12 +27,18 @@ type ToolArgsDelta struct {
 }
 
 type Usage struct {
-	PromptTokens          int
-	CompletionTokens      int
-	TotalTokens           int
-	PromptCacheHitTokens  int
-	PromptCacheMissTokens int
-	ReasoningReplayTokens int
+	PromptTokens           int
+	CompletionTokens       int
+	TotalTokens            int
+	PromptCacheHitTokens   int
+	PromptCacheMissTokens  int
+	ReasoningReplayTokens  int
+	ToolResultRawChars     int
+	ToolResultReplayChars  int
+	ToolResultRawTokens    int
+	ToolResultReplayTokens int
+	ToolResultTokensSaved  int
+	ToolResultsCompacted   int
 }
 
 type ProviderEvent struct {

@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -93,7 +92,7 @@ func (m model) hasSkillSuggestions() bool {
 }
 
 func (m model) renderSkillSuggestions() string {
-	rows := []string{"Skills"}
+	rows := []string{pickerTitle("Skills")}
 	const maxRows = 8
 	start := 0
 	if len(m.skills.matches) > maxRows {
@@ -109,20 +108,21 @@ func (m model) renderSkillSuggestions() string {
 	if end > start+maxRows {
 		end = start + maxRows
 	}
+	labelWidth := 0
+	for i := start; i < end; i++ {
+		labelWidth = max(labelWidth, lipgloss.Width("$"+m.skills.matches[i].Name))
+	}
+	labelWidth = min(labelWidth, 24)
 	for i := start; i < end; i++ {
 		skill := m.skills.matches[i]
-		prefix := "  "
-		if i == m.skills.selected {
-			prefix = "> "
-		}
 		desc := strings.TrimSpace(skill.Description)
 		if skill.Status == string(skills.AvailabilityNeedsSetup) && strings.TrimSpace(skill.Reason) != "" {
 			desc = skill.Reason
 		}
-		rows = append(rows, fmt.Sprintf("%s$%-16s %s", prefix, skill.Name, desc))
+		rows = append(rows, pickerSuggestionRow("$"+skill.Name, desc, i == m.skills.selected, labelWidth))
 	}
-	rows = append(rows, "  ↑/↓ navigate · Tab/Enter insert · Esc cancel")
-	return lipgloss.NewStyle().Foreground(tuitheme.Default.Info).Render(strings.Join(rows, "\n"))
+	rows = append(rows, pickerHint("  ↑/↓ navigate · Tab/Enter insert · Esc cancel"))
+	return strings.Join(rows, "\n")
 }
 
 func (m *model) insertSelectedSkill() bool {
@@ -226,39 +226,20 @@ func (m *model) openSkillsListFromMenu() {
 }
 
 func (m model) renderSkillsMenu() string {
-	title := lipgloss.NewStyle().Foreground(tuitheme.Default.InfoSoft).Bold(true)
-	muted := lipgloss.NewStyle().Foreground(tuitheme.Default.Muted)
 	rows := []string{
-		title.Render("Skills"),
-		muted.Render("Choose an action"),
+		pickerTitle("Skills"),
+		pickerHint("Choose an action"),
 		"",
 	}
 	for i, item := range skillsMenuItems() {
 		rows = append(rows, renderSkillsMenuRow(item, i == m.skillsMenu.selected))
 	}
-	rows = append(rows, "", muted.Render("  ↑/↓ select · Enter confirm · Esc close"))
+	rows = append(rows, "", pickerHint("  ↑/↓ select · Enter confirm · Esc close"))
 	return strings.Join(rows, "\n")
 }
 
 func renderSkillsMenuRow(item skillsMenuItem, selected bool) string {
-	muted := lipgloss.NewStyle().Foreground(tuitheme.Default.Muted)
-	nameStyle := lipgloss.NewStyle()
-	prefix := muted.Render("  ")
-	if selected {
-		prefix = lipgloss.NewStyle().Foreground(tuitheme.Default.InfoSoft).Bold(true).Render("> ")
-		nameStyle = nameStyle.Foreground(tuitheme.Default.InfoSoft).Bold(true)
-	}
-	head := prefix + nameStyle.Render(item.Name)
-	desc := strings.TrimSpace(item.Description)
-	if desc == "" {
-		return head
-	}
-	const descCol = 28
-	gap := descCol - lipgloss.Width(head)
-	if gap < 1 {
-		gap = 1
-	}
-	return head + strings.Repeat(" ", gap) + muted.Render(desc)
+	return pickerSuggestionRow(item.Name, item.Description, selected, 26)
 }
 
 func (m *model) setSkillsManagerItems(views []skills.SkillView) {
@@ -404,21 +385,18 @@ func (m *model) toggleSelectedManagedSkill() {
 }
 
 func (m model) renderSkillsManager() string {
-	title := lipgloss.NewStyle().Foreground(tuitheme.Default.InfoSoft).Bold(true)
-	body := lipgloss.NewStyle()
-	muted := lipgloss.NewStyle().Foreground(tuitheme.Default.Muted)
 	rows := []string{
-		title.Render("Enable/Disable Skills"),
-		muted.Render("Turn skills on or off. Changes are saved automatically."),
+		pickerTitle("Enable/Disable Skills"),
+		pickerHint("Turn skills on or off. Changes are saved automatically."),
 		"",
-		muted.Render("Type to search skills"),
-		renderSkillsManagerSearchLine(m.skillsManager.query, muted, body),
+		pickerHint("Type to search skills"),
+		renderSkillsManagerSearchLine(m.skillsManager.query),
 	}
 	const maxRows = 8
 	if len(m.skillsManager.all) == 0 {
-		rows = append(rows, muted.Italic(true).Render("  no skills found"))
+		rows = append(rows, pickerHint("  no skills found"))
 	} else if len(m.skillsManager.matches) == 0 {
-		rows = append(rows, muted.Italic(true).Render("  no matches"))
+		rows = append(rows, pickerHint("  no matches"))
 	} else {
 		start := 0
 		if len(m.skillsManager.matches) > maxRows {
@@ -439,15 +417,15 @@ func (m model) renderSkillsManager() string {
 			rows = append(rows, renderSkillsManagerRow(item, visible == m.skillsManager.selected))
 		}
 	}
-	rows = append(rows, "", muted.Render("  ↑/↓ select · Space/Enter toggle · Esc close"))
+	rows = append(rows, "", pickerHint("  ↑/↓ select · Space/Enter toggle · Esc close"))
 	return strings.Join(rows, "\n")
 }
 
-func renderSkillsManagerSearchLine(query string, muted, body lipgloss.Style) string {
+func renderSkillsManagerSearchLine(query string) string {
 	if strings.TrimSpace(query) == "" {
-		return muted.Render("> ")
+		return pickerSection("> ")
 	}
-	return muted.Render("> ") + body.Render(query)
+	return pickerSection("> ") + pickerTone(query, "text")
 }
 
 func renderSkillsManagerRow(item skillManagerItem, selected bool) string {

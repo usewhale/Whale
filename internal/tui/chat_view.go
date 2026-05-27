@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 
+	"github.com/usewhale/whale/internal/app"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
@@ -27,6 +28,14 @@ func (m *model) appendStatus(text string) {
 		m.assembler = tuirender.NewAssembler()
 	}
 	m.assembler.AddStatus(text)
+	m.refreshLiveViewportContent()
+}
+
+func (m *model) appendLiveLocalResult(result *app.LocalResult) {
+	if m.assembler == nil {
+		m.assembler = tuirender.NewAssembler()
+	}
+	m.assembler.AddLocalResult(result)
 	m.refreshLiveViewportContent()
 }
 

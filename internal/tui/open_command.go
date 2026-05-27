@@ -47,7 +47,7 @@ func (m *model) handleOpenCommandFinished(msg openCommandFinishedMsg) tea.Cmd {
 		role = "error"
 		text = msg.err.Error()
 	}
-	m.appendLocalSubmitResult(role, text)
+	m.appendLocalSubmitResult(role, text, nil)
 	m.addLog(logEntry{Kind: role, Source: "system", Summary: text, Raw: text})
 	if role == "error" {
 		m.status = "error"

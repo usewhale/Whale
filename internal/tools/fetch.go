@@ -72,7 +72,7 @@ func (b *Toolset) fetch(ctx context.Context, call core.ToolCall) (core.ToolResul
 		truncated = true
 		raw = raw[:maxFetchBytes]
 	}
-	body := string(raw)
+	body := decodeWebBody(raw, resp.Header.Get("Content-Type"))
 	text := htmlToText(body)
 	content := body
 	switch format {

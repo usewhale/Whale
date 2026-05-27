@@ -131,6 +131,7 @@ type Event struct {
 	AutoAccept      bool
 	AutoAcceptKnown bool
 	ViewMode        string
+	LocalResult     *app.LocalResult
 	Skills          []skills.SkillView
 	Plugins         []plugins.PluginStatus
 	WorktreeExit    *app.WorktreeExitSummary

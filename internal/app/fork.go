@@ -9,20 +9,28 @@ import (
 	"github.com/usewhale/whale/internal/session"
 )
 
-func (a *App) forkCurrentSession(name string) (string, error) {
+type forkSessionResult struct {
+	Message  string
+	Local    *LocalResult
+	SourceID string
+	NextID   string
+	Title    string
+}
+
+func (a *App) forkCurrentSession(name string) (forkSessionResult, error) {
 	if a == nil || a.msgStore == nil {
-		return "", fmt.Errorf("session store unavailable")
+		return forkSessionResult{}, fmt.Errorf("session store unavailable")
 	}
 	sourceID := strings.TrimSpace(a.sessionID)
 	if sourceID == "" {
-		return "", fmt.Errorf("no active session to fork")
+		return forkSessionResult{}, fmt.Errorf("no active session to fork")
 	}
 	msgs, err := a.msgStore.List(a.ctx, sourceID)
 	if err != nil {
-		return "", err
+		return forkSessionResult{}, err
 	}
 	if len(msgs) == 0 {
-		return "", fmt.Errorf("no conversation to fork")
+		return forkSessionResult{}, fmt.Errorf("no conversation to fork")
 	}
 
 	nextID := newSessionID(time.Now())
@@ -32,7 +40,7 @@ func (a *App) forkCurrentSession(name string) (string, error) {
 		copied[i] = msg
 	}
 	if err := a.msgStore.RewriteSession(a.ctx, nextID, copied); err != nil {
-		return "", err
+		return forkSessionResult{}, err
 	}
 
 	titleBase := strings.TrimSpace(name)
@@ -51,28 +59,36 @@ func (a *App) forkCurrentSession(name string) (string, error) {
 		ParentSessionID: sourceID,
 		Title:           title,
 	}); err != nil {
-		return "", err
+		return forkSessionResult{}, err
 	}
 	mode := a.currentMode
 	if mode == "" {
 		mode = session.ModeAgent
 	}
 	if err := session.SaveModeState(a.sessionsDir, nextID, mode); err != nil {
-		return "", err
+		return forkSessionResult{}, err
 	}
 	todo, err := session.LoadTodoState(a.sessionsDir, sourceID)
 	if err != nil {
-		return "", err
+		return forkSessionResult{}, err
 	}
 	if len(todo.Items) > 0 {
 		if err := session.SaveTodoState(a.sessionsDir, nextID, todo); err != nil {
-			return "", err
+			return forkSessionResult{}, err
 		}
 	}
 
 	a.sessionID = nextID
 	a.a = nil
-	return fmt.Sprintf("Forked conversation %q. You are now in the fork.\nTo resume the original: %s", title, resumeCommand(a.workspaceRoot, sourceID)), nil
+	resume := resumeCommand(a.workspaceRoot, sourceID)
+	msg := fmt.Sprintf("Forked conversation %q. You are now in the fork.\nTo resume the original: %s", title, resume)
+	return forkSessionResult{
+		Message:  msg,
+		Local:    buildForkLocalResult(title, sourceID, nextID, resume, msg),
+		SourceID: sourceID,
+		NextID:   nextID,
+		Title:    title,
+	}, nil
 }
 
 func deriveForkTitleBase(msgs []core.Message) string {

@@ -299,7 +299,9 @@ func (s *Service) handleLocalSubmit(line string) {
 			s.emitSessionHydrated()
 		}
 		if cmd.Text != "" {
-			s.emit(localSubmitResultEvent("info", cmd.Text))
+			ev := localSubmitResultEvent("info", cmd.Text)
+			ev.LocalResult = cmd.LocalResult
+			s.emit(ev)
 		}
 		return
 	}
@@ -310,7 +312,9 @@ func (s *Service) handleLocalSubmit(line string) {
 	}
 	if cmd.Handled {
 		if cmd.Text != "" {
-			s.emit(localSubmitResultEvent("info", cmd.Text))
+			ev := localSubmitResultEvent("info", cmd.Text)
+			ev.LocalResult = cmd.LocalResult
+			s.emit(ev)
 		}
 		if cmd.Turn != nil {
 			s.emit(localSubmitResultEvent("error", "command starts an agent turn and cannot run as a local submit"))
@@ -434,7 +438,7 @@ func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.
 		// Emit Info after session hydration so the text isn't
 		// wiped by the hydration's assembler reset.
 		if cmd.Text != "" {
-			s.emit(Event{Kind: EventInfo, Text: cmd.Text})
+			s.emit(Event{Kind: EventInfo, Text: cmd.Text, LocalResult: cmd.LocalResult})
 		}
 		if cmd.Turn == nil {
 			s.emit(Event{Kind: EventTurnDone, LastResponse: cmd.Text})
@@ -458,7 +462,7 @@ func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.
 	}
 	if cmd.Handled {
 		if cmd.Text != "" {
-			s.emit(Event{Kind: EventInfo, Text: cmd.Text})
+			s.emit(Event{Kind: EventInfo, Text: cmd.Text, LocalResult: cmd.LocalResult})
 		}
 		if cmd.Turn == nil {
 			s.emit(Event{Kind: EventTurnDone, LastResponse: cmd.Text})

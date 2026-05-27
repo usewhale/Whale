@@ -151,6 +151,45 @@ func TestRunDoctorUsesEnvKeyWhenPresent(t *testing.T) {
 	}
 }
 
+func TestRunDoctorReportsWhaleHomeOverride(t *testing.T) {
+	dataDir := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("WHALE_HOME", dataDir)
+
+	report, err := RunDoctor(context.Background(), Config{MemoryFileOrder: "AGENTS.md"}, workspace)
+	if err != nil {
+		t.Fatalf("RunDoctor: %v", err)
+	}
+	if report.DataDir != dataDir {
+		t.Fatalf("DataDir = %q, want %q", report.DataDir, dataDir)
+	}
+	got := findDoctorCheck(report.Checks, "data dir override")
+	if got.Level != DoctorOK || !strings.Contains(got.Detail, "WHALE_HOME") || !strings.Contains(got.Detail, dataDir) {
+		t.Fatalf("data dir override check: %+v", got)
+	}
+}
+
+func TestDoctorCheckDataDirOverrideHintsOnWindows(t *testing.T) {
+	got := doctorCheckDataDirOverride("windows", func(string) string { return "" }, `C:\Users\dev\.whale`)
+	if got.Level != DoctorOK || !strings.Contains(got.Detail, "WHALE_HOME") {
+		t.Fatalf("windows data dir override hint: %+v", got)
+	}
+}
+
+func TestDoctorCheckDataDirOverrideOmittedWhenUnsetOutsideWindows(t *testing.T) {
+	got := doctorCheckDataDirOverride("linux", func(string) string { return "" }, "/home/dev/.whale")
+	if got.Level != "" {
+		t.Fatalf("data dir override check should be omitted: %+v", got)
+	}
+}
+
+func TestDoctorCheckDataDirACLOmittedOutsideWindows(t *testing.T) {
+	got := doctorCheckDataDirACL("linux", "/home/dev/.whale")
+	if got.Level != "" {
+		t.Fatalf("data dir acl check should be omitted: %+v", got)
+	}
+}
+
 func TestCheckDeepSeekAPIReachabilityClassifiesResponses(t *testing.T) {
 	t.Setenv("DEEPSEEK_BASE_URL", newDoctorServer(t, http.StatusUnauthorized).URL)
 	msg, err := CheckDeepSeekAPIReachability(context.Background(), "sk-1234567890abcdef1234")

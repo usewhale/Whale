@@ -1250,7 +1250,7 @@ func TestWindowsDeferredBusyEnterPreservesBusySlashClassification(t *testing.T) 
 		if got := m.input.Value(); got != "/ask inspect this" {
 			t.Fatalf("expected blocked slash command to remain editable, got %q", got)
 		}
-		if m.status != "command disabled while working" {
+		if m.status != "/ask disabled while working" {
 			t.Fatalf("expected disabled status, got %q", m.status)
 		}
 	})
@@ -2308,7 +2308,8 @@ func TestPermissionsMenuRendersStateAndDispatchesExplicitMode(t *testing.T) {
 		t.Fatalf("expected permissions menu mode, got %v", m.mode)
 	}
 	rendered := m.renderPermissionsMenu()
-	if !strings.Contains(rendered, "Session auto-accept: off") || !strings.Contains(rendered, "Enable session auto-accept") {
+	plain := xansi.Strip(rendered)
+	if !strings.Contains(plain, "Session auto-accept: off") || !strings.Contains(plain, "Enable session auto-accept") {
 		t.Fatalf("unexpected permissions menu:\n%s", rendered)
 	}
 
@@ -2325,7 +2326,8 @@ func TestPermissionsMenuRendersStateAndDispatchesExplicitMode(t *testing.T) {
 	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventPermissionsMenu, AutoAccept: true}))
 	m = next.(model)
 	rendered = m.renderPermissionsMenu()
-	if !strings.Contains(rendered, "Session auto-accept: on") || !strings.Contains(rendered, "Disable session auto-accept") {
+	plain = xansi.Strip(rendered)
+	if !strings.Contains(plain, "Session auto-accept: on") || !strings.Contains(plain, "Disable session auto-accept") {
 		t.Fatalf("unexpected enabled permissions menu:\n%s", rendered)
 	}
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -2344,6 +2346,50 @@ func TestPermissionsMenuRendersStateAndDispatchesExplicitMode(t *testing.T) {
 	if len(*intents) != 0 || m.mode != modeChat {
 		t.Fatalf("cancel should not dispatch and should return to chat, intents=%+v mode=%v", *intents, m.mode)
 	}
+}
+
+func TestPermissionsMenuUsesSegmentedPickerStyles(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	m := newModel(nil, "", "", "")
+	m.mode = modePermissionsMenu
+	rendered := m.renderPermissionsMenu()
+	if !strings.Contains(rendered, "\x1b[") {
+		t.Fatalf("expected styled permissions menu, got:\n%s", rendered)
+	}
+	plain := xansi.Strip(rendered)
+	for _, want := range []string{"Permissions", "Session auto-accept: off", "> Enable session auto-accept", "  Cancel"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected plain menu to contain %q, got:\n%s", want, plain)
+		}
+	}
+}
+
+func assertStyledPickerContains(t *testing.T, rendered string, wants ...string) {
+	t.Helper()
+	if !strings.Contains(rendered, "\x1b[") {
+		t.Fatalf("expected styled picker, got:\n%s", rendered)
+	}
+	plain := xansi.Strip(rendered)
+	for _, want := range wants {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected plain picker to contain %q, got:\n%s", want, plain)
+		}
+	}
+}
+
+func TestModelPickerUsesSegmentedPickerStyles(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	m := newModel(nil, "deepseek-chat", "medium", "auto")
+	m.mode = modeModelPicker
+	m.modelPicker.models = []string{"deepseek-chat", "deepseek-reasoner"}
+	m.modelPicker.efforts = []string{"low", "medium", "high"}
+	assertStyledPickerContains(t, m.renderModelPicker(), "Select Model and Effort", "Model:", "> deepseek-chat", "  deepseek-reasoner", "(up/down choose, enter next/confirm, esc back)")
 }
 
 func TestSessionPickerEnterDispatchesSelectedSession(t *testing.T) {
@@ -2377,6 +2423,96 @@ func TestSessionPickerEnterDispatchesSelectedSession(t *testing.T) {
 	if m.mode != modeChat {
 		t.Fatalf("expected chat mode after selection, got %v", m.mode)
 	}
+}
+
+func TestSessionPickerUsesSegmentedPickerStyles(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	m := newModel(nil, "", "", "")
+	next, _ := m.Update(svcMsg(service.Event{
+		Kind: service.EventSessionsListed,
+		Choices: []string{
+			"recent sessions:",
+			"   #   Updated   Branch                    Conversation",
+			"*  1) 4s ago    -                        current",
+			"   2) 1m ago    feature                  second session",
+		},
+	}))
+	m = next.(model)
+	assertStyledPickerContains(t, m.renderSessionPicker(), "sessions", "#   Updated   Branch", "> 1)   4s ago", "  2)   1m ago", "feature", "second session")
+}
+
+func TestSecondaryPickersUseSegmentedPickerStyles(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	m := newModel(nil, "", "", "")
+	m.files.matches = []fileSuggestion{{Path: "internal/tui/render.go"}, {Path: "internal/tui", IsDir: true}}
+	m.files.selected = 1
+	assertStyledPickerContains(t, m.renderFileSuggestions(), "Files", "> internal/tui/", "dir", "Tab/Enter insert")
+
+	m = newModel(nil, "", "", "")
+	m.palette.actions = []paletteAction{{Label: "Open logs"}, {Label: "Show help"}}
+	m.palette.selected = 1
+	assertStyledPickerContains(t, m.renderPalette(), "Command Palette", "(enter to run, esc to close)", "> Show help")
+
+	m = newModel(nil, "", "", "")
+	m.skills.matches = []skillSuggestion{{Name: "code-review", Description: "Review local changes"}, {Name: "plan", Description: "Make a plan"}}
+	m.skills.selected = 0
+	assertStyledPickerContains(t, m.renderSkillSuggestions(), "Skills", "> $code-review", "Review local changes", "Tab/Enter insert")
+
+	m = newModel(nil, "", "", "")
+	m.handleServiceEvent(service.Event{Kind: service.EventSkillsMenu})
+	assertStyledPickerContains(t, m.renderSkillsMenu(), "Skills", "Choose an action", "> List skills", "Enable/Disable Skills")
+
+	m = newModel(nil, "", "", "")
+	m.handleServiceEvent(service.Event{
+		Kind: service.EventSkillsManager,
+		Skills: []skills.SkillView{
+			{Name: "code-review", Description: "Review local changes", Status: skills.AvailabilityReady},
+		},
+	})
+	assertStyledPickerContains(t, m.renderSkillsManager(), "Enable/Disable Skills", "[x] code-review", "Review local changes")
+
+	m = newModel(nil, "", "", "")
+	m.handleServiceEvent(service.Event{
+		Kind: service.EventPluginsManager,
+		Plugins: []plugins.PluginStatus{{
+			Manifest: plugins.Manifest{ID: "memory", Name: "Memory", Description: "Durable memory"},
+			Enabled:  true,
+		}},
+	})
+	assertStyledPickerContains(t, m.renderPluginsManager(), "Plugins", "Installed plugins", "[x] memory", "Durable memory")
+
+	m = newModel(nil, "", "", "")
+	m.handleServiceEvent(service.Event{Kind: service.EventReviewMenu})
+	assertStyledPickerContains(t, m.renderReviewMenu(), "Review", "Choose what to review", "> Local changes", "Branch")
+
+	m.reviewTargetPicker.branches = []reviewBranchItem{{Name: "main"}, {Name: "feature", Current: true}}
+	m.reviewTargetPicker.defaultBranch = "main"
+	m.mode = modeReviewBranchPicker
+	assertStyledPickerContains(t, m.renderReviewTargetPicker(), "Choose base branch", "Type to search branches", "> feature -> main")
+
+	m = newModel(nil, "", "", "")
+	m.planImplementation.index = 1
+	assertStyledPickerContains(t, m.renderPlanImplementationPicker(), "Implement this plan?", "> No, stay in Plan mode")
+
+	m = newModel(nil, "", "", "")
+	m.userInput.questions = []core.UserInputQuestion{{
+		Question: "Pick deployment target",
+		Options:  []core.UserInputOption{{Label: "Staging", Description: "Use staging"}, {Label: "Production", Description: "Use production"}},
+	}}
+	m.userInput.selectedOption = 1
+	assertStyledPickerContains(t, m.renderUserInputPicker(), "Pick deployment target", "> Production", "- Use production")
+
+	m = newModel(nil, "", "", "")
+	m.worktreeExit.summary = app.WorktreeExitSummary{
+		Session: app.WorktreeSession{Name: "feat", Branch: "feature/work", Path: "/tmp/work"},
+	}
+	assertStyledPickerContains(t, m.renderWorktreeExit(), "Exiting worktree session", "worktree: feat", "> Keep worktree", "No worktree changes were detected.")
 }
 
 func TestCrossWorkspaceResumeInfoRendersInTUI(t *testing.T) {
@@ -2777,7 +2913,7 @@ func TestSlashArgumentHintShownForCommandSpace(t *testing.T) {
 	if len(m.slash.matches) != 0 {
 		t.Fatalf("did not expect /model option matches, got %+v", m.slash.matches)
 	}
-	if rendered := m.renderSlashSuggestions(); !strings.Contains(rendered, "Arguments [model]") {
+	if rendered := m.renderSlashSuggestions(); !strings.Contains(xansi.Strip(rendered), "Arguments [model]") {
 		t.Fatalf("expected /model argument hint, got:\n%s", rendered)
 	}
 }
@@ -2807,7 +2943,7 @@ func TestSlashOptionSuggestionsInsertSubcommand(t *testing.T) {
 		t.Fatal("expected /stats option suggestions")
 	}
 	selectSlashCommand(t, &m, "/stats usage")
-	if rendered := m.renderSlashSuggestions(); !strings.Contains(rendered, "usage") || !strings.Contains(rendered, "Show token and cost usage") {
+	if rendered := m.renderSlashSuggestions(); !strings.Contains(xansi.Strip(rendered), "/stats usage") || !strings.Contains(xansi.Strip(rendered), "Show token and cost usage") {
 		t.Fatalf("expected /stats option description, got:\n%s", rendered)
 	}
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -2820,6 +2956,26 @@ func TestSlashOptionSuggestionsInsertSubcommand(t *testing.T) {
 	}
 	if got := m.input.Value(); got != "" {
 		t.Fatalf("expected input cleared after /stats usage option, got %q", got)
+	}
+}
+
+func TestSlashStatsOptionSuggestionsUseFullCommandLabels(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	m := newModel(nil, "", "", "")
+	m.input.SetValue("/stats ")
+	m.updateSlashMatches()
+	rendered := m.renderSlashSuggestions()
+	if !strings.Contains(rendered, "\x1b[") {
+		t.Fatalf("expected styled stats suggestions, got:\n%s", rendered)
+	}
+	plain := xansi.Strip(rendered)
+	for _, want := range []string{"/stats usage", "/stats tools", "Show token and cost usage", "Show tool-call counts"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected stats suggestions to contain %q, got:\n%s", want, plain)
+		}
 	}
 }
 
@@ -4738,12 +4894,17 @@ func TestEnterWhileBusyBlocksSlashCommandsWithoutQueueing(t *testing.T) {
 			if !m.busy {
 				t.Fatal("expected active turn to remain busy")
 			}
-			if !strings.Contains(m.status, "disabled") {
-				t.Fatalf("expected disabled guidance, got %q", m.status)
+			if !strings.Contains(m.status, "disabled while working") {
+				t.Fatalf("expected disabled status, got %q", m.status)
 			}
 			gotTranscript := strings.Join(tuirender.ChatLines(m.chatMessages(), 80), "\n")
-			if !strings.Contains(gotTranscript, "disabled while a turn is in progress") {
-				t.Fatalf("expected visible blocked-command message, got:\n%s", gotTranscript)
+			if strings.Contains(gotTranscript, "disabled while") {
+				t.Fatalf("blocked-command guidance should not be inserted into chat messages:\n%s", gotTranscript)
+			}
+			m.width = 100
+			m.height = 24
+			if view := m.View(); !strings.Contains(view, "disabled while working") {
+				t.Fatalf("expected blocked-command guidance in busy status line:\n%s", view)
 			}
 		})
 	}
@@ -5598,6 +5759,10 @@ func TestPlanCompletedReplacesPartialPlanAndTurnDoneShowsPicker(t *testing.T) {
 	}
 	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventPlanDelta, Text: "partial"}))
 	m = next.(model)
+	liveRendered := strings.Join(tuirender.ChatLines(m.assembler.Snapshot(), 80), "\n")
+	if !strings.Contains(liveRendered, "Proposed Plan") || !strings.Contains(liveRendered, "partial") {
+		t.Fatalf("expected live proposed plan render, got %q", liveRendered)
+	}
 	next, cmd := m.Update(svcMsg(service.Event{Kind: service.EventPlanCompleted, Text: "complete final plan"}))
 	m = next.(model)
 	if cmd == nil {
@@ -5608,6 +5773,10 @@ func TestPlanCompletedReplacesPartialPlanAndTurnDoneShowsPicker(t *testing.T) {
 	}
 	if len(m.transcript) != 1 || m.transcript[0].Kind != tuirender.KindPlan {
 		t.Fatalf("expected completed plan in transcript, got %+v", m.transcript)
+	}
+	rendered := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
+	if !strings.Contains(rendered, "Proposed Plan") || !strings.Contains(rendered, "complete final plan") {
+		t.Fatalf("expected rendered proposed plan, got %q", rendered)
 	}
 	if m.lastProposedPlan != "complete final plan" {
 		t.Fatalf("expected last proposed plan to be captured, got %q", m.lastProposedPlan)
@@ -5799,6 +5968,10 @@ func TestPlanCompletedWithoutDeltasStillRendersPlan(t *testing.T) {
 	if len(m.transcript) != 1 || m.transcript[0].Kind != tuirender.KindPlan {
 		t.Fatalf("expected final plan in transcript, got %+v", m.transcript)
 	}
+	rendered := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
+	if !strings.Contains(rendered, "Proposed Plan") || !strings.Contains(rendered, "final plan") {
+		t.Fatalf("expected rendered proposed plan, got %q", rendered)
+	}
 	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventTurnDone, LastResponse: "done"}))
 	m = next.(model)
 	snap := m.assembler.Snapshot()
@@ -5807,6 +5980,27 @@ func TestPlanCompletedWithoutDeltasStillRendersPlan(t *testing.T) {
 	}
 	if m.mode != modePlanImplementation {
 		t.Fatalf("expected implementation picker, got mode %v", m.mode)
+	}
+}
+
+func TestHydrateSessionMessages_RestoresProposedPlanStyle(t *testing.T) {
+	m := &model{assembler: tuirender.NewAssembler()}
+	msgs := []core.Message{
+		{
+			Role: core.RoleAssistant,
+			Text: "drafting...\n<proposed_plan>\n# Plan\n- Patch renderer\n</proposed_plan>",
+		},
+	}
+	m.hydrateSessionMessages(msgs)
+	snap := m.assembler.Snapshot()
+	if len(snap) != 2 || snap[0].Kind != tuirender.KindText || snap[1].Kind != tuirender.KindPlan {
+		t.Fatalf("expected assistant text and proposed plan, got %+v", snap)
+	}
+	rendered := strings.Join(tuirender.ChatLines(snap, 80), "\n")
+	for _, want := range []string{"drafting", "Proposed Plan", "Patch renderer"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected %q in hydrated proposed plan:\n%s", want, rendered)
+		}
 	}
 }
 
@@ -6226,6 +6420,169 @@ func TestNewSessionLocalResultRendersAsNotice(t *testing.T) {
 	}
 }
 
+func TestStatusLocalResultRendersAsStructuredTranscriptEntry(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.width = 80
+	m.height = 14
+
+	m.input.SetValue("/status")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind:   service.EventLocalSubmitResult,
+		Status: "info",
+		Text:   "Status\n\n- session: test-session",
+		LocalResult: &app.LocalResult{
+			Kind:      "status",
+			Title:     "Status",
+			PlainText: "Status\n\n- session: test-session",
+			Fields: []app.LocalResultField{
+				{Label: "Session", Value: "test-session"},
+				{Label: "Mode", Value: "agent", Tone: "info"},
+			},
+		},
+	}))
+	m = next.(model)
+
+	if len(m.transcript) < 2 {
+		t.Fatalf("expected command echo and status result, got %+v", m.transcript)
+	}
+	got := m.transcript[len(m.transcript)-1]
+	if got.Kind != tuirender.KindLocalStatus || got.Role != "local_status" || got.Local == nil {
+		t.Fatalf("expected local status transcript entry, got role=%q kind=%q local=%+v", got.Role, got.Kind, got.Local)
+	}
+	rendered := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
+	for _, want := range []string{"/status", "Status", "Session", "test-session", "Mode", "agent"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected rendered status transcript to contain %q:\n%s", want, rendered)
+		}
+	}
+}
+
+func TestBusyStatusLocalResultRendersAsStructuredLiveEntry(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.width = 80
+	m.height = 14
+	m.busy = true
+
+	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventAssistantDelta, Text: "working"}))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind:   service.EventLocalSubmitResult,
+		Status: "info",
+		Text:   "Status\n\n- session: test-session\n- mode: agent",
+		LocalResult: &app.LocalResult{
+			Kind:      "status",
+			Title:     "Status",
+			PlainText: "Status\n\n- session: test-session\n- mode: agent",
+			Fields: []app.LocalResultField{
+				{Label: "Session", Value: "test-session"},
+				{Label: "Mode", Value: "agent", Tone: "info"},
+			},
+		},
+	}))
+	m = next.(model)
+
+	snap := m.assembler.Snapshot()
+	if len(snap) != 2 {
+		t.Fatalf("expected assistant and local status in live assembler, got %+v", snap)
+	}
+	if got := snap[1]; got.Kind != tuirender.KindLocalStatus || got.Role != "local_status" || got.Local == nil {
+		t.Fatalf("expected structured local status live entry, got role=%q kind=%q local=%+v", got.Role, got.Kind, got.Local)
+	}
+	rendered := strings.Join(tuirender.ChatLines(m.chatMessages(), 80), "\n")
+	workingIx := strings.Index(rendered, "working")
+	statusIx := strings.Index(rendered, "test-session")
+	if workingIx < 0 || statusIx < 0 || workingIx > statusIx {
+		t.Fatalf("expected live assistant output before structured status card:\n%s", rendered)
+	}
+}
+
+func TestMCPLocalResultRendersAsStructuredTranscriptEntry(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.width = 80
+	m.height = 14
+
+	m.input.SetValue("/mcp")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind:   service.EventLocalSubmitResult,
+		Status: "info",
+		Text:   "MCP\n\nconfig: /tmp/mcp.json\nservers: 1",
+		LocalResult: &app.LocalResult{
+			Kind:      "mcp",
+			Title:     "MCP",
+			PlainText: "MCP\n\nconfig: /tmp/mcp.json\nservers: 1",
+			Fields: []app.LocalResultField{
+				{Label: "Config", Value: "/tmp/mcp.json"},
+				{Label: "Servers", Value: "1", Tone: "info"},
+			},
+			Sections: []app.LocalResultSection{{
+				Title: "fs",
+				Fields: []app.LocalResultField{
+					{Label: "Status", Value: "failed", Tone: "error"},
+					{Label: "Error", Value: "timeout", Tone: "error"},
+				},
+			}},
+		},
+	}))
+	m = next.(model)
+
+	if len(m.transcript) < 2 {
+		t.Fatalf("expected command echo and mcp result, got %+v", m.transcript)
+	}
+	got := m.transcript[len(m.transcript)-1]
+	if got.Kind != tuirender.KindLocalMCP || got.Role != "local_mcp" || got.Local == nil {
+		t.Fatalf("expected local mcp transcript entry, got role=%q kind=%q local=%+v", got.Role, got.Kind, got.Local)
+	}
+	rendered := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
+	for _, want := range []string{"/mcp", "MCP", "Config", "/tmp/mcp.json", "fs", "failed", "timeout"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected rendered mcp transcript to contain %q:\n%s", want, rendered)
+		}
+	}
+}
+
+func TestBusyMCPLocalResultRendersAsStructuredLiveEntry(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.width = 80
+	m.height = 14
+	m.busy = true
+
+	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventAssistantDelta, Text: "working"}))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind:   service.EventLocalSubmitResult,
+		Status: "info",
+		Text:   "MCP\n\nconfig: /tmp/mcp.json\nservers: 1",
+		LocalResult: &app.LocalResult{
+			Kind:      "mcp",
+			Title:     "MCP",
+			PlainText: "MCP\n\nconfig: /tmp/mcp.json\nservers: 1",
+			Fields: []app.LocalResultField{
+				{Label: "Config", Value: "/tmp/mcp.json"},
+				{Label: "Servers", Value: "1", Tone: "info"},
+			},
+		},
+	}))
+	m = next.(model)
+
+	snap := m.assembler.Snapshot()
+	if len(snap) != 2 {
+		t.Fatalf("expected assistant and local mcp in live assembler, got %+v", snap)
+	}
+	if got := snap[1]; got.Kind != tuirender.KindLocalMCP || got.Role != "local_mcp" || got.Local == nil {
+		t.Fatalf("expected structured local mcp live entry, got role=%q kind=%q local=%+v", got.Role, got.Kind, got.Local)
+	}
+	rendered := strings.Join(tuirender.ChatLines(m.chatMessages(), 80), "\n")
+	workingIx := strings.Index(rendered, "working")
+	mcpIx := strings.Index(rendered, "/tmp/mcp.json")
+	if workingIx < 0 || mcpIx < 0 || workingIx > mcpIx {
+		t.Fatalf("expected live assistant output before structured mcp card:\n%s", rendered)
+	}
+}
+
 func TestLocalCommandResultCommitsIdleAssemblerBeforeNextPrompt(t *testing.T) {
 	m, _ := newModelWithDispatchSpy()
 	m.width = 80
@@ -6427,7 +6784,7 @@ func TestFinalAssistantFailedCommittedReplacementDoesNotMutateTranscript(t *test
 	}
 }
 
-func TestBusySlashWarningPreservesLiveTurnOrder(t *testing.T) {
+func TestBusySlashWarningStaysOutOfLiveTurn(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.width = 100
 	m.height = 30
@@ -6444,10 +6801,20 @@ func TestBusySlashWarningPreservesLiveTurnOrder(t *testing.T) {
 	}
 
 	rendered := strings.Join(tuirender.ChatLines(m.chatMessages(), 100), "\n")
-	assistantIx := strings.Index(rendered, "already visible")
-	warningIx := strings.Index(rendered, "disabled while a turn is in progress")
-	if assistantIx < 0 || warningIx < 0 || assistantIx > warningIx {
-		t.Fatalf("expected busy slash warning after existing live assistant output:\n%s", rendered)
+	if !strings.Contains(rendered, "already visible") {
+		t.Fatalf("expected existing live assistant output:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "disabled while") {
+		t.Fatalf("busy slash warning should not be inserted into live chat output:\n%s", rendered)
+	}
+	if view := m.View(); !strings.Contains(view, "/model disabled while working") {
+		t.Fatalf("expected busy slash warning in status line:\n%s", view)
+	}
+	if view := m.View(); strings.Contains(view, "Enter to queue") {
+		t.Fatalf("blocked slash draft should not show queue guidance:\n%s", view)
+	}
+	if view := m.View(); strings.Contains(view, "Esc/Ctrl+C to interrupt") {
+		t.Fatalf("blocked slash draft should not claim Ctrl+C interrupts:\n%s", view)
 	}
 
 	next, _ = m.Update(svcMsg(service.Event{
@@ -6457,11 +6824,36 @@ func TestBusySlashWarningPreservesLiveTurnOrder(t *testing.T) {
 	}))
 	m = next.(model)
 	rendered = strings.Join(tuirender.ChatLines(m.transcript, 100), "\n")
-	assistantIx = strings.Index(rendered, "already visible")
-	warningIx = strings.Index(rendered, "disabled while a turn is in progress")
+	assistantIx := strings.Index(rendered, "already visible")
 	tailIx := strings.Index(rendered, "recovered tail")
-	if assistantIx < 0 || warningIx < 0 || tailIx < 0 || !(assistantIx < warningIx && warningIx < tailIx) {
-		t.Fatalf("expected committed order assistant, warning, recovered tail:\n%s", rendered)
+	if assistantIx < 0 || tailIx < 0 || !(assistantIx < tailIx) {
+		t.Fatalf("expected committed order assistant then recovered tail:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "disabled while") {
+		t.Fatalf("busy slash warning should not be committed to transcript:\n%s", rendered)
+	}
+}
+
+func TestBusySlashWarningDoesNotHideProviderRetryStatus(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 140
+	m.height = 24
+	m.startBusy()
+	m.busySince = time.Now().Add(-12 * time.Second)
+	m.input.SetValue("/model")
+	m.status = "/model disabled while working"
+	m.providerRetryStatus = "API rate limited, retrying in 1s (1/3)"
+	m.providerRetryUntil = time.Now().Add(time.Second)
+
+	view := m.View()
+	if !strings.Contains(view, "API rate limited, retrying in 1s (1/3) (12s)") {
+		t.Fatalf("expected retry status to take priority over blocked slash status:\n%s", view)
+	}
+	if strings.Contains(view, "/model disabled while working") {
+		t.Fatalf("blocked slash status should not hide retry status:\n%s", view)
+	}
+	if strings.Contains(view, "Enter to queue") {
+		t.Fatalf("blocked slash draft should not show queue guidance during retry:\n%s", view)
 	}
 }
 
@@ -8192,7 +8584,7 @@ func TestChatBusyViewShowsWorkingAboveComposer(t *testing.T) {
 	m.startBusy()
 	m.busySince = time.Now().Add(-12 * time.Second)
 	view := m.View()
-	if !strings.Contains(view, "Working (12s) · Esc/Ctrl+C to interrupt") {
+	if !strings.Contains(view, "Working (12s) · Type follow-up, Enter to queue · Esc/Ctrl+C to interrupt") {
 		t.Fatalf("expected working status line with elapsed time:\n%s", view)
 	}
 	if strings.Contains(view, "status: working") {
@@ -8203,9 +8595,164 @@ func TestChatBusyViewShowsWorkingAboveComposer(t *testing.T) {
 	}
 }
 
-func TestChatBusyViewShowsProviderRetryStatus(t *testing.T) {
+func TestChatBusyViewShowsDraftSpecificBusyHint(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 100
+	m.height = 24
+	m.startBusy()
+	m.busySince = time.Now().Add(-12 * time.Second)
+	m.input.SetValue("follow up")
+
+	view := m.View()
+	if !strings.Contains(view, "Working (12s) · Enter to queue · Esc to interrupt · Ctrl+C clears draft") {
+		t.Fatalf("expected draft-specific busy status line:\n%s", view)
+	}
+	if strings.Contains(view, "Esc/Ctrl+C to interrupt") {
+		t.Fatalf("draft busy status should not claim Ctrl+C interrupts:\n%s", view)
+	}
+}
+
+func TestChatBusyViewTreatsWhitespaceDraftAsEmpty(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 100
+	m.height = 24
+	m.startBusy()
+	m.busySince = time.Now().Add(-12 * time.Second)
+	m.input.SetValue("  \n\t  ")
+
+	view := m.View()
+	if !strings.Contains(view, "Working (12s) · Type follow-up · Esc to interrupt · Ctrl+C clears draft") {
+		t.Fatalf("expected whitespace draft to use draft-clearing busy guidance:\n%s", view)
+	}
+	for _, unexpected := range []string{"Enter to queue", "Esc/Ctrl+C to interrupt"} {
+		if strings.Contains(view, unexpected) {
+			t.Fatalf("whitespace-only draft should not show %q:\n%s", unexpected, view)
+		}
+	}
+}
+
+func TestChatBusyViewShowsBlockedSlashDraftHint(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 100
+	m.height = 24
+	m.startBusy()
+	m.busySince = time.Now().Add(-12 * time.Second)
+	m.input.SetValue("/model")
+	m.status = "/model disabled while working"
+
+	view := m.View()
+	if !strings.Contains(view, "/model disabled while working (12s) · Edit command or press Esc to interrupt · Ctrl+C clears draft") {
+		t.Fatalf("expected blocked slash busy status line:\n%s", view)
+	}
+	if strings.Contains(view, "Enter to queue") {
+		t.Fatalf("blocked slash draft should not show queue guidance:\n%s", view)
+	}
+	if strings.Contains(view, "Esc/Ctrl+C to interrupt") {
+		t.Fatalf("blocked slash draft should not claim Ctrl+C interrupts:\n%s", view)
+	}
+}
+
+func TestChatBusyViewShowsBlockedSlashPrefixDraftHint(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 100
+	m.height = 24
+	m.startBusy()
+	m.busySince = time.Now().Add(-12 * time.Second)
+	m.input.SetValue("/mo")
+	m.status = "/model disabled while working"
+
+	view := m.View()
+	if !strings.Contains(view, "/model disabled while working (12s) · Edit command or press Esc to interrupt · Ctrl+C clears draft") {
+		t.Fatalf("expected expanded blocked slash prefix status line:\n%s", view)
+	}
+	if strings.Contains(view, "Enter to queue") {
+		t.Fatalf("blocked slash prefix draft should not show queue guidance:\n%s", view)
+	}
+}
+
+func TestChatBusyViewDoesNotQueueUnsentSlashDraft(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 120
+	m.height = 24
+	m.startBusy()
+	m.busySince = time.Now().Add(-12 * time.Second)
+	m.input.SetValue("/model")
+
+	view := m.View()
+	if !strings.Contains(view, "Working (12s) · Slash commands are disabled while working · Esc to interrupt · Ctrl+C clears draft") {
+		t.Fatalf("expected unsent slash draft busy guidance:\n%s", view)
+	}
+	if strings.Contains(view, "Enter to queue") {
+		t.Fatalf("unsent slash draft should not show queue guidance:\n%s", view)
+	}
+}
+
+func TestChatBusyViewShowsRunHintForBusyImmediateSlashDraft(t *testing.T) {
+	for _, draft := range []string{"/status", "/btw remember this"} {
+		t.Run(draft, func(t *testing.T) {
+			m := newModel(nil, "", "", "")
+			m.width = 120
+			m.height = 24
+			m.startBusy()
+			m.busySince = time.Now().Add(-12 * time.Second)
+			m.input.SetValue(draft)
+
+			view := m.View()
+			if !strings.Contains(view, "Working (12s) · Enter to run · Esc to interrupt · Ctrl+C clears draft") {
+				t.Fatalf("expected busy-immediate slash draft run guidance:\n%s", view)
+			}
+			if strings.Contains(view, "Slash commands are disabled while working") {
+				t.Fatalf("busy-immediate slash draft should not show disabled guidance:\n%s", view)
+			}
+			if strings.Contains(view, "Enter to queue") {
+				t.Fatalf("busy-immediate slash draft should not show queue guidance:\n%s", view)
+			}
+		})
+	}
+}
+
+func TestChatBusyViewDoesNotQueueEditedSlashDraft(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 120
+	m.height = 24
+	m.startBusy()
+	m.busySince = time.Now().Add(-12 * time.Second)
+	m.input.SetValue("/permissions")
+	m.status = "/model disabled while working"
+
+	view := m.View()
+	if !strings.Contains(view, "Working (12s) · Slash commands are disabled while working · Esc to interrupt · Ctrl+C clears draft") {
+		t.Fatalf("expected edited slash draft busy guidance:\n%s", view)
+	}
+	if strings.Contains(view, "/model disabled while working") {
+		t.Fatalf("edited slash draft should not show stale blocked status:\n%s", view)
+	}
+	if strings.Contains(view, "Enter to queue") {
+		t.Fatalf("edited slash draft should not show queue guidance:\n%s", view)
+	}
+}
+
+func TestChatBusyViewIgnoresStaleBlockedSlashStatusForNormalDraft(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 100
+	m.height = 24
+	m.startBusy()
+	m.busySince = time.Now().Add(-12 * time.Second)
+	m.input.SetValue("normal follow up")
+	m.status = "/model disabled while working"
+
+	view := m.View()
+	if strings.Contains(view, "/model disabled while working") {
+		t.Fatalf("stale blocked slash status should not label normal drafts:\n%s", view)
+	}
+	if !strings.Contains(view, "Working (12s) · Enter to queue · Esc to interrupt · Ctrl+C clears draft") {
+		t.Fatalf("expected normal draft queue guidance after slash edit:\n%s", view)
+	}
+}
+
+func TestChatBusyViewShowsProviderRetryStatus(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 140
 	m.height = 24
 	m.startBusy()
 	m.busySince = time.Now().Add(-12 * time.Second)
@@ -8213,7 +8760,7 @@ func TestChatBusyViewShowsProviderRetryStatus(t *testing.T) {
 	m.providerRetryUntil = time.Now().Add(time.Second)
 
 	view := m.View()
-	if !strings.Contains(view, "API rate limited, retrying in 1s (1/3) (12s) · Esc/Ctrl+C to interrupt") {
+	if !strings.Contains(view, "API rate limited, retrying in 1s (1/3) (12s) · Type follow-up, Enter to queue · Esc/Ctrl+C to interrupt") {
 		t.Fatalf("expected retry status in busy line:\n%s", view)
 	}
 }
@@ -8231,7 +8778,7 @@ func TestChatBusyViewIgnoresExpiredProviderRetryStatus(t *testing.T) {
 	if strings.Contains(view, "API rate limited") {
 		t.Fatalf("expired retry status should not render:\n%s", view)
 	}
-	if !strings.Contains(view, "Working (12s) · Esc/Ctrl+C to interrupt") {
+	if !strings.Contains(view, "Working (12s) · Type follow-up, Enter to queue · Esc/Ctrl+C to interrupt") {
 		t.Fatalf("expected working status after retry expiry:\n%s", view)
 	}
 }
@@ -8341,6 +8888,28 @@ func TestChatStoppingViewShowsStoppingAboveComposer(t *testing.T) {
 	view := m.View()
 	if !strings.Contains(view, "Stopping (1m 05s)") {
 		t.Fatalf("expected stopping status line with continued elapsed time:\n%s", view)
+	}
+	if strings.Contains(view, "to interrupt") {
+		t.Fatalf("stopping view should not show interrupt hint:\n%s", view)
+	}
+}
+
+func TestChatStoppingViewShowsBlockedSlashStatus(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 100
+	m.height = 24
+	m.startBusy()
+	m.stopping = true
+	m.busySince = time.Now().Add(-(time.Minute + 5*time.Second))
+	m.input.SetValue("/model")
+	m.status = "/model disabled while stopping"
+
+	view := m.View()
+	if !strings.Contains(view, "/model disabled while stopping (1m 05s)") {
+		t.Fatalf("expected blocked slash stopping status line:\n%s", view)
+	}
+	if strings.Contains(view, "Enter to queue") {
+		t.Fatalf("blocked slash while stopping should not show queue guidance:\n%s", view)
 	}
 	if strings.Contains(view, "to interrupt") {
 		t.Fatalf("stopping view should not show interrupt hint:\n%s", view)
@@ -9380,14 +9949,24 @@ func TestTaskProgressUpdatesTaskToolRow(t *testing.T) {
 		ToolCallID: "tc-task",
 		ToolName:   "spawn_subagent",
 		Text:       "spawn_subagent running · review · reading internal/tasks/runner.go",
+		Metadata: map[string]any{
+			"child_session_id": "parent--subagent-tc-task",
+			"child_tool":       "read_file",
+			"role":             "review",
+		},
 	}))
 	m = next.(model)
 	snap := m.assembler.Snapshot()
 	if len(snap) != 1 {
 		t.Fatalf("expected one tool row, got %+v", snap)
 	}
-	if snap[0].Role != "result_running" || !strings.Contains(snap[0].Text, "reading internal/tasks/runner.go") {
-		t.Fatalf("unexpected progress row: %+v", snap[0])
+	if snap[0].Kind != tuirender.KindSubagent || snap[0].Role != "result_running" {
+		t.Fatalf("expected running subagent row, got %+v", snap[0])
+	}
+	for _, want := range []string{"Subagent review running", "session: parent--subagent-tc-task", "current: read_file", "detail: reading internal/tasks/runner.go"} {
+		if !strings.Contains(snap[0].Text, want) {
+			t.Fatalf("expected %q in progress row: %+v", want, snap[0])
+		}
 	}
 
 	next, _ = m.Update(svcMsg(service.Event{
@@ -9395,11 +9974,113 @@ func TestTaskProgressUpdatesTaskToolRow(t *testing.T) {
 		ToolCallID: "tc-task",
 		ToolName:   "spawn_subagent",
 		Text:       `spawn_subagent running · review · Searched "TaskProgress" in internal/tui (*.go) · 7 matches in 3 files`,
+		Metadata: map[string]any{
+			"child_session_id": "parent--subagent-tc-task",
+			"child_tool":       "grep",
+			"role":             "review",
+		},
 	}))
 	m = next.(model)
 	snap = m.assembler.Snapshot()
-	if !strings.Contains(snap[0].Text, `Searched "TaskProgress" in internal/tui (*.go) · 7 matches in 3 files`) {
-		t.Fatalf("expected progress target and metric to be preserved: %+v", snap[0])
+	if !strings.Contains(snap[0].Text, "current: grep") || !strings.Contains(snap[0].Text, `detail: Searched "TaskProgress" in internal/tui (*.go) · 7 matches in 3 files`) {
+		t.Fatalf("expected child tool and progress metric to be preserved: %+v", snap[0])
+	}
+
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind:       service.EventTaskProgress,
+		ToolCallID: "tc-task",
+		ToolName:   "spawn_subagent",
+		Text:       "spawn_subagent compacted · review · Compacted child context (10 -> 3 messages)",
+		Status:     "compacted",
+		Metadata: map[string]any{
+			"child_session_id": "parent--subagent-tc-task",
+			"role":             "review",
+		},
+	}))
+	m = next.(model)
+	snap = m.assembler.Snapshot()
+	if snap[0].Role != "result_running" || !strings.Contains(snap[0].Text, "Subagent review compacted") || !strings.Contains(snap[0].Text, "current: grep") {
+		t.Fatalf("expected non-running progress status to update subagent row without losing current tool: %+v", snap[0])
+	}
+
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind:       service.EventTaskProgress,
+		ToolCallID: "tc-task",
+		ToolName:   "spawn_subagent",
+		Text:       "spawn_subagent completed · review · Child finished",
+		Status:     "completed",
+		Metadata: map[string]any{
+			"child_session_id": "parent--subagent-tc-task",
+			"role":             "review",
+		},
+	}))
+	m = next.(model)
+	snap = m.assembler.Snapshot()
+	if snap[0].Role != "result_ok" || !strings.Contains(snap[0].Text, "Subagent review completed") {
+		t.Fatalf("expected completed progress status to update subagent row: %+v", snap[0])
+	}
+
+	result := `{"ok":true,"success":true,"data":{"role":"review","child_session_id":"parent--subagent-tc-task","summary":"no permission bypass found"},"metadata":{"duration_ms":1500}}`
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind:       service.EventToolResult,
+		ToolCallID: "tc-task",
+		ToolName:   "spawn_subagent",
+		Text:       result,
+	}))
+	m = next.(model)
+	if len(m.transcript) == 0 {
+		t.Fatalf("expected completed subagent row in transcript")
+	}
+	completed := m.transcript[len(m.transcript)-1]
+	for _, want := range []string{"Subagent review completed", "session: parent--subagent-tc-task", "current: grep", "duration: 1.5s", "summary: no permission bypass found"} {
+		if !strings.Contains(completed.Text, want) {
+			t.Fatalf("expected %q in completed row: %+v", want, completed)
+		}
+	}
+}
+
+func TestSubagentFailureUpdatesDedicatedCell(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), mode: modeChat}
+	next, _ := m.Update(svcMsg(service.Event{
+		Kind:       service.EventToolCall,
+		ToolCallID: "tc-task",
+		ToolName:   "spawn_subagent",
+		Text:       "spawn_subagent: review · inspect internal/tasks",
+	}))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind:       service.EventTaskProgress,
+		ToolCallID: "tc-task",
+		ToolName:   "spawn_subagent",
+		Text:       "spawn_subagent tool_failed · review · Read internal/tasks/runner.go failed",
+		Metadata: map[string]any{
+			"child_session_id": "parent--subagent-tc-task",
+			"child_tool":       "read_file",
+			"role":             "review",
+		},
+	}))
+	m = next.(model)
+	snap := m.assembler.Snapshot()
+	if !strings.Contains(snap[0].Text, "Subagent review failed") || !strings.Contains(snap[0].Text, "current: read_file") {
+		t.Fatalf("unexpected progress row: %+v", snap[0])
+	}
+
+	result := `{"ok":false,"success":false,"code":"spawn_subagent_failed","error":"subagent failed","data":{"role":"review","child_session_id":"parent--subagent-tc-task"},"metadata":{"duration_ms":41}}`
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind:       service.EventToolResult,
+		ToolCallID: "tc-task",
+		ToolName:   "spawn_subagent",
+		Text:       result,
+	}))
+	m = next.(model)
+	if len(m.transcript) == 0 {
+		t.Fatalf("expected failed subagent row in transcript")
+	}
+	failed := m.transcript[len(m.transcript)-1]
+	for _, want := range []string{"Subagent review failed", "session: parent--subagent-tc-task", "duration: 41ms", "summary: subagent failed"} {
+		if !strings.Contains(failed.Text, want) {
+			t.Fatalf("expected %q in failed row: %+v", want, failed)
+		}
 	}
 }
 

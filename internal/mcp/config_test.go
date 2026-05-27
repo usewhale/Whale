@@ -116,30 +116,6 @@ func TestTransportKindRejectsConflictsAndUnsupportedValues(t *testing.T) {
 	}
 }
 
-func TestFilesystemAllowedDirsFromNpxConfig(t *testing.T) {
-	srv := ServerConfig{
-		Command: "npx",
-		Args:    []string{"-y", "@modelcontextprotocol/server-filesystem", "/tmp", "~/work"},
-	}
-	got := srv.filesystemAllowedDirs()
-	if len(got) != 2 {
-		t.Fatalf("expected 2 allowed dirs, got %+v", got)
-	}
-	if got[0] != filepath.Clean("/tmp") {
-		t.Fatalf("first allowed dir = %q", got[0])
-	}
-	if !filepath.IsAbs(got[1]) || !strings.HasSuffix(got[1], "work") {
-		t.Fatalf("home dir was not expanded to an absolute path: %+v", got)
-	}
-}
-
-func TestFilesystemAllowedDirsIgnoresNonFilesystemServer(t *testing.T) {
-	got := (ServerConfig{Command: "npx", Args: []string{"-y", "@upstash/context7-mcp"}}).filesystemAllowedDirs()
-	if len(got) != 0 {
-		t.Fatalf("expected no allowed dirs for non-filesystem server, got %+v", got)
-	}
-}
-
 func TestResolvedHeadersExpandsEnvAndDoesNotLeakMissingValue(t *testing.T) {
 	t.Setenv("WHALE_MCP_HEADER_TOKEN", "secret-token")
 	headers, err := resolvedHeaders(map[string]string{

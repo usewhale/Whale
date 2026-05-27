@@ -28,6 +28,7 @@ tmp/
 .antigravitycli/
 .omx/
 .antigravitycli/
+.claude/
 session.json
 .env
 .env.*

@@ -41,6 +41,9 @@ func ListSessions(sessionsDir string, limit int) ([]SessionSummary, error) {
 		if id == "" {
 			continue
 		}
+		if isSubagentSessionID(id) {
+			continue
+		}
 		meta, err := LoadSessionMeta(sessionsDir, id)
 		if err == nil && strings.TrimSpace(meta.Kind) == "subagent" {
 			continue
@@ -129,6 +132,11 @@ func FindSessionPathByID(sessionsDir, sessionID string) string {
 
 func isSessionJSONLName(name string) bool {
 	return strings.HasSuffix(name, ".jsonl") && !strings.HasSuffix(name, toolInputEventsSuffix)
+}
+
+func isSubagentSessionID(id string) bool {
+	id = strings.TrimSpace(id)
+	return strings.Contains(id, "--subagent-") || strings.HasPrefix(id, "subagent-")
 }
 
 func sanitizeSessionID(v string) string {

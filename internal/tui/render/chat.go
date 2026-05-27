@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/usewhale/whale/internal/app"
 	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
 
@@ -41,7 +42,7 @@ func ChatLines(messages []UIMessage, width int) []string {
 }
 
 func IsWorkEvent(m UIMessage) bool {
-	return m.Kind == KindToolCall || m.Kind == KindToolResult
+	return m.Kind == KindToolCall || m.Kind == KindToolResult || m.Kind == KindSubagent
 }
 
 func NeedsWorkSeparatorBefore(m UIMessage) bool {
@@ -90,8 +91,14 @@ func renderCard(m UIMessage, block string, width int) []string {
 	if m.Kind == KindStatus || m.Role == "status" {
 		return renderStatusCard(m, block, width)
 	}
+	if m.Kind == KindLocalStatus || m.Kind == KindLocalMCP || m.Local != nil {
+		return renderLocalResultCard(m, width)
+	}
 	if m.Kind == KindThinking || m.Role == "think" {
 		return renderThinkingCard(m, block, width)
+	}
+	if m.Kind == KindPlan {
+		return renderProposedPlanCard(m, block, width)
 	}
 	if m.Kind == KindPlanUpdate {
 		return renderPlanUpdateCard(m, block, width)
@@ -111,6 +118,27 @@ func renderCard(m UIMessage, block string, width int) []string {
 	card := spacedCardStyle(width, borderColor).
 		Render(strings.TrimRight(rendered, "\n"))
 
+	return strings.Split(strings.TrimRight(card, "\n"), "\n")
+}
+
+func renderProposedPlanCard(m UIMessage, block string, width int) []string {
+	contentWidth := width - 6
+	if contentWidth < 16 {
+		contentWidth = 16
+	}
+	title := lipgloss.NewStyle().
+		Foreground(roleBorderColor(m)).
+		Bold(true).
+		Render("Proposed Plan")
+	body := strings.TrimRight(hardWrapRendered(renderEntryText("plan", block, contentWidth), contentWidth), "\n")
+	if body != "" {
+		body = lipgloss.NewStyle().
+			Background(tuitheme.Default.PlanBackground).
+			Render(body)
+	}
+	rendered := joinTitleAndBody(title, body)
+	card := spacedCardStyle(width, roleBorderColor(m)).
+		Render(strings.TrimRight(rendered, "\n"))
 	return strings.Split(strings.TrimRight(card, "\n"), "\n")
 }
 
@@ -293,6 +321,152 @@ func renderStatusCard(m UIMessage, block string, width int) []string {
 	return strings.Split(strings.TrimRight(card, "\n"), "\n")
 }
 
+func renderLocalResultCard(m UIMessage, width int) []string {
+	if m.Local == nil {
+		return renderNotice(m.Text, width)
+	}
+	contentWidth := width - 6
+	if contentWidth < 16 {
+		contentWidth = 16
+	}
+	titleText := strings.TrimSpace(m.Local.Title)
+	if titleText == "" {
+		titleText = "Local result"
+	}
+	title := lipgloss.NewStyle().
+		Foreground(tuitheme.Default.Info).
+		Bold(true).
+		Render(titleText)
+	body := renderLocalResultBody(m.Local, contentWidth)
+	rendered := joinTitleAndBody(title, body)
+	card := spacedCardStyle(width, tuitheme.Default.Info).
+		Render(strings.TrimRight(rendered, "\n"))
+	return strings.Split(strings.TrimRight(card, "\n"), "\n")
+}
+
+func renderLocalResultBody(result *app.LocalResult, width int) string {
+	if result == nil {
+		return ""
+	}
+	blocks := make([]string, 0, 1+len(result.Sections))
+	if fields := renderLocalResultFields(result.Fields, width); fields != "" {
+		blocks = append(blocks, fields)
+	}
+	for _, section := range result.Sections {
+		title := strings.TrimSpace(section.Title)
+		fields := renderLocalResultFields(section.Fields, width)
+		if title == "" && fields == "" {
+			continue
+		}
+		var block string
+		if title != "" {
+			block = lipgloss.NewStyle().
+				Foreground(tuitheme.Default.Info).
+				Bold(true).
+				Render(title)
+		}
+		if fields != "" {
+			if block == "" {
+				block = fields
+			} else {
+				block = joinTitleAndBody(block, fields)
+			}
+		}
+		blocks = append(blocks, block)
+	}
+	return strings.Join(blocks, "\n\n")
+}
+
+func renderLocalResultFields(fields []app.LocalResultField, width int) string {
+	if len(fields) == 0 {
+		return ""
+	}
+	labelWidth, valueWidth, separator := localResultFieldWidths(fields, width)
+	lines := make([]string, 0, len(fields))
+	labelStyle := lipgloss.NewStyle().Foreground(tuitheme.Default.Muted)
+	for _, field := range fields {
+		label := truncatePlain(field.Label, labelWidth)
+		label = labelStyle.Width(labelWidth).Render(label)
+		value := localResultValueStyle(field.Tone).Render(field.Value)
+		wrapped := strings.Split(strings.TrimRight(hardWrapRendered(value, valueWidth), "\n"), "\n")
+		if len(wrapped) == 0 {
+			lines = append(lines, label+separator)
+			continue
+		}
+		lines = append(lines, label+separator+wrapped[0])
+		for _, line := range wrapped[1:] {
+			lines = append(lines, strings.Repeat(" ", labelWidth)+separator+line)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func localResultFieldWidths(fields []app.LocalResultField, width int) (labelWidth int, valueWidth int, separator string) {
+	if width < 1 {
+		width = 1
+	}
+	separator = "   "
+	separatorWidth := lipgloss.Width(separator)
+	if width <= separatorWidth+2 {
+		separator = " "
+		separatorWidth = 1
+	}
+	desiredLabelWidth := 0
+	for _, field := range fields {
+		if w := lipgloss.Width(field.Label); w > desiredLabelWidth {
+			desiredLabelWidth = w
+		}
+	}
+	if desiredLabelWidth > 18 {
+		desiredLabelWidth = 18
+	}
+	minValueWidth := 8
+	if maxValueWidth := width - separatorWidth - 1; maxValueWidth < minValueWidth {
+		minValueWidth = max(1, maxValueWidth)
+	}
+	maxLabelWidth := width - separatorWidth - minValueWidth
+	if maxLabelWidth < 1 {
+		maxLabelWidth = 1
+	}
+	labelWidth = min(desiredLabelWidth, maxLabelWidth)
+	if labelWidth < 1 {
+		labelWidth = 1
+	}
+	valueWidth = width - separatorWidth - labelWidth
+	if valueWidth < 1 {
+		valueWidth = 1
+	}
+	return labelWidth, valueWidth, separator
+}
+
+func localResultValueStyle(tone string) lipgloss.Style {
+	style := lipgloss.NewStyle().Foreground(tuitheme.Default.Text)
+	switch tone {
+	case "info":
+		return style.Foreground(tuitheme.Default.Info)
+	case "warn":
+		return style.Foreground(tuitheme.Default.Warn)
+	case "error":
+		return style.Foreground(tuitheme.Default.Error)
+	case "muted":
+		return style.Foreground(tuitheme.Default.Muted)
+	case "result":
+		return style.Foreground(tuitheme.Default.Result)
+	default:
+		return style
+	}
+}
+
+func truncatePlain(text string, width int) string {
+	if width <= 0 || lipgloss.Width(text) <= width {
+		return text
+	}
+	if width <= 3 {
+		return xansi.Truncate(text, width, "")
+	}
+	return xansi.Truncate(text, width-3, "") + "..."
+}
+
 func renderUserPrompt(block string, width int) []string {
 	contentWidth := width - 4
 	if contentWidth < 16 {
@@ -379,7 +553,7 @@ func renderToolEventHeader(m UIMessage, header string, width int) []string {
 
 func renderToolEventChild(line string, width int) []string {
 	line = strings.TrimRight(line, "\r\n")
-	if strings.TrimSpace(line) == "" {
+	if strings.TrimSpace(xansi.Strip(line)) == "" {
 		return nil
 	}
 	if hasLeadingCommandSpace(line) {
@@ -499,17 +673,29 @@ func RenderCommandLike(text string) string {
 	if text == "" {
 		return ""
 	}
+	if rendered, ok := highlightShellCommand(text); ok {
+		return rendered
+	}
+	return renderCommandLikeFallback(text)
+}
+
+func renderCommandLikeFallback(text string) string {
 	var out strings.Builder
 	tokenIndex := 0
+	commandPosition := true
 	for _, part := range splitCommandPreservingSpace(text) {
 		if part == "" {
 			continue
 		}
 		if isCommandSpace(part) {
 			out.WriteString(part)
+			if strings.ContainsAny(part, "\n\r") {
+				commandPosition = true
+			}
 			continue
 		}
-		out.WriteString(styleCommandToken(part, tokenIndex))
+		out.WriteString(styleCommandToken(part, tokenIndex, commandPosition))
+		commandPosition = isShellCommandBoundary(part)
 		tokenIndex++
 	}
 	return out.String()
@@ -567,19 +753,28 @@ func isCommandSpace(text string) bool {
 	return text != ""
 }
 
-func styleCommandToken(token string, index int) string {
+func styleCommandToken(token string, index int, commandPosition bool) string {
 	style := lipgloss.NewStyle().Foreground(tuitheme.Default.Text)
 	switch {
 	case isShellOperator(token):
-		style = lipgloss.NewStyle().Foreground(tuitheme.Default.Muted)
+		style = lipgloss.NewStyle().Foreground(tuitheme.Default.Palette)
 	case strings.HasPrefix(token, "-"):
 		style = lipgloss.NewStyle().Foreground(tuitheme.Default.Warn)
 	case strings.HasPrefix(token, "\"") || strings.HasPrefix(token, "'"):
-		style = lipgloss.NewStyle().Foreground(tuitheme.Default.Success)
-	case index == 0:
-		style = lipgloss.NewStyle().Foreground(tuitheme.Default.InfoSoft)
+		style = lipgloss.NewStyle().Foreground(tuitheme.Default.Result)
+	case index == 0 || commandPosition:
+		style = lipgloss.NewStyle().Foreground(tuitheme.Default.Info)
 	}
 	return style.Render(token)
+}
+
+func isShellCommandBoundary(token string) bool {
+	switch token {
+	case "&&", "||", "|", ";":
+		return true
+	default:
+		return false
+	}
 }
 
 func isShellOperator(token string) bool {

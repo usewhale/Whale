@@ -11,6 +11,8 @@ import (
 	"github.com/yuin/goldmark/parser"
 	gmrenderer "github.com/yuin/goldmark/renderer"
 	"github.com/yuin/goldmark/util"
+
+	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
 
 func boolPtr(v bool) *bool       { return &v }
@@ -513,6 +515,11 @@ func markdownStyle() ansi.StyleConfig {
 		},
 		Strong: ansi.StylePrimitive{Bold: boolPtr(true)},
 		Emph:   ansi.StylePrimitive{Italic: boolPtr(true)},
+		Code: ansi.StyleBlock{
+			StylePrimitive: ansi.StylePrimitive{
+				Color: stringPtr(string(tuitheme.Default.Info)),
+			},
+		},
 		BlockQuote: ansi.StyleBlock{
 			StylePrimitive: ansi.StylePrimitive{
 				Prefix: "│ ",

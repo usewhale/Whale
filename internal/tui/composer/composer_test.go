@@ -381,3 +381,112 @@ func TestComposerSetValueCollapsesLargeHistoryEntry(t *testing.T) {
 		t.Fatalf("expected recalled large value to render as one line, got height %d", got)
 	}
 }
+
+// visualLineCountUncached recomputes the wrap height without using the
+// composer's wrap cache or rawValue cache. Test-only oracle used to
+// verify the cached path produces the same answer.
+func visualLineCountUncached(c Composer) int {
+	width := c.textarea.Width()
+	lines := strings.Split(c.textarea.Value(), "\n")
+	if c.textarea.Value() == "" {
+		lines = []string{""}
+	}
+	if width <= 0 {
+		return len(lines)
+	}
+	total := 0
+	for _, line := range lines {
+		total += wrappedLineCount([]rune(line), width)
+	}
+	return total
+}
+
+func TestVisualLineCountCacheMatchesUncached(t *testing.T) {
+	c := New()
+	c.SetWidth(120)
+
+	steps := []func(){
+		func() { c.HandlePaste("hello world") },
+		func() { c.HandlePaste(" goodbye") },
+		func() { c.InsertNewline() },
+		func() { c.HandlePaste(strings.Repeat("lorem ipsum dolor sit amet ", 10)) },
+		func() { c.SetWidth(40) },
+		func() { c.InsertNewline() },
+		func() { c.HandlePaste("中文 line with multibyte runes") },
+		func() { c.SetWidth(80) },
+		func() { c.Reset() },
+		func() { c.HandlePaste("fresh start\nline two\nline three") },
+	}
+	for i, step := range steps {
+		step()
+		got := c.visualLineCount()
+		want := visualLineCountUncached(c)
+		if got != want {
+			t.Fatalf("step %d: cached visualLineCount=%d, uncached=%d, value=%q",
+				i, got, want, c.Value())
+		}
+	}
+}
+
+func TestVisualLineCountCacheBoundsMemory(t *testing.T) {
+	c := New()
+	c.SetWidth(80)
+	// Pump enough unique lines through the composer to force the wrapCache
+	// cap to kick in. Each Reset followed by a fresh paste introduces a
+	// new line content, ensuring the cache grows.
+	for i := 0; i < wrapCacheMaxEntries*2; i++ {
+		c.Reset()
+		c.HandlePaste(strings.Repeat("x", i%600))
+		c.InsertNewline()
+		_ = c.visualLineCount()
+	}
+	if len(c.wrapCache) > wrapCacheMaxEntries {
+		t.Fatalf("wrapCache exceeded cap: got %d entries, want <= %d",
+			len(c.wrapCache), wrapCacheMaxEntries)
+	}
+}
+
+func TestRawCacheConsistentAfterMutations(t *testing.T) {
+	c := New()
+	c.SetWidth(80)
+
+	mutations := []func(){
+		func() { c.HandlePaste("alpha") },
+		func() { c.InsertNewline() },
+		func() { c.HandlePaste("beta gamma") },
+		func() { c.SetValue("entire replacement\nnew content") },
+		func() { c.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}}) },
+		func() { c.Reset() },
+	}
+	for i, m := range mutations {
+		m()
+		// rawValue (possibly cached) must match the textarea's live state.
+		if got, want := c.rawValue(), c.textarea.Value(); got != want {
+			t.Fatalf("mutation %d: rawValue=%q, textarea.Value()=%q", i, got, want)
+		}
+	}
+}
+
+// Regression: HandlePaste of a >largePasteCharThreshold-rune paste must
+// keep the original text accessible via Value(). The pending-paste
+// placeholder is inserted into the textarea, but a stale rawCache used to
+// hide it from prunePendingPastes(), which then dropped the entry and
+// caused Value() to return the placeholder literal instead of the
+// expanded original.
+func TestHandlePasteLargeContentPreservedAcrossRawCache(t *testing.T) {
+	c := New()
+	c.SetWidth(80)
+	original := strings.Repeat("lorem ipsum dolor sit amet ", 50) // ~1350 chars
+	c.HandlePaste(original)
+	if got := c.Value(); got != original {
+		t.Fatalf("Value() after large paste = %q (len=%d), want original (len=%d)",
+			truncateForLog(got), len(got), len(original))
+	}
+}
+
+func truncateForLog(s string) string {
+	if len(s) > 80 {
+		return s[:40] + "..." + s[len(s)-40:]
+	}
+	return s
+}

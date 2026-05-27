@@ -4,7 +4,9 @@ package shell
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"sync"
 	"time"
 )
 
@@ -26,4 +28,24 @@ func RunCommand(ctx context.Context, cmd *exec.Cmd) error {
 		return err
 	}
 	return waitCommandContext(ctx, cmd, cancel)
+}
+
+type CommandCleanup struct {
+	cmd  *exec.Cmd
+	once sync.Once
+	err  error
+}
+
+func AttachCommandCleanup(cmd *exec.Cmd) *CommandCleanup {
+	return &CommandCleanup{cmd: cmd}
+}
+
+func (c *CommandCleanup) Cleanup() error {
+	if c == nil || c.cmd == nil || c.cmd.Process == nil {
+		return os.ErrProcessDone
+	}
+	c.once.Do(func() {
+		c.err = c.cmd.Process.Kill()
+	})
+	return c.err
 }

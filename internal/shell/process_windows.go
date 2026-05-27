@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -53,6 +54,45 @@ func RunCommand(ctx context.Context, cmd *exec.Cmd) error {
 		defer closeJob(job)
 	}
 	return waitCommandContext(ctx, cmd, cancel)
+}
+
+type CommandCleanup struct {
+	cmd  *exec.Cmd
+	job  syscall.Handle
+	once sync.Once
+	err  error
+}
+
+func AttachCommandCleanup(cmd *exec.Cmd) *CommandCleanup {
+	cleanup := &CommandCleanup{cmd: cmd}
+	job, err := createCommandJob()
+	if err != nil {
+		return cleanup
+	}
+	if cmd != nil && cmd.Process != nil {
+		if err := assignProcessToJob(job, cmd.Process.Pid); err == nil {
+			cleanup.job = job
+			return cleanup
+		}
+	}
+	closeJob(job)
+	return cleanup
+}
+
+func (c *CommandCleanup) Cleanup() error {
+	if c == nil {
+		return os.ErrProcessDone
+	}
+	c.once.Do(func() {
+		if c.job != 0 {
+			c.err = cancelCommandTreeAndJob(c.cmd, c.job)
+			closeJob(c.job)
+			c.job = 0
+			return
+		}
+		c.err = killCommandTree(c.cmd)
+	})
+	return c.err
 }
 
 func cancelCommandTreeAndJob(cmd *exec.Cmd, job syscall.Handle) error {

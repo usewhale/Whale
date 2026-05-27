@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -11,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -20,9 +20,8 @@ import (
 
 	"github.com/usewhale/whale/internal/build"
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/shell"
 )
-
-const httpErrorBodyPreviewBytes = 200
 
 const (
 	StatusDisabled  = "disabled"
@@ -33,12 +32,11 @@ const (
 )
 
 type Manager struct {
-	mu            sync.RWMutex
-	cfg           Config
-	sessions      map[string]*clientSession
-	states        map[string]ServerState
-	tools         []core.Tool
-	workspaceRoot string
+	mu       sync.RWMutex
+	cfg      Config
+	sessions map[string]*clientSession
+	states   map[string]ServerState
+	tools    []core.Tool
 }
 
 type ServerState struct {
@@ -53,15 +51,6 @@ type ServerState struct {
 type StartupEvent struct {
 	State    ServerState
 	Complete bool
-}
-
-func (m *Manager) SetWorkspaceRoot(root string) {
-	if m == nil {
-		return
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.workspaceRoot = strings.TrimSpace(root)
 }
 
 type clientSession struct {
@@ -226,17 +215,13 @@ func (m *Manager) startServer(ctx context.Context, srv ServerConfig, seen map[st
 		return nil, startupErr(srv, "list_tools", err, httpDiag)
 	}
 	disabled := srv.disabledToolSet()
-	allowedDirs := srv.filesystemAllowedDirs()
 	tools := make([]core.Tool, 0, len(listed.Tools))
 	for _, tool := range listed.Tools {
 		if tool == nil || strings.TrimSpace(tool.Name) == "" || disabled[tool.Name] {
 			continue
 		}
 		name := UniqueToolName(QualifyToolName(srv.Name, tool.Name), seen)
-		m.mu.RLock()
-		workspaceRoot := m.workspaceRoot
-		m.mu.RUnlock()
-		tools = append(tools, &Tool{manager: m, serverName: srv.Name, toolName: tool.Name, registeredName: name, spec: tool, allowedDirs: allowedDirs, workspaceRoot: workspaceRoot})
+		tools = append(tools, &Tool{manager: m, serverName: srv.Name, toolName: tool.Name, registeredName: name, spec: tool})
 	}
 	m.mu.Lock()
 	m.sessions[srv.Name] = &clientSession{cfg: srv, session: session, cancel: cancel}
@@ -255,9 +240,14 @@ func createTransport(ctx context.Context, kind string, srv ServerConfig) (sdk.Tr
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("mcp server %q env config: %w", srv.Name, err)
 		}
-		cmd := exec.CommandContext(ctx, expandHome(srv.Command), srv.Args...)
+		cmd := exec.CommandContext(ctx, expandStdioCommand(srv.Command), expandStdioArgs(srv.Args)...)
 		cmd.Env = append(os.Environ(), env...)
-		return &sdk.CommandTransport{Command: cmd}, cmd, nil, nil
+		shell.ConfigureCommand(cmd)
+		transport := &stdioProcessTransport{
+			base: &sdk.CommandTransport{Command: cmd},
+			cmd:  cmd,
+		}
+		return transport, cmd, nil, nil
 	case "http":
 		if strings.TrimSpace(srv.URL) == "" {
 			return nil, nil, nil, fmt.Errorf("mcp server %q requires url", srv.Name)
@@ -345,19 +335,68 @@ func sortedServerNames(servers map[string]ServerConfig) []string {
 	return names
 }
 
-func expandHome(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "~" {
-		if home, err := os.UserHomeDir(); err == nil && home != "" {
+func expandStdioCommand(command string) string {
+	return expandStdioValue(command, true, runtime.GOOS, os.Getenv, os.UserHomeDir)
+}
+
+func expandStdioArgs(args []string) []string {
+	out := make([]string, len(args))
+	for i, arg := range args {
+		out[i] = expandStdioValue(arg, false, runtime.GOOS, os.Getenv, os.UserHomeDir)
+	}
+	return out
+}
+
+func expandStdioValue(value string, trim bool, goos string, getenv func(string) string, userHomeDir func() (string, error)) string {
+	if trim {
+		value = strings.TrimSpace(value)
+	}
+	if goos == "windows" {
+		value = expandWindowsPercentEnv(value, getenv)
+	}
+	if value == "~" {
+		if home, err := userHomeDir(); err == nil && home != "" {
 			return home
 		}
 	}
-	if strings.HasPrefix(path, "~/") {
-		if home, err := os.UserHomeDir(); err == nil && home != "" {
-			return filepath.Join(home, strings.TrimPrefix(path, "~/"))
+	prefixes := []string{"~/"}
+	if goos == "windows" {
+		prefixes = append(prefixes, `~\`)
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(value, prefix) {
+			if home, err := userHomeDir(); err == nil && home != "" {
+				return filepath.Join(home, strings.TrimPrefix(value, prefix))
+			}
 		}
 	}
-	return path
+	return value
+}
+
+func expandWindowsPercentEnv(value string, getenv func(string) string) string {
+	var out strings.Builder
+	for i := 0; i < len(value); {
+		if value[i] != '%' {
+			out.WriteByte(value[i])
+			i++
+			continue
+		}
+		end := strings.IndexByte(value[i+1:], '%')
+		if end < 0 {
+			out.WriteByte(value[i])
+			i++
+			continue
+		}
+		name := value[i+1 : i+1+end]
+		resolved := getenv(name)
+		if strings.TrimSpace(name) == "" || resolved == "" {
+			out.WriteString(value[i : i+end+2])
+		} else {
+			out.WriteString(resolved)
+		}
+		i += end + 2
+	}
+	return out.String()
 }
 
 func maybeStdioErr(err error, cmd *exec.Cmd) error {
@@ -390,11 +429,21 @@ func startupTimeoutErr(srv ServerConfig, phase string) error {
 }
 
 func startupHint(srv ServerConfig) string {
-	command := strings.ToLower(filepath.Base(strings.TrimSpace(srv.Command)))
+	command := normalizedCommandBase(srv.Command)
 	if command != "npx" && command != "npm" {
 		return ""
 	}
 	return "; command uses npx/npm, which can download packages or consume stdio before the MCP server starts; install the MCP server and point command at its binary, or increase the server timeout"
+}
+
+func normalizedCommandBase(command string) string {
+	command = strings.TrimSpace(command)
+	command = strings.ReplaceAll(command, "\\", "/")
+	command = strings.ToLower(filepath.Base(command))
+	for _, suffix := range []string{".cmd", ".exe", ".bat"} {
+		command = strings.TrimSuffix(command, suffix)
+	}
+	return command
 }
 
 func isContextTimeout(ctx context.Context, err error) bool {
@@ -405,28 +454,16 @@ type httpDiagnostics struct {
 	mu     sync.Mutex
 	url    string
 	status string
-	body   string
 }
 
 func (d *httpDiagnostics) record(reqURL *url.URL, resp *http.Response) {
 	if d == nil || resp == nil {
 		return
 	}
-	originalBody := resp.Body
-	body := boundedBodyPreview(resp.Body, httpErrorBodyPreviewBytes)
-	if originalBody != nil {
-		_ = originalBody.Close()
-	}
-	data := []byte(body)
-	resp.Body = io.NopCloser(bytes.NewReader(data))
-	if body == "" {
-		body = "<no body>"
-	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.url = safeHTTPURL(reqURL)
 	d.status = resp.Status
-	d.body = body
 }
 
 func (d *httpDiagnostics) summary() string {
@@ -438,27 +475,7 @@ func (d *httpDiagnostics) summary() string {
 	if d.status == "" {
 		return ""
 	}
-	return fmt.Sprintf("transport=http url=%s status=%s body=%s", d.url, d.status, d.body)
-}
-
-func boundedBodyPreview(body io.Reader, maxBytes int) string {
-	if body == nil || maxBytes <= 0 {
-		return ""
-	}
-	data, err := io.ReadAll(io.LimitReader(body, int64(maxBytes+1)))
-	if err != nil {
-		return "<failed to read body>"
-	}
-	truncated := len(data) > maxBytes
-	if truncated {
-		data = data[:maxBytes]
-	}
-	text := strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(string(data), "\n", " "), "\r", " "))
-	text = redactErrorText(text)
-	if truncated {
-		text += "..."
-	}
-	return text
+	return fmt.Sprintf("transport=http url=%s status=%s", d.url, d.status)
 }
 
 func safeHTTPURL(u *url.URL) string {
@@ -467,48 +484,6 @@ func safeHTTPURL(u *url.URL) string {
 	}
 	out := url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}
 	return out.String()
-}
-
-func redactErrorText(text string) string {
-	text = redactAfterCaseInsensitive(text, "bearer ", isSecretTerminator)
-	for _, needle := range []string{"api_key=", "apikey=", "api-key=", "token=", "authorization="} {
-		text = redactAfterCaseInsensitive(text, needle, isSecretTerminator)
-	}
-	return text
-}
-
-func redactAfterCaseInsensitive(text, needle string, terminator func(rune) bool) string {
-	needleLower := strings.ToLower(needle)
-	searchFrom := 0
-	for {
-		if searchFrom >= len(text) {
-			return text
-		}
-		idx := strings.Index(strings.ToLower(text[searchFrom:]), needleLower)
-		if idx < 0 {
-			return text
-		}
-		idx += searchFrom
-		start := idx + len(needle)
-		end := start
-		for end < len(text) {
-			r, size := rune(text[end]), 1
-			if terminator(r) {
-				break
-			}
-			end += size
-		}
-		if end > start {
-			text = text[:start] + "***" + text[end:]
-			searchFrom = start + len("***")
-			continue
-		}
-		searchFrom = start
-	}
-}
-
-func isSecretTerminator(r rune) bool {
-	return r == 0 || r == '"' || r == '\'' || r == ',' || r == '&' || r == ';' || r == ')' || r == ']' || r == '}' || r == '<' || r == '>' || r == ':' || r == ' ' || r == '\t'
 }
 
 func stdioCheck(old *exec.Cmd) error {

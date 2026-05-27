@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/usewhale/whale/internal/securefs"
 	"github.com/usewhale/whale/internal/skills"
 )
 
@@ -75,7 +76,7 @@ func (s *Store) AppendEvidence(ev Evidence) (Evidence, error) {
 	if strings.TrimSpace(s.dataDir) == "" {
 		return Evidence{}, fmt.Errorf("skills-improver data dir is empty")
 	}
-	if err := os.MkdirAll(s.dataDir, 0o700); err != nil {
+	if err := securefs.MkdirPrivate(s.dataDir); err != nil {
 		return Evidence{}, fmt.Errorf("create skills-improver data dir: %w", err)
 	}
 	ev.CreatedAt = time.Now().UTC()
@@ -92,7 +93,7 @@ func (s *Store) AppendEvidence(ev Evidence) (Evidence, error) {
 	if err != nil {
 		return Evidence{}, err
 	}
-	f, err := os.OpenFile(s.evidencePath(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := securefs.OpenPrivateAppend(s.evidencePath())
 	if err != nil {
 		return Evidence{}, fmt.Errorf("open evidence log: %w", err)
 	}
@@ -219,7 +220,7 @@ func (s *Store) SaveProposal(p Proposal) (Proposal, error) {
 	p.SkillFilePath = abs
 	p.CreatedAt = time.Now().UTC()
 	p.ID = proposalID(p)
-	if err := os.MkdirAll(s.proposalsDir(), 0o700); err != nil {
+	if err := securefs.MkdirPrivate(s.proposalsDir()); err != nil {
 		return Proposal{}, fmt.Errorf("create proposals dir: %w", err)
 	}
 	b, err := json.MarshalIndent(p, "", "  ")
@@ -227,7 +228,7 @@ func (s *Store) SaveProposal(p Proposal) (Proposal, error) {
 		return Proposal{}, err
 	}
 	path := filepath.Join(s.proposalsDir(), p.ID+".json")
-	if err := os.WriteFile(path, append(b, '\n'), 0o600); err != nil {
+	if err := securefs.WritePrivateFile(path, append(b, '\n')); err != nil {
 		return Proposal{}, fmt.Errorf("write proposal: %w", err)
 	}
 	return p, nil
@@ -305,7 +306,7 @@ func (s *Store) ApplyProposal(id string) (Proposal, error) {
 	if err != nil {
 		return Proposal{}, err
 	}
-	if err := os.WriteFile(filepath.Join(s.proposalsDir(), p.ID+".json"), append(b, '\n'), 0o600); err != nil {
+	if err := securefs.WritePrivateFile(filepath.Join(s.proposalsDir(), p.ID+".json"), append(b, '\n')); err != nil {
 		return Proposal{}, fmt.Errorf("mark proposal applied: %w", err)
 	}
 	return p, nil

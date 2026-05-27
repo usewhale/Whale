@@ -3,6 +3,7 @@ module github.com/usewhale/whale
 go 1.26.2
 
 require (
+	github.com/alecthomas/chroma/v2 v2.14.0
 	github.com/BurntSushi/toml v1.5.0
 	github.com/charmbracelet/bubbles v1.0.0
 	github.com/charmbracelet/bubbletea v1.3.10
@@ -18,12 +19,12 @@ require (
 	github.com/spf13/cobra v1.10.1
 	github.com/spf13/pflag v1.0.9
 	github.com/yuin/goldmark v1.7.8
+	golang.org/x/net v0.33.0
 	golang.org/x/sys v0.41.0
 	golang.org/x/text v0.23.0
 )
 
 require (
-	github.com/alecthomas/chroma/v2 v2.14.0 // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
@@ -49,6 +50,5 @@ require (
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	github.com/yuin/goldmark-emoji v1.0.5 // indirect
-	golang.org/x/net v0.33.0 // indirect
 	golang.org/x/oauth2 v0.35.0 // indirect
 )

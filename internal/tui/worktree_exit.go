@@ -5,10 +5,8 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/usewhale/whale/internal/app/service"
-	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
 
 type worktreeExitOption struct {
@@ -64,25 +62,21 @@ func (m *model) handleWorktreeExitKey(msg tea.KeyMsg) tea.Cmd {
 func (m model) renderWorktreeExit() string {
 	summary := m.worktreeExit.summary
 	lines := []string{
-		"Exiting worktree session",
+		pickerTitle("Exiting worktree session"),
 		"",
-		fmt.Sprintf("worktree: %s", summary.Session.Name),
-		fmt.Sprintf("branch: %s", valueOrDash(summary.Session.Branch)),
-		fmt.Sprintf("path: %s", valueOrDash(summary.Session.Path)),
+		pickerStateLine("worktree", summary.Session.Name, "text"),
+		pickerStateLine("branch", valueOrDash(summary.Session.Branch), "text"),
+		pickerStateLine("path", valueOrDash(summary.Session.Path), "text"),
 		"",
-		worktreeExitSummaryText(summary.ChangedFiles, summary.IgnoredFiles, summary.Commits),
+		pickerHint(worktreeExitSummaryText(summary.ChangedFiles, summary.IgnoredFiles, summary.Commits)),
 		"",
 	}
 	for i, option := range m.worktreeExitOptions() {
-		prefix := "  "
-		if i == m.worktreeExit.selected {
-			prefix = "> "
-		}
-		lines = append(lines, prefix+option.label)
-		lines = append(lines, "    "+option.description)
+		lines = append(lines, pickerRow(option.label, i == m.worktreeExit.selected, false))
+		lines = append(lines, pickerHint("    "+option.description))
 	}
-	lines = append(lines, "", "(up/down choose, enter confirm, esc cancel)")
-	return lipgloss.NewStyle().Foreground(tuitheme.Default.Info).Render(strings.Join(lines, "\n"))
+	lines = append(lines, "", pickerHint("(up/down choose, enter confirm, esc cancel)"))
+	return strings.Join(lines, "\n")
 }
 
 func worktreeExitSummaryText(changedFiles, ignoredFiles, commits int) string {

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/usewhale/whale/internal/compact"
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/defaults"
 	"github.com/usewhale/whale/internal/llm"
@@ -20,8 +21,11 @@ import (
 )
 
 const (
-	defaultBaseURL           = "https://api.deepseek.com"
-	defaultStreamMaxAttempts = 6
+	defaultBaseURL               = "https://api.deepseek.com"
+	defaultStreamMaxAttempts     = 6
+	maxToolResultReplayTokens    = 2000
+	maxToolResultReplayChars     = 12 * 1024
+	compactedToolResultKeepRunes = 3000
 )
 
 var errIncompleteStream = errors.New("stream disconnected before completion")
@@ -144,7 +148,8 @@ func (c *Client) StreamResponse(ctx context.Context, history []core.Message, too
 }
 
 func (c *Client) stream(ctx context.Context, history []core.Message, tools []core.Tool, out chan<- llm.ProviderEvent) error {
-	msgs := toDeepSeekMessages(history)
+	msgs, sanitizeDiag := sanitizeDeepSeekMessagesForRequest(toDeepSeekMessages(history), c.thinkingEnabled)
+	replayDiag := toolResultReplayDiagnostics(history, msgs)
 	payload := map[string]any{
 		"model":          c.model,
 		"stream":         true,
@@ -170,10 +175,10 @@ func (c *Client) stream(ctx context.Context, history []core.Message, tools []cor
 		return fmt.Errorf("marshal payload: %w", err)
 	}
 
-	return c.streamWithRetries(ctx, body, msgs, out)
+	return c.streamWithRetries(ctx, body, msgs, sanitizeDiag, replayDiag, out)
 }
 
-func (c *Client) streamWithRetries(ctx context.Context, body []byte, msgs []map[string]any, out chan<- llm.ProviderEvent) error {
+func (c *Client) streamWithRetries(ctx context.Context, body []byte, msgs []map[string]any, sanitizeDiag deepSeekMessageDiagnostics, replayDiag deepSeekReplayDiagnostics, out chan<- llm.ProviderEvent) error {
 	policy := llmretry.NormalizePolicy(c.retryPolicy)
 	requestAttempt := 1
 	streamAttempt := 1
@@ -185,7 +190,7 @@ func (c *Client) streamWithRetries(ctx context.Context, body []byte, msgs []map[
 				return err
 			}
 			if !llmretry.ShouldRetry(policy, err) || requestAttempt >= policy.MaxAttempts {
-				return deepSeekRequestError(err)
+				return deepSeekRequestError(err, sanitizeDiag)
 			}
 			delay := llmretry.Backoff(policy, requestAttempt, err)
 			out <- retryScheduledEvent(requestAttempt, policy.MaxAttempts, delay, err, "request", false)
@@ -196,7 +201,7 @@ func (c *Client) streamWithRetries(ctx context.Context, body []byte, msgs []map[
 			continue
 		}
 
-		parseErr := parseSSE(resp.Body, c.model, estimateReasoningReplayTokens(msgs), out)
+		parseErr := parseSSE(resp.Body, c.model, estimateReasoningReplayTokens(msgs), replayDiag, out)
 		_ = resp.Body.Close()
 		if parseErr == nil {
 			return nil
@@ -250,10 +255,14 @@ func (e *requestBuildError) Unwrap() error {
 	return e.err
 }
 
-func deepSeekRequestError(err error) error {
+func deepSeekRequestError(err error, diag deepSeekMessageDiagnostics) error {
 	var httpErr *llmretry.HTTPError
 	if errors.As(err, &httpErr) {
-		return fmt.Errorf("deepseek %d: %s", httpErr.StatusCode, strings.TrimSpace(httpErr.Body))
+		msg := fmt.Sprintf("deepseek %d: %s", httpErr.StatusCode, strings.TrimSpace(httpErr.Body))
+		if httpErr.StatusCode == http.StatusBadRequest && !diag.empty() {
+			msg += " (" + diag.String() + ")"
+		}
+		return errors.New(msg)
 	}
 	return err
 }
@@ -295,10 +304,10 @@ func shouldRetryStreamError(err error) bool {
 	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 }
 
-func parseSSE(r io.Reader, model string, replayTokens int, out chan<- llm.ProviderEvent) error {
+func parseSSE(r io.Reader, model string, replayTokens int, replayDiag deepSeekReplayDiagnostics, out chan<- llm.ProviderEvent) error {
 	reader := bufio.NewReader(r)
 	var dataLines []string
-	acc := streamAccumulator{callsByIndex: map[int]*toolCallState{}, readyIndices: map[int]bool{}, reasoningReplayTokens: replayTokens}
+	acc := streamAccumulator{callsByIndex: map[int]*toolCallState{}, readyIndices: map[int]bool{}, reasoningReplayTokens: replayTokens, replayDiag: replayDiag}
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil && !errors.Is(err, io.EOF) {
@@ -373,6 +382,7 @@ type streamAccumulator struct {
 	finishReason          string
 	usage                 llm.Usage
 	reasoningReplayTokens int
+	replayDiag            deepSeekReplayDiagnostics
 }
 
 func parseSSEData(data, model string, out chan<- llm.ProviderEvent, acc *streamAccumulator) (bool, error) {
@@ -486,12 +496,18 @@ func emitComplete(out chan<- llm.ProviderEvent, model string, acc *streamAccumul
 		Reasoning: acc.reasoning.String(),
 		ToolCalls: calls,
 		Usage: llm.Usage{
-			PromptTokens:          acc.usage.PromptTokens,
-			CompletionTokens:      acc.usage.CompletionTokens,
-			TotalTokens:           acc.usage.TotalTokens,
-			PromptCacheHitTokens:  acc.usage.PromptCacheHitTokens,
-			PromptCacheMissTokens: acc.usage.PromptCacheMissTokens,
-			ReasoningReplayTokens: acc.reasoningReplayTokens,
+			PromptTokens:           acc.usage.PromptTokens,
+			CompletionTokens:       acc.usage.CompletionTokens,
+			TotalTokens:            acc.usage.TotalTokens,
+			PromptCacheHitTokens:   acc.usage.PromptCacheHitTokens,
+			PromptCacheMissTokens:  acc.usage.PromptCacheMissTokens,
+			ReasoningReplayTokens:  acc.reasoningReplayTokens,
+			ToolResultRawChars:     acc.replayDiag.rawChars,
+			ToolResultReplayChars:  acc.replayDiag.replayChars,
+			ToolResultRawTokens:    acc.replayDiag.rawTokens,
+			ToolResultReplayTokens: acc.replayDiag.replayTokens,
+			ToolResultTokensSaved:  acc.replayDiag.tokensSaved(),
+			ToolResultsCompacted:   acc.replayDiag.compacted,
 		},
 		Model:        model,
 		FinishReason: mapFinishReason(acc.finishReason),
@@ -518,6 +534,81 @@ func estimateReasoningReplayTokens(messages []map[string]any) int {
 		return 0
 	}
 	return chars / 4
+}
+
+type deepSeekReplayDiagnostics struct {
+	rawChars     int
+	replayChars  int
+	rawTokens    int
+	replayTokens int
+	compacted    int
+}
+
+func (d deepSeekReplayDiagnostics) tokensSaved() int {
+	if d.rawTokens <= d.replayTokens {
+		return 0
+	}
+	return d.rawTokens - d.replayTokens
+}
+
+func toolResultReplayDiagnostics(history []core.Message, messages []map[string]any) deepSeekReplayDiagnostics {
+	diag, rawByCallID := rawToolResultReplayDiagnosticsWithContent(history)
+	for _, msg := range messages {
+		role, _ := msg["role"].(string)
+		if role != "tool" {
+			continue
+		}
+		toolCallID, _ := msg["tool_call_id"].(string)
+		content, _ := msg["content"].(string)
+		diag.replayChars += len(content)
+		diag.replayTokens += compact.EstimateTokens(content)
+		if raw, ok := rawByCallID[toolCallID]; ok && content != raw {
+			diag.compacted++
+		}
+	}
+	return diag
+}
+
+func rawToolResultReplayDiagnostics(history []core.Message) deepSeekReplayDiagnostics {
+	diag, _ := rawToolResultReplayDiagnosticsWithContent(history)
+	return diag
+}
+
+func rawToolResultReplayDiagnosticsWithContent(history []core.Message) (deepSeekReplayDiagnostics, map[string]string) {
+	var diag deepSeekReplayDiagnostics
+	rawByCallID := map[string]string{}
+	pendingToolCalls := map[string]struct{}{}
+	flushPending := func() {
+		for id := range pendingToolCalls {
+			delete(pendingToolCalls, id)
+		}
+	}
+	for _, msg := range history {
+		switch msg.Role {
+		case core.RoleSystem, core.RoleUser:
+			flushPending()
+		case core.RoleAssistant:
+			flushPending()
+			for _, tc := range msg.ToolCalls {
+				if strings.TrimSpace(tc.ID) != "" {
+					pendingToolCalls[tc.ID] = struct{}{}
+				}
+			}
+		case core.RoleTool:
+			for _, tr := range msg.ToolResults {
+				if _, ok := pendingToolCalls[tr.ToolCallID]; !ok {
+					continue
+				}
+				rawTokens := compact.EstimateTokens(tr.Content)
+				diag.rawChars += len(tr.Content)
+				diag.rawTokens += rawTokens
+				rawByCallID[tr.ToolCallID] = tr.Content
+				delete(pendingToolCalls, tr.ToolCallID)
+			}
+		}
+	}
+	flushPending()
+	return diag, rawByCallID
 }
 
 func mapFinishReason(v string) core.FinishReason {
@@ -610,7 +701,7 @@ func toDeepSeekMessages(history []core.Message) []map[string]any {
 				out = append(out, map[string]any{
 					"role":         "tool",
 					"tool_call_id": tr.ToolCallID,
-					"content":      tr.Content,
+					"content":      compactToolResultForReplay(tr.Content),
 				})
 				delete(pendingToolCalls, tr.ToolCallID)
 			}
@@ -618,4 +709,207 @@ func toDeepSeekMessages(history []core.Message) []map[string]any {
 	}
 	flushPending()
 	return out
+}
+
+type deepSeekMessageDiagnostics struct {
+	strippedReasoning         int
+	preservedToolReasoning    int
+	syntheticToolResults      int
+	droppedStrayTools         int
+	repairedMissingToolCallID int
+}
+
+func (d deepSeekMessageDiagnostics) empty() bool {
+	return d.strippedReasoning == 0 &&
+		d.preservedToolReasoning == 0 &&
+		d.syntheticToolResults == 0 &&
+		d.droppedStrayTools == 0 &&
+		d.repairedMissingToolCallID == 0
+}
+
+func (d deepSeekMessageDiagnostics) String() string {
+	parts := []string{
+		fmt.Sprintf("stripped_reasoning=%d", d.strippedReasoning),
+		fmt.Sprintf("preserved_tool_reasoning=%d", d.preservedToolReasoning),
+		fmt.Sprintf("synthetic_tool_results=%d", d.syntheticToolResults),
+		fmt.Sprintf("dropped_stray_tools=%d", d.droppedStrayTools),
+		fmt.Sprintf("repaired_missing_tool_call_ids=%d", d.repairedMissingToolCallID),
+	}
+	return "message diagnostics: " + strings.Join(parts, " ")
+}
+
+func sanitizeDeepSeekMessagesForRequest(messages []map[string]any, thinkingEnabled bool) ([]map[string]any, deepSeekMessageDiagnostics) {
+	out := make([]map[string]any, 0, len(messages))
+	var diag deepSeekMessageDiagnostics
+	for i := 0; i < len(messages); i++ {
+		msg := messages[i]
+		role, _ := msg["role"].(string)
+		switch role {
+		case "tool":
+			diag.droppedStrayTools++
+			continue
+		case "assistant":
+			calls, hasCalls := deepSeekToolCalls(msg)
+			if !hasCalls {
+				clean := cloneDeepSeekMessage(msg)
+				if reasoningContentNonEmpty(clean) {
+					diag.strippedReasoning++
+				}
+				delete(clean, "reasoning_content")
+				out = append(out, clean)
+				continue
+			}
+
+			clean := cloneDeepSeekMessage(msg)
+			repairedCalls := cloneDeepSeekToolCalls(calls)
+			needed := make([]string, 0, len(repairedCalls))
+			for callIdx, call := range repairedCalls {
+				id, _ := call["id"].(string)
+				if strings.TrimSpace(id) == "" {
+					id = fmt.Sprintf("whale_synthetic_call_%d_%d", i, callIdx)
+					call["id"] = id
+					diag.repairedMissingToolCallID++
+				}
+				needed = append(needed, id)
+			}
+			clean["tool_calls"] = repairedCalls
+			if reasoningContentNonEmpty(clean) {
+				diag.preservedToolReasoning++
+			} else if thinkingEnabled {
+				clean["reasoning_content"] = ""
+			} else {
+				delete(clean, "reasoning_content")
+			}
+			out = append(out, clean)
+
+			next := i + 1
+			for _, id := range needed {
+				if next < len(messages) {
+					nextMsg := messages[next]
+					nextRole, _ := nextMsg["role"].(string)
+					if nextRole == "tool" {
+						toolID, _ := nextMsg["tool_call_id"].(string)
+						if strings.TrimSpace(toolID) == id {
+							out = append(out, cloneDeepSeekMessage(nextMsg))
+							next++
+							continue
+						}
+						if strings.TrimSpace(toolID) == "" {
+							tool := cloneDeepSeekMessage(nextMsg)
+							tool["tool_call_id"] = id
+							out = append(out, tool)
+							next++
+							continue
+						}
+					}
+				}
+				out = append(out, syntheticMissingToolResult(id))
+				diag.syntheticToolResults++
+			}
+			for next < len(messages) {
+				nextRole, _ := messages[next]["role"].(string)
+				if nextRole != "tool" {
+					break
+				}
+				diag.droppedStrayTools++
+				next++
+			}
+			i = next - 1
+		default:
+			out = append(out, cloneDeepSeekMessage(msg))
+		}
+	}
+	return out, diag
+}
+
+func deepSeekToolCalls(msg map[string]any) ([]map[string]any, bool) {
+	raw, ok := msg["tool_calls"]
+	if !ok {
+		return nil, false
+	}
+	switch calls := raw.(type) {
+	case []map[string]any:
+		if len(calls) == 0 {
+			return nil, false
+		}
+		return calls, true
+	case []any:
+		out := make([]map[string]any, 0, len(calls))
+		for _, item := range calls {
+			call, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			out = append(out, call)
+		}
+		if len(out) == 0 {
+			return nil, false
+		}
+		return out, true
+	default:
+		return nil, false
+	}
+}
+
+func cloneDeepSeekMessage(msg map[string]any) map[string]any {
+	out := make(map[string]any, len(msg))
+	for k, v := range msg {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneDeepSeekToolCalls(calls []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(calls))
+	for _, call := range calls {
+		cloned := cloneDeepSeekMessage(call)
+		if fn, ok := call["function"].(map[string]any); ok {
+			cloned["function"] = cloneDeepSeekMessage(fn)
+		}
+		out = append(out, cloned)
+	}
+	return out
+}
+
+func reasoningContentNonEmpty(msg map[string]any) bool {
+	reasoning, _ := msg["reasoning_content"].(string)
+	return strings.TrimSpace(reasoning) != ""
+}
+
+func syntheticMissingToolResult(id string) map[string]any {
+	return map[string]any{
+		"role":         "tool",
+		"tool_call_id": id,
+		"content":      `{"success":false,"error":"missing tool result recovered before provider send","code":"missing_tool_result_recovered"}`,
+	}
+}
+
+func compactToolResultForReplay(content string) string {
+	estimatedTokens := compact.EstimateTokens(content)
+	if estimatedTokens <= maxToolResultReplayTokens && len(content) <= maxToolResultReplayChars {
+		return content
+	}
+	runes := []rune(content)
+	if len(runes) <= compactedToolResultKeepRunes {
+		return content
+	}
+	headRunes := compactedToolResultKeepRunes / 2
+	tailRunes := compactedToolResultKeepRunes - headRunes
+	head := string(runes[:headRunes])
+	tail := string(runes[len(runes)-tailRunes:])
+	return fmt.Sprintf(
+		"[tool result compacted for model replay]\n"+
+			"original_estimated_tokens=%d original_chars=%d retained_head_runes=%d retained_tail_runes=%d\n"+
+			"Full raw tool result remains in Whale session history; this provider replay is abbreviated.\n\n"+
+			"--- head ---\n%s\n\n"+
+			"--- omitted ---\n[... omitted %d runes from tool result replay ...]\n\n"+
+			"--- tail ---\n%s",
+		estimatedTokens,
+		len(content),
+		headRunes,
+		tailRunes,
+		head,
+		len(runes)-headRunes-tailRunes,
+		tail,
+	)
 }

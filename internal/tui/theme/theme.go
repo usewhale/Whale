@@ -24,13 +24,14 @@ type Palette struct {
 	UserAccent     lipgloss.Color
 	UserBackground lipgloss.Color
 
-	Plan          lipgloss.Color
-	Tool          lipgloss.Color
-	Result        lipgloss.Color
-	ResultDenied  lipgloss.Color
-	ResultTimeout lipgloss.Color
-	ResultError   lipgloss.Color
-	ResultRunning lipgloss.Color
+	Plan           lipgloss.Color
+	PlanBackground lipgloss.Color
+	Tool           lipgloss.Color
+	Result         lipgloss.Color
+	ResultDenied   lipgloss.Color
+	ResultTimeout  lipgloss.Color
+	ResultError    lipgloss.Color
+	ResultRunning  lipgloss.Color
 }
 
 var Default = Palette{
@@ -50,7 +51,8 @@ var Default = Palette{
 	Selection:      lipgloss.Color("238"),
 	UserAccent:     lipgloss.Color("63"),
 	UserBackground: lipgloss.Color("236"),
-	Plan:           lipgloss.Color("45"),
+	Plan:           lipgloss.Color("75"),
+	PlanBackground: lipgloss.Color("236"),
 	Tool:           lipgloss.Color("220"),
 	Result:         lipgloss.Color("81"),
 	ResultDenied:   lipgloss.Color("214"),

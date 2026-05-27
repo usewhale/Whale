@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -210,7 +211,6 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 		return nil, fmt.Errorf("load mcp config: %w", err)
 	}
 	mcpManager := whalemcp.NewManager(mcpConfig)
-	mcpManager.SetWorkspaceRoot(workspaceRoot)
 	pluginManager := plugins.NewManager(plugins.Context{DataDir: cfg.DataDir, WorkspaceRoot: workspaceRoot}, cfg.PluginsDisabled)
 	pluginTools := pluginManager.Tools()
 	toolset.SetExtraSkills(pluginManager.Skills())
@@ -296,14 +296,17 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 			}
 			return sessionID
 		},
-		WorkspaceRoot:       workspaceRoot,
-		MemoryEnabled:       cfg.MemoryEnabled,
-		MemoryMaxChars:      cfg.MemoryMaxChars,
-		MemoryFileOrder:     parseCSVList(cfg.MemoryFileOrder),
-		DefaultModel:        defaults.DefaultModel,
-		DefaultMaxTokens:    tasks.DefaultMaxTokens,
-		DefaultMaxToolIters: tasks.DefaultMaxToolIters,
-		SummaryMaxChars:     tasks.DefaultSummaryMaxChar,
+		WorkspaceRoot:        workspaceRoot,
+		MemoryEnabled:        cfg.MemoryEnabled,
+		MemoryMaxChars:       cfg.MemoryMaxChars,
+		MemoryFileOrder:      parseCSVList(cfg.MemoryFileOrder),
+		AutoCompact:          cfg.AutoCompact,
+		AutoCompactThreshold: cfg.AutoCompactThreshold,
+		DefaultModel:         defaults.DefaultModel,
+		DefaultMaxTokens:     tasks.DefaultMaxTokens,
+		DefaultMaxToolIters:  tasks.DefaultMaxToolIters,
+		SummaryMaxChars:      tasks.DefaultSummaryMaxChar,
+		UsageLogPath:         filepath.Join(cfg.DataDir, "usage.jsonl"),
 	})
 	taskTools := tasks.NewTools(taskRunner)
 	registeredTools := append([]core.Tool{}, baseTools...)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -18,8 +17,6 @@ type Tool struct {
 	toolName       string
 	registeredName string
 	spec           *sdk.Tool
-	allowedDirs    []string
-	workspaceRoot  string
 }
 
 func (t *Tool) Name() string { return t.registeredName }
@@ -32,14 +29,7 @@ func (t *Tool) Description() string {
 	if desc == "" {
 		desc = "MCP tool"
 	}
-	detail := fmt.Sprintf("%s (MCP server: %s, tool: %s)", desc, t.serverName, t.toolName)
-	if len(t.allowedDirs) > 0 {
-		detail += fmt.Sprintf(" Allowed directories: %s.", strings.Join(t.allowedDirs, ", "))
-		if strings.TrimSpace(t.workspaceRoot) != "" && !pathInAllowedDirs(t.workspaceRoot, t.allowedDirs) {
-			detail += " Current workspace is outside those directories; use Whale built-in read_file, list_dir, search_files, or grep for workspace files."
-		}
-	}
-	return detail
+	return fmt.Sprintf("%s (MCP server: %s, tool: %s)", desc, t.serverName, t.toolName)
 }
 
 func (t *Tool) Parameters() map[string]any {
@@ -77,9 +67,6 @@ func (t *Tool) Run(ctx context.Context, call core.ToolCall) (core.ToolResult, er
 		if err := json.Unmarshal([]byte(call.Input), &args); err != nil {
 			return mcpError(call, "invalid_mcp_input", err.Error()), nil
 		}
-	}
-	if deniedPath, ok := t.deniedPath(args); ok {
-		return mcpPermissionDenied(call, deniedPath, t.allowedDirs), nil
 	}
 	result, err := t.manager.CallTool(ctx, t.serverName, t.toolName, args)
 	if err != nil {
@@ -134,76 +121,6 @@ func mcpError(call core.ToolCall, code, message string) core.ToolResult {
 		content = fmt.Sprintf(`{"ok":false,"error":%q,"code":%q}`, message, code)
 	}
 	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}
-}
-
-func mcpPermissionDenied(call core.ToolCall, path string, allowedDirs []string) core.ToolResult {
-	message := fmt.Sprintf("path outside MCP fs allowed directories: %s not in %s", path, strings.Join(allowedDirs, ", "))
-	env := core.NewToolErrorEnvelope("permission_denied", message)
-	env.Data = map[string]any{
-		"path":         path,
-		"allowed_dirs": allowedDirs,
-	}
-	content, err := core.MarshalToolEnvelope(env)
-	if err != nil {
-		content = fmt.Sprintf(`{"ok":false,"success":false,"error":%q,"code":"permission_denied"}`, message)
-	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}
-}
-
-func (t *Tool) deniedPath(args map[string]any) (string, bool) {
-	if len(t.allowedDirs) == 0 {
-		return "", false
-	}
-	for _, path := range mcpPathArgs(args) {
-		if path == "" || !filepath.IsAbs(expandHome(path)) {
-			continue
-		}
-		if !pathInAllowedDirs(path, t.allowedDirs) {
-			return cleanAbsPath(path), true
-		}
-	}
-	return "", false
-}
-
-func mcpPathArgs(args map[string]any) []string {
-	keys := []string{"path", "file_path", "root", "directory", "source", "destination"}
-	out := []string{}
-	for _, key := range keys {
-		if s, ok := args[key].(string); ok && strings.TrimSpace(s) != "" {
-			out = append(out, strings.TrimSpace(s))
-		}
-	}
-	if xs, ok := args["paths"].([]any); ok {
-		for _, x := range xs {
-			if s, ok := x.(string); ok && strings.TrimSpace(s) != "" {
-				out = append(out, strings.TrimSpace(s))
-			}
-		}
-	}
-	return out
-}
-
-func pathInAllowedDirs(path string, allowedDirs []string) bool {
-	path = cleanAbsPath(path)
-	for _, dir := range allowedDirs {
-		dir = cleanAbsPath(dir)
-		if path == dir {
-			return true
-		}
-		rel, err := filepath.Rel(dir, path)
-		if err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return true
-		}
-	}
-	return false
-}
-
-func cleanAbsPath(path string) string {
-	path = expandHome(strings.TrimSpace(path))
-	if abs, err := filepath.Abs(path); err == nil {
-		path = abs
-	}
-	return filepath.Clean(path)
 }
 
 func flattenContent(content []sdk.Content) (string, []map[string]any) {

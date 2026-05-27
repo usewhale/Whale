@@ -15,6 +15,7 @@ type RunOptions struct {
 	HiddenInput        bool
 	ReadOnly           bool
 	ShellAllowPrefixes []string
+	ViewMode           string
 }
 
 func (a *Agent) RunStreamWithOptions(ctx context.Context, sessionID, input string, hiddenInput bool) (<-chan AgentEvent, error) {
@@ -68,7 +69,7 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 	go func() {
 		defer close(out)
 		defer a.active.Delete(sessionID)
-		rt := memory.HydrateRuntime(memory.NewImmutablePrefix(a.buildImmutableSystemBlocks()), history)
+		rt := memory.HydrateRuntime(memory.NewImmutablePrefix(a.buildImmutableSystemBlocks(opts)), history)
 		expectedPrefixFingerprint := rt.Prefix.Fingerprint()
 		toolIters := 0
 		if a.repairer != nil {
@@ -89,7 +90,7 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 		}
 		for {
 			rt.Scratch.ResetTurn()
-			rt.Prefix.Refresh(a.buildImmutableSystemBlocks())
+			rt.Prefix.Refresh(a.buildImmutableSystemBlocks(opts))
 			if got := rt.Prefix.Fingerprint(); got != expectedPrefixFingerprint {
 				if !emit(AgentEvent{
 					Type: AgentEventTypePrefixDrift,

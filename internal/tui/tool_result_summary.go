@@ -3,6 +3,8 @@ package tui
 import (
 	"fmt"
 	"strings"
+
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 const shellOutputPreviewLines = 6
@@ -172,7 +174,7 @@ func shellPayloadOutput(env toolResultEnvelope, preferStderr bool) string {
 func joinShellOutput(parts ...string) string {
 	out := make([]string, 0, len(parts))
 	for _, part := range parts {
-		if strings.TrimSpace(part) != "" {
+		if strings.TrimSpace(xansi.Strip(part)) != "" {
 			out = append(out, part)
 		}
 	}
@@ -181,7 +183,7 @@ func joinShellOutput(parts ...string) string {
 
 func summarizeShellOutput(text string) string {
 	text = strings.TrimRight(text, "\n")
-	if strings.TrimSpace(text) == "" {
+	if strings.TrimSpace(xansi.Strip(text)) == "" {
 		return ""
 	}
 	rawLines := strings.Split(text, "\n")
@@ -203,11 +205,10 @@ func summarizeShellOutput(text string) string {
 }
 
 func truncateShellOutputLine(line string) string {
-	runes := []rune(line)
-	if len(runes) <= shellOutputLineRunes {
+	if xansi.StringWidth(line) <= shellOutputLineRunes {
 		return line
 	}
-	return string(runes[:shellOutputLineRunes]) + "..."
+	return xansi.Truncate(line, shellOutputLineRunes, "...")
 }
 
 func minInt(a, b int) int {

@@ -17,8 +17,12 @@ func (a *Agent) buildTurnProviderHistory(sessionID string, rt *memory.RuntimeSta
 	return out
 }
 
-func (a *Agent) buildImmutableSystemBlocks() []string {
+func (a *Agent) buildImmutableSystemBlocks(opts ...RunOptions) []string {
 	systemBlocks := make([]string, 0, len(a.extraSystemBlocks)+2)
+	var turnOpts RunOptions
+	if len(opts) > 0 {
+		turnOpts = opts[0]
+	}
 	for _, block := range a.extraSystemBlocks {
 		if trimmed := strings.TrimSpace(block); trimmed != "" {
 			systemBlocks = append(systemBlocks, trimmed)
@@ -47,6 +51,9 @@ Ask mode is active.
 		`))
 	}
 	systemBlocks = append(systemBlocks, "Mode switching commands are /agent, /ask, and /plan. Shift+Tab cycles modes in the TUI. Do not tell users to run /mode agent, /mode ask, or /mode plan; those commands do not exist.")
+	if block := renderOutputStyleBlock(turnOpts.ViewMode); block != "" {
+		systemBlocks = append(systemBlocks, block)
+	}
 	systemBlocks = append(systemBlocks, renderDelegationPolicyBlock())
 	systemBlocks = append(systemBlocks, renderRuntimeBlock(a.workspaceRoot, runtimeWorktreeContext{WorktreeRoot: a.worktreeRoot, OriginalWorkspace: a.originalWorkspace}, shell.DescribeRuntime()))
 	systemBlocks = append(systemBlocks, "For questions about the current date or time, use an available read-only shell/time command to verify the answer instead of guessing from model memory.")
@@ -68,6 +75,21 @@ Ask mode is active.
 		}
 	}
 	return systemBlocks
+}
+
+func renderOutputStyleBlock(viewMode string) string {
+	if strings.TrimSpace(viewMode) != "focus" {
+		return ""
+	}
+	return strings.TrimSpace(`
+Focus view is active in the terminal.
+
+- Keep user-facing text brief and high-level.
+- Emit text only when it changes what the user needs to know: a result, finding, blocker, risk, decision point, meaningful plan change, checkpoint, or final summary.
+- The UI already summarizes tool calls, file reads, searches, shell commands, edits, plans, and todos. Do not write assistant text merely to announce routine tool use, file inspection, searching, reading, or continuing with the next obvious step.
+- Lead with the answer, action, blocker, or decision. Skip preambles and routine narration.
+- Do not list every command, file, or tool call unless those details are evidence for a finding or the user explicitly asked for them.
+`)
 }
 
 func renderModeAuthorityBlock(mode session.Mode) string {

@@ -2,9 +2,14 @@ package core
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +24,25 @@ type ToolRegistry struct {
 }
 
 const DefaultMaxToolResultChars = 32 * 1024
+
+type toolResultArchiveContextKey struct{}
+
+type toolResultArchiveConfig struct {
+	Dir       string
+	SessionID string
+}
+
+func WithToolResultArchive(ctx context.Context, dir, sessionID string) context.Context {
+	dir = strings.TrimSpace(dir)
+	sessionID = strings.TrimSpace(sessionID)
+	if dir == "" || sessionID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, toolResultArchiveContextKey{}, toolResultArchiveConfig{
+		Dir:       dir,
+		SessionID: sessionID,
+	})
+}
 
 func NewToolRegistry(tools []Tool) *ToolRegistry {
 	r, err := NewToolRegistryChecked(tools)
@@ -148,7 +172,7 @@ func (r *ToolRegistry) DispatchWithProgress(ctx context.Context, call ToolCall, 
 		r.mu.RUnlock()
 	}
 	if tool == nil {
-		return normalizeRegistryResult(call, ToolResult{
+		return normalizeRegistryResult(ctx, call, ToolResult{
 			ToolCallID: call.ID,
 			Name:       call.Name,
 			Content:    `{"ok":false,"error":"tool not found","code":"not_found"}`,
@@ -157,7 +181,7 @@ func (r *ToolRegistry) DispatchWithProgress(ctx context.Context, call ToolCall, 
 	}
 	if hasSpec {
 		if err := validateToolInput(spec.Parameters, call.Input); err != nil {
-			return normalizeRegistryResult(call, ToolResult{
+			return normalizeRegistryResult(ctx, call, ToolResult{
 				ToolCallID: call.ID,
 				Name:       call.Name,
 				Content:    fmt.Sprintf(`{"ok":false,"error":%q,"code":"invalid_input"}`, err.Error()),
@@ -177,29 +201,36 @@ func (r *ToolRegistry) DispatchWithProgress(ctx context.Context, call ToolCall, 
 		if errors.Is(err, context.Canceled) {
 			code = "cancelled"
 		}
-		return normalizeRegistryResult(call, ToolResult{
+		return normalizeRegistryResult(ctx, call, ToolResult{
 			ToolCallID: call.ID,
 			Name:       call.Name,
 			Content:    fmt.Sprintf(`{"ok":false,"error":%q,"code":%q}`, err.Error(), code),
 			IsError:    true,
 		}, maxResultChars, time.Since(start).Milliseconds()), nil
 	}
-	return normalizeRegistryResult(call, res, maxResultChars, time.Since(start).Milliseconds()), nil
+	return normalizeRegistryResult(ctx, call, res, maxResultChars, time.Since(start).Milliseconds()), nil
 }
 
-func normalizeRegistryResult(call ToolCall, res ToolResult, maxResultChars int, durationMS int64) ToolResult {
+func normalizeRegistryResult(ctx context.Context, call ToolCall, res ToolResult, maxResultChars int, durationMS int64) ToolResult {
 	if maxResultChars <= 0 {
 		maxResultChars = DefaultMaxToolResultChars
 	}
-	content, isErr := normalizeToolContent(call.Name, res.Content, res.IsError, maxResultChars, durationMS)
+	content, isErr, archivePath := normalizeToolContent(ctx, call.Name, call.ID, res.Content, res.IsError, maxResultChars, durationMS)
 	res.ToolCallID = call.ID
 	res.Name = call.Name
 	res.Content = content
 	res.IsError = isErr
+	if archivePath != "" {
+		if res.Metadata == nil {
+			res.Metadata = map[string]any{}
+		}
+		res.Metadata["full_result_path"] = archivePath
+		res.Metadata["output_truncated"] = true
+	}
 	return res
 }
 
-func normalizeToolContent(toolName, raw string, fallbackErr bool, maxResultChars int, durationMS int64) (string, bool) {
+func normalizeToolContent(ctx context.Context, toolName, toolCallID, raw string, fallbackErr bool, maxResultChars int, durationMS int64) (string, bool, string) {
 	env := ToolEnvelope{
 		OK:        !fallbackErr,
 		Success:   !fallbackErr,
@@ -283,11 +314,12 @@ func normalizeToolContent(toolName, raw string, fallbackErr bool, maxResultChars
 	b, err := json.Marshal(env)
 	if err != nil {
 		if maxResultChars > 0 && len(raw) > maxResultChars {
-			return raw[:maxResultChars], fallbackErr
+			return raw[:maxResultChars], fallbackErr, ""
 		}
-		return raw, fallbackErr
+		return raw, fallbackErr, ""
 	}
 	if maxResultChars > 0 && len(b) > maxResultChars {
+		archivePath := archiveToolResult(ctx, toolName, toolCallID, b)
 		errorMsg := env.Error
 		if env.OK {
 			errorMsg = ""
@@ -322,17 +354,59 @@ func normalizeToolContent(toolName, raw string, fallbackErr bool, maxResultChars
 					"original_bytes":   len(b),
 				},
 			}
+			if archivePath != "" {
+				short["metadata"].(map[string]any)["full_result_path"] = archivePath
+			}
 			sb, serr := json.Marshal(short)
 			if serr == nil && len(sb) <= maxResultChars {
-				return string(sb), !env.OK
+				return string(sb), !env.OK, archivePath
 			}
 			if budget < 1024 {
 				break
 			}
 		}
-		return string(b[:maxResultChars]), !env.OK
+		return string(b[:maxResultChars]), !env.OK, archivePath
 	}
-	return string(b), !env.OK
+	return string(b), !env.OK, ""
+}
+
+var archivePathSanitizer = regexp.MustCompile(`[^A-Za-z0-9_.-]+`)
+
+func archiveToolResult(ctx context.Context, toolName, toolCallID string, payload []byte) string {
+	cfg, ok := ctx.Value(toolResultArchiveContextKey{}).(toolResultArchiveConfig)
+	if !ok || strings.TrimSpace(cfg.Dir) == "" || strings.TrimSpace(cfg.SessionID) == "" || len(payload) == 0 {
+		return ""
+	}
+	sessionID := sanitizeArchivePathPart(cfg.SessionID, "session")
+	callID := sanitizeArchivePathPart(toolCallID, "tool-call")
+	tool := sanitizeArchivePathPart(toolName, "tool")
+	sum := sha256.Sum256(payload)
+	name := fmt.Sprintf("%s-%s-%s.json", tool, callID, hex.EncodeToString(sum[:8]))
+	dir := filepath.Join(cfg.Dir, sessionID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return ""
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		return ""
+	}
+	return path
+}
+
+func sanitizeArchivePathPart(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = fallback
+	}
+	value = archivePathSanitizer.ReplaceAllString(value, "_")
+	value = strings.Trim(value, "._-")
+	if value == "" {
+		return fallback
+	}
+	if len(value) > 96 {
+		return value[:96]
+	}
+	return value
 }
 
 func splitToolResultBudget(maxResultChars int) (int, int) {

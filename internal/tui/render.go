@@ -7,6 +7,8 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/usewhale/whale/internal/app"
+	appcommands "github.com/usewhale/whale/internal/app/commands"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
@@ -264,35 +266,11 @@ func (m model) bottomPartsBeforeInput(mainWidth int) []string {
 		bottomParts = append(bottomParts, m.renderWorktreeExit())
 	}
 	if m.mode == modeSessionPicker {
-		rows := []string{"sessions (↑/↓ select, enter confirm, esc cancel):"}
-		for i, row := range m.sessionChoices {
-			if isSessionHeaderRow(row) {
-				rows = append(rows, row)
-				continue
-			}
-			prefix := "  "
-			if i == m.sessionIndex {
-				prefix = "> "
-			}
-			rows = append(rows, prefix+displaySessionChoiceRow(row))
-		}
-		bottomParts = append(bottomParts, lipgloss.NewStyle().Foreground(tuitheme.Default.Plan).Render(strings.Join(rows, "\n")))
+		bottomParts = append(bottomParts, m.renderSessionPicker())
 	}
 	if m.mode == modeUserInput {
 		if m.userInput.index < len(m.userInput.questions) {
-			q := m.userInput.questions[m.userInput.index]
-			rows := make([]string, 0, len(q.Options)+3)
-			rows = append(rows, q.Question)
-			rows = append(rows, "")
-			for i, opt := range q.Options {
-				prefix := "  "
-				if i == m.userInput.selectedOption {
-					prefix = "> "
-				}
-				rows = append(rows, fmt.Sprintf("%s%s - %s", prefix, opt.Label, opt.Description))
-			}
-			rows = append(rows, "", "(up/down choose, enter confirm, esc cancel)")
-			bottomParts = append(bottomParts, lipgloss.NewStyle().Foreground(tuitheme.Default.Info).Render(strings.Join(rows, "\n")))
+			bottomParts = append(bottomParts, m.renderUserInputPicker())
 		}
 	}
 	if m.mode == modeModelPicker {
@@ -714,14 +692,33 @@ func (m model) renderBusyStatusLine(width int) string {
 	}
 	label := "Working"
 	if m.stopping {
-		label = "Stopping"
+		if status := busySlashDraftStatus(m.input.Value(), m.status); status != "" {
+			label = status
+		} else {
+			label = "Stopping"
+		}
 	} else if status := strings.TrimSpace(m.providerRetryStatus); status != "" && time.Now().Before(m.providerRetryUntil) {
+		label = status
+	} else if status := busySlashDraftStatus(m.input.Value(), m.status); status != "" {
 		label = status
 	}
 	line := fmt.Sprintf("%s (%s)", label, formatElapsedCompact(m.busyElapsed()))
 	if !m.stopping {
 		if m.mode == modeChat {
-			line += " · Esc/Ctrl+C to interrupt"
+			input := m.input.Value()
+			if busySlashDraftStatus(input, m.status) != "" {
+				line += " · Edit command or press Esc to interrupt · Ctrl+C clears draft"
+			} else if busySlashDraftImmediate(input) {
+				line += " · Enter to run · Esc to interrupt · Ctrl+C clears draft"
+			} else if appcommands.LooksLikeSlashCommand(input) {
+				line += " · Slash commands are disabled while working · Esc to interrupt · Ctrl+C clears draft"
+			} else if input == "" {
+				line += " · Type follow-up, Enter to queue · Esc/Ctrl+C to interrupt"
+			} else if strings.TrimSpace(input) == "" {
+				line += " · Type follow-up · Esc to interrupt · Ctrl+C clears draft"
+			} else {
+				line += " · Enter to queue · Esc to interrupt · Ctrl+C clears draft"
+			}
 		} else {
 			line += " · Ctrl+C to interrupt"
 		}
@@ -730,6 +727,49 @@ func (m model) renderBusyStatusLine(width int) string {
 		Width(width).
 		Foreground(tuitheme.Default.Warn).
 		Render(line)
+}
+
+func busyStatusLabel(status string) string {
+	status = strings.TrimSpace(status)
+	if strings.Contains(status, " disabled while ") {
+		return status
+	}
+	return ""
+}
+
+func busySlashDraftStatus(input, status string) string {
+	status = busyStatusLabel(status)
+	if status == "" {
+		return ""
+	}
+	fields := strings.Fields(status)
+	if len(fields) == 0 {
+		return ""
+	}
+	input = strings.TrimSpace(input)
+	if busySlashDraftMatchesCommand(input, fields[0]) {
+		return status
+	}
+	return ""
+}
+
+func busySlashDraftMatchesCommand(input, command string) bool {
+	if input == command || strings.HasPrefix(input, command+" ") {
+		return true
+	}
+	fields := strings.Fields(input)
+	if len(fields) != 1 {
+		return false
+	}
+	return appcommands.ExpandUniqueSlashPrefix(fields[0], app.CommandsHelp, "/mcp") == command
+}
+
+func busySlashDraftImmediate(input string) bool {
+	input = strings.TrimSpace(input)
+	if !appcommands.LooksLikeSlashCommand(input) {
+		return false
+	}
+	return appcommands.ClassifySubmit(input, app.CommandsHelp, "/mcp").BusyImmediate()
 }
 
 func (m model) renderQueuedPrompts(width int) string {
@@ -821,80 +861,107 @@ func (m model) pageLabel() string {
 }
 
 func (m model) renderPalette() string {
-	rows := []string{"Command Palette (enter to run, esc to close)"}
-	for i, it := range m.palette.actions {
-		prefix := "  "
-		if i == m.palette.selected {
-			prefix = "> "
-		}
-		rows = append(rows, prefix+it.Label)
+	rows := []string{
+		pickerTitle("Command Palette"),
+		pickerHint("(enter to run, esc to close)"),
 	}
-	return lipgloss.NewStyle().Foreground(tuitheme.Default.Palette).Render(strings.Join(rows, "\n"))
+	for i, it := range m.palette.actions {
+		rows = append(rows, pickerRow(it.Label, i == m.palette.selected, false))
+	}
+	return strings.Join(rows, "\n")
 }
 
 func (m model) renderModelPicker() string {
-	rows := []string{"Select Model and Effort"}
+	rows := []string{pickerTitle("Select Model and Effort")}
 	rows = append(rows, "")
-	rows = append(rows, "Model:")
+	rows = append(rows, pickerSection("Model:"))
 	for i, item := range m.modelPicker.models {
-		prefix := "  "
-		if m.modelPicker.stage == 0 && i == m.modelPicker.modelIx {
-			prefix = "> "
-		}
-		rows = append(rows, prefix+item)
+		rows = append(rows, pickerRow(item, m.modelPicker.stage == 0 && i == m.modelPicker.modelIx, false))
 	}
 	if m.modelPicker.stage >= 1 {
 		rows = append(rows, "")
-		rows = append(rows, "Effort:")
+		rows = append(rows, pickerSection("Effort:"))
 		for i, item := range m.modelPicker.efforts {
-			prefix := "  "
-			if m.modelPicker.stage == 1 && i == m.modelPicker.effIx {
-				prefix = "> "
-			}
-			rows = append(rows, prefix+item)
+			rows = append(rows, pickerRow(item, m.modelPicker.stage == 1 && i == m.modelPicker.effIx, false))
 		}
 	}
 	if m.modelPicker.stage >= 2 {
-		rows = append(rows, "", "Thinking:")
+		rows = append(rows, "", pickerSection("Thinking:"))
 		for i, item := range m.modelPicker.thinkings {
-			prefix := "  "
-			if m.modelPicker.stage == 2 && i == m.modelPicker.thinkIx {
-				prefix = "> "
-			}
-			rows = append(rows, prefix+item)
+			rows = append(rows, pickerRow(item, m.modelPicker.stage == 2 && i == m.modelPicker.thinkIx, false))
 		}
 	}
-	rows = append(rows, "", "(up/down choose, enter next/confirm, esc back)")
-	return lipgloss.NewStyle().Foreground(tuitheme.Default.Info).Render(strings.Join(rows, "\n"))
+	rows = append(rows, "", pickerHint("(up/down choose, enter next/confirm, esc back)"))
+	return strings.Join(rows, "\n")
 }
 
 func (m model) renderPermissionsMenu() string {
 	state := "off"
+	stateTone := "muted"
 	action := "Enable session auto-accept"
 	if m.permissionsMenu.autoAccept {
 		state = "on"
+		stateTone = "info"
 		action = "Disable session auto-accept"
 	}
 	rows := []string{
-		"Permissions",
+		pickerTitle("Permissions"),
 		"",
-		"Session auto-accept: " + state,
+		pickerStateLine("Session auto-accept", state, stateTone),
 		"",
 	}
 	items := []string{action, "Cancel"}
 	for i, item := range items {
-		prefix := "  "
-		if i == m.permissionsMenu.selected {
-			prefix = "> "
-		}
-		rows = append(rows, prefix+item)
+		rows = append(rows, pickerRow(item, i == m.permissionsMenu.selected, item == "Cancel"))
 	}
-	rows = append(rows, "", "(up/down choose, enter confirm, esc cancel)")
-	return lipgloss.NewStyle().Foreground(tuitheme.Default.Info).Render(strings.Join(rows, "\n"))
+	rows = append(rows, "", pickerHint("(up/down choose, enter confirm, esc cancel)"))
+	return strings.Join(rows, "\n")
+}
+
+func (m model) renderSessionPicker() string {
+	rows := []string{
+		pickerTitle("sessions"),
+		pickerHint("(up/down choose, enter confirm, esc cancel)"),
+	}
+	for i, row := range m.sessionChoices {
+		if isSessionHeaderRow(row) {
+			continue
+		}
+		if strings.Contains(row, "Updated") && strings.Contains(row, "Conversation") {
+			rows = append(rows, pickerSection("  #   Updated   Branch                    Conversation"))
+			continue
+		}
+		selected := i == m.sessionIndex
+		if choice, ok := parseSessionChoiceDisplay(row); ok {
+			rows = append(rows, pickerSessionChoiceRow(choice, selected))
+			continue
+		}
+		rows = append(rows, pickerRow(displaySessionChoiceRow(row), selected, false))
+	}
+	return strings.Join(rows, "\n")
+}
+
+func (m model) renderUserInputPicker() string {
+	if m.userInput.index >= len(m.userInput.questions) {
+		return ""
+	}
+	q := m.userInput.questions[m.userInput.index]
+	rows := make([]string, 0, len(q.Options)+4)
+	rows = append(rows, pickerTitle(q.Question), "")
+	labelWidth := 0
+	for _, opt := range q.Options {
+		labelWidth = max(labelWidth, lipgloss.Width(opt.Label))
+	}
+	labelWidth = min(labelWidth, 24)
+	for i, opt := range q.Options {
+		rows = append(rows, pickerInlineDescriptionRow(opt.Label, opt.Description, i == m.userInput.selectedOption, labelWidth))
+	}
+	rows = append(rows, "", pickerHint("(up/down choose, enter confirm, esc cancel)"))
+	return strings.Join(rows, "\n")
 }
 
 func (m model) renderPlanImplementationPicker() string {
-	rows := []string{"Implement this plan?", ""}
+	rows := []string{pickerTitle("Implement this plan?"), ""}
 	items := []struct {
 		label string
 	}{
@@ -902,14 +969,10 @@ func (m model) renderPlanImplementationPicker() string {
 		{"No, stay in Plan mode"},
 	}
 	for i, item := range items {
-		prefix := "  "
-		if i == m.planImplementation.index {
-			prefix = "> "
-		}
-		rows = append(rows, prefix+item.label)
+		rows = append(rows, pickerRow(item.label, i == m.planImplementation.index, false))
 	}
-	rows = append(rows, "", "(up/down choose, enter confirm, esc cancel)")
-	return lipgloss.NewStyle().Foreground(tuitheme.Default.Info).Render(strings.Join(rows, "\n"))
+	rows = append(rows, "", pickerHint("(up/down choose, enter confirm, esc cancel)"))
+	return strings.Join(rows, "\n")
 }
 
 func (m model) layoutDims() (mainWidth, bodyHeight int) {

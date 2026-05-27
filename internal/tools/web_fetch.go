@@ -65,7 +65,7 @@ func (b *Toolset) webFetch(ctx context.Context, call core.ToolCall) (core.ToolRe
 		truncated = true
 		raw = raw[:maxFetchBytes]
 	}
-	html := string(raw)
+	html := decodeWebBody(raw, resp.Header.Get("Content-Type"))
 	title := extractHTMLTitle(html)
 	text := htmlToText(html)
 	content := text

@@ -105,7 +105,12 @@ func (p *cacheMetricsProvider) StreamResponse(_ context.Context, _ []Message, _ 
 
 func TestRunStreamEmitsPrefixCacheMetrics(t *testing.T) {
 	store := NewInMemoryStore()
-	a := NewAgentWithRegistry(&cacheMetricsProvider{}, store, core.NewToolRegistry(nil))
+	a := NewAgentWithRegistry(
+		&cacheMetricsProvider{},
+		store,
+		core.NewToolRegistry(nil),
+		WithUsageLogPath(filepath.Join(t.TempDir(), "usage.jsonl")),
+	)
 
 	events, err := a.RunStream(context.Background(), "s-cache-metrics", "hi")
 	if err != nil {

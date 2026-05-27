@@ -5,6 +5,13 @@ import (
 	"strings"
 )
 
+type sessionChoiceDisplay struct {
+	Number       string
+	Updated      string
+	Branch       string
+	Conversation string
+}
+
 func isSessionHeaderRow(row string) bool {
 	return strings.HasSuffix(strings.TrimSpace(row), ":")
 }
@@ -16,6 +23,37 @@ func displaySessionChoiceRow(row string) string {
 		return " " + strings.TrimPrefix(row, "*")
 	}
 	return row
+}
+
+func parseSessionChoiceDisplay(row string) (sessionChoiceDisplay, bool) {
+	fields := strings.Fields(displaySessionChoiceRow(row))
+	if len(fields) < 3 {
+		return sessionChoiceDisplay{}, false
+	}
+	number := fields[0]
+	if number == "" || strings.TrimSuffix(number, ")") == "#" {
+		return sessionChoiceDisplay{}, false
+	}
+	if _, err := strconv.Atoi(strings.TrimSuffix(number, ")")); err != nil {
+		return sessionChoiceDisplay{}, false
+	}
+	updated := fields[1]
+	branchIndex := 2
+	if len(fields) >= 4 && fields[2] == "ago" {
+		updated = fields[1] + " " + fields[2]
+		branchIndex = 3
+	}
+	if branchIndex >= len(fields) {
+		return sessionChoiceDisplay{}, false
+	}
+	branch := fields[branchIndex]
+	conversation := strings.Join(fields[branchIndex+1:], " ")
+	return sessionChoiceDisplay{
+		Number:       number,
+		Updated:      updated,
+		Branch:       branch,
+		Conversation: conversation,
+	}, true
 }
 
 func sessionChoiceNumberAt(rows []string, idx int) int {

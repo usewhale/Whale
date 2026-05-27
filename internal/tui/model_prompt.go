@@ -71,12 +71,7 @@ func (m *model) submitPromptWhileBusy(value string) {
 		return
 	}
 	if appcommands.LooksLikeSlashCommand(submit.Line) {
-		m.append("error", busySlashBlockedMessage(submit.Line, m.stopping))
-		if m.stopping {
-			m.status = "command disabled while stopping"
-		} else {
-			m.status = "command disabled while working"
-		}
+		m.status = busySlashBlockedStatus(submit.Line, m.stopping)
 		m.refreshViewportContent()
 		return
 	}
@@ -98,12 +93,7 @@ func (m *model) submitPromptFromDeferredBusyEnter(value string, wasStopping bool
 	}
 	stopping := m.stopping || wasStopping
 	if appcommands.LooksLikeSlashCommand(submit.Line) {
-		m.append("error", busySlashBlockedMessage(submit.Line, stopping))
-		if stopping {
-			m.status = "command disabled while stopping"
-		} else {
-			m.status = "command disabled while working"
-		}
+		m.status = busySlashBlockedStatus(submit.Line, stopping)
 		m.refreshViewportContent()
 		return nil
 	}
@@ -111,17 +101,17 @@ func (m *model) submitPromptFromDeferredBusyEnter(value string, wasStopping bool
 	return nil
 }
 
-func busySlashBlockedMessage(line string, stopping bool) string {
+func busySlashBlockedStatus(line string, stopping bool) string {
 	fields := strings.Fields(line)
 	cmd := strings.TrimSpace(line)
 	if len(fields) > 0 {
 		cmd = fields[0]
 	}
-	state := "a turn is in progress"
+	state := "working"
 	if stopping {
-		state = "the current turn is stopping"
+		state = "stopping"
 	}
-	return fmt.Sprintf("%s is disabled while %s. Press Esc/Ctrl+C to interrupt or wait.", cmd, state)
+	return fmt.Sprintf("%s disabled while %s", cmd, state)
 }
 
 func (m *model) submitLocalNoTurn(submit appcommands.SubmitClassification) tea.Cmd {

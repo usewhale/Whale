@@ -112,7 +112,9 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 	case service.EventInfo:
 		m.clearProviderRetryStatus()
 		if !isEnvironmentInventoryBlock(ev.Text) {
-			if isSessionNotice(ev.Text) {
+			if ev.LocalResult != nil {
+				m.appendLocalResult(ev.LocalResult)
+			} else if isSessionNotice(ev.Text) {
 				m.appendTranscript("notice", tuirender.KindNotice, ev.Text)
 			} else {
 				m.append("info", ev.Text)
@@ -142,7 +144,7 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		}
 		if !isEnvironmentInventoryBlock(ev.Text) {
 			m.appendLocalCommandEcho(m.popLocalSubmitCommand())
-			m.appendLocalSubmitResult(role, ev.Text)
+			m.appendLocalSubmitResult(role, ev.Text, ev.LocalResult)
 		} else {
 			m.addLog(logEntry{
 				Kind:    "env_summary",
@@ -222,7 +224,7 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 	case service.EventTaskProgress:
 		m.clearProviderRetryStatus()
 		m.status = ev.Text
-		m.updateTaskProgress(ev.ToolCallID, ev.ToolName, ev.Text)
+		m.updateTaskProgress(ev.ToolCallID, ev.ToolName, ev.Text, ev.Status, ev.Metadata)
 		m.addLog(logEntry{Kind: "task_progress", Source: ev.ToolName, Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Metadata)})
 	case service.EventTaskCompleted:
 		m.clearProviderRetryStatus()
@@ -564,8 +566,12 @@ func (m *model) openPlanImplementationPicker() {
 	m.planImplementation.index = 0
 }
 
-func (m *model) appendLocalSubmitResult(role, text string) {
+func (m *model) appendLocalSubmitResult(role, text string, localResult *app.LocalResult) {
 	if m.busy {
+		if localResult != nil {
+			m.appendLiveLocalResult(localResult)
+			return
+		}
 		m.append(role, text)
 		return
 	}
@@ -574,6 +580,10 @@ func (m *model) appendLocalSubmitResult(role, text string) {
 	}
 	if isSessionNotice(text) {
 		m.appendTranscript("notice", tuirender.KindNotice, text)
+		return
+	}
+	if localResult != nil {
+		m.appendLocalResult(localResult)
 		return
 	}
 	m.appendTranscript(role, tuirender.KindText, text)

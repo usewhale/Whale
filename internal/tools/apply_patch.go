@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/usewhale/whale/internal/core"
@@ -47,6 +46,8 @@ type patchOp struct {
 type patchFilePlan struct {
 	path        string
 	abs         string
+	beforeBytes []byte
+	exists      bool
 	before      string
 	after       string
 	lineEndings lineEndingSnapshot
@@ -74,19 +75,22 @@ func (b *Toolset) applyPatch(_ context.Context, call core.ToolCall) (core.ToolRe
 	}
 	changes := patchPlanChanges(plans)
 	metadata := fileDiffMetadata(changes)
+	commitPlans := make([]fileCommitPlan, 0, len(plans))
 	for _, plan := range plans {
-		if plan.remove {
-			if err := os.Remove(plan.abs); err != nil {
-				return marshalToolError(call, "patch_apply_failed", err.Error()), nil
-			}
-			continue
+		commitPlans = append(commitPlans, fileCommitPlan{
+			path:           plan.path,
+			abs:            plan.abs,
+			expectedBytes:  plan.beforeBytes,
+			expectedExists: plan.exists,
+			afterBytes:     restoreTextFileBytes(plan.after, plan.lineEndings),
+			remove:         plan.remove,
+		})
+	}
+	if err := b.commitFilePlans(commitPlans); err != nil {
+		if isFileConflict(err) {
+			return marshalToolError(call, "patch_conflict", err.Error()+": read the file again before patching"), nil
 		}
-		if err := os.MkdirAll(filepath.Dir(plan.abs), 0o755); err != nil {
-			return marshalToolError(call, "patch_apply_failed", err.Error()), nil
-		}
-		if err := os.WriteFile(plan.abs, restoreTextFileBytes(plan.after, plan.lineEndings), 0o644); err != nil {
-			return marshalToolError(call, "patch_apply_failed", err.Error()), nil
-		}
+		return marshalToolError(call, "patch_apply_failed", err.Error()), nil
 	}
 
 	filesChanged := make([]string, 0, len(plans))
@@ -138,13 +142,15 @@ func patchPlanChanges(plans []patchFilePlan) []fileChangePreview {
 }
 
 type patchFileState struct {
-	path        string
-	abs         string
-	before      string
-	after       string
-	lineEndings lineEndingSnapshot
-	exists      bool
-	remove      bool
+	path         string
+	abs          string
+	raw          []byte
+	beforeExists bool
+	before       string
+	after        string
+	lineEndings  lineEndingSnapshot
+	exists       bool
+	remove       bool
 }
 
 func (b *Toolset) planPatch(ops []patchOp) ([]patchFilePlan, error) {
@@ -167,7 +173,7 @@ func (b *Toolset) planPatch(ops []patchOp) ([]patchFilePlan, error) {
 			exists = false
 		}
 		before, lineEndings := normalizeTextFileBytes(raw)
-		st := &patchFileState{path: path, abs: abs, before: before, after: before, lineEndings: lineEndings, exists: exists}
+		st := &patchFileState{path: path, abs: abs, raw: raw, beforeExists: exists, before: before, after: before, lineEndings: lineEndings, exists: exists}
 		states[path] = st
 		order = append(order, path)
 		return st, nil
@@ -219,24 +225,18 @@ func (b *Toolset) planPatch(ops []patchOp) ([]patchFilePlan, error) {
 		if st.before == st.after && !st.remove {
 			continue
 		}
-		plans = append(plans, patchFilePlan{path: st.path, abs: st.abs, before: st.before, after: st.after, lineEndings: st.lineEndings, remove: st.remove})
+		plans = append(plans, patchFilePlan{path: st.path, abs: st.abs, beforeBytes: st.raw, exists: st.beforeExists, before: st.before, after: st.after, lineEndings: st.lineEndings, remove: st.remove})
 	}
 	return plans, nil
 }
 
 func applyPatchHunks(path, content string, hunks []patchHunk) (string, error) {
 	lines, hadTrailingNewline := splitLinesKeepFlag(content)
-	next := make([]string, len(lines))
-	copy(next, lines)
-	for _, h := range hunks {
-		idx := findSubslice(next, h.oldLines)
-		if idx < 0 {
-			return "", fmt.Errorf("hunk context not found in %s", path)
-		}
-		before := append([]string{}, next[:idx]...)
-		after := append([]string{}, next[idx+len(h.oldLines):]...)
-		next = append(before, append(h.newLines, after...)...)
+	replacements, err := computePatchReplacements(path, lines, hunks)
+	if err != nil {
+		return "", err
 	}
+	next := applyPatchReplacements(lines, replacements)
 	out := strings.Join(next, "\n")
 	if hadTrailingNewline {
 		out += "\n"
@@ -244,20 +244,72 @@ func applyPatchHunks(path, content string, hunks []patchHunk) (string, error) {
 	return out, nil
 }
 
-func applyPatchLineEndingHunks(path string, lines []lineEndingLine, hunks []patchHunk) ([]lineEndingLine, error) {
-	next := make([]lineEndingLine, len(lines))
-	copy(next, lines)
+type patchReplacement struct {
+	start    int
+	oldLen   int
+	newLines []string
+}
+
+func computePatchReplacements(path string, lines []string, hunks []patchHunk) ([]patchReplacement, error) {
+	replacements := make([]patchReplacement, 0, len(hunks))
+	lineIndex := 0
 	for _, h := range hunks {
-		idx := findLineEndingSubslice(next, h.oldLines)
+		idx := findSubsliceFrom(lines, h.oldLines, lineIndex)
 		if idx < 0 {
 			return nil, fmt.Errorf("hunk context not found in %s", path)
 		}
-		replacement := patchReplacementLineEndings(next[idx:idx+len(h.oldLines)], h)
-		before := append([]lineEndingLine{}, next[:idx]...)
-		after := append([]lineEndingLine{}, next[idx+len(h.oldLines):]...)
-		next = append(before, append(replacement, after...)...)
+		replacements = append(replacements, patchReplacement{
+			start:    idx,
+			oldLen:   len(h.oldLines),
+			newLines: h.newLines,
+		})
+		lineIndex = idx + len(h.oldLines)
+	}
+	return replacements, nil
+}
+
+func applyPatchReplacements(lines []string, replacements []patchReplacement) []string {
+	next := append([]string(nil), lines...)
+	for i := len(replacements) - 1; i >= 0; i-- {
+		replacement := replacements[i]
+		before := append([]string{}, next[:replacement.start]...)
+		after := append([]string{}, next[replacement.start+replacement.oldLen:]...)
+		next = append(before, replacement.newLines...)
+		next = append(next, after...)
+	}
+	return next
+}
+
+func applyPatchLineEndingHunks(path string, lines []lineEndingLine, hunks []patchHunk) ([]lineEndingLine, error) {
+	replacements := make([]lineEndingReplacement, 0, len(hunks))
+	lineIndex := 0
+	for _, h := range hunks {
+		idx := findLineEndingSubsliceFrom(lines, h.oldLines, lineIndex)
+		if idx < 0 {
+			return nil, fmt.Errorf("hunk context not found in %s", path)
+		}
+		replacements = append(replacements, lineEndingReplacement{
+			start:  idx,
+			oldLen: len(h.oldLines),
+			lines:  patchReplacementLineEndings(lines[idx:idx+len(h.oldLines)], h),
+		})
+		lineIndex = idx + len(h.oldLines)
+	}
+	next := append([]lineEndingLine(nil), lines...)
+	for i := len(replacements) - 1; i >= 0; i-- {
+		replacement := replacements[i]
+		before := append([]lineEndingLine{}, next[:replacement.start]...)
+		after := append([]lineEndingLine{}, next[replacement.start+replacement.oldLen:]...)
+		next = append(before, replacement.lines...)
+		next = append(next, after...)
 	}
 	return next, nil
+}
+
+type lineEndingReplacement struct {
+	start  int
+	oldLen int
+	lines  []lineEndingLine
 }
 
 func patchReplacementLineEndings(old []lineEndingLine, h patchHunk) []lineEndingLine {
@@ -437,14 +489,24 @@ func splitLinesKeepFlag(s string) ([]string, bool) {
 }
 
 func findSubslice(haystack, needle []string) int {
+	return findSubsliceFrom(haystack, needle, 0)
+}
+
+func findSubsliceFrom(haystack, needle []string, start int) int {
 	if len(needle) == 0 {
-		return 0
+		if start <= len(haystack) {
+			return start
+		}
+		return -1
 	}
-	if len(needle) > len(haystack) {
+	if start < 0 {
+		start = 0
+	}
+	if len(needle) > len(haystack) || start > len(haystack)-len(needle) {
 		return -1
 	}
 outer:
-	for i := 0; i <= len(haystack)-len(needle); i++ {
+	for i := start; i <= len(haystack)-len(needle); i++ {
 		for j := 0; j < len(needle); j++ {
 			if haystack[i+j] != needle[j] {
 				continue outer
@@ -456,14 +518,24 @@ outer:
 }
 
 func findLineEndingSubslice(haystack []lineEndingLine, needle []string) int {
+	return findLineEndingSubsliceFrom(haystack, needle, 0)
+}
+
+func findLineEndingSubsliceFrom(haystack []lineEndingLine, needle []string, start int) int {
 	if len(needle) == 0 {
-		return 0
+		if start <= len(haystack) {
+			return start
+		}
+		return -1
 	}
-	if len(needle) > len(haystack) {
+	if start < 0 {
+		start = 0
+	}
+	if len(needle) > len(haystack) || start > len(haystack)-len(needle) {
 		return -1
 	}
 outer:
-	for i := 0; i <= len(haystack)-len(needle); i++ {
+	for i := start; i <= len(haystack)-len(needle); i++ {
 		for j := 0; j < len(needle); j++ {
 			if haystack[i+j].text != needle[j] {
 				continue outer

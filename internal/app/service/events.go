@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 func (s *Service) emit(ev Event) {
@@ -43,14 +44,15 @@ type deltaChunk struct {
 }
 
 type turnDeltaCoalescers struct {
-	mu             sync.Mutex
-	svc            *Service
-	chunks         []deltaChunk
-	queuedChars    int
-	droppedFlushes int
-	lastFlush      time.Time
-	flushChars     int
-	flushInterval  time.Duration
+	mu            sync.Mutex
+	svc           *Service
+	chunks        []deltaChunk
+	queuedChars   int
+	droppedBytes  int
+	lastFlush     time.Time
+	flushChars    int
+	flushInterval time.Duration
+	hardCap       int
 }
 
 func newTurnDeltaCoalescers(s *Service) turnDeltaCoalescers {
@@ -59,6 +61,7 @@ func newTurnDeltaCoalescers(s *Service) turnDeltaCoalescers {
 		lastFlush:     time.Now(),
 		flushChars:    2048,
 		flushInterval: 50 * time.Millisecond,
+		hardCap:       256 * 1024,
 	}
 }
 
@@ -105,21 +108,62 @@ func (c *turnDeltaCoalescers) drainLocked(now time.Time) []deltaChunk {
 }
 
 func (c *turnDeltaCoalescers) flushChunksBestEffort(chunks []deltaChunk) {
-	dropped := 0
-	for _, chunk := range chunks {
+	sent := 0
+SendLoop:
+	for i, chunk := range chunks {
 		if chunk.text == "" {
+			sent = i + 1
 			continue
 		}
 		select {
 		case c.svc.events <- Event{Kind: chunk.kind, Text: chunk.text}:
+			sent = i + 1
 		default:
-			dropped++
+			// Stop at the first failure so we preserve cross-kind order on
+			// re-queue: a later same-kind chunk slipping ahead of an earlier
+			// different-kind one would corrupt the visible stream.
+			break SendLoop
 		}
 	}
-	if dropped > 0 {
-		c.mu.Lock()
-		c.droppedFlushes += dropped
-		c.mu.Unlock()
+	remainder := chunks[sent:]
+	if len(remainder) == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// Prepend unsent chunks ahead of anything add() has accumulated since
+	// drainLocked. If the seam is the same kind, coalesce to avoid emitting
+	// adjacent fragments of the same stream.
+	if n := len(c.chunks); n > 0 && remainder[len(remainder)-1].kind == c.chunks[0].kind {
+		remainder[len(remainder)-1].text += c.chunks[0].text
+		c.chunks = c.chunks[1:]
+	}
+	c.chunks = append(remainder, c.chunks...)
+	c.queuedChars = 0
+	for _, ch := range c.chunks {
+		c.queuedChars += len(ch.text)
+	}
+	// Soft cap: if the queue has grown past the hard limit (UI truly wedged),
+	// drop the OLDEST bytes to keep memory bounded while still showing the
+	// latest progress. Account the dropped bytes for the end-of-turn notice.
+	for c.queuedChars > c.hardCap && len(c.chunks) > 0 {
+		head := &c.chunks[0]
+		overflow := c.queuedChars - c.hardCap
+		if len(head.text) <= overflow {
+			c.droppedBytes += len(head.text)
+			c.queuedChars -= len(head.text)
+			c.chunks = c.chunks[1:]
+			continue
+		}
+		// Advance to the next rune boundary so we never hand the UI a
+		// fragment that starts mid-multibyte sequence (would render as a
+		// replacement char).
+		for overflow < len(head.text) && !utf8.RuneStart(head.text[overflow]) {
+			overflow++
+		}
+		head.text = head.text[overflow:]
+		c.droppedBytes += overflow
+		c.queuedChars -= overflow
 	}
 }
 
@@ -129,8 +173,8 @@ func (c *turnDeltaCoalescers) flushReliable() {
 	}
 	c.mu.Lock()
 	chunks := c.drainLocked(time.Now())
-	droppedFlushes := c.droppedFlushes
-	c.droppedFlushes = 0
+	droppedBytes := c.droppedBytes
+	c.droppedBytes = 0
 	c.mu.Unlock()
 
 	for _, chunk := range chunks {
@@ -138,13 +182,13 @@ func (c *turnDeltaCoalescers) flushReliable() {
 			c.svc.emitReliable(Event{Kind: chunk.kind, Text: chunk.text})
 		}
 	}
-	if droppedFlushes > 0 {
+	if droppedBytes > 0 {
 		// The notice itself must be reliable: emitting it best-effort means
-		// that under sustained UI backpressure the user never learns chunks
-		// were dropped, defeating the point of the notice.
+		// that under sustained UI backpressure the user never learns content
+		// was dropped, defeating the point of the notice.
 		c.svc.emitReliable(Event{
 			Kind: EventInfo,
-			Text: fmt.Sprintf("[stream] coalesced output under UI backpressure; omitted %d intermediate chunks", droppedFlushes),
+			Text: fmt.Sprintf("[stream] UI backpressure exceeded buffer; omitted ~%d bytes of streamed text", droppedBytes),
 		})
 	}
 }

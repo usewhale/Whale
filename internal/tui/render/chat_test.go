@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
+	"github.com/usewhale/whale/internal/app"
 )
 
 func assertVisibleWidthAtMost(t *testing.T, lines []string, maxWidth int) {
@@ -92,6 +93,25 @@ func TestAssembler_PreservesStreamingBlankLineBeforeTable(t *testing.T) {
 	}
 }
 
+func TestAssembler_RebuildToolEntryIndexPreservesSubagentEntries(t *testing.T) {
+	a := NewAssembler()
+	a.AddPlan("old plan")
+	a.AddSubagent("tc-subagent", "Subagent review running\nsession: child-123\ncurrent: read_file")
+
+	a.SetPlan("new plan")
+	if !a.UpdateToolCall("tc-subagent", "Subagent review running\nsession: child-123\ncurrent: grep", "result_running") {
+		t.Fatalf("expected subagent row to remain indexed after plan replacement")
+	}
+
+	snap := a.Snapshot()
+	if len(snap) != 2 {
+		t.Fatalf("expected plan and subagent rows, got %+v", snap)
+	}
+	if snap[1].Kind != KindSubagent || snap[1].Text != "Subagent review running\nsession: child-123\ncurrent: grep" {
+		t.Fatalf("expected subagent row to be updated after index rebuild, got %+v", snap[1])
+	}
+}
+
 func TestChatLines_ThinkingCardHasDistinctLabel(t *testing.T) {
 	entries := []UIMessage{
 		{Role: "think", Kind: KindThinking, Text: "I should answer carefully."},
@@ -131,6 +151,31 @@ func TestChatLines_PlanUpdateHasDistinctLabel(t *testing.T) {
 		t.Fatalf("expected plan update lines to stay separate, got: %q", joined)
 	}
 	assertBlankLineBetween(t, lines, "Updated Plan", "Inspect")
+}
+
+func TestChatLines_ProposedPlanHasDistinctLabel(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	entries := []UIMessage{
+		{Role: "plan", Kind: KindPlan, Text: "# Plan\n\n- Inspect renderer\n- Add tests"},
+	}
+	lines := ChatLines(entries, 80)
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "Proposed Plan") {
+		t.Fatalf("expected proposed plan label, got: %q", joined)
+	}
+	if !strings.Contains(joined, "Plan") || !strings.Contains(joined, "Inspect renderer") || !strings.Contains(joined, "Add tests") {
+		t.Fatalf("expected markdown plan body, got: %q", joined)
+	}
+	if strings.Contains(joined, "Updated Plan") {
+		t.Fatalf("proposed plan should not use update-plan label, got: %q", joined)
+	}
+	if !strings.Contains(joined, "\x1b[48;5;236m") {
+		t.Fatalf("expected proposed plan body background styling, got: %q", joined)
+	}
+	assertBlankLineBetween(t, lines, "Proposed Plan", "Plan")
 }
 
 func TestChatLines_UserPromptGlyphAndContinuationIndent(t *testing.T) {
@@ -206,6 +251,113 @@ func TestChatLines_StatusRendersAsDistinctCard(t *testing.T) {
 		t.Fatalf("expected status to render as a bordered card, got: %q", joined)
 	}
 	assertBlankLineBetween(t, lines, "Reasoning only", "visible answer")
+}
+
+func TestChatLines_LocalStatusRendersStructuredCard(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	entries := []UIMessage{{
+		Role: "local_status",
+		Kind: KindLocalStatus,
+		Text: "Status\n\n- session: sess-1",
+		Local: &app.LocalResult{
+			Kind:  "status",
+			Title: "Status",
+			Fields: []app.LocalResultField{
+				{Label: "Session", Value: "sess-1"},
+				{Label: "Mode", Value: "agent", Tone: "info"},
+				{Label: "Model", Value: "deepseek-v4-pro", Tone: "info"},
+			},
+		},
+	}}
+	lines := ChatLines(entries, 80)
+	joined := joinedPlain(lines)
+	for _, want := range []string{"Status", "Session", "sess-1", "Mode", "agent", "Model", "deepseek-v4-pro"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected local status card to contain %q, got:\n%s", want, joined)
+		}
+	}
+	raw := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "┃") {
+		t.Fatalf("expected local status to render as a bordered card, got:\n%s", joined)
+	}
+	if strings.Contains(raw, "\x1b[38;5;78m") {
+		t.Fatalf("local status should not use success green, got %q", raw)
+	}
+	assertVisibleWidthAtMost(t, lines, 80)
+}
+
+func TestChatLines_LocalMCPRendersStructuredSections(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	entries := []UIMessage{{
+		Role: "local_mcp",
+		Kind: KindLocalMCP,
+		Text: "MCP\n\nconfig: /tmp/mcp.json\nservers: 2",
+		Local: &app.LocalResult{
+			Kind:  "mcp",
+			Title: "MCP",
+			Fields: []app.LocalResultField{
+				{Label: "Config", Value: "/tmp/mcp.json"},
+				{Label: "Servers", Value: "2", Tone: "info"},
+			},
+			Sections: []app.LocalResultSection{
+				{
+					Title: "context7",
+					Fields: []app.LocalResultField{
+						{Label: "Status", Value: "connected", Tone: "info"},
+						{Label: "Tools", Value: "3"},
+					},
+				},
+				{
+					Title: "fs",
+					Fields: []app.LocalResultField{
+						{Label: "Status", Value: "failed", Tone: "error"},
+						{Label: "Tools", Value: "0"},
+						{Label: "Error", Value: "timeout", Tone: "error"},
+					},
+				},
+			},
+		},
+	}}
+	lines := ChatLines(entries, 80)
+	joined := joinedPlain(lines)
+	for _, want := range []string{"MCP", "Config", "/tmp/mcp.json", "Servers", "context7", "connected", "fs", "failed", "timeout"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected local mcp card to contain %q, got:\n%s", want, joined)
+		}
+	}
+	raw := strings.Join(lines, "\n")
+	if strings.Contains(raw, "\x1b[38;5;78m") {
+		t.Fatalf("local mcp should not use success green, got %q", raw)
+	}
+	assertVisibleWidthAtMost(t, lines, 80)
+}
+
+func TestChatLines_LocalResultFieldsStayWithinNarrowCard(t *testing.T) {
+	entries := []UIMessage{{
+		Role: "local_status",
+		Kind: KindLocalStatus,
+		Text: "Status\n\n- original workspace: /very/long/workspace/path",
+		Local: &app.LocalResult{
+			Kind:  "status",
+			Title: "Status",
+			Fields: []app.LocalResultField{
+				{Label: "Original workspace", Value: "/very/long/workspace/path/that/must/wrap"},
+				{Label: "Context window", Value: "100% left (0 used / 128k)"},
+			},
+		},
+	}}
+	lines := ChatLines(entries, 20)
+	joined := joinedPlain(lines)
+	if !strings.Contains(joined, "Status") || !strings.Contains(joined, "/very") {
+		t.Fatalf("expected narrow local result to remain readable, got:\n%s", joined)
+	}
+	assertVisibleWidthAtMost(t, lines, 20)
 }
 
 func TestChatLines_ContinuationIndent(t *testing.T) {
@@ -315,6 +467,63 @@ func TestRenderCommandLikePreservesShellCommandText(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "\x1b[") {
 		t.Fatalf("expected command token styling, got %q", rendered)
+	}
+}
+
+func TestRenderCommandLikeStylesCommandAfterOperator(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	cmd := "git status | head -1\nprintf 'done'"
+	rendered := RenderCommandLike(cmd)
+	if got := xansi.Strip(rendered); got != cmd {
+		t.Fatalf("command rendering changed text:\nwant %q\n got %q", cmd, got)
+	}
+	for _, want := range []string{"\x1b[38;5;111mgit", "\x1b[38;5;212m|", "\x1b[38;5;111mhead", "\x1b[38;5;111mprintf"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected styled command token %q, got %q", want, rendered)
+		}
+	}
+}
+
+func TestRenderCommandLikeHighlightsBashSyntax(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	cmd := `for f in *.go; do echo "$f"; done # comment`
+	rendered := RenderCommandLike(cmd)
+	if got := xansi.Strip(rendered); got != cmd {
+		t.Fatalf("command rendering changed text:\nwant %q\n got %q", cmd, got)
+	}
+	for _, want := range []string{
+		"\x1b[38;5;212mfor",
+		"\x1b[38;5;212m;",
+		"\x1b[38;5;81m\"",
+		"\x1b[38;5;245m# comment",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected bash syntax style %q, got %q", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "\x1b[38;5;78m") {
+		t.Fatalf("command rendering should not use success green, got %q", rendered)
+	}
+}
+
+func TestRenderCommandLikeFallbackPreservesHugeCommandText(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	cmd := strings.Repeat("x", maxShellHighlightBytes+1)
+	rendered := RenderCommandLike(cmd)
+	if got := xansi.Strip(rendered); got != cmd {
+		t.Fatalf("fallback command rendering changed text:\nwant len %d\n got len %d", len(cmd), len(got))
+	}
+	if !strings.Contains(rendered, "\x1b[") {
+		t.Fatalf("expected fallback command styling, got %q", rendered[:80])
 	}
 }
 
@@ -458,11 +667,59 @@ func TestChatLines_ShellResultPreservesOutputLines(t *testing.T) {
 	}
 }
 
+func TestChatLines_ShellResultPreservesANSIOutput(t *testing.T) {
+	entries := []UIMessage{
+		{
+			Role: "shell_result_ok",
+			Kind: KindToolCall,
+			Text: "Ran printf colors\n✓ · 23ms\n\x1b[31mRED\x1b[0m\n\x1b[34mBLUE\x1b[0m",
+		},
+	}
+	lines := ChatLines(entries, 100)
+	raw := strings.Join(lines, "\n")
+	plain := xansi.Strip(raw)
+	for _, want := range []string{"RED", "BLUE"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected visible output %q preserved, got: %q", want, plain)
+		}
+	}
+	for _, want := range []string{"\x1b[31mRED\x1b[0m", "\x1b[34mBLUE\x1b[0m"} {
+		if !strings.Contains(raw, want) {
+			t.Fatalf("expected ANSI output %q preserved, got: %q", want, raw)
+		}
+	}
+}
+
 func TestMarkdown_NarrowWidthFallback(t *testing.T) {
 	input := "a **b** c"
 	got := Markdown(input, 10, false)
 	if got != input {
 		t.Fatalf("expected markdown fallback to plain text for narrow width, got: %q", got)
+	}
+}
+
+func TestMarkdown_InlineCodeUsesColor(t *testing.T) {
+	input := "Run `git status` before `origin/main`."
+	got := Markdown(input, 80, false)
+	plain := xansi.Strip(got)
+	for _, want := range []string{"git status", "origin/main"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected inline code text %q preserved, got: %q", want, got)
+		}
+	}
+	if !strings.Contains(got, "\x1b[") {
+		t.Fatalf("expected inline code styling, got: %q", got)
+	}
+}
+
+func TestMarkdown_QuietInlineCodeKeepsBackticks(t *testing.T) {
+	input := "Run `git status` before `origin/main`."
+	got := Markdown(input, 80, true)
+	plain := xansi.Strip(got)
+	for _, want := range []string{"`git status`", "`origin/main`"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected quiet inline code marker %q preserved, got: %q", want, got)
+		}
 	}
 }
 
@@ -599,7 +856,7 @@ func TestChatLines_OrderedListKeepsDotSeparator(t *testing.T) {
 		},
 	}
 	lines := ChatLines(entries, 90)
-	joined := strings.Join(lines, "\n")
+	joined := joinedPlain(lines)
 	if strings.Contains(joined, "1core.py") || strings.Contains(joined, "2server.py") {
 		t.Fatalf("ordered list marker collapsed into text: %q", joined)
 	}

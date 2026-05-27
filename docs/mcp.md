@@ -3,6 +3,8 @@
 Whale can load tools from MCP servers at startup.
 
 MCP tools are registered as normal Whale tools with names like `mcp__server__tool`. Normal approval behavior still applies.
+Whale does not inspect MCP tool arguments for filesystem paths; configure filesystem access in the MCP server itself and use `[permissions.mcp]` or `disabled_tools` to control which MCP tools can run.
+If you previously relied on Whale-side path checks for `@modelcontextprotocol/server-filesystem`, move those limits into the filesystem server's own directory arguments and use `[permissions.mcp]` only for tool-level `allow`, `ask`, or `deny` rules.
 
 ## Config file
 
@@ -11,6 +13,9 @@ By default, Whale reads:
 ```text
 ~/.whale/mcp.json
 ```
+
+On Windows this resolves under `%USERPROFILE%\.whale` by default. If `WHALE_HOME`
+is set, Whale reads the default MCP config from `$WHALE_HOME/mcp.json`.
 
 You can use another file by setting `[mcp].config_path` in `config.toml`:
 
@@ -119,7 +124,7 @@ Header values and stdio env values can reference environment variables with `${N
 
 - `timeout`: startup and call timeout in seconds. Default: `15`.
 - `disabled`: set to `true` to skip a server.
-- `disabled_tools`: list of MCP tool names to hide from Whale.
+- `disabled_tools`: list of original MCP tool names to hide from Whale. Use the tool name reported by the MCP server, such as `read_file` or `write_file`, not Whale's registered `mcp__server__tool` name.
 - `env`: environment variables for stdio servers.
 - `headers`: HTTP headers for Streamable HTTP servers.
 
@@ -156,7 +161,7 @@ config: /Users/me/.whale/mcp.json
 servers: 2
 - context7: connected (3 tool(s))
 - remote: failed
-  error: mcp server "remote" failed during connect: ... (transport=http url=https://example.com/mcp status=401 Unauthorized body=...)
+  error: mcp server "remote" failed during connect: ... (transport=http url=https://example.com/mcp status=401 Unauthorized)
 ```
 
 ## Common issues
@@ -186,4 +191,4 @@ For HTTP servers:
 - `404`: check that the URL is the MCP endpoint, not a product homepage or API root.
 - `429` or `5xx`: check provider rate limits or service status.
 
-Whale redacts common token shapes in MCP startup errors, but config files can still contain secrets. Do not commit `~/.whale/mcp.json`.
+Whale omits query strings from HTTP startup errors, but config files can still contain secrets. Do not commit `~/.whale/mcp.json`.

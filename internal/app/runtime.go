@@ -87,6 +87,7 @@ func (a *App) RunTurnWithOptions(ctx context.Context, input string, opts agent.R
 	if !opts.HiddenInput && strings.TrimSpace(input) != "" {
 		_, _ = session.PatchSessionMeta(a.sessionsDir, a.sessionID, session.SessionMetaPatch{Title: input})
 	}
+	opts = a.applyRunOptionsDefaults(opts)
 	ag, err := a.ensureAgent()
 	if err != nil {
 		return nil, err
@@ -102,11 +103,16 @@ func (a *App) RunTurnWithInjectedInputOptions(ctx context.Context, visibleInput,
 	if strings.TrimSpace(visibleInput) != "" {
 		_, _ = session.PatchSessionMeta(a.sessionsDir, a.sessionID, session.SessionMetaPatch{Title: visibleInput})
 	}
+	opts = a.applyRunOptionsDefaults(opts)
 	ag, err := a.ensureAgent()
 	if err != nil {
 		return nil, err
 	}
 	return ag.RunStreamWithInjectedInputOptions(ctx, a.sessionID, visibleInput, hiddenInput, opts)
+}
+
+func (a *App) applyRunOptionsDefaults(opts agent.RunOptions) agent.RunOptions {
+	return opts
 }
 
 func (a *App) FinalizeTurn(lastAssistantText string) error {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/securefs"
 )
 
 type JSONLStore struct {
@@ -27,13 +28,16 @@ type approvalsFile struct {
 	Approvals []string `json:"approvals"`
 }
 
-const toolInputEventsSuffix = ".tool_input_events.jsonl"
+const (
+	DataDirEnv            = "WHALE_HOME"
+	toolInputEventsSuffix = ".tool_input_events.jsonl"
+)
 
 func NewJSONLStore(sessionsDir string) (*JSONLStore, error) {
 	if sessionsDir == "" {
 		return nil, fmt.Errorf("sessionsDir is required")
 	}
-	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+	if err := securefs.MkdirPrivate(sessionsDir); err != nil {
 		return nil, fmt.Errorf("create sessions dir: %w", err)
 	}
 	return &JSONLStore{
@@ -47,6 +51,9 @@ func DefaultDataDir() string {
 }
 
 func defaultDataDir(goos string, getenv func(string) string, userHomeDir func() (string, error)) string {
+	if dataDir := strings.TrimSpace(getenv(DataDirEnv)); dataDir != "" {
+		return dataDir
+	}
 	if goos == "windows" {
 		home, err := userHomeDir()
 		if err != nil || strings.TrimSpace(home) == "" {
@@ -201,10 +208,7 @@ func (s *JSONLStore) readSessionLocked(sessionID string) ([]core.Message, int, e
 
 func (s *JSONLStore) appendMessageLocked(sessionID string, msg core.Message) error {
 	path := s.sessionPath(sessionID)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("mkdir sessions: %w", err)
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := securefs.OpenPrivateAppend(path)
 	if err != nil {
 		return fmt.Errorf("open append: %w", err)
 	}
@@ -221,11 +225,8 @@ func (s *JSONLStore) appendMessageLocked(sessionID string, msg core.Message) err
 
 func (s *JSONLStore) rewriteSessionLocked(sessionID string, msgs []core.Message) error {
 	path := s.sessionPath(sessionID)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("mkdir sessions: %w", err)
-	}
 	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	f, err := securefs.OpenPrivateTruncate(tmp)
 	if err != nil {
 		return fmt.Errorf("open temp: %w", err)
 	}
@@ -306,7 +307,7 @@ func (s *JSONLStore) GrantApproval(_ context.Context, sessionID, key string) err
 	if err != nil {
 		return fmt.Errorf("marshal approvals: %w", err)
 	}
-	if err := os.WriteFile(path, payload, 0o600); err != nil {
+	if err := securefs.WritePrivateFile(path, payload); err != nil {
 		return fmt.Errorf("write approvals: %w", err)
 	}
 	return nil

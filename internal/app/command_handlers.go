@@ -13,6 +13,7 @@ import (
 type CommandExecution struct {
 	Handled     bool
 	Text        string
+	LocalResult *LocalResult
 	Turn        *plugins.CommandTurn
 	ShouldExit  bool
 	ClearScreen bool
@@ -39,7 +40,8 @@ func (a *App) ExecuteSlash(line string) (CommandExecution, error) {
 		return CommandExecution{Handled: true, ClearScreen: true}, nil
 	}
 	if cmdResult.ShowStatus {
-		return CommandExecution{Handled: true, Text: a.buildStatus()}, nil
+		status := a.buildStatusLocalResult()
+		return CommandExecution{Handled: true, Text: status.PlainText, LocalResult: status}, nil
 	}
 	if cmdResult.InitMemory {
 		line, err := a.initMemory()
@@ -70,8 +72,8 @@ func (a *App) ExecuteSlash(line string) (CommandExecution, error) {
 		}}, nil
 	}
 	if strings.TrimSpace(cmdResult.ForkName) != "" || trimmedCommandHead(line) == "/fork" {
-		msg, err := a.forkCurrentSession(cmdResult.ForkName)
-		return CommandExecution{Handled: true, Text: msg}, err
+		res, err := a.forkCurrentSession(cmdResult.ForkName)
+		return CommandExecution{Handled: true, Text: res.Message, LocalResult: res.Local}, err
 	}
 	out := CommandExecution{Handled: true, ShouldExit: cmdResult.ShouldExit}
 	if cmdResult.Mode != "" {
@@ -126,6 +128,7 @@ func (a *App) ExecuteSlash(line string) (CommandExecution, error) {
 		if _, err := session.PatchSessionMeta(a.sessionsDir, a.sessionID, session.SessionMetaPatchFromMeta(a.baseSessionMeta())); err != nil {
 			return out, err
 		}
+		out.LocalResult = buildNewSessionLocalResult(cmdResult.SessionID, oldID, string(a.currentMode), oldMsgCount, out.Text)
 	}
 	return out, nil
 }
@@ -153,10 +156,12 @@ func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 		return CommandExecution{Handled: true, Text: msg}, err
 	}
 	if trimmed == "/mcp" {
-		return CommandExecution{Handled: true, Text: a.buildMCPStatus()}, nil
+		mcp := a.buildMCPLocalResult()
+		return CommandExecution{Handled: true, Text: mcp.PlainText, LocalResult: mcp}, nil
 	}
 	if trimmed == "/help" {
-		return CommandExecution{Handled: true, Text: BuildHelpText()}, nil
+		help := buildHelpLocalResult()
+		return CommandExecution{Handled: true, Text: help.PlainText, LocalResult: help}, nil
 	}
 	if strings.HasPrefix(trimmed, "/help ") {
 		return CommandExecution{Handled: true}, errors.New("usage: /help")
@@ -181,7 +186,8 @@ func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 		return CommandExecution{Handled: true}, errors.New("usage: /plugins")
 	}
 	if trimmed == "/stats" {
-		return CommandExecution{Handled: true, Text: a.buildStats()}, nil
+		stats := a.buildStatsLocalResult("overview")
+		return CommandExecution{Handled: true, Text: stats.PlainText, LocalResult: stats}, nil
 	}
 	if a.pluginManager != nil {
 		res, handled, err := a.pluginManager.HandleCommand(a.ctx, trimmed)
@@ -189,7 +195,11 @@ func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 			if res.Mutated {
 				a.a = nil
 			}
-			return CommandExecution{Handled: handled, Text: res.Text, Turn: res.Turn, Mutated: res.Mutated}, err
+			out := CommandExecution{Handled: handled, Text: res.Text, Turn: res.Turn, Mutated: res.Mutated}
+			if handled && err == nil && pluginCommandID(trimmed) == "memory" && strings.TrimSpace(res.Text) != "" {
+				out.LocalResult = buildMemoryLocalResult(trimmed, res.Text, res.Mutated)
+			}
+			return out, err
 		}
 		if pluginID := pluginCommandID(trimmed); pluginID != "" {
 			if st, ok := a.pluginManager.Status(pluginID); ok && !st.Enabled {
@@ -202,7 +212,8 @@ func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 		if len(fields) == 2 {
 			switch fields[1] {
 			case "usage", "tools", "repair", "recent", "profile", "all":
-				return CommandExecution{Handled: true, Text: a.buildStatsView(fields[1])}, nil
+				stats := a.buildStatsLocalResult(fields[1])
+				return CommandExecution{Handled: true, Text: stats.PlainText, LocalResult: stats}, nil
 			}
 		}
 		return CommandExecution{Handled: true}, errors.New("usage: /stats [usage|tools|repair|recent|profile|all]")
@@ -222,9 +233,11 @@ func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 		}
 		a.a = nil
 		if !info.Compacted {
-			return CommandExecution{Handled: true, Text: "nothing to compact"}, nil
+			text := "nothing to compact"
+			return CommandExecution{Handled: true, Text: text, LocalResult: buildCompactLocalResult(info, text)}, nil
 		}
-		return CommandExecution{Handled: true, Text: fmt.Sprintf("compacted conversation: %d -> %d messages; ~%d -> ~%d tokens", info.MessagesBefore, info.MessagesAfter, info.BeforeEstimate, info.AfterEstimate)}, nil
+		text := fmt.Sprintf("compacted conversation: %d -> %d messages; ~%d -> ~%d tokens", info.MessagesBefore, info.MessagesAfter, info.BeforeEstimate, info.AfterEstimate)
+		return CommandExecution{Handled: true, Text: text, LocalResult: buildCompactLocalResult(info, text)}, nil
 	}
 	return CommandExecution{}, nil
 }

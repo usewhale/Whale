@@ -26,6 +26,12 @@ func addUsage(a, b llm.Usage) llm.Usage {
 	a.PromptCacheHitTokens += b.PromptCacheHitTokens
 	a.PromptCacheMissTokens += b.PromptCacheMissTokens
 	a.ReasoningReplayTokens += b.ReasoningReplayTokens
+	a.ToolResultRawChars += b.ToolResultRawChars
+	a.ToolResultReplayChars += b.ToolResultReplayChars
+	a.ToolResultRawTokens += b.ToolResultRawTokens
+	a.ToolResultReplayTokens += b.ToolResultReplayTokens
+	a.ToolResultTokensSaved += b.ToolResultTokensSaved
+	a.ToolResultsCompacted += b.ToolResultsCompacted
 	return a
 }
 

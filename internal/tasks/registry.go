@@ -2,7 +2,6 @@ package tasks
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/usewhale/whale/internal/core"
 )
@@ -65,30 +64,30 @@ func (t guardedReadOnlyTool) Capabilities() []string {
 func (t guardedReadOnlyTool) ApprovalHint() string { return t.spec.ApprovalHint }
 
 func (t guardedReadOnlyTool) Run(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
-	if t.spec.Name == "shell_run" && shellBackgroundRequested(call.Input) {
-		return core.ToolResult{
-			ToolCallID: call.ID,
-			Name:       call.Name,
-			Content:    errorContent("background_not_allowed", "subagents cannot start background shell tasks"),
-			IsError:    true,
-		}, nil
-	}
-	if !core.IsReadOnlyToolCall(t.spec, call) {
-		return core.ToolResult{
-			ToolCallID: call.ID,
-			Name:       call.Name,
-			Content:    errorContent("read_only_required", "subagent tools are restricted to read-only calls"),
-			IsError:    true,
-		}, nil
+	if res, blocked := t.guardReadOnly(call); blocked {
+		return res, nil
 	}
 	return t.tool.Run(ctx, call)
 }
 
-func shellBackgroundRequested(raw string) bool {
-	var args map[string]any
-	if err := json.Unmarshal([]byte(raw), &args); err != nil {
-		return false
+func (t guardedReadOnlyTool) RunWithProgress(ctx context.Context, call core.ToolCall, progress func(core.ToolProgress)) (core.ToolResult, error) {
+	if res, blocked := t.guardReadOnly(call); blocked {
+		return res, nil
 	}
-	background, _ := args["background"].(bool)
-	return background
+	if runner, ok := t.tool.(core.ToolProgressRunner); ok {
+		return runner.RunWithProgress(ctx, call, progress)
+	}
+	return t.tool.Run(ctx, call)
+}
+
+func (t guardedReadOnlyTool) guardReadOnly(call core.ToolCall) (core.ToolResult, bool) {
+	if core.IsReadOnlyToolCall(t.spec, call) {
+		return core.ToolResult{}, false
+	}
+	return core.ToolResult{
+		ToolCallID: call.ID,
+		Name:       call.Name,
+		Content:    errorContent("read_only_required", "subagent tools are restricted to read-only calls"),
+		IsError:    true,
+	}, true
 }

@@ -14,11 +14,17 @@ func TestAppendUsage_WritesJSONL(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "usage.jsonl")
 	err := AppendUsage(path, "s1", "deepseek-v4-flash", "abc123", llm.Usage{
-		PromptTokens:          12,
-		CompletionTokens:      3,
-		PromptCacheHitTokens:  5,
-		PromptCacheMissTokens: 7,
-		ReasoningReplayTokens: 2,
+		PromptTokens:           12,
+		CompletionTokens:       3,
+		PromptCacheHitTokens:   5,
+		PromptCacheMissTokens:  7,
+		ReasoningReplayTokens:  2,
+		ToolResultRawChars:     1200,
+		ToolResultReplayChars:  300,
+		ToolResultRawTokens:    300,
+		ToolResultReplayTokens: 75,
+		ToolResultTokensSaved:  225,
+		ToolResultsCompacted:   1,
 	}, 0.1234, time.UnixMilli(1000))
 	if err != nil {
 		t.Fatalf("append usage failed: %v", err)
@@ -33,6 +39,9 @@ func TestAppendUsage_WritesJSONL(t *testing.T) {
 	}
 	if !strings.Contains(s, `"reasoning_replay_tokens":2`) {
 		t.Fatalf("missing replay tokens in log: %s", s)
+	}
+	if !strings.Contains(s, `"tool_result_tokens_saved":225`) {
+		t.Fatalf("missing tool replay savings in log: %s", s)
 	}
 	if !strings.Contains(s, `"prefix_fingerprint":"abc123"`) {
 		t.Fatalf("missing prefix fingerprint in log: %s", s)

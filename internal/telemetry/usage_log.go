@@ -10,17 +10,23 @@ import (
 )
 
 type UsageRecord struct {
-	TS                 int64   `json:"ts"`
-	Session            string  `json:"session"`
-	Model              string  `json:"model"`
-	PrefixFingerprint  string  `json:"prefix_fingerprint,omitempty"`
-	PromptTokens       int     `json:"prompt_tokens"`
-	CompletionTokens   int     `json:"completion_tokens"`
-	PromptCacheHit     int     `json:"prompt_cache_hit_tokens"`
-	PromptCacheMiss    int     `json:"prompt_cache_miss_tokens"`
-	CacheHitRatio      float64 `json:"cache_hit_ratio,omitempty"`
-	ReasoningReplayTok int     `json:"reasoning_replay_tokens,omitempty"`
-	CostUSD            float64 `json:"cost_usd"`
+	TS                     int64   `json:"ts"`
+	Session                string  `json:"session"`
+	Model                  string  `json:"model"`
+	PrefixFingerprint      string  `json:"prefix_fingerprint,omitempty"`
+	PromptTokens           int     `json:"prompt_tokens"`
+	CompletionTokens       int     `json:"completion_tokens"`
+	PromptCacheHit         int     `json:"prompt_cache_hit_tokens"`
+	PromptCacheMiss        int     `json:"prompt_cache_miss_tokens"`
+	CacheHitRatio          float64 `json:"cache_hit_ratio,omitempty"`
+	ReasoningReplayTok     int     `json:"reasoning_replay_tokens,omitempty"`
+	ToolResultRawChars     int     `json:"tool_result_raw_chars,omitempty"`
+	ToolResultReplayChars  int     `json:"tool_result_replay_chars,omitempty"`
+	ToolResultRawTokens    int     `json:"tool_result_raw_tokens,omitempty"`
+	ToolResultReplayTokens int     `json:"tool_result_replay_tokens,omitempty"`
+	ToolResultTokensSaved  int     `json:"tool_result_tokens_saved,omitempty"`
+	ToolResultsCompacted   int     `json:"tool_results_compacted,omitempty"`
+	CostUSD                float64 `json:"cost_usd"`
 }
 
 func DefaultUsageLogPath() string {
@@ -39,17 +45,23 @@ func AppendUsage(path, sessionID, model, prefixFingerprint string, usage llm.Usa
 		return err
 	}
 	rec := UsageRecord{
-		TS:                 now.UnixMilli(),
-		Session:            sessionID,
-		Model:              model,
-		PrefixFingerprint:  prefixFingerprint,
-		PromptTokens:       usage.PromptTokens,
-		CompletionTokens:   usage.CompletionTokens,
-		PromptCacheHit:     usage.PromptCacheHitTokens,
-		PromptCacheMiss:    usage.PromptCacheMissTokens,
-		CacheHitRatio:      cacheHitRatio(usage),
-		ReasoningReplayTok: usage.ReasoningReplayTokens,
-		CostUSD:            cost,
+		TS:                     now.UnixMilli(),
+		Session:                sessionID,
+		Model:                  model,
+		PrefixFingerprint:      prefixFingerprint,
+		PromptTokens:           usage.PromptTokens,
+		CompletionTokens:       usage.CompletionTokens,
+		PromptCacheHit:         usage.PromptCacheHitTokens,
+		PromptCacheMiss:        usage.PromptCacheMissTokens,
+		CacheHitRatio:          cacheHitRatio(usage),
+		ReasoningReplayTok:     usage.ReasoningReplayTokens,
+		ToolResultRawChars:     usage.ToolResultRawChars,
+		ToolResultReplayChars:  usage.ToolResultReplayChars,
+		ToolResultRawTokens:    usage.ToolResultRawTokens,
+		ToolResultReplayTokens: usage.ToolResultReplayTokens,
+		ToolResultTokensSaved:  usage.ToolResultTokensSaved,
+		ToolResultsCompacted:   usage.ToolResultsCompacted,
+		CostUSD:                cost,
 	}
 	b, err := json.Marshal(rec)
 	if err != nil {

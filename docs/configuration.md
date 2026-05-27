@@ -24,6 +24,10 @@ Whale stores local state under `~/.whale/`, including:
 - `sessions/`
 - `usage.jsonl`
 
+On Windows, the default global state directory is `%USERPROFILE%\.whale`.
+Set `WHALE_HOME` to use a custom global state directory on any platform.
+Run `whale doctor` to confirm the active data directory.
+
 Do not commit these files.
 
 ## Config files
@@ -115,6 +119,8 @@ auto_accept = false
 
 [permissions.mcp]
 "*" = "ask"
+"mcp__fs__*" = "deny"
+"mcp__github__create_issue" = "ask"
 
 [permissions.memory]
 "*" = "ask"
@@ -229,6 +235,15 @@ File edits (`edit`, `write`, `apply_patch`) ask for approval by default; set
 files, which ask. Custom or plugin tools that advertise a `mutates_state`
 capability are evaluated under `[permissions.mutating_tool]` and ask by
 default.
+
+MCP rules match the registered MCP tool name, such as
+`mcp__server__tool`. Whale does not inspect MCP tool arguments for filesystem
+paths; configure filesystem limits in the MCP server and use `[permissions.mcp]`
+or `disabled_tools` to allow, ask, or deny MCP tools.
+If you previously relied on Whale-side path rules for filesystem MCP tools,
+configure allowed directories in the MCP server's own arguments instead.
+`disabled_tools` entries use the original MCP tool name, for example
+`write_file`, not `mcp__fs__write_file`.
 
 ## Worktrees
 

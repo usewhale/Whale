@@ -39,6 +39,15 @@ func EstimateTurnUSD(model string, usage llm.Usage) float64 {
 		(float64(completion)/1_000_000.0)*p.OutputUSDPerMTok
 }
 
+func EstimateUsageRecordUSD(rec UsageRecord) float64 {
+	return EstimateTurnUSD(rec.Model, llm.Usage{
+		PromptTokens:          rec.PromptTokens,
+		CompletionTokens:      rec.CompletionTokens,
+		PromptCacheHitTokens:  rec.PromptCacheHit,
+		PromptCacheMissTokens: rec.PromptCacheMiss,
+	})
+}
+
 func InputCostUSD(model string, usage llm.Usage) float64 {
 	p := pricingForModel(model)
 	promptNonCache := max(usage.PromptTokens-usage.PromptCacheHitTokens, 0)

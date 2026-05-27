@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -76,6 +77,41 @@ func TestWebFetchAcceptsFormatAndHTMLAlias(t *testing.T) {
 	}
 	if !strings.Contains(out.Data.Content, "<h1>Hello</h1>") {
 		t.Fatalf("expected raw html content, got: %s", out.Data.Content)
+	}
+}
+
+func TestWebFetchDecodesHTMLMetaCharset(t *testing.T) {
+	raw := []byte(`<html><head><meta charset="shift_jis"><title>`)
+	raw = append(raw, []byte{0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea}...)
+	raw = append(raw, []byte(`</title></head><body><p>`)...)
+	raw = append(raw, []byte{0x93, 0xfa, 0x96, 0x7b, 0x8c, 0xea}...)
+	raw = append(raw, []byte(`</p></body></html>`)...)
+
+	ts, _ := NewToolset(t.TempDir())
+	ts.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(bytes.NewReader(raw)),
+			Header:     http.Header{"Content-Type": []string{"text/html"}},
+			Request:    req,
+		}, nil
+	})}
+	res, err := ts.webFetch(context.Background(), core.ToolCall{ID: "1", Name: "web_fetch", Input: `{"url":"https://example.com"}`})
+	if err != nil || res.IsError {
+		t.Fatalf("web_fetch failed err=%v res=%+v", err, res)
+	}
+
+	var out struct {
+		Data struct {
+			Title   string `json:"title"`
+			Content string `json:"content"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.Data.Title != "日本語" || !strings.Contains(out.Data.Content, "日本語") {
+		t.Fatalf("expected decoded Shift_JIS content, got title=%q content=%q", out.Data.Title, out.Data.Content)
 	}
 }
 

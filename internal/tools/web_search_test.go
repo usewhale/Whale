@@ -105,6 +105,173 @@ func TestWebSearchFallsBackToBing(t *testing.T) {
 	}
 }
 
+func TestWebSearchBingNoResultsUsesBingSource(t *testing.T) {
+	ts, err := NewToolset(t.TempDir())
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	ts.ddgSearchURL = "https://ddg.test/search?q=%s"
+	ts.bingSearchURL = "https://bing.test/search?q=%s"
+	ts.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host == "ddg.test" {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`<html><body>Unfortunately, bots use DuckDuckGo too</body></html>`)),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`<html><body><main>No results found</main></body></html>`)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	res, err := ts.webSearch(context.Background(), core.ToolCall{
+		ID:    "1",
+		Name:  "web_search",
+		Input: `{"query":"nope"}`,
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("web search failed err=%v res=%+v", err, res)
+	}
+	if !strings.Contains(res.Content, `"source":"bing"`) {
+		t.Fatalf("expected bing source for bing no-results page, got %s", res.Content)
+	}
+	if !strings.Contains(res.Content, `"count":0`) {
+		t.Fatalf("expected zero count, got %s", res.Content)
+	}
+}
+
+func TestWebSearchDuckDuckGoNoResultsWinsOverUnparseableBing(t *testing.T) {
+	ts, err := NewToolset(t.TempDir())
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	ts.ddgSearchURL = "https://ddg.test/search?q=%s"
+	ts.bingSearchURL = "https://bing.test/search?q=%s"
+	ts.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host == "ddg.test" {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`<html><body><main>No results found</main></body></html>`)),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`<html><body><main>unexpected search layout</main></body></html>`)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	res, err := ts.webSearch(context.Background(), core.ToolCall{
+		ID:    "1",
+		Name:  "web_search",
+		Input: `{"query":"primary-empty"}`,
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("web search should preserve duckduckgo no-results err=%v res=%+v", err, res)
+	}
+	if !strings.Contains(res.Content, `"source":"duckduckgo"`) {
+		t.Fatalf("expected duckduckgo source, got %s", res.Content)
+	}
+	if !strings.Contains(res.Content, `"count":0`) {
+		t.Fatalf("expected zero count, got %s", res.Content)
+	}
+}
+
+func TestWebSearchBingUnparseableFallbackFails(t *testing.T) {
+	ts, err := NewToolset(t.TempDir())
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	ts.ddgSearchURL = "https://ddg.test/search?q=%s"
+	ts.bingSearchURL = "https://bing.test/search?q=%s"
+	ts.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host == "ddg.test" {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`<html><body>Unfortunately, bots use DuckDuckGo too</body></html>`)),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`<html><body><main>unexpected search layout</main></body></html>`)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	res, err := ts.webSearch(context.Background(), core.ToolCall{
+		ID:    "1",
+		Name:  "web_search",
+		Input: `{"query":"layout-change"}`,
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	msg := toolErrorMessage(t, res)
+	for _, want := range []string{
+		"duckduckgo returned a bot challenge",
+		"bing fallback returned no parseable results",
+		"unexpected search layout",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("expected error to contain %q, got %q", want, msg)
+		}
+	}
+}
+
+func TestWebSearchBingChallengeFallbackFails(t *testing.T) {
+	ts, err := NewToolset(t.TempDir())
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	ts.ddgSearchURL = "https://ddg.test/search?q=%s"
+	ts.bingSearchURL = "https://bing.test/search?q=%s"
+	ts.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host == "ddg.test" {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`<html><body>Unfortunately, bots use DuckDuckGo too</body></html>`)),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`<html><body>Verify you are human before continuing</body></html>`)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	res, err := ts.webSearch(context.Background(), core.ToolCall{
+		ID:    "1",
+		Name:  "web_search",
+		Input: `{"query":"blocked"}`,
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	msg := toolErrorMessage(t, res)
+	for _, want := range []string{
+		"duckduckgo returned a bot challenge",
+		"bing fallback returned a bot challenge",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("expected error to contain %q, got %q", want, msg)
+		}
+	}
+}
+
 func TestWebSearchForceBingEnv(t *testing.T) {
 	t.Setenv("WHALE_WEBSEARCH_FORCE_BING", "1")
 	ts, err := NewToolset(t.TempDir())

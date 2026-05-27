@@ -3,8 +3,12 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/usewhale/whale/internal/core"
 )
 
 type regTestTool struct{ name string }
@@ -119,5 +123,42 @@ func TestToolRegistryTruncatesLargeResult(t *testing.T) {
 	metadata, ok := out["metadata"].(map[string]any)
 	if !ok || metadata["output_truncated"] != true {
 		t.Fatalf("expected output_truncated metadata, got: %s", res.Content)
+	}
+}
+
+func TestToolRegistryArchivesLargeResultBeforeTruncation(t *testing.T) {
+	r := NewToolRegistry([]Tool{longOutputTool{}})
+	r.SetMaxResultChars(2048)
+	archiveDir := t.TempDir()
+	ctx := core.WithToolResultArchive(context.Background(), archiveDir, "sess/1")
+
+	res, err := r.Dispatch(ctx, ToolCall{ID: "tc/1", Name: "long_out"})
+	if err != nil {
+		t.Fatalf("dispatch err: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+		t.Fatalf("unexpected json: %v", err)
+	}
+	metadata, ok := out["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing metadata: %s", res.Content)
+	}
+	path, _ := metadata["full_result_path"].(string)
+	if path == "" {
+		t.Fatalf("missing full_result_path metadata: %s", res.Content)
+	}
+	if !strings.HasPrefix(path, filepath.Join(archiveDir, "sess_1")) {
+		t.Fatalf("archive path not scoped to sanitized session dir: %q", path)
+	}
+	full, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read archive: %v", err)
+	}
+	if len(full) <= len(res.Content) || !strings.Contains(string(full), strings.Repeat("a", 256)) {
+		t.Fatalf("archive did not preserve larger normalized payload, archived=%d replay=%d", len(full), len(res.Content))
+	}
+	if res.Metadata["full_result_path"] != path || res.Metadata["output_truncated"] != true {
+		t.Fatalf("tool result metadata missing archive path: %+v", res.Metadata)
 	}
 }

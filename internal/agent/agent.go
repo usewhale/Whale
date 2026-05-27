@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -261,6 +262,7 @@ type Agent struct {
 	sessionsDir            string
 	budgetWarningUSD       float64
 	usageLogPath           string
+	toolResultArchiveDir   string
 	budgetWarned80         sync.Map
 	maxToolIters           int
 	active                 sync.Map
@@ -285,6 +287,7 @@ func NewAgent(provider llm.Provider, store store.MessageStore, tools []core.Tool
 		projectMemoryFileOrder: defaults.DefaultMemoryFileOrder(),
 		sessionRuntime:         memory.NewSessionRuntime(""),
 		usageLogPath:           telemetry.DefaultUsageLogPath(),
+		toolResultArchiveDir:   defaultToolResultArchiveDir(telemetry.DefaultUsageLogPath()),
 		maxToolIters:           64,
 	}
 }
@@ -311,6 +314,7 @@ func NewAgentWithRegistry(provider llm.Provider, store store.MessageStore, tools
 		projectMemoryFileOrder: defaults.DefaultMemoryFileOrder(),
 		sessionRuntime:         memory.NewSessionRuntime(""),
 		usageLogPath:           telemetry.DefaultUsageLogPath(),
+		toolResultArchiveDir:   defaultToolResultArchiveDir(telemetry.DefaultUsageLogPath()),
 		maxToolIters:           64,
 	}
 	for _, opt := range opts {
@@ -381,7 +385,16 @@ func WithBudgetWarningUSD(capUSD float64) AgentOption {
 func WithUsageLogPath(path string) AgentOption {
 	return func(a *Agent) {
 		a.usageLogPath = strings.TrimSpace(path)
+		a.toolResultArchiveDir = defaultToolResultArchiveDir(a.usageLogPath)
 	}
+}
+
+func defaultToolResultArchiveDir(usageLogPath string) string {
+	usageLogPath = strings.TrimSpace(usageLogPath)
+	if usageLogPath == "" {
+		usageLogPath = telemetry.DefaultUsageLogPath()
+	}
+	return filepath.Join(filepath.Dir(usageLogPath), "tool-results")
 }
 
 func WithRecoveryPolicy(r RecoveryPolicy) AgentOption {
