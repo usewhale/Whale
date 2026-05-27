@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
 func (m *model) startupHeaderPrintCmd() tea.Cmd {
@@ -80,6 +82,12 @@ func (m *model) flushNativeScrollbackCmd() tea.Cmd {
 	if start >= len(m.transcript) {
 		return nil
 	}
+	if m.focusEnabled() {
+		projected := m.focusMessages(m.transcript[start:])
+		if focusMessagesAreOnlyDeferredToolSummary(projected) {
+			return nil
+		}
+	}
 	text := m.scrollbackText(m.transcript[start:])
 	if start == 0 && (m.startupHeaderOnce == nil || !*m.startupHeaderOnce) {
 		if header := strings.TrimSpace(m.startupHeaderText()); header != "" {
@@ -96,4 +104,16 @@ func (m *model) flushNativeScrollbackCmd() tea.Cmd {
 		return nil
 	}
 	return tea.Println(text)
+}
+
+func focusMessagesAreOnlyDeferredToolSummary(messages []tuirender.UIMessage) bool {
+	if len(messages) == 0 {
+		return false
+	}
+	for _, msg := range messages {
+		if msg.Kind != tuirender.KindToolSummary {
+			return false
+		}
+	}
+	return true
 }
