@@ -13,6 +13,7 @@ import (
 
 	"github.com/usewhale/whale/internal/agent"
 	"github.com/usewhale/whale/internal/policy"
+	"github.com/usewhale/whale/internal/securefs"
 	"github.com/usewhale/whale/internal/store"
 )
 
@@ -200,10 +201,7 @@ func SaveConfigFile(path string, cfg FileConfig) error {
 	if err := toml.NewEncoder(&buf).Encode(cfg); err != nil {
 		return fmt.Errorf("encode config: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("mkdir config dir: %w", err)
-	}
-	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+	if err := securefs.WritePrivateFile(path, buf.Bytes()); err != nil {
 		return fmt.Errorf("write config: %w", err)
 	}
 	return nil

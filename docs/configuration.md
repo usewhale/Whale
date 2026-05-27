@@ -24,6 +24,10 @@ Whale stores local state under `~/.whale/`, including:
 - `sessions/`
 - `usage.jsonl`
 
+On Windows, the default global state directory is `%USERPROFILE%\.whale`.
+Set `WHALE_HOME` to use a custom global state directory on any platform.
+Run `whale doctor` to confirm the active data directory.
+
 Do not commit these files.
 
 ## Config files

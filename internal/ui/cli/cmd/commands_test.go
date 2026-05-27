@@ -78,6 +78,32 @@ func TestRunDoctorReturnsExitErrorOnFailures(t *testing.T) {
 	}
 }
 
+func TestRunDoctorOutputReportsWhaleHomeOverride(t *testing.T) {
+	dataDir := t.TempDir()
+	workspace := t.TempDir()
+	t.Setenv("WHALE_HOME", dataDir)
+	t.Setenv("DEEPSEEK_BASE_URL", "http://127.0.0.1:1")
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	var out bytes.Buffer
+	err = runDoctor(&out, app.Config{})
+	var exitErr ExitError
+	if !errors.As(err, &exitErr) || exitErr.Code != 1 {
+		t.Fatalf("expected ExitError{1}, got %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "data dir: "+dataDir) || !strings.Contains(got, "data dir override") || !strings.Contains(got, "WHALE_HOME="+dataDir) {
+		t.Fatalf("expected doctor output to report WHALE_HOME data dir, got:\n%s", got)
+	}
+}
+
 func TestDoctorBadge(t *testing.T) {
 	if got := doctorBadge(app.DoctorOK); got != "ok" {
 		t.Fatalf("doctorBadge ok = %q", got)

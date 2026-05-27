@@ -125,6 +125,42 @@ func TestManagerRecordsFailedServer(t *testing.T) {
 	}
 }
 
+func TestExpandStdioValueExpandsHomeAndWindowsPercentEnv(t *testing.T) {
+	getenv := func(key string) string {
+		switch key {
+		case "USERPROFILE":
+			return `C:\Users\tester`
+		case "APPDATA":
+			return `C:\Users\tester\AppData\Roaming`
+		default:
+			return ""
+		}
+	}
+	userHomeDir := func() (string, error) { return `C:\Users\tester`, nil }
+
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "userprofile", in: `%USERPROFILE%\bin\server.exe`, want: `C:\Users\tester\bin\server.exe`},
+		{name: "appdata in arg", in: `--config=%APPDATA%\Whale\mcp.json`, want: `--config=C:\Users\tester\AppData\Roaming\Whale\mcp.json`},
+		{name: "missing env preserved", in: `%MISSING_VAR%\server.exe`, want: `%MISSING_VAR%\server.exe`},
+		{name: "windows home backslash", in: `~\bin\server.exe`, want: `C:\Users\tester/bin\server.exe`},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := expandStdioValue(tc.in, true, "windows", getenv, userHomeDir)
+			if got != tc.want {
+				t.Fatalf("expandStdioValue(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+	if got := expandStdioValue(`~\bin\server`, true, "linux", getenv, userHomeDir); got != `~\bin\server` {
+		t.Fatalf("non-windows backslash home = %q, want unchanged", got)
+	}
+}
+
 func TestManagerInitializesAndCallsStreamableHTTPToolWithHeaders(t *testing.T) {
 	t.Setenv("WHALE_MCP_TEST_TOKEN", "ctx-test-token")
 	server := newEchoMCPServer()

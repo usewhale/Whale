@@ -193,7 +193,7 @@ See [docs/plugins.md](docs/plugins.md) for details.
 
 ## Configuration
 
-Whale uses `~/.whale/config.toml` for global settings, `./.whale/config.toml` for shared project settings, and `./.whale/config.local.toml` for private project-local overrides. Config loads in this order:
+Whale uses `~/.whale/config.toml` for global settings, `./.whale/config.toml` for shared project settings, and `./.whale/config.local.toml` for private project-local overrides. On Windows, the global directory is `%USERPROFILE%\.whale`. Set `WHALE_HOME` to use a custom global Whale data directory. Config loads in this order:
 
 ```text
 defaults < global < project shared < project local < CLI flags/env

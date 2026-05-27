@@ -20,6 +20,31 @@ func TestDefaultDataDirIgnoresHomeOnWindows(t *testing.T) {
 	}
 }
 
+func TestDefaultDataDirUsesWhaleHomeOverride(t *testing.T) {
+	got := defaultDataDir("windows", getenv(map[string]string{
+		DataDirEnv: `D:\WhaleData`,
+		"HOME":     `C:\msys64\home\goranka`,
+	}), func() (string, error) {
+		return `C:\Users\goranka`, nil
+	})
+	if got != `D:\WhaleData` {
+		t.Fatalf("defaultDataDir with %s = %q, want D:\\WhaleData", DataDirEnv, got)
+	}
+}
+
+func TestDefaultDataDirIgnoresBlankWhaleHomeOverride(t *testing.T) {
+	got := defaultDataDir("linux", getenv(map[string]string{
+		DataDirEnv: "  ",
+		"HOME":     "/home/dev",
+	}), func() (string, error) {
+		return "/ignored", nil
+	})
+	want := filepath.Join("/home/dev", ".whale")
+	if got != want {
+		t.Fatalf("defaultDataDir with blank %s = %q, want %q", DataDirEnv, got, want)
+	}
+}
+
 func TestDefaultDataDirDoesNotFallbackToHomeOnWindows(t *testing.T) {
 	got := defaultDataDir("windows", getenv(map[string]string{
 		"HOME": `C:\msys64\home\goranka`,

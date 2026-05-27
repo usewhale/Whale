@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -19,7 +20,8 @@ func TestCredentialsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat credentials.json: %v", err)
 	}
-	if got := info.Mode().Perm(); got != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		got := info.Mode().Perm()
 		t.Fatalf("credentials.json perms: want 0600, got %o", got)
 	}
 

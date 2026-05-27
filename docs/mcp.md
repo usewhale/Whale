@@ -14,6 +14,9 @@ By default, Whale reads:
 ~/.whale/mcp.json
 ```
 
+On Windows this resolves under `%USERPROFILE%\.whale` by default. If `WHALE_HOME`
+is set, Whale reads the default MCP config from `$WHALE_HOME/mcp.json`.
+
 You can use another file by setting `[mcp].config_path` in `config.toml`:
 
 ```toml
