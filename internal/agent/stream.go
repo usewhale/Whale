@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -655,6 +656,9 @@ func (a *Agent) dispatchParallelSubagentsWithRecovery(ctx context.Context, sessi
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	sort.SliceStable(outcomes, func(i, j int) bool {
+		return outcomes[i].Prepared.Index < outcomes[j].Prepared.Index
+	})
 	return outcomes, nil
 }
 

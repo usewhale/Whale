@@ -287,6 +287,41 @@ func (t *delayedSpawnSubagentTool) Run(ctx context.Context, call ToolCall) (Tool
 	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok:" + call.ID}, nil
 }
 
+type reverseDelaySpawnSubagentTool struct {
+	calls   atomic.Int32
+	running atomic.Int32
+	max     atomic.Int32
+}
+
+func (t *reverseDelaySpawnSubagentTool) Name() string { return "spawn_subagent" }
+func (t *reverseDelaySpawnSubagentTool) Run(ctx context.Context, call ToolCall) (ToolResult, error) {
+	t.calls.Add(1)
+	running := t.running.Add(1)
+	for {
+		max := t.max.Load()
+		if running <= max || t.max.CompareAndSwap(max, running) {
+			break
+		}
+	}
+	defer t.running.Add(-1)
+
+	delay := 10 * time.Millisecond
+	switch call.ID {
+	case "tc-subagent-1":
+		delay = 120 * time.Millisecond
+	case "tc-subagent-2":
+		delay = 70 * time.Millisecond
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ToolResult{}, ctx.Err()
+	case <-timer.C:
+	}
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok:" + call.ID}, nil
+}
+
 func TestReadySpawnSubagentGroupRunsConcurrently(t *testing.T) {
 	store := NewInMemoryStore()
 	spawn := &delayedSpawnSubagentTool{delay: 300 * time.Millisecond}
@@ -334,4 +369,96 @@ func TestReadySpawnSubagentGroupRunsConcurrently(t *testing.T) {
 			t.Fatalf("tool result %d id = %q, want %q", i, toolMsg.ToolResults[i].ToolCallID, wantID)
 		}
 	}
+}
+
+func TestParallelSpawnSubagentResultsUseOriginalOrderAfterOutOfOrderCompletion(t *testing.T) {
+	store := NewInMemoryStore()
+	spawn := &reverseDelaySpawnSubagentTool{}
+	postHookOrder := []string{}
+	a := NewAgentWithRegistry(
+		&parallelSpawnProvider{},
+		store,
+		NewToolRegistry([]Tool{spawn}),
+		WithHookHandlers(HookHandler{
+			Event: HookEventPostToolUse,
+			Match: "spawn_subagent",
+			Name:  "record-post-order",
+			Run: func(_ context.Context, payload HookPayload) HookResult {
+				if payload.ToolCall != nil {
+					postHookOrder = append(postHookOrder, payload.ToolCall.ID)
+				}
+				return HookResult{}
+			},
+		}),
+	)
+
+	events, err := a.RunStream(context.Background(), "s-parallel-subagents-order", "go")
+	if err != nil {
+		t.Fatalf("run stream failed: %v", err)
+	}
+	var resultEventOrder []string
+	for ev := range events {
+		if ev.Type == AgentEventTypeError && ev.Err != nil {
+			t.Fatalf("run stream emitted error: %v", ev.Err)
+		}
+		if ev.Type == AgentEventTypeToolResult && ev.Result != nil {
+			resultEventOrder = append(resultEventOrder, ev.Result.ToolCallID)
+		}
+	}
+
+	if got := spawn.calls.Load(); got != 3 {
+		t.Fatalf("expected 3 spawn_subagent calls, got %d", got)
+	}
+	if got := spawn.max.Load(); got < 2 {
+		t.Fatalf("expected overlapping spawn_subagent calls, max concurrency was %d", got)
+	}
+
+	wantOrder := []string{"tc-subagent-1", "tc-subagent-2", "tc-subagent-3"}
+	if !sameStringSlice(postHookOrder, wantOrder) {
+		t.Fatalf("post hook order = %v, want %v", postHookOrder, wantOrder)
+	}
+	if !sameStringSlice(resultEventOrder, wantOrder) {
+		t.Fatalf("tool result event order = %v, want %v", resultEventOrder, wantOrder)
+	}
+
+	msgs, err := store.List(context.Background(), "s-parallel-subagents-order")
+	if err != nil {
+		t.Fatalf("list failed: %v", err)
+	}
+	if len(msgs) < 3 {
+		t.Fatalf("expected at least user, assistant, and tool messages, got %d", len(msgs))
+	}
+	toolMessages := 0
+	var toolMsg Message
+	for _, msg := range msgs {
+		if msg.Role == RoleTool {
+			toolMessages++
+			toolMsg = msg
+		}
+	}
+	if toolMessages != 1 {
+		t.Fatalf("expected one persisted tool message, got %d", toolMessages)
+	}
+	if len(toolMsg.ToolResults) != 3 {
+		t.Fatalf("expected 3 tool results, got %d", len(toolMsg.ToolResults))
+	}
+	gotOrder := make([]string, 0, len(toolMsg.ToolResults))
+	for _, result := range toolMsg.ToolResults {
+		gotOrder = append(gotOrder, result.ToolCallID)
+	}
+	if !sameStringSlice(gotOrder, wantOrder) {
+		t.Fatalf("persisted tool result order = %v, want %v", gotOrder, wantOrder)
+	}
+}
+
+func sameStringSlice(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
