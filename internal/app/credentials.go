@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/usewhale/whale/internal/securefs"
 )
 
 var deepSeekAPIKeyPattern = regexp.MustCompile(`^sk-[A-Za-z0-9_-]{16,}$`)
@@ -41,10 +43,7 @@ func SaveCredentials(dataDir string, creds Credentials) error {
 		return fmt.Errorf("marshal credentials: %w", err)
 	}
 	path := credentialsPath(dataDir)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("mkdir credentials dir: %w", err)
-	}
-	if err := os.WriteFile(path, b, 0o600); err != nil {
+	if err := securefs.WritePrivateFile(path, b); err != nil {
 		return fmt.Errorf("write credentials: %w", err)
 	}
 	return nil

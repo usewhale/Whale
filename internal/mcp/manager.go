@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -239,7 +240,7 @@ func createTransport(ctx context.Context, kind string, srv ServerConfig) (sdk.Tr
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("mcp server %q env config: %w", srv.Name, err)
 		}
-		cmd := exec.CommandContext(ctx, expandHome(srv.Command), srv.Args...)
+		cmd := exec.CommandContext(ctx, expandStdioCommand(srv.Command), expandStdioArgs(srv.Args)...)
 		cmd.Env = append(os.Environ(), env...)
 		shell.ConfigureCommand(cmd)
 		transport := &stdioProcessTransport{
@@ -334,19 +335,68 @@ func sortedServerNames(servers map[string]ServerConfig) []string {
 	return names
 }
 
-func expandHome(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "~" {
-		if home, err := os.UserHomeDir(); err == nil && home != "" {
+func expandStdioCommand(command string) string {
+	return expandStdioValue(command, true, runtime.GOOS, os.Getenv, os.UserHomeDir)
+}
+
+func expandStdioArgs(args []string) []string {
+	out := make([]string, len(args))
+	for i, arg := range args {
+		out[i] = expandStdioValue(arg, false, runtime.GOOS, os.Getenv, os.UserHomeDir)
+	}
+	return out
+}
+
+func expandStdioValue(value string, trim bool, goos string, getenv func(string) string, userHomeDir func() (string, error)) string {
+	if trim {
+		value = strings.TrimSpace(value)
+	}
+	if goos == "windows" {
+		value = expandWindowsPercentEnv(value, getenv)
+	}
+	if value == "~" {
+		if home, err := userHomeDir(); err == nil && home != "" {
 			return home
 		}
 	}
-	if strings.HasPrefix(path, "~/") {
-		if home, err := os.UserHomeDir(); err == nil && home != "" {
-			return filepath.Join(home, strings.TrimPrefix(path, "~/"))
+	prefixes := []string{"~/"}
+	if goos == "windows" {
+		prefixes = append(prefixes, `~\`)
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(value, prefix) {
+			if home, err := userHomeDir(); err == nil && home != "" {
+				return filepath.Join(home, strings.TrimPrefix(value, prefix))
+			}
 		}
 	}
-	return path
+	return value
+}
+
+func expandWindowsPercentEnv(value string, getenv func(string) string) string {
+	var out strings.Builder
+	for i := 0; i < len(value); {
+		if value[i] != '%' {
+			out.WriteByte(value[i])
+			i++
+			continue
+		}
+		end := strings.IndexByte(value[i+1:], '%')
+		if end < 0 {
+			out.WriteByte(value[i])
+			i++
+			continue
+		}
+		name := value[i+1 : i+1+end]
+		resolved := getenv(name)
+		if strings.TrimSpace(name) == "" || resolved == "" {
+			out.WriteString(value[i : i+end+2])
+		} else {
+			out.WriteString(resolved)
+		}
+		i += end + 2
+	}
+	return out.String()
 }
 
 func maybeStdioErr(err error, cmd *exec.Cmd) error {

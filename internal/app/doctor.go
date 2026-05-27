@@ -19,6 +19,7 @@ import (
 	"github.com/usewhale/whale/internal/defaults"
 	"github.com/usewhale/whale/internal/memory"
 	"github.com/usewhale/whale/internal/plugins"
+	"github.com/usewhale/whale/internal/securefs"
 	"github.com/usewhale/whale/internal/store"
 )
 
@@ -78,6 +79,7 @@ func RunDoctor(ctx context.Context, cfg Config, workspaceRoot string) (DoctorRep
 	legacyCheck := doctorCheckLegacyConfig(dataDir, workspaceRoot, len(ConfigSources(loadedConfig)) > 0)
 	dataDirCheck := doctorCheckDataDir(dataDir)
 	dataDirOverrideCheck := doctorCheckDataDirOverride(runtime.GOOS, os.Getenv, dataDir)
+	dataDirACLCheck := doctorCheckDataDirACL(runtime.GOOS, dataDir)
 	apiReachCheck := doctorCheckAPIReach(ctx, key)
 	memoryCheck := doctorCheckMemory(workspaceRoot, order, cfg.MemoryMaxChars)
 	hooksCheck := doctorCheckHooks(dataDir, workspaceRoot)
@@ -94,6 +96,9 @@ func RunDoctor(ctx context.Context, cfg Config, workspaceRoot string) (DoctorRep
 	}
 	if dataDirOverrideCheck.Level != "" {
 		checks = append(checks, dataDirOverrideCheck)
+	}
+	if dataDirACLCheck.Level != "" {
+		checks = append(checks, dataDirACLCheck)
 	}
 	checks = append(checks, apiReachCheck, memoryCheck)
 	if hooksCheck.Level != "" {
@@ -223,14 +228,14 @@ func doctorCheckCredentials(dataDir string) DoctorCheck {
 
 func doctorCheckDataDir(dataDir string) DoctorCheck {
 	sessionsDir := store.DefaultSessionsDir(dataDir)
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+	if err := securefs.MkdirPrivate(dataDir); err != nil {
 		return DoctorCheck{
 			Label:  "data dir",
 			Level:  DoctorFail,
 			Detail: fmt.Sprintf("%s create failed — %v", dataDir, err),
 		}
 	}
-	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+	if err := securefs.MkdirPrivate(sessionsDir); err != nil {
 		return DoctorCheck{
 			Label:  "data dir",
 			Level:  DoctorFail,
@@ -276,6 +281,22 @@ func doctorCheckDataDirOverride(goos string, getenv func(string) string, dataDir
 		}
 	}
 	return DoctorCheck{}
+}
+
+func doctorCheckDataDirACL(goos, dataDir string) DoctorCheck {
+	if goos != "windows" {
+		return DoctorCheck{}
+	}
+	status := securefs.CheckPrivatePath(dataDir)
+	level := DoctorOK
+	if !status.Protected {
+		level = DoctorWarn
+	}
+	return DoctorCheck{
+		Label:  "data dir acl",
+		Level:  level,
+		Detail: status.Detail,
+	}
 }
 
 func doctorCheckAPIReach(ctx context.Context, key string) DoctorCheck {

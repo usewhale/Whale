@@ -183,6 +183,13 @@ func TestDoctorCheckDataDirOverrideOmittedWhenUnsetOutsideWindows(t *testing.T) 
 	}
 }
 
+func TestDoctorCheckDataDirACLOmittedOutsideWindows(t *testing.T) {
+	got := doctorCheckDataDirACL("linux", "/home/dev/.whale")
+	if got.Level != "" {
+		t.Fatalf("data dir acl check should be omitted: %+v", got)
+	}
+}
+
 func TestCheckDeepSeekAPIReachabilityClassifiesResponses(t *testing.T) {
 	t.Setenv("DEEPSEEK_BASE_URL", newDoctorServer(t, http.StatusUnauthorized).URL)
 	msg, err := CheckDeepSeekAPIReachability(context.Background(), "sk-1234567890abcdef1234")

@@ -99,6 +99,28 @@ func TestWindowsMCPStdioTimeoutKillsProcessTree(t *testing.T) {
 	}
 }
 
+func TestWindowsMCPStdioExpandsPercentEnvInCommandAndArgs(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("WHALE_MCP_TEST_DIR", dir)
+
+	_, cmd, _, err := createTransport(context.Background(), "stdio", ServerConfig{
+		Name:    "envpath",
+		Command: `%WHALE_MCP_TEST_DIR%\server.exe`,
+		Args:    []string{`--config=%WHALE_MCP_TEST_DIR%\mcp.json`},
+	})
+	if err != nil {
+		t.Fatalf("createTransport: %v", err)
+	}
+	wantCommand := filepath.Join(dir, "server.exe")
+	if cmd.Path != wantCommand {
+		t.Fatalf("cmd.Path = %q, want %q", cmd.Path, wantCommand)
+	}
+	wantArg := "--config=" + filepath.Join(dir, "mcp.json")
+	if len(cmd.Args) != 2 || cmd.Args[1] != wantArg {
+		t.Fatalf("cmd.Args = %#v, want second arg %q", cmd.Args, wantArg)
+	}
+}
+
 func TestWindowsMCPProcessTreeHelper(t *testing.T) {
 	switch os.Getenv(windowsMCPHelperEnv) {
 	case "server":
