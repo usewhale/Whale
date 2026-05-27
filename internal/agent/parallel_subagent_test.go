@@ -322,6 +322,79 @@ func (t *reverseDelaySpawnSubagentTool) Run(ctx context.Context, call ToolCall) 
 	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok:" + call.ID}, nil
 }
 
+type progressSpawnSubagentTool struct {
+	calls   atomic.Int32
+	running atomic.Int32
+	max     atomic.Int32
+}
+
+func (t *progressSpawnSubagentTool) Name() string { return "spawn_subagent" }
+func (t *progressSpawnSubagentTool) Run(ctx context.Context, call ToolCall) (ToolResult, error) {
+	return t.RunWithProgress(ctx, call, nil)
+}
+func (t *progressSpawnSubagentTool) RunWithProgress(ctx context.Context, call ToolCall, progress func(core.ToolProgress)) (ToolResult, error) {
+	t.calls.Add(1)
+	running := t.running.Add(1)
+	for {
+		max := t.max.Load()
+		if running <= max || t.max.CompareAndSwap(max, running) {
+			break
+		}
+	}
+	defer t.running.Add(-1)
+
+	firstDelay := 30 * time.Millisecond
+	secondDelay := 20 * time.Millisecond
+	switch call.ID {
+	case "tc-subagent-1":
+		firstDelay = 25 * time.Millisecond
+		secondDelay = 60 * time.Millisecond
+	case "tc-subagent-2":
+		firstDelay = 10 * time.Millisecond
+		secondDelay = 40 * time.Millisecond
+	}
+
+	first := time.NewTimer(firstDelay)
+	defer first.Stop()
+	select {
+	case <-ctx.Done():
+		return ToolResult{}, ctx.Err()
+	case <-first.C:
+	}
+	progress(core.ToolProgress{
+		ToolCallID: call.ID,
+		ToolName:   call.Name,
+		Status:     "running",
+		Summary:    "first progress:" + call.ID,
+		Role:       "explore",
+		Model:      "mock-progress-model",
+		Count:      1,
+	})
+
+	second := time.NewTimer(secondDelay)
+	defer second.Stop()
+	select {
+	case <-ctx.Done():
+		return ToolResult{}, ctx.Err()
+	case <-second.C:
+	}
+	progress(core.ToolProgress{
+		ToolCallID: call.ID,
+		ToolName:   call.Name,
+		Status:     "done",
+		Summary:    "second progress:" + call.ID,
+		Role:       "review",
+		Model:      "mock-progress-model",
+		Count:      2,
+	})
+
+	return ToolResult{
+		ToolCallID: call.ID,
+		Name:       call.Name,
+		Content:    `{"success":true,"data":{"role":"review","summary":"subagent completed"}}`,
+	}, nil
+}
+
 func TestReadySpawnSubagentGroupRunsConcurrently(t *testing.T) {
 	store := NewInMemoryStore()
 	spawn := &delayedSpawnSubagentTool{delay: 300 * time.Millisecond}
@@ -448,6 +521,107 @@ func TestParallelSpawnSubagentResultsUseOriginalOrderAfterOutOfOrderCompletion(t
 	}
 	if !sameStringSlice(gotOrder, wantOrder) {
 		t.Fatalf("persisted tool result order = %v, want %v", gotOrder, wantOrder)
+	}
+}
+
+func TestParallelSpawnSubagentProgressKeepsToolCallIDsAndCompletionCounts(t *testing.T) {
+	store := NewInMemoryStore()
+	spawn := &progressSpawnSubagentTool{}
+	a := NewAgentWithRegistry(
+		&parallelSpawnProvider{},
+		store,
+		NewToolRegistry([]Tool{spawn}),
+	)
+
+	events, err := a.RunStream(context.Background(), "s-parallel-subagents-progress", "go")
+	if err != nil {
+		t.Fatalf("run stream failed: %v", err)
+	}
+
+	type progressRecord struct {
+		toolCallID string
+		toolName   string
+		role       string
+		model      string
+		count      int
+		summary    string
+		status     string
+	}
+	var progressEvents []progressRecord
+	subagentDoneCounts := map[string]int{}
+	toolResultCounts := map[string]int{}
+	for ev := range events {
+		if ev.Type == AgentEventTypeError && ev.Err != nil {
+			t.Fatalf("run stream emitted error: %v", ev.Err)
+		}
+		if ev.Type == AgentEventTypeTaskProgress && ev.Task != nil {
+			progressEvents = append(progressEvents, progressRecord{
+				toolCallID: ev.Task.ToolCallID,
+				toolName:   ev.Task.ToolName,
+				role:       ev.Task.Role,
+				model:      ev.Task.Model,
+				count:      ev.Task.Count,
+				summary:    ev.Task.Summary,
+				status:     ev.Task.Status,
+			})
+		}
+		if ev.Type == AgentEventTypeSubagentDone && ev.Task != nil {
+			subagentDoneCounts[ev.Task.ToolCallID]++
+			if ev.Task.Status != "completed" {
+				t.Fatalf("expected completed subagent status, got %+v", ev.Task)
+			}
+		}
+		if ev.Type == AgentEventTypeToolResult && ev.Result != nil && ev.Result.Name == "spawn_subagent" {
+			toolResultCounts[ev.Result.ToolCallID]++
+		}
+	}
+
+	if got := spawn.calls.Load(); got != 3 {
+		t.Fatalf("expected 3 spawn_subagent calls, got %d", got)
+	}
+	if got := spawn.max.Load(); got < 2 {
+		t.Fatalf("expected overlapping spawn_subagent calls, max concurrency was %d", got)
+	}
+
+	wantProgress := map[string][]progressRecord{
+		"tc-subagent-1": {
+			{toolCallID: "tc-subagent-1", toolName: "spawn_subagent", role: "explore", model: "mock-progress-model", count: 1, summary: "first progress:tc-subagent-1", status: "running"},
+			{toolCallID: "tc-subagent-1", toolName: "spawn_subagent", role: "review", model: "mock-progress-model", count: 2, summary: "second progress:tc-subagent-1", status: "done"},
+		},
+		"tc-subagent-2": {
+			{toolCallID: "tc-subagent-2", toolName: "spawn_subagent", role: "explore", model: "mock-progress-model", count: 1, summary: "first progress:tc-subagent-2", status: "running"},
+			{toolCallID: "tc-subagent-2", toolName: "spawn_subagent", role: "review", model: "mock-progress-model", count: 2, summary: "second progress:tc-subagent-2", status: "done"},
+		},
+		"tc-subagent-3": {
+			{toolCallID: "tc-subagent-3", toolName: "spawn_subagent", role: "explore", model: "mock-progress-model", count: 1, summary: "first progress:tc-subagent-3", status: "running"},
+			{toolCallID: "tc-subagent-3", toolName: "spawn_subagent", role: "review", model: "mock-progress-model", count: 2, summary: "second progress:tc-subagent-3", status: "done"},
+		},
+	}
+	gotProgressByCall := map[string][]progressRecord{}
+	for _, rec := range progressEvents {
+		gotProgressByCall[rec.toolCallID] = append(gotProgressByCall[rec.toolCallID], rec)
+	}
+	if len(progressEvents) != 6 {
+		t.Fatalf("expected 6 progress events, got %d: %+v", len(progressEvents), progressEvents)
+	}
+	for callID, want := range wantProgress {
+		got := gotProgressByCall[callID]
+		if len(got) != len(want) {
+			t.Fatalf("expected %d progress events for %s, got %d: %+v", len(want), callID, len(got), got)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("progress event %d for %s = %+v, want %+v", i, callID, got[i], want[i])
+			}
+		}
+	}
+	for _, callID := range []string{"tc-subagent-1", "tc-subagent-2", "tc-subagent-3"} {
+		if subagentDoneCounts[callID] != 1 {
+			t.Fatalf("expected exactly one subagent completed event for %s, got %d", callID, subagentDoneCounts[callID])
+		}
+		if toolResultCounts[callID] != 1 {
+			t.Fatalf("expected exactly one tool result event for %s, got %d", callID, toolResultCounts[callID])
+		}
 	}
 }
 
