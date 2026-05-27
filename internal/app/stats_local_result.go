@@ -188,7 +188,12 @@ func profileSummaryFields(stats profileStats) []LocalResultField {
 }
 
 func profileStatsSections(stats profileStats) []LocalResultSection {
-	sections := []LocalResultSection{{Title: "Profile", Fields: []LocalResultField{
+	allInReasoningReplay := stats.ReasoningReplayTokens + stats.SubagentReasoningReplay
+	allInToolReplayTokens := stats.ToolResultReplayTokens + stats.SubagentToolResultReplayTokens
+	allInToolRawTokens := stats.ToolResultRawTokens + stats.SubagentToolResultRawTokens
+	allInToolSavedTokens := stats.ToolResultTokensSaved + stats.SubagentToolResultTokensSaved
+	allInToolCompacted := stats.ToolResultsCompacted + stats.SubagentToolResultsCompacted
+	profileFields := []LocalResultField{
 		{Label: "Tokens", Value: fmt.Sprintf("%s total · %s input · %s output", formatCount(stats.PromptTokens+stats.CompletionTokens), formatCount(stats.PromptTokens), formatCount(stats.CompletionTokens))},
 		{Label: "Cache", Value: fmt.Sprintf("%s hit · %s miss · %.1f%%", formatCount(stats.CacheHit), formatCount(stats.CacheMiss), ratioPercent(stats.CacheHit, stats.CacheHit+stats.CacheMiss))},
 		{Label: "Estimated cost", Value: fmt.Sprintf("$%.4f", stats.CostUSD)},
@@ -196,13 +201,38 @@ func profileStatsSections(stats profileStats) []LocalResultSection {
 		{Label: "Prefix fingerprints", Value: fmt.Sprintf("%d", len(stats.PrefixFingerprints))},
 		{Label: "Tools", Value: fmt.Sprintf("%d calls · %s result chars", stats.ToolCalls, formatCount(stats.ToolResultChars))},
 		{Label: "Reasoning/text", Value: fmt.Sprintf("%s reasoning chars · %s visible text chars", formatCount(stats.ReasoningChars), formatCount(stats.VisibleTextChars))},
-	}}}
+	}
+	if allInReasoningReplay > 0 {
+		profileFields = append(profileFields, LocalResultField{Label: "Reasoning replay", Value: fmt.Sprintf("%s main · %s subagent · %s all-in", formatCount(stats.ReasoningReplayTokens), formatCount(stats.SubagentReasoningReplay), formatCount(allInReasoningReplay))})
+	}
+	if allInToolReplayTokens > 0 || allInToolRawTokens > 0 || allInToolSavedTokens > 0 || allInToolCompacted > 0 {
+		profileFields = append(profileFields, LocalResultField{Label: "Tool replay", Value: fmt.Sprintf("%s sent · %s raw · %s saved · %d compacted", formatCount(allInToolReplayTokens), formatCount(allInToolRawTokens), formatCount(allInToolSavedTokens), allInToolCompacted)})
+	}
+	sections := []LocalResultSection{{Title: "Profile", Fields: profileFields}}
 	if len(stats.ByTool) > 0 {
 		fields := make([]LocalResultField, 0, statsRecentLimit)
 		for _, ts := range topProfileTools(stats.ByTool, statsRecentLimit) {
 			fields = append(fields, LocalResultField{Label: ts.Tool, Value: fmt.Sprintf("%d calls · %s result chars", ts.Calls, formatCount(ts.ResultChars))})
 		}
 		sections = append(sections, LocalResultSection{Title: "Top tools", Fields: fields})
+	}
+	if top := topToolReplaySessions(stats.Sessions, statsRecentLimit); len(top) > 0 {
+		fields := make([]LocalResultField, 0, statsRecentLimit)
+		for _, sp := range top {
+			fields = append(fields, LocalResultField{Label: sp.ID, Value: fmt.Sprintf("%s sent · %s raw · %s saved · %d compacted · %s", formatCount(profileSessionToolReplayTokens(sp)), formatCount(profileSessionToolRawTokens(sp)), formatCount(profileSessionToolSavedTokens(sp)), profileSessionToolCompacted(sp), nonEmpty(sp.FirstUserText, "(no user text)"))})
+		}
+		sections = append(sections, LocalResultSection{Title: "Top tool replay sessions", Fields: fields})
+	}
+	if top := topReasoningReplaySessions(stats.Sessions, statsRecentLimit); len(top) > 0 {
+		fields := make([]LocalResultField, 0, statsRecentLimit)
+		for _, sp := range top {
+			childDetail := ""
+			if sp.SubagentReasoningReplay > 0 {
+				childDetail = fmt.Sprintf(" · +%s subagents", formatCount(sp.SubagentReasoningReplay))
+			}
+			fields = append(fields, LocalResultField{Label: sp.ID, Value: fmt.Sprintf("%s tokens%s · %.1f%% of input · %s", formatCount(sp.ReasoningReplayTokens+sp.SubagentReasoningReplay), childDetail, ratioPercent(sp.ReasoningReplayTokens+sp.SubagentReasoningReplay, sp.PromptTokens+sp.SubagentPromptTokens), nonEmpty(sp.FirstUserText, "(no user text)"))})
+		}
+		sections = append(sections, LocalResultSection{Title: "Top reasoning replay sessions", Fields: fields})
 	}
 	if len(stats.TopSessions) > 0 {
 		fields := make([]LocalResultField, 0, statsRecentLimit)

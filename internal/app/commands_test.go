@@ -605,6 +605,20 @@ func TestHandleLocalCommandStats(t *testing.T) {
 			t.Fatalf("expected profile stats to omit %q, got:\n%s", dontWant, out)
 		}
 	}
+	profileLocal := a.buildStatsLocalResultAt("profile", time.Date(2026, 5, 12, 10, 5, 0, 0, time.Local))
+	for _, want := range []struct {
+		section string
+		field   string
+	}{
+		{"Profile", "Reasoning replay"},
+		{"Profile", "Tool replay"},
+		{"Top tool replay sessions", "s1"},
+		{"Top reasoning replay sessions", "s1"},
+	} {
+		if !localResultHasSectionField(profileLocal, want.section, want.field) {
+			t.Fatalf("expected stats profile local result section %q field %q, got %+v", want.section, want.field, profileLocal.Sections)
+		}
+	}
 
 	handled, out, _, err = a.HandleLocalCommand("/stats tools")
 	if err != nil || !handled {
@@ -1386,6 +1400,18 @@ func localResultFieldValue(result *LocalResult, label string) string {
 func localResultSectionHasField(section LocalResultSection, label string) bool {
 	for _, field := range section.Fields {
 		if field.Label == label {
+			return true
+		}
+	}
+	return false
+}
+
+func localResultHasSectionField(result *LocalResult, sectionTitle, fieldLabel string) bool {
+	if result == nil {
+		return false
+	}
+	for _, section := range result.Sections {
+		if section.Title == sectionTitle && localResultSectionHasField(section, fieldLabel) {
 			return true
 		}
 	}

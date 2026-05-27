@@ -21,12 +21,11 @@ import (
 )
 
 const (
-	defaultBaseURL                 = "https://api.deepseek.com"
-	defaultStreamMaxAttempts       = 6
-	maxToolResultReplayTokens      = 8000
-	maxTotalToolResultReplayTokens = 12000
-	maxToolResultReplayChars       = 32 * 1024
-	compactedToolResultKeepRunes   = 6000
+	defaultBaseURL               = "https://api.deepseek.com"
+	defaultStreamMaxAttempts     = 6
+	maxToolResultReplayTokens    = 2000
+	maxToolResultReplayChars     = 12 * 1024
+	compactedToolResultKeepRunes = 3000
 )
 
 var errIncompleteStream = errors.New("stream disconnected before completion")
@@ -709,7 +708,6 @@ func toDeepSeekMessages(history []core.Message) []map[string]any {
 		}
 	}
 	flushPending()
-	compactToolResultsForTotalReplayBudget(out)
 	return out
 }
 
@@ -914,82 +912,4 @@ func compactToolResultForReplay(content string) string {
 		len(runes)-headRunes-tailRunes,
 		tail,
 	)
-}
-
-func compactToolResultsForTotalReplayBudget(messages []map[string]any) {
-	type toolMsg struct {
-		index  int
-		tokens int
-	}
-	var tools []toolMsg
-	total := 0
-	for i, msg := range messages {
-		role, _ := msg["role"].(string)
-		if role != "tool" {
-			continue
-		}
-		content, _ := msg["content"].(string)
-		tokens := compact.EstimateTokens(content)
-		total += tokens
-		tools = append(tools, toolMsg{index: i, tokens: tokens})
-	}
-	if total <= maxTotalToolResultReplayTokens {
-		return
-	}
-	remaining := maxTotalToolResultReplayTokens
-	for i := len(tools) - 1; i >= 0; i-- {
-		item := tools[i]
-		if item.tokens <= remaining {
-			remaining -= item.tokens
-			continue
-		}
-		msg := messages[item.index]
-		content, _ := msg["content"].(string)
-		toolCallID, _ := msg["tool_call_id"].(string)
-		msg["content"] = compactToolResultForTotalReplayBudget(toolCallID, content, item.tokens)
-	}
-}
-
-func compactToolResultForTotalReplayBudget(toolCallID, content string, estimatedTokens int) string {
-	summary := map[string]any{
-		"success": true,
-		"code":    "tool_result_replay_budget_compacted",
-		"summary": "older tool result omitted from provider replay due to cumulative tool result budget",
-		"data": map[string]any{
-			"tool_call_id":              toolCallID,
-			"original_chars":            len(content),
-			"original_estimated_tokens": estimatedTokens,
-			"budget_tokens":             maxTotalToolResultReplayTokens,
-		},
-		"truncated": true,
-		"metadata": map[string]any{
-			"provider_replay_compacted": true,
-			"compaction_reason":         "total_tool_result_replay_budget",
-		},
-	}
-	if env, ok := core.ParseToolEnvelope(content); ok {
-		data := summary["data"].(map[string]any)
-		if strings.TrimSpace(env.Summary) != "" {
-			data["original_summary"] = env.Summary
-		}
-		if strings.TrimSpace(env.Code) != "" {
-			data["original_code"] = env.Code
-		}
-		if env.Truncated {
-			data["original_truncated"] = true
-		}
-		if env.Metadata != nil {
-			if path, ok := env.Metadata["full_result_path"].(string); ok && strings.TrimSpace(path) != "" {
-				data["full_result_path"] = path
-			}
-			if n, ok := env.Metadata["original_bytes"]; ok {
-				data["original_bytes"] = n
-			}
-		}
-	}
-	b, err := json.Marshal(summary)
-	if err != nil {
-		return `{"success":true,"code":"tool_result_replay_budget_compacted","summary":"older tool result omitted from provider replay due to cumulative tool result budget","truncated":true}`
-	}
-	return string(b)
 }

@@ -520,6 +520,36 @@ func TestToDeepSeekMessagesCompactsOversizedToolResultForReplay(t *testing.T) {
 	}
 }
 
+func TestToDeepSeekMessagesCompactsMediumToolResultForReplay(t *testing.T) {
+	medium := "HEAD-" + strings.Repeat("a", 10000) + "-TAIL"
+	history := []core.Message{
+		{
+			Role: core.RoleAssistant,
+			ToolCalls: []core.ToolCall{
+				{ID: "call_1", Name: "grep", Input: `{"pattern":"needle"}`},
+			},
+		},
+		{
+			Role: core.RoleTool,
+			ToolResults: []core.ToolResult{
+				{ToolCallID: "call_1", Name: "grep", Content: medium},
+			},
+		},
+	}
+
+	out := toDeepSeekMessages(history)
+	content, _ := out[1]["content"].(string)
+	if !strings.Contains(content, "[tool result compacted for model replay]") {
+		t.Fatalf("expected medium tool result to compact, got %q", content[:min(len(content), 200)])
+	}
+	if !strings.Contains(content, "HEAD-") || !strings.Contains(content, "-TAIL") {
+		t.Fatalf("expected compacted content to preserve head and tail, got %q", content)
+	}
+	if len(content) >= len(medium) {
+		t.Fatalf("expected medium content to shrink: before=%d after=%d", len(medium), len(content))
+	}
+}
+
 func TestToDeepSeekMessagesLeavesSmallToolResultUnchanged(t *testing.T) {
 	history := []core.Message{
 		{
@@ -878,7 +908,7 @@ func TestToolResultReplayDiagnosticsIgnoresStrayRawToolResults(t *testing.T) {
 	}
 }
 
-func TestToDeepSeekMessagesCompactsOlderToolResultsWhenTotalReplayBudgetExceeded(t *testing.T) {
+func TestToDeepSeekMessagesKeepsPriorToolReplayStableWhenAppendingResults(t *testing.T) {
 	chunk := strings.Repeat("tool-output ", 650)
 	var history []core.Message
 	for i := 0; i < 12; i++ {
@@ -890,29 +920,41 @@ func TestToDeepSeekMessagesCompactsOlderToolResultsWhenTotalReplayBudgetExceeded
 		)
 	}
 
-	msgs := toDeepSeekMessages(history)
-	var firstTool, lastTool string
-	for _, msg := range msgs {
+	before := toDeepSeekMessages(history)
+	priorToolContents := make(map[string]string)
+	for _, msg := range before {
 		if msg["role"] != "tool" {
 			continue
 		}
 		content, _ := msg["content"].(string)
-		if msg["tool_call_id"] == "call_00" {
-			firstTool = content
+		toolCallID, _ := msg["tool_call_id"].(string)
+		priorToolContents[toolCallID] = content
+	}
+	if len(priorToolContents) != 12 {
+		t.Fatalf("expected 12 tool messages, got %d", len(priorToolContents))
+	}
+
+	history = append(history,
+		core.Message{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "call_12", Name: "shell_run", Input: "{}"}}},
+		core.Message{Role: core.RoleTool, ToolResults: []core.ToolResult{{ToolCallID: "call_12", Name: "shell_run", Content: "new result"}}},
+	)
+
+	after := toDeepSeekMessages(history)
+	for _, msg := range after {
+		if msg["role"] != "tool" {
+			continue
 		}
-		if msg["tool_call_id"] == "call_11" {
-			lastTool = content
+		toolCallID, _ := msg["tool_call_id"].(string)
+		want, ok := priorToolContents[toolCallID]
+		if !ok {
+			continue
 		}
-	}
-	if !strings.Contains(firstTool, "tool_result_replay_budget_compacted") {
-		t.Fatalf("expected oldest tool result to be compacted by cumulative budget, got %q", firstTool)
-	}
-	if !strings.Contains(lastTool, "result-11") || strings.Contains(lastTool, "tool_result_replay_budget_compacted") {
-		t.Fatalf("expected newest tool result to remain available, got %q", lastTool)
-	}
-	msgs, _ = sanitizeDeepSeekMessagesForRequest(msgs, true)
-	diag := toolResultReplayDiagnostics(history, msgs)
-	if diag.compacted == 0 || diag.rawTokens <= diag.replayTokens || diag.tokensSaved() == 0 {
-		t.Fatalf("expected cumulative compaction savings, got %+v", diag)
+		got, _ := msg["content"].(string)
+		if got != want {
+			t.Fatalf("tool replay content changed for %s", toolCallID)
+		}
+		if strings.Contains(got, "tool_result_replay_budget_compacted") {
+			t.Fatalf("unexpected cumulative budget compaction for %s: %q", toolCallID, got)
+		}
 	}
 }
