@@ -11,9 +11,6 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-
-	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
 
 type reviewMenuItem struct {
@@ -300,39 +297,35 @@ func (m *model) closeReviewMenu() {
 }
 
 func (m model) renderReviewMenu() string {
-	title := lipgloss.NewStyle().Foreground(tuitheme.Default.InfoSoft).Bold(true)
-	muted := lipgloss.NewStyle().Foreground(tuitheme.Default.Muted)
 	rows := []string{
-		title.Render("Review"),
-		muted.Render("Choose what to review"),
+		pickerTitle("Review"),
+		pickerHint("Choose what to review"),
 		"",
 	}
 	for i, item := range reviewMenuItems() {
 		rows = append(rows, renderReviewMenuRow(item, i == m.reviewMenu.selected))
 	}
-	rows = append(rows, "", muted.Render("  ↑/↓ select · Enter confirm · Esc close"))
+	rows = append(rows, "", pickerHint("  ↑/↓ select · Enter confirm · Esc close"))
 	return strings.Join(rows, "\n")
 }
 
 func (m model) renderReviewTargetPicker() string {
-	title := lipgloss.NewStyle().Foreground(tuitheme.Default.InfoSoft).Bold(true)
-	muted := lipgloss.NewStyle().Foreground(tuitheme.Default.Muted)
 	rows := []string{}
 	switch m.mode {
 	case modeReviewBranchPicker:
-		rows = append(rows, title.Render("Choose base branch"))
-		rows = append(rows, muted.Render(branchSearchLine(m.reviewTargetPicker.query)))
+		rows = append(rows, pickerTitle("Choose base branch"))
+		rows = append(rows, pickerHint(branchSearchLine(m.reviewTargetPicker.query)))
 	case modeReviewCommitPicker:
-		rows = append(rows, title.Render("Choose commit"))
+		rows = append(rows, pickerTitle("Choose commit"))
 	case modeReviewPRPicker:
-		rows = append(rows, title.Render("Choose pull request"))
+		rows = append(rows, pickerTitle("Choose pull request"))
 	}
 	if m.reviewTargetPicker.loading {
-		rows = append(rows, muted.Render("Loading..."), "", muted.Render("  Esc back"))
+		rows = append(rows, pickerHint("Loading..."), "", pickerHint("  Esc back"))
 		return strings.Join(rows, "\n")
 	}
 	if m.reviewTargetPicker.err != "" {
-		rows = append(rows, muted.Render(m.reviewTargetPicker.err))
+		rows = append(rows, pickerHint(m.reviewTargetPicker.err))
 	}
 	switch m.mode {
 	case modeReviewBranchPicker:
@@ -367,7 +360,7 @@ func (m model) renderReviewTargetPicker() string {
 			rows = append(rows, renderReviewTargetRow("Type number or URL manually...", m.reviewTargetPicker.selected == i))
 		}
 	}
-	rows = append(rows, "", muted.Render("  ↑/↓ select · Enter confirm · / type manually · Esc back"))
+	rows = append(rows, "", pickerHint("  ↑/↓ select · Enter confirm · / type manually · Esc back"))
 	return strings.Join(rows, "\n")
 }
 
@@ -440,14 +433,7 @@ func visibleReviewTargetRange(total, selected, limit int) (int, int) {
 }
 
 func renderReviewTargetRow(text string, selected bool) string {
-	muted := lipgloss.NewStyle().Foreground(tuitheme.Default.Muted)
-	style := lipgloss.NewStyle()
-	prefix := muted.Render("  ")
-	if selected {
-		prefix = lipgloss.NewStyle().Foreground(tuitheme.Default.InfoSoft).Bold(true).Render("> ")
-		style = style.Foreground(tuitheme.Default.InfoSoft).Bold(true)
-	}
-	return prefix + style.Render(text)
+	return pickerRow(text, selected, false)
 }
 
 func formatReviewCommit(item reviewCommitItem) string {
@@ -482,24 +468,7 @@ func formatReviewPR(item reviewPRItem) string {
 }
 
 func renderReviewMenuRow(item reviewMenuItem, selected bool) string {
-	muted := lipgloss.NewStyle().Foreground(tuitheme.Default.Muted)
-	nameStyle := lipgloss.NewStyle()
-	prefix := muted.Render("  ")
-	if selected {
-		prefix = lipgloss.NewStyle().Foreground(tuitheme.Default.InfoSoft).Bold(true).Render("> ")
-		nameStyle = nameStyle.Foreground(tuitheme.Default.InfoSoft).Bold(true)
-	}
-	head := prefix + nameStyle.Render(item.Name)
-	desc := strings.TrimSpace(item.Description)
-	if desc == "" {
-		return head
-	}
-	const descCol = 38
-	gap := descCol - lipgloss.Width(head)
-	if gap < 1 {
-		gap = 1
-	}
-	return head + strings.Repeat(" ", gap) + muted.Render(desc)
+	return pickerSuggestionRow(item.Name, item.Description, selected, 36)
 }
 
 func loadReviewCommitsCmd(cwd string) tea.Cmd {

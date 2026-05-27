@@ -1,6 +1,10 @@
 package tui
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
 
 func TestDisplaySessionChoiceRowPreservesOrdinal(t *testing.T) {
 	got := displaySessionChoiceRow("   2) 1m ago    main                     hello")
@@ -24,5 +28,31 @@ func TestSessionChoiceNumberAtStillParsesCurrentMarker(t *testing.T) {
 	}
 	if got := sessionChoiceNumberAt(rows, 2); got != 1 {
 		t.Fatalf("expected session number 1, got %d", got)
+	}
+}
+
+func TestParseSessionChoiceDisplaySplitsColumns(t *testing.T) {
+	got, ok := parseSessionChoiceDisplay("   2) 1m ago    main                     hello resume")
+	if !ok {
+		t.Fatal("expected session choice row to parse")
+	}
+	if got.Number != "2)" || got.Updated != "1m ago" || got.Branch != "main" || got.Conversation != "hello resume" {
+		t.Fatalf("unexpected parsed session row: %+v", got)
+	}
+}
+
+func TestParseSessionChoiceDisplayHandlesNonASCIIBranch(t *testing.T) {
+	branch := strings.Repeat("中", 24)
+	row := fmt.Sprintf("   6) %-9s %-24s %s", "14m ago", branch, "git status")
+	got, ok := parseSessionChoiceDisplay(row)
+	if !ok {
+		t.Fatal("expected non-ASCII session choice row to parse")
+	}
+	if got.Number != "6)" || got.Updated != "14m ago" || got.Branch != branch || got.Conversation != "git status" {
+		t.Fatalf("unexpected parsed non-ASCII session row: %+v", got)
+	}
+	rendered := pickerSessionChoiceRow(got, true)
+	if strings.Contains(rendered, "�") {
+		t.Fatalf("rendered session row contains replacement characters:\n%s", rendered)
 	}
 }

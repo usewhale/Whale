@@ -1,13 +1,10 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	appcommands "github.com/usewhale/whale/internal/app/commands"
-	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
 
 type slashSuggestion struct {
@@ -135,8 +132,12 @@ func (m *model) updateSlashArgumentMatches(raw string) {
 		if strings.TrimSpace(insert) == "" {
 			insert = spec.Name + " " + opt.Token
 		}
+		display := opt.Token
+		if spec.Name == "/stats" {
+			display = spec.Name + " " + opt.Token
+		}
 		matches = append(matches, slashSuggestion{
-			Display:     opt.Token,
+			Display:     display,
 			Description: opt.Description,
 			InsertText:  insert,
 			AutoRun:     opt.AutoRun,
@@ -196,7 +197,7 @@ func (m model) hasSlashPanel() bool {
 func (m model) renderSlashSuggestions() string {
 	rows := []string{}
 	if hint := strings.TrimSpace(m.slash.argumentHint); hint != "" {
-		rows = append(rows, "Arguments "+hint)
+		rows = append(rows, pickerSection("Arguments ")+pickerTone(hint, "info"))
 	}
 	const maxRows = 8
 	start := 0
@@ -213,22 +214,15 @@ func (m model) renderSlashSuggestions() string {
 	if end > start+maxRows {
 		end = start + maxRows
 	}
+	labelWidth := pickerVisibleLabelWidth(m.slash.matches, start, end, 24)
 	for i := start; i < end; i++ {
 		item := m.slash.matches[i]
-		prefix := "  "
-		if i == m.slash.selected {
-			prefix = "> "
-		}
-		if desc := strings.TrimSpace(item.Description); desc != "" {
-			rows = append(rows, fmt.Sprintf("%s%-16s %s", prefix, item.Display, desc))
-		} else {
-			rows = append(rows, prefix+item.Display)
-		}
+		rows = append(rows, pickerSuggestionRow(item.Display, item.Description, i == m.slash.selected, labelWidth))
 	}
 	if len(m.slash.matches) > 0 {
-		rows = append(rows, "  ↑/↓ navigate · Tab/Enter pick · Esc cancel")
+		rows = append(rows, pickerHint("  ↑/↓ navigate · Tab/Enter pick · Esc cancel"))
 	}
-	return lipgloss.NewStyle().Foreground(tuitheme.Default.Info).Render(strings.Join(rows, "\n"))
+	return strings.Join(rows, "\n")
 }
 
 func parseSlashCommands(help string) []string {

@@ -2308,7 +2308,8 @@ func TestPermissionsMenuRendersStateAndDispatchesExplicitMode(t *testing.T) {
 		t.Fatalf("expected permissions menu mode, got %v", m.mode)
 	}
 	rendered := m.renderPermissionsMenu()
-	if !strings.Contains(rendered, "Session auto-accept: off") || !strings.Contains(rendered, "Enable session auto-accept") {
+	plain := xansi.Strip(rendered)
+	if !strings.Contains(plain, "Session auto-accept: off") || !strings.Contains(plain, "Enable session auto-accept") {
 		t.Fatalf("unexpected permissions menu:\n%s", rendered)
 	}
 
@@ -2325,7 +2326,8 @@ func TestPermissionsMenuRendersStateAndDispatchesExplicitMode(t *testing.T) {
 	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventPermissionsMenu, AutoAccept: true}))
 	m = next.(model)
 	rendered = m.renderPermissionsMenu()
-	if !strings.Contains(rendered, "Session auto-accept: on") || !strings.Contains(rendered, "Disable session auto-accept") {
+	plain = xansi.Strip(rendered)
+	if !strings.Contains(plain, "Session auto-accept: on") || !strings.Contains(plain, "Disable session auto-accept") {
 		t.Fatalf("unexpected enabled permissions menu:\n%s", rendered)
 	}
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -2344,6 +2346,50 @@ func TestPermissionsMenuRendersStateAndDispatchesExplicitMode(t *testing.T) {
 	if len(*intents) != 0 || m.mode != modeChat {
 		t.Fatalf("cancel should not dispatch and should return to chat, intents=%+v mode=%v", *intents, m.mode)
 	}
+}
+
+func TestPermissionsMenuUsesSegmentedPickerStyles(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	m := newModel(nil, "", "", "")
+	m.mode = modePermissionsMenu
+	rendered := m.renderPermissionsMenu()
+	if !strings.Contains(rendered, "\x1b[") {
+		t.Fatalf("expected styled permissions menu, got:\n%s", rendered)
+	}
+	plain := xansi.Strip(rendered)
+	for _, want := range []string{"Permissions", "Session auto-accept: off", "> Enable session auto-accept", "  Cancel"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected plain menu to contain %q, got:\n%s", want, plain)
+		}
+	}
+}
+
+func assertStyledPickerContains(t *testing.T, rendered string, wants ...string) {
+	t.Helper()
+	if !strings.Contains(rendered, "\x1b[") {
+		t.Fatalf("expected styled picker, got:\n%s", rendered)
+	}
+	plain := xansi.Strip(rendered)
+	for _, want := range wants {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected plain picker to contain %q, got:\n%s", want, plain)
+		}
+	}
+}
+
+func TestModelPickerUsesSegmentedPickerStyles(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	m := newModel(nil, "deepseek-chat", "medium", "auto")
+	m.mode = modeModelPicker
+	m.modelPicker.models = []string{"deepseek-chat", "deepseek-reasoner"}
+	m.modelPicker.efforts = []string{"low", "medium", "high"}
+	assertStyledPickerContains(t, m.renderModelPicker(), "Select Model and Effort", "Model:", "> deepseek-chat", "  deepseek-reasoner", "(up/down choose, enter next/confirm, esc back)")
 }
 
 func TestSessionPickerEnterDispatchesSelectedSession(t *testing.T) {
@@ -2377,6 +2423,96 @@ func TestSessionPickerEnterDispatchesSelectedSession(t *testing.T) {
 	if m.mode != modeChat {
 		t.Fatalf("expected chat mode after selection, got %v", m.mode)
 	}
+}
+
+func TestSessionPickerUsesSegmentedPickerStyles(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	m := newModel(nil, "", "", "")
+	next, _ := m.Update(svcMsg(service.Event{
+		Kind: service.EventSessionsListed,
+		Choices: []string{
+			"recent sessions:",
+			"   #   Updated   Branch                    Conversation",
+			"*  1) 4s ago    -                        current",
+			"   2) 1m ago    feature                  second session",
+		},
+	}))
+	m = next.(model)
+	assertStyledPickerContains(t, m.renderSessionPicker(), "sessions", "#   Updated   Branch", "> 1)   4s ago", "  2)   1m ago", "feature", "second session")
+}
+
+func TestSecondaryPickersUseSegmentedPickerStyles(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	m := newModel(nil, "", "", "")
+	m.files.matches = []fileSuggestion{{Path: "internal/tui/render.go"}, {Path: "internal/tui", IsDir: true}}
+	m.files.selected = 1
+	assertStyledPickerContains(t, m.renderFileSuggestions(), "Files", "> internal/tui/", "dir", "Tab/Enter insert")
+
+	m = newModel(nil, "", "", "")
+	m.palette.actions = []paletteAction{{Label: "Open logs"}, {Label: "Show help"}}
+	m.palette.selected = 1
+	assertStyledPickerContains(t, m.renderPalette(), "Command Palette", "(enter to run, esc to close)", "> Show help")
+
+	m = newModel(nil, "", "", "")
+	m.skills.matches = []skillSuggestion{{Name: "code-review", Description: "Review local changes"}, {Name: "plan", Description: "Make a plan"}}
+	m.skills.selected = 0
+	assertStyledPickerContains(t, m.renderSkillSuggestions(), "Skills", "> $code-review", "Review local changes", "Tab/Enter insert")
+
+	m = newModel(nil, "", "", "")
+	m.handleServiceEvent(service.Event{Kind: service.EventSkillsMenu})
+	assertStyledPickerContains(t, m.renderSkillsMenu(), "Skills", "Choose an action", "> List skills", "Enable/Disable Skills")
+
+	m = newModel(nil, "", "", "")
+	m.handleServiceEvent(service.Event{
+		Kind: service.EventSkillsManager,
+		Skills: []skills.SkillView{
+			{Name: "code-review", Description: "Review local changes", Status: skills.AvailabilityReady},
+		},
+	})
+	assertStyledPickerContains(t, m.renderSkillsManager(), "Enable/Disable Skills", "[x] code-review", "Review local changes")
+
+	m = newModel(nil, "", "", "")
+	m.handleServiceEvent(service.Event{
+		Kind: service.EventPluginsManager,
+		Plugins: []plugins.PluginStatus{{
+			Manifest: plugins.Manifest{ID: "memory", Name: "Memory", Description: "Durable memory"},
+			Enabled:  true,
+		}},
+	})
+	assertStyledPickerContains(t, m.renderPluginsManager(), "Plugins", "Installed plugins", "[x] memory", "Durable memory")
+
+	m = newModel(nil, "", "", "")
+	m.handleServiceEvent(service.Event{Kind: service.EventReviewMenu})
+	assertStyledPickerContains(t, m.renderReviewMenu(), "Review", "Choose what to review", "> Local changes", "Branch")
+
+	m.reviewTargetPicker.branches = []reviewBranchItem{{Name: "main"}, {Name: "feature", Current: true}}
+	m.reviewTargetPicker.defaultBranch = "main"
+	m.mode = modeReviewBranchPicker
+	assertStyledPickerContains(t, m.renderReviewTargetPicker(), "Choose base branch", "Type to search branches", "> feature -> main")
+
+	m = newModel(nil, "", "", "")
+	m.planImplementation.index = 1
+	assertStyledPickerContains(t, m.renderPlanImplementationPicker(), "Implement this plan?", "> No, stay in Plan mode")
+
+	m = newModel(nil, "", "", "")
+	m.userInput.questions = []core.UserInputQuestion{{
+		Question: "Pick deployment target",
+		Options:  []core.UserInputOption{{Label: "Staging", Description: "Use staging"}, {Label: "Production", Description: "Use production"}},
+	}}
+	m.userInput.selectedOption = 1
+	assertStyledPickerContains(t, m.renderUserInputPicker(), "Pick deployment target", "> Production", "- Use production")
+
+	m = newModel(nil, "", "", "")
+	m.worktreeExit.summary = app.WorktreeExitSummary{
+		Session: app.WorktreeSession{Name: "feat", Branch: "feature/work", Path: "/tmp/work"},
+	}
+	assertStyledPickerContains(t, m.renderWorktreeExit(), "Exiting worktree session", "worktree: feat", "> Keep worktree", "No worktree changes were detected.")
 }
 
 func TestCrossWorkspaceResumeInfoRendersInTUI(t *testing.T) {
@@ -2777,7 +2913,7 @@ func TestSlashArgumentHintShownForCommandSpace(t *testing.T) {
 	if len(m.slash.matches) != 0 {
 		t.Fatalf("did not expect /model option matches, got %+v", m.slash.matches)
 	}
-	if rendered := m.renderSlashSuggestions(); !strings.Contains(rendered, "Arguments [model]") {
+	if rendered := m.renderSlashSuggestions(); !strings.Contains(xansi.Strip(rendered), "Arguments [model]") {
 		t.Fatalf("expected /model argument hint, got:\n%s", rendered)
 	}
 }
@@ -2807,7 +2943,7 @@ func TestSlashOptionSuggestionsInsertSubcommand(t *testing.T) {
 		t.Fatal("expected /stats option suggestions")
 	}
 	selectSlashCommand(t, &m, "/stats usage")
-	if rendered := m.renderSlashSuggestions(); !strings.Contains(rendered, "usage") || !strings.Contains(rendered, "Show token and cost usage") {
+	if rendered := m.renderSlashSuggestions(); !strings.Contains(xansi.Strip(rendered), "/stats usage") || !strings.Contains(xansi.Strip(rendered), "Show token and cost usage") {
 		t.Fatalf("expected /stats option description, got:\n%s", rendered)
 	}
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -2820,6 +2956,26 @@ func TestSlashOptionSuggestionsInsertSubcommand(t *testing.T) {
 	}
 	if got := m.input.Value(); got != "" {
 		t.Fatalf("expected input cleared after /stats usage option, got %q", got)
+	}
+}
+
+func TestSlashStatsOptionSuggestionsUseFullCommandLabels(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	m := newModel(nil, "", "", "")
+	m.input.SetValue("/stats ")
+	m.updateSlashMatches()
+	rendered := m.renderSlashSuggestions()
+	if !strings.Contains(rendered, "\x1b[") {
+		t.Fatalf("expected styled stats suggestions, got:\n%s", rendered)
+	}
+	plain := xansi.Strip(rendered)
+	for _, want := range []string{"/stats usage", "/stats tools", "Show token and cost usage", "Show tool-call counts"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected stats suggestions to contain %q, got:\n%s", want, plain)
+		}
 	}
 }
 

@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"fmt"
 	"io/fs"
 	"path/filepath"
 	"sort"
@@ -10,8 +9,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-
-	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
 
 const (
@@ -272,16 +269,16 @@ func (m model) hasFilePanel() bool {
 }
 
 func (m model) renderFileSuggestions() string {
-	rows := []string{"Files"}
+	rows := []string{pickerTitle("Files")}
 	if len(m.files.matches) == 0 {
 		if m.files.searching {
-			rows = append(rows, "  Searching workspace files...")
+			rows = append(rows, pickerHint("  Searching workspace files..."))
 		} else if strings.TrimSpace(m.files.query) != "" {
-			rows = append(rows, "  No file matches")
+			rows = append(rows, pickerHint("  No file matches"))
 		} else {
-			rows = append(rows, "  Type to search workspace files")
+			rows = append(rows, pickerHint("  Type to search workspace files"))
 		}
-		return lipgloss.NewStyle().Foreground(tuitheme.Default.Info).Render(strings.Join(rows, "\n"))
+		return strings.Join(rows, "\n")
 	}
 	start := 0
 	if len(m.files.matches) > maxFileSuggestionRows {
@@ -297,22 +294,27 @@ func (m model) renderFileSuggestions() string {
 	if end > start+maxFileSuggestionRows {
 		end = start + maxFileSuggestionRows
 	}
+	labelWidth := 0
+	for i := start; i < end; i++ {
+		display := m.files.matches[i].Path
+		if m.files.matches[i].IsDir {
+			display += "/"
+		}
+		labelWidth = max(labelWidth, lipgloss.Width(display))
+	}
+	labelWidth = min(labelWidth, 48)
 	for i := start; i < end; i++ {
 		item := m.files.matches[i]
-		prefix := "  "
-		if i == m.files.selected {
-			prefix = "> "
-		}
 		kind := "file"
 		display := item.Path
 		if item.IsDir {
 			kind = "dir"
 			display += "/"
 		}
-		rows = append(rows, fmt.Sprintf("%s%-48s %s", prefix, display, kind))
+		rows = append(rows, pickerSuggestionRow(display, kind, i == m.files.selected, labelWidth))
 	}
-	rows = append(rows, "  ↑/↓ navigate · Tab/Enter insert · Esc cancel")
-	return lipgloss.NewStyle().Foreground(tuitheme.Default.Info).Render(strings.Join(rows, "\n"))
+	rows = append(rows, pickerHint("  ↑/↓ navigate · Tab/Enter insert · Esc cancel"))
+	return strings.Join(rows, "\n")
 }
 
 func (m model) selectedFileSuggestion() (fileSuggestion, bool) {
