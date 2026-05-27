@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/usewhale/whale/internal/core"
@@ -47,6 +46,8 @@ type patchOp struct {
 type patchFilePlan struct {
 	path        string
 	abs         string
+	beforeBytes []byte
+	exists      bool
 	before      string
 	after       string
 	lineEndings lineEndingSnapshot
@@ -74,19 +75,22 @@ func (b *Toolset) applyPatch(_ context.Context, call core.ToolCall) (core.ToolRe
 	}
 	changes := patchPlanChanges(plans)
 	metadata := fileDiffMetadata(changes)
+	commitPlans := make([]fileCommitPlan, 0, len(plans))
 	for _, plan := range plans {
-		if plan.remove {
-			if err := os.Remove(plan.abs); err != nil {
-				return marshalToolError(call, "patch_apply_failed", err.Error()), nil
-			}
-			continue
+		commitPlans = append(commitPlans, fileCommitPlan{
+			path:           plan.path,
+			abs:            plan.abs,
+			expectedBytes:  plan.beforeBytes,
+			expectedExists: plan.exists,
+			afterBytes:     restoreTextFileBytes(plan.after, plan.lineEndings),
+			remove:         plan.remove,
+		})
+	}
+	if err := b.commitFilePlans(commitPlans); err != nil {
+		if isFileConflict(err) {
+			return marshalToolError(call, "patch_conflict", err.Error()+": read the file again before patching"), nil
 		}
-		if err := os.MkdirAll(filepath.Dir(plan.abs), 0o755); err != nil {
-			return marshalToolError(call, "patch_apply_failed", err.Error()), nil
-		}
-		if err := os.WriteFile(plan.abs, restoreTextFileBytes(plan.after, plan.lineEndings), 0o644); err != nil {
-			return marshalToolError(call, "patch_apply_failed", err.Error()), nil
-		}
+		return marshalToolError(call, "patch_apply_failed", err.Error()), nil
 	}
 
 	filesChanged := make([]string, 0, len(plans))
@@ -138,13 +142,15 @@ func patchPlanChanges(plans []patchFilePlan) []fileChangePreview {
 }
 
 type patchFileState struct {
-	path        string
-	abs         string
-	before      string
-	after       string
-	lineEndings lineEndingSnapshot
-	exists      bool
-	remove      bool
+	path         string
+	abs          string
+	raw          []byte
+	beforeExists bool
+	before       string
+	after        string
+	lineEndings  lineEndingSnapshot
+	exists       bool
+	remove       bool
 }
 
 func (b *Toolset) planPatch(ops []patchOp) ([]patchFilePlan, error) {
@@ -167,7 +173,7 @@ func (b *Toolset) planPatch(ops []patchOp) ([]patchFilePlan, error) {
 			exists = false
 		}
 		before, lineEndings := normalizeTextFileBytes(raw)
-		st := &patchFileState{path: path, abs: abs, before: before, after: before, lineEndings: lineEndings, exists: exists}
+		st := &patchFileState{path: path, abs: abs, raw: raw, beforeExists: exists, before: before, after: before, lineEndings: lineEndings, exists: exists}
 		states[path] = st
 		order = append(order, path)
 		return st, nil
@@ -219,7 +225,7 @@ func (b *Toolset) planPatch(ops []patchOp) ([]patchFilePlan, error) {
 		if st.before == st.after && !st.remove {
 			continue
 		}
-		plans = append(plans, patchFilePlan{path: st.path, abs: st.abs, before: st.before, after: st.after, lineEndings: st.lineEndings, remove: st.remove})
+		plans = append(plans, patchFilePlan{path: st.path, abs: st.abs, beforeBytes: st.raw, exists: st.beforeExists, before: st.before, after: st.after, lineEndings: st.lineEndings, remove: st.remove})
 	}
 	return plans, nil
 }

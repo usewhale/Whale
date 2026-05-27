@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"os"
-	"path/filepath"
 
 	"github.com/usewhale/whale/internal/core"
 )
@@ -27,12 +26,21 @@ func (b *Toolset) writeFile(_ context.Context, call core.ToolCall) (core.ToolRes
 	if readErr != nil && !os.IsNotExist(readErr) {
 		return marshalToolError(call, "read_failed", readErr.Error()), nil
 	}
+	if b.afterFileRead != nil {
+		b.afterFileRead(abs)
+	}
 	existing := readErr == nil
 	before, after, content := prepareWriteFileContent(beforeBytes, in.Content, existing)
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
-		return marshalToolError(call, "write_failed", err.Error()), nil
-	}
-	if err := os.WriteFile(abs, []byte(content), 0o644); err != nil {
+	if err := b.commitFilePlans([]fileCommitPlan{{
+		path:           in.FilePath,
+		abs:            abs,
+		expectedBytes:  beforeBytes,
+		expectedExists: existing,
+		afterBytes:     []byte(content),
+	}}); err != nil {
+		if isFileConflict(err) {
+			return marshalToolError(call, "write_conflict", err.Error()+": read the file again before writing"), nil
+		}
 		return marshalToolError(call, "write_failed", err.Error()), nil
 	}
 	metadata := fileDiffMetadata([]fileChangePreview{{path: in.FilePath, before: before, after: after}})

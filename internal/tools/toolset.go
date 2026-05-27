@@ -22,8 +22,12 @@ type Toolset struct {
 	ddgSearchURL      string
 	bingSearchURL     string
 	tasks             *shellTaskRegistry
-	skillDisabled     []string
-	extraSkills       []*skills.Skill
+	fileLocks         *fileMutationLocks
+	// Test hooks for deterministic mutation-race coverage.
+	afterFileRead    func(string)
+	beforeFileCommit func(string)
+	skillDisabled    []string
+	extraSkills      []*skills.Skill
 }
 
 func NewToolset(root string) (*Toolset, error) {
@@ -40,6 +44,7 @@ func NewToolset(root string) (*Toolset, error) {
 		ddgSearchURL:  "https://html.duckduckgo.com/html/?q=%s",
 		bingSearchURL: "https://www.bing.com/search?q=%s",
 		tasks:         newShellTaskRegistry(),
+		fileLocks:     newFileMutationLocks(),
 	}, nil
 }
 

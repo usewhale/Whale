@@ -32,6 +32,9 @@ func (b *Toolset) editFile(_ context.Context, call core.ToolCall) (core.ToolResu
 		}
 		return marshalToolError(call, "read_failed", err.Error()), nil
 	}
+	if b.afterFileRead != nil {
+		b.afterFileRead(abs)
+	}
 	before, lineEndings := normalizeTextFileBytes(data)
 	if in.Search == "" {
 		return marshalToolError(call, "invalid_args", "search is required"), nil
@@ -50,7 +53,17 @@ func (b *Toolset) editFile(_ context.Context, call core.ToolCall) (core.ToolResu
 	} else {
 		after = strings.Replace(before, resolved.search, resolved.replace, 1)
 	}
-	if err := os.WriteFile(abs, restoreTextFileBytes(after, lineEndings), 0o644); err != nil {
+	afterBytes := restoreTextFileBytes(after, lineEndings)
+	if err := b.commitFilePlans([]fileCommitPlan{{
+		path:           in.FilePath,
+		abs:            abs,
+		expectedBytes:  data,
+		expectedExists: true,
+		afterBytes:     afterBytes,
+	}}); err != nil {
+		if isFileConflict(err) {
+			return marshalToolError(call, "write_conflict", err.Error()+": read the file again before editing"), nil
+		}
 		return marshalToolError(call, "write_failed", err.Error()), nil
 	}
 	metadata := fileDiffMetadata([]fileChangePreview{{path: in.FilePath, before: before, after: after}})
