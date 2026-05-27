@@ -295,14 +295,16 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 			}
 			return sessionID
 		},
-		WorkspaceRoot:       workspaceRoot,
-		MemoryEnabled:       cfg.MemoryEnabled,
-		MemoryMaxChars:      cfg.MemoryMaxChars,
-		MemoryFileOrder:     parseCSVList(cfg.MemoryFileOrder),
-		DefaultModel:        defaults.DefaultModel,
-		DefaultMaxTokens:    tasks.DefaultMaxTokens,
-		DefaultMaxToolIters: tasks.DefaultMaxToolIters,
-		SummaryMaxChars:     tasks.DefaultSummaryMaxChar,
+		WorkspaceRoot:        workspaceRoot,
+		MemoryEnabled:        cfg.MemoryEnabled,
+		MemoryMaxChars:       cfg.MemoryMaxChars,
+		MemoryFileOrder:      parseCSVList(cfg.MemoryFileOrder),
+		AutoCompact:          cfg.AutoCompact,
+		AutoCompactThreshold: cfg.AutoCompactThreshold,
+		DefaultModel:         defaults.DefaultModel,
+		DefaultMaxTokens:     tasks.DefaultMaxTokens,
+		DefaultMaxToolIters:  tasks.DefaultMaxToolIters,
+		SummaryMaxChars:      tasks.DefaultSummaryMaxChar,
 	})
 	taskTools := tasks.NewTools(taskRunner)
 	registeredTools := append([]core.Tool{}, baseTools...)

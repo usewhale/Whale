@@ -48,3 +48,14 @@ func IsDeepSeekV4Model(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
 	return strings.Contains(m, DefaultModel) || strings.Contains(m, ProModel)
 }
+
+// ContextWindowForModel returns the context window size in tokens for model.
+func ContextWindowForModel(model string) int {
+	if strings.TrimSpace(model) == "" {
+		return DefaultContextWindow
+	}
+	if IsDeepSeekV4Model(model) {
+		return DeepSeekV4ContextWindow
+	}
+	return DefaultContextWindow
+}

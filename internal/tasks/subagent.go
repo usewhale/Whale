@@ -9,6 +9,7 @@ import (
 
 	"github.com/usewhale/whale/internal/agent"
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/defaults"
 	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/store"
@@ -128,6 +129,7 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 			return policy.ApprovalAllow
 		}),
 		agent.WithSessionsDir(r.sessionsDir),
+		agent.WithAutoCompact(r.autoCompact, r.autoCompactThreshold, r.contextWindowForModel(model)),
 		agent.WithProjectMemory(r.memoryEnabled, r.memoryMaxChars, r.memoryFileOrder, r.workspaceRoot),
 		agent.WithUsageLogPath(""),
 		agent.WithMaxToolIters(maxToolIters),
@@ -213,6 +215,10 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 		DurationMS:        time.Since(start).Milliseconds(),
 		CompletedAt:       completedAt.Format(time.RFC3339),
 	}, nil
+}
+
+func (r *Runner) contextWindowForModel(model string) int {
+	return defaults.ContextWindowForModel(model)
 }
 
 func (r *Runner) childSessionID(parentToolCallID string) string {

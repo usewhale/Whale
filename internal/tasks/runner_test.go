@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/defaults"
 	"github.com/usewhale/whale/internal/llm"
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/store"
@@ -217,6 +218,147 @@ func TestSpawnSubagentAllowsReadOnlyMCPToolsWithoutApprovalPath(t *testing.T) {
 	}
 	if res.Summary != "done" {
 		t.Fatalf("summary = %q", res.Summary)
+	}
+}
+
+func TestSpawnSubagentInheritsAutoCompact(t *testing.T) {
+	var histories [][]core.Message
+	factory := func(_ string, _ int) (llm.Provider, error) {
+		return providerFunc(func(_ context.Context, history []core.Message, tools []core.Tool) <-chan llm.ProviderEvent {
+			histories = append(histories, append([]core.Message(nil), history...))
+			out := make(chan llm.ProviderEvent, 1)
+			go func() {
+				defer close(out)
+				content := "child done"
+				if len(tools) == 0 && len(history) > 0 && strings.Contains(history[len(history)-1].Text, "Summarize the conversation") {
+					content = "compact summary"
+				}
+				out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
+					FinishReason: core.FinishReasonEndTurn,
+					Content:      content,
+				}}
+			}()
+			return out
+		}), nil
+	}
+	msgStore := store.NewInMemoryStore()
+	childSessionID := "parent-session--subagent-tool-1"
+	for range 8 {
+		_, _ = msgStore.Create(context.Background(), core.Message{
+			SessionID: childSessionID,
+			Role:      core.RoleUser,
+			Text:      strings.Repeat("large prior context ", 80),
+		})
+	}
+	parent := core.NewToolRegistry([]core.Tool{testTool{name: "read_file", readOnly: true}})
+	r := NewRunner(RunnerConfig{
+		ProviderFactory:      factory,
+		ParentTools:          parent,
+		MessageStore:         msgStore,
+		ParentSessionID:      "parent-session",
+		AutoCompact:          true,
+		AutoCompactThreshold: 0.01,
+	})
+	res, err := r.SpawnSubagentWithProgress(context.Background(), SpawnSubagentRequest{
+		Task:             "continue inspection",
+		Role:             "explore",
+		Model:            "legacy-model",
+		ParentToolCallID: "tool-1",
+	}, func(core.ToolProgress) {})
+	if err != nil {
+		t.Fatalf("SpawnSubagentWithProgress: %v", err)
+	}
+	if res.Summary != "child done" {
+		t.Fatalf("summary = %q", res.Summary)
+	}
+	if len(histories) < 2 {
+		t.Fatalf("expected compact summary call and child response call, got %d", len(histories))
+	}
+	first := histories[0]
+	if len(first) == 0 || !strings.Contains(first[len(first)-1].Text, "Summarize the conversation") {
+		t.Fatalf("expected first provider call to compact child history, got %+v", first)
+	}
+	msgs, err := msgStore.List(context.Background(), childSessionID)
+	if err != nil {
+		t.Fatalf("list child messages: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected compact summary plus child response, got %+v", msgs)
+	}
+	if msgs[0].Role != core.RoleUser || msgs[0].Text != "compact summary" || msgs[0].FinishReason != core.FinishReasonEndTurn {
+		t.Fatalf("unexpected compact summary message: %+v", msgs[0])
+	}
+	if msgs[1].Role != core.RoleAssistant || msgs[1].Text != "child done" {
+		t.Fatalf("unexpected child response message: %+v", msgs[1])
+	}
+}
+
+func TestSpawnSubagentDerivesAutoCompactWindowFromChildModel(t *testing.T) {
+	var histories [][]core.Message
+	factory := func(_ string, _ int) (llm.Provider, error) {
+		return providerFunc(func(_ context.Context, history []core.Message, tools []core.Tool) <-chan llm.ProviderEvent {
+			histories = append(histories, append([]core.Message(nil), history...))
+			out := make(chan llm.ProviderEvent, 1)
+			go func() {
+				defer close(out)
+				content := "child done"
+				if len(tools) == 0 && len(history) > 0 && strings.Contains(history[len(history)-1].Text, "Summarize the conversation") {
+					content = "compact summary"
+				}
+				out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
+					FinishReason: core.FinishReasonEndTurn,
+					Content:      content,
+				}}
+			}()
+			return out
+		}), nil
+	}
+	msgStore := store.NewInMemoryStore()
+	childSessionID := "parent-session--subagent-tool-1"
+	for range 8 {
+		_, _ = msgStore.Create(context.Background(), core.Message{
+			SessionID: childSessionID,
+			Role:      core.RoleUser,
+			Text:      strings.Repeat("large prior context ", 80),
+		})
+	}
+	parent := core.NewToolRegistry([]core.Tool{testTool{name: "read_file", readOnly: true}})
+	r := NewRunner(RunnerConfig{
+		ProviderFactory:      factory,
+		ParentTools:          parent,
+		MessageStore:         msgStore,
+		ParentSessionID:      "parent-session",
+		AutoCompact:          true,
+		AutoCompactThreshold: 0.01,
+	})
+	res, err := r.SpawnSubagentWithProgress(context.Background(), SpawnSubagentRequest{
+		Task:             "continue inspection",
+		Role:             "explore",
+		Model:            defaults.DefaultModel,
+		ParentToolCallID: "tool-1",
+	}, func(core.ToolProgress) {})
+	if err != nil {
+		t.Fatalf("SpawnSubagentWithProgress: %v", err)
+	}
+	if res.Summary != "child done" {
+		t.Fatalf("summary = %q", res.Summary)
+	}
+	if len(histories) != 1 {
+		t.Fatalf("expected child response without premature compact, got %d provider calls", len(histories))
+	}
+	first := histories[0]
+	if len(first) == 0 || strings.Contains(first[len(first)-1].Text, "Summarize the conversation") {
+		t.Fatalf("expected first provider call to use child model window, got %+v", first)
+	}
+	msgs, err := msgStore.List(context.Background(), childSessionID)
+	if err != nil {
+		t.Fatalf("list child messages: %v", err)
+	}
+	if len(msgs) <= 2 {
+		t.Fatalf("expected un-compacted child history to remain, got %+v", msgs)
+	}
+	if msgs[len(msgs)-1].Role != core.RoleAssistant || msgs[len(msgs)-1].Text != "child done" {
+		t.Fatalf("unexpected child response message: %+v", msgs[len(msgs)-1])
 	}
 }
 
