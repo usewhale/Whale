@@ -24,7 +24,27 @@ type Composer struct {
 	width            int
 	pendingPastes    []pendingPaste
 	largePasteCounts map[int]int
+	wrapCache        map[wrapCacheKey]int
+
+	// rawCache memoizes textarea.Value() within a single tick. Each
+	// pointer-receiver mutation method re-primes it after touching the
+	// textarea. textarea.Value() walks every line and allocates the whole
+	// buffer as a fresh string, and multiple call sites within one
+	// Update() (AtEnd, reflow, splitComposerLines callers) used to pay
+	// that cost repeatedly — the dominant cost during per-rune paste.
+	rawCache      string
+	rawCacheValid bool
 }
+
+type wrapCacheKey struct {
+	line  string
+	width int
+}
+
+// wrapCacheMaxEntries bounds Composer.wrapCache. Above this, the map is
+// dropped wholesale: cheap, and a session that churns more than a few
+// thousand distinct lines pays at most one full recompute per overflow.
+const wrapCacheMaxEntries = 4096
 
 type pendingPaste struct {
 	placeholder string
@@ -60,6 +80,7 @@ func (c *Composer) SetValue(value string) {
 	c.ensureInitialized()
 	c.pendingPastes = nil
 	c.textarea.SetValue(c.collapseLargeValue(value))
+	c.markRawCacheStale()
 	c.moveToEnd()
 	c.reflow()
 }
@@ -67,7 +88,9 @@ func (c *Composer) SetValue(value string) {
 func (c *Composer) Reset() {
 	c.ensureInitialized()
 	c.pendingPastes = nil
+	c.wrapCache = nil
 	c.textarea.Reset()
+	c.markRawCacheStale()
 	c.reflow()
 }
 
@@ -93,6 +116,7 @@ func (c *Composer) ReplaceCurrentPrefixedToken(prefix rune, replacement string) 
 	next := string(runes[:start]) + replacement + string(runes[end:])
 	c.pendingPastes = nil
 	c.textarea.SetValue(next)
+	c.markRawCacheStale()
 	c.moveCursorToRuneOffset(start + len(replacementRunes))
 	c.reflow()
 	return true
@@ -108,6 +132,7 @@ func (c *Composer) SetWidth(width int) {
 func (c *Composer) InsertNewline() {
 	c.ensureInitialized()
 	c.textarea.InsertRune('\n')
+	c.markRawCacheStale()
 	c.reflow()
 }
 
@@ -120,6 +145,7 @@ func (c *Composer) HandlePaste(value string) {
 	} else {
 		c.textarea.InsertString(value)
 	}
+	c.markRawCacheStale()
 	c.prunePendingPastes()
 	c.reflow()
 }
@@ -130,6 +156,7 @@ func (c *Composer) Update(msg tea.Msg) tea.Cmd {
 	prevHeight := c.textarea.Height()
 	var cmd tea.Cmd
 	c.textarea, cmd = c.textarea.Update(msg)
+	c.markRawCacheStale()
 	c.prunePendingPastes()
 	c.reflow()
 	if wasAtEnd && c.textarea.Height() > prevHeight {
@@ -276,6 +303,17 @@ func (c *Composer) moveFoldedVisibleLine(direction int) bool {
 }
 
 func (c *Composer) reflow() {
+	// Prime the rawValue cache once for this reflow; visualLineCount (and
+	// any other rawValue caller below) will hit the cache instead of
+	// repeatedly walking the textarea's line storage.
+	c.primeRawCache()
+	// Lazily seed the wrap cache here (pointer receiver) so that subsequent
+	// value-receiver visualLineCount calls share the same backing map and
+	// their inserts persist. Bound the size to keep memory predictable on
+	// long-running sessions.
+	if c.wrapCache == nil || len(c.wrapCache) >= wrapCacheMaxEntries {
+		c.wrapCache = make(map[wrapCacheKey]int)
+	}
 	height := c.visualLineCount()
 	if height < 1 {
 		height = 1
@@ -482,12 +520,29 @@ func (c Composer) normalizeView(view string) string {
 
 func (c Composer) visualLineCount() int {
 	width := c.textarea.Width()
+	lines := splitComposerLines(c.rawValue())
 	if width <= 0 {
-		return len(splitComposerLines(c.rawValue()))
+		return len(lines)
 	}
+	cursorLine := c.textarea.Line()
 	total := 0
-	for _, line := range splitComposerLines(c.rawValue()) {
-		total += wrappedLineCount([]rune(line), width)
+	for i, line := range lines {
+		if i == cursorLine {
+			total += wrappedLineCount([]rune(line), width)
+			continue
+		}
+		key := wrapCacheKey{line: line, width: width}
+		if c.wrapCache != nil {
+			if count, ok := c.wrapCache[key]; ok {
+				total += count
+				continue
+			}
+		}
+		count := wrappedLineCount([]rune(line), width)
+		if c.wrapCache != nil && len(c.wrapCache) < wrapCacheMaxEntries {
+			c.wrapCache[key] = count
+		}
+		total += count
 	}
 	return total
 }
@@ -577,7 +632,29 @@ func (c Composer) initialized() Composer {
 }
 
 func (c Composer) rawValue() string {
+	if c.rawCacheValid {
+		return c.rawCache
+	}
 	return c.textarea.Value()
+}
+
+// primeRawCache must be called by pointer-receiver methods after any
+// textarea mutation. Subsequent rawValue() calls within the same tick then
+// return the cached string instead of re-materializing it.
+func (c *Composer) primeRawCache() {
+	c.rawCache = c.textarea.Value()
+	c.rawCacheValid = true
+}
+
+// markRawCacheStale invalidates the cached rawValue. Pointer-receiver
+// methods must call this *immediately* after every textarea mutation,
+// before any helper (prunePendingPastes, AtEnd, moveCursorToRuneOffset, …)
+// reads rawValue() — otherwise those helpers would see the pre-mutation
+// buffer. The most user-visible failure mode is prunePendingPastes
+// dropping the just-inserted large-paste placeholder because the stale
+// snapshot doesn't contain it yet.
+func (c *Composer) markRawCacheStale() {
+	c.rawCacheValid = false
 }
 
 func (c Composer) currentPrefixedToken(prefix rune) (string, bool) {
