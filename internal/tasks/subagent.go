@@ -201,6 +201,18 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 			return fail("failed", errors.New("subagent failed"))
 		case agent.AgentEventTypeTurnCancelled:
 			return fail("cancelled", ctx.Err())
+		default:
+			if status, eventSummary, metadata, ok := summarizeChildAgentEvent(ev); ok {
+				progressCount++
+				if metadata == nil {
+					metadata = map[string]any{}
+				}
+				metadata["child_session_id"] = sessionID
+				emitSubagentProgress(progress, role, model, progressCount, status, eventSummary, metadata)
+			}
+			// Other child events are intentionally drained here. The parent only
+			// exposes stable subagent lifecycle/progress updates, not every
+			// internal child-agent stream event.
 		}
 		if err := ctx.Err(); err != nil {
 			return fail("cancelled", err)

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/usewhale/whale/internal/agent"
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/defaults"
 	"github.com/usewhale/whale/internal/llm"
@@ -125,6 +126,87 @@ func TestReadOnlyRegistryPreservesProgressRunner(t *testing.T) {
 	}
 	if progress[0].ToolCallID != "read-1" || progress[0].ToolName != "read_file" || progress[0].Summary != "progress from child read" {
 		t.Fatalf("unexpected progress: %+v", progress[0])
+	}
+}
+
+func TestSummarizeChildAgentEventProgress(t *testing.T) {
+	tests := []struct {
+		name        string
+		event       agent.AgentEvent
+		wantOK      bool
+		wantStatus  string
+		wantSummary string
+	}{
+		{
+			name: "context compacted",
+			event: agent.AgentEvent{Type: agent.AgentEventTypeContextCompacted, Compact: &agent.CompactInfo{
+				Compacted:      true,
+				MessagesBefore: 10,
+				MessagesAfter:  3,
+				BeforeEstimate: 1000,
+				AfterEstimate:  300,
+			}},
+			wantOK:      true,
+			wantStatus:  "compacted",
+			wantSummary: "Compacted child context (10 -> 3 messages)",
+		},
+		{
+			name: "recovery exhausted",
+			event: agent.AgentEvent{Type: agent.AgentEventTypeToolRecoveryExhausted, Recovery: &agent.ToolRecoveryInfo{
+				ToolName:     "read_file",
+				FailureClass: "schema",
+				Reason:       "invalid input",
+				Attempt:      2,
+				MaxAttempts:  2,
+			}},
+			wantOK:      true,
+			wantStatus:  "tool_recovery_failed",
+			wantSummary: "Recovery exhausted for read_file: invalid input",
+		},
+		{
+			name: "fallback recovery executed",
+			event: agent.AgentEvent{Type: agent.AgentEventTypeToolRecoveryExhausted, Recovery: &agent.ToolRecoveryInfo{
+				ToolName:     "read_file",
+				FailureClass: "not_found",
+				Action:       "fallback_readonly",
+				Attempt:      1,
+				MaxAttempts:  1,
+				Executed:     true,
+			}},
+			wantOK:      true,
+			wantStatus:  "tool_recovered",
+			wantSummary: "Recovered read_file via fallback_readonly",
+		},
+		{
+			name: "replan recovery executed",
+			event: agent.AgentEvent{Type: agent.AgentEventTypeToolRecoveryExhausted, Recovery: &agent.ToolRecoveryInfo{
+				ToolName:       "grep",
+				FailureClass:   "policy_denied",
+				Action:         "request_replan",
+				Attempt:        1,
+				MaxAttempts:    1,
+				Executed:       true,
+				ReplanInjected: true,
+			}},
+			wantOK:      true,
+			wantStatus:  "tool_recovery_replanned",
+			wantSummary: "Requested replan for grep via request_replan",
+		},
+		{
+			name:        "ignored event",
+			event:       agent.AgentEvent{Type: agent.AgentEventTypePrefixCacheMetrics},
+			wantOK:      false,
+			wantStatus:  "",
+			wantSummary: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			status, summary, _, ok := summarizeChildAgentEvent(tt.event)
+			if ok != tt.wantOK || status != tt.wantStatus || summary != tt.wantSummary {
+				t.Fatalf("summarizeChildAgentEvent = %q %q %v, want %q %q %v", status, summary, ok, tt.wantStatus, tt.wantSummary, tt.wantOK)
+			}
+		})
 	}
 }
 
