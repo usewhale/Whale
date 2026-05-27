@@ -26,6 +26,10 @@ type SideQuestionEvent struct {
 }
 
 func (a *Agent) RunSideQuestion(ctx context.Context, sessionID, question string) (<-chan SideQuestionEvent, error) {
+	return a.RunSideQuestionWithOptions(ctx, sessionID, question, RunOptions{})
+}
+
+func (a *Agent) RunSideQuestionWithOptions(ctx context.Context, sessionID, question string, opts RunOptions) (<-chan SideQuestionEvent, error) {
 	question = strings.TrimSpace(question)
 	if question == "" {
 		return nil, errors.New("Usage: /btw <your question>")
@@ -39,7 +43,7 @@ func (a *Agent) RunSideQuestion(ctx context.Context, sessionID, question string)
 	}
 	_, sessionActive := a.active.Load(sessionID)
 	history = stripInProgressAssistantMessage(history, sessionActive)
-	rt := memory.HydrateRuntime(memory.NewImmutablePrefix(a.buildImmutableSystemBlocks()), history)
+	rt := memory.HydrateRuntime(memory.NewImmutablePrefix(a.buildImmutableSystemBlocks(opts)), history)
 	tmpHistory := append(a.buildTurnProviderHistory(sessionID, rt), core.Message{
 		SessionID: sessionID,
 		Role:      core.RoleUser,

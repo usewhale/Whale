@@ -167,3 +167,21 @@ func TestNewSessionStoresWorktreeMeta(t *testing.T) {
 		t.Fatalf("unexpected worktree meta: %+v", meta)
 	}
 }
+
+func TestRunOptionsDoNotDefaultToCurrentViewMode(t *testing.T) {
+	a := &App{cfg: Config{ViewMode: ViewModeFocus}}
+
+	got := a.applyRunOptionsDefaults(agent.RunOptions{})
+	if got.ViewMode != "" {
+		t.Fatalf("view mode should stay unset for headless app turns, got %q", got.ViewMode)
+	}
+}
+
+func TestRunOptionsKeepExplicitViewMode(t *testing.T) {
+	a := &App{cfg: Config{ViewMode: ViewModeFocus}}
+
+	got := a.applyRunOptionsDefaults(agent.RunOptions{ViewMode: ViewModeDefault})
+	if got.ViewMode != ViewModeDefault {
+		t.Fatalf("view mode: want explicit %q, got %q", ViewModeDefault, got.ViewMode)
+	}
+}

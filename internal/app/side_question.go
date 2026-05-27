@@ -8,6 +8,10 @@ import (
 )
 
 func (a *App) RunSideQuestion(ctx context.Context, question string) (<-chan agent.SideQuestionEvent, error) {
+	return a.RunSideQuestionWithOptions(ctx, question, agent.RunOptions{})
+}
+
+func (a *App) RunSideQuestionWithOptions(ctx context.Context, question string, opts agent.RunOptions) (<-chan agent.SideQuestionEvent, error) {
 	if strings.TrimSpace(question) == "" {
 		return nil, agentSideQuestionUsageError()
 	}
@@ -15,7 +19,7 @@ func (a *App) RunSideQuestion(ctx context.Context, question string) (<-chan agen
 	if err != nil {
 		return nil, err
 	}
-	return ag.RunSideQuestion(ctx, a.sessionID, question)
+	return ag.RunSideQuestionWithOptions(ctx, a.sessionID, question, a.applyRunOptionsDefaults(opts))
 }
 
 func agentSideQuestionUsageError() error {
