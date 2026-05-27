@@ -313,6 +313,28 @@ func TestChatLines_LocalMCPRendersStructuredSections(t *testing.T) {
 	assertVisibleWidthAtMost(t, lines, 80)
 }
 
+func TestChatLines_LocalResultFieldsStayWithinNarrowCard(t *testing.T) {
+	entries := []UIMessage{{
+		Role: "local_status",
+		Kind: KindLocalStatus,
+		Text: "Status\n\n- original workspace: /very/long/workspace/path",
+		Local: &app.LocalResult{
+			Kind:  "status",
+			Title: "Status",
+			Fields: []app.LocalResultField{
+				{Label: "Original workspace", Value: "/very/long/workspace/path/that/must/wrap"},
+				{Label: "Context window", Value: "100% left (0 used / 128k)"},
+			},
+		},
+	}}
+	lines := ChatLines(entries, 20)
+	joined := joinedPlain(lines)
+	if !strings.Contains(joined, "Status") || !strings.Contains(joined, "/very") {
+		t.Fatalf("expected narrow local result to remain readable, got:\n%s", joined)
+	}
+	assertVisibleWidthAtMost(t, lines, 20)
+}
+
 func TestChatLines_ContinuationIndent(t *testing.T) {
 	entries := []UIMessage{
 		{Role: "assistant", Kind: KindText, Text: "line1\n\nline2"},

@@ -357,19 +357,7 @@ func renderLocalResultFields(fields []app.LocalResultField, width int) string {
 	if len(fields) == 0 {
 		return ""
 	}
-	labelWidth := 0
-	for _, field := range fields {
-		if w := lipgloss.Width(field.Label); w > labelWidth {
-			labelWidth = w
-		}
-	}
-	if labelWidth > 18 {
-		labelWidth = 18
-	}
-	valueWidth := width - labelWidth - 3
-	if valueWidth < 8 {
-		valueWidth = 8
-	}
+	labelWidth, valueWidth, separator := localResultFieldWidths(fields, width)
 	lines := make([]string, 0, len(fields))
 	labelStyle := lipgloss.NewStyle().Foreground(tuitheme.Default.Muted)
 	for _, field := range fields {
@@ -378,15 +366,53 @@ func renderLocalResultFields(fields []app.LocalResultField, width int) string {
 		value := localResultValueStyle(field.Tone).Render(field.Value)
 		wrapped := strings.Split(strings.TrimRight(hardWrapRendered(value, valueWidth), "\n"), "\n")
 		if len(wrapped) == 0 {
-			lines = append(lines, label+"   ")
+			lines = append(lines, label+separator)
 			continue
 		}
-		lines = append(lines, label+"   "+wrapped[0])
+		lines = append(lines, label+separator+wrapped[0])
 		for _, line := range wrapped[1:] {
-			lines = append(lines, strings.Repeat(" ", labelWidth)+"   "+line)
+			lines = append(lines, strings.Repeat(" ", labelWidth)+separator+line)
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func localResultFieldWidths(fields []app.LocalResultField, width int) (labelWidth int, valueWidth int, separator string) {
+	if width < 1 {
+		width = 1
+	}
+	separator = "   "
+	separatorWidth := lipgloss.Width(separator)
+	if width <= separatorWidth+2 {
+		separator = " "
+		separatorWidth = 1
+	}
+	desiredLabelWidth := 0
+	for _, field := range fields {
+		if w := lipgloss.Width(field.Label); w > desiredLabelWidth {
+			desiredLabelWidth = w
+		}
+	}
+	if desiredLabelWidth > 18 {
+		desiredLabelWidth = 18
+	}
+	minValueWidth := 8
+	if maxValueWidth := width - separatorWidth - 1; maxValueWidth < minValueWidth {
+		minValueWidth = max(1, maxValueWidth)
+	}
+	maxLabelWidth := width - separatorWidth - minValueWidth
+	if maxLabelWidth < 1 {
+		maxLabelWidth = 1
+	}
+	labelWidth = min(desiredLabelWidth, maxLabelWidth)
+	if labelWidth < 1 {
+		labelWidth = 1
+	}
+	valueWidth = width - separatorWidth - labelWidth
+	if valueWidth < 1 {
+		valueWidth = 1
+	}
+	return labelWidth, valueWidth, separator
 }
 
 func localResultValueStyle(tone string) lipgloss.Style {
