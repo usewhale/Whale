@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/llm"
@@ -479,6 +480,123 @@ func TestToDeepSeekMessagesDoesNotSendToolResultMetadata(t *testing.T) {
 	}
 	if content, _ := toolMsg["content"].(string); strings.Contains(content, "unified_diff") || strings.Contains(content, "-old") {
 		t.Fatalf("tool content must not include metadata diff: %q", content)
+	}
+}
+
+func TestToDeepSeekMessagesCompactsOversizedToolResultForReplay(t *testing.T) {
+	large := "HEAD-" + strings.Repeat("a", 45000) + "-TAIL"
+	history := []core.Message{
+		{
+			Role: core.RoleAssistant,
+			ToolCalls: []core.ToolCall{
+				{ID: "call_1", Name: "read_file", Input: `{"file_path":"big.txt"}`},
+			},
+		},
+		{
+			Role: core.RoleTool,
+			ToolResults: []core.ToolResult{
+				{ToolCallID: "call_1", Name: "read_file", Content: large},
+			},
+		},
+	}
+
+	out := toDeepSeekMessages(history)
+	if len(out) != 2 {
+		t.Fatalf("expected assistant and tool messages, got %d", len(out))
+	}
+	toolMsg := out[1]
+	if toolMsg["role"] != "tool" || toolMsg["tool_call_id"] != "call_1" {
+		t.Fatalf("tool message pairing changed: %+v", toolMsg)
+	}
+	content, _ := toolMsg["content"].(string)
+	if !strings.Contains(content, "[tool result compacted for model replay]") {
+		t.Fatalf("expected compaction marker, got %q", content[:min(len(content), 200)])
+	}
+	if !strings.Contains(content, "HEAD-") || !strings.Contains(content, "-TAIL") {
+		t.Fatalf("expected compacted content to preserve head and tail, got %q", content)
+	}
+	if len(content) >= len(large) {
+		t.Fatalf("expected compacted content to shrink: before=%d after=%d", len(large), len(content))
+	}
+}
+
+func TestToDeepSeekMessagesLeavesSmallToolResultUnchanged(t *testing.T) {
+	history := []core.Message{
+		{
+			Role: core.RoleAssistant,
+			ToolCalls: []core.ToolCall{
+				{ID: "call_1", Name: "echo", Input: `{"x":1}`},
+			},
+		},
+		{
+			Role: core.RoleTool,
+			ToolResults: []core.ToolResult{
+				{ToolCallID: "call_1", Name: "echo", Content: "small result"},
+			},
+		},
+	}
+
+	out := toDeepSeekMessages(history)
+	content, _ := out[1]["content"].(string)
+	if content != "small result" {
+		t.Fatalf("expected small content unchanged, got %q", content)
+	}
+}
+
+func TestToDeepSeekMessagesCompactsOversizedWhitespaceToolResult(t *testing.T) {
+	large := strings.Repeat(" \n\t", 15000)
+	history := []core.Message{
+		{
+			Role: core.RoleAssistant,
+			ToolCalls: []core.ToolCall{
+				{ID: "call_1", Name: "shell_run", Input: `{"command":"printf spaces"}`},
+			},
+		},
+		{
+			Role: core.RoleTool,
+			ToolResults: []core.ToolResult{
+				{ToolCallID: "call_1", Name: "shell_run", Content: large},
+			},
+		},
+	}
+
+	out := toDeepSeekMessages(history)
+	content, _ := out[1]["content"].(string)
+	if !strings.Contains(content, "[tool result compacted for model replay]") {
+		t.Fatalf("expected whitespace-only oversized result to compact, got len=%d", len(content))
+	}
+	if len(content) >= len(large) {
+		t.Fatalf("expected compacted whitespace to shrink: before=%d after=%d", len(large), len(content))
+	}
+}
+
+func TestToDeepSeekMessagesCompactsToolResultOnRuneBoundaries(t *testing.T) {
+	large := "开头-" + strings.Repeat("你", 9000) + "-结尾"
+	history := []core.Message{
+		{
+			Role: core.RoleAssistant,
+			ToolCalls: []core.ToolCall{
+				{ID: "call_1", Name: "read_file", Input: `{"file_path":"big.txt"}`},
+			},
+		},
+		{
+			Role: core.RoleTool,
+			ToolResults: []core.ToolResult{
+				{ToolCallID: "call_1", Name: "read_file", Content: large},
+			},
+		},
+	}
+
+	out := toDeepSeekMessages(history)
+	content, _ := out[1]["content"].(string)
+	if !utf8.ValidString(content) {
+		t.Fatalf("compacted content is not valid UTF-8")
+	}
+	if !strings.Contains(content, "开头-") || !strings.Contains(content, "-结尾") {
+		t.Fatalf("expected unicode head and tail to survive, got %q", content)
+	}
+	if !strings.Contains(content, "[tool result compacted for model replay]") {
+		t.Fatalf("expected compaction marker, got %q", content)
 	}
 }
 

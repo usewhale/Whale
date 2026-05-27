@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/usewhale/whale/internal/compact"
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/defaults"
 	"github.com/usewhale/whale/internal/llm"
@@ -20,8 +21,11 @@ import (
 )
 
 const (
-	defaultBaseURL           = "https://api.deepseek.com"
-	defaultStreamMaxAttempts = 6
+	defaultBaseURL               = "https://api.deepseek.com"
+	defaultStreamMaxAttempts     = 6
+	maxToolResultReplayTokens    = 8000
+	maxToolResultReplayChars     = 32 * 1024
+	compactedToolResultKeepRunes = 6000
 )
 
 var errIncompleteStream = errors.New("stream disconnected before completion")
@@ -610,7 +614,7 @@ func toDeepSeekMessages(history []core.Message) []map[string]any {
 				out = append(out, map[string]any{
 					"role":         "tool",
 					"tool_call_id": tr.ToolCallID,
-					"content":      tr.Content,
+					"content":      compactToolResultForReplay(tr.Content),
 				})
 				delete(pendingToolCalls, tr.ToolCallID)
 			}
@@ -618,4 +622,34 @@ func toDeepSeekMessages(history []core.Message) []map[string]any {
 	}
 	flushPending()
 	return out
+}
+
+func compactToolResultForReplay(content string) string {
+	estimatedTokens := compact.EstimateTokens(content)
+	if estimatedTokens <= maxToolResultReplayTokens && len(content) <= maxToolResultReplayChars {
+		return content
+	}
+	runes := []rune(content)
+	if len(runes) <= compactedToolResultKeepRunes {
+		return content
+	}
+	headRunes := compactedToolResultKeepRunes / 2
+	tailRunes := compactedToolResultKeepRunes - headRunes
+	head := string(runes[:headRunes])
+	tail := string(runes[len(runes)-tailRunes:])
+	return fmt.Sprintf(
+		"[tool result compacted for model replay]\n"+
+			"original_estimated_tokens=%d original_chars=%d retained_head_runes=%d retained_tail_runes=%d\n"+
+			"Full raw tool result remains in Whale session history; this provider replay is abbreviated.\n\n"+
+			"--- head ---\n%s\n\n"+
+			"--- omitted ---\n[... omitted %d runes from tool result replay ...]\n\n"+
+			"--- tail ---\n%s",
+		estimatedTokens,
+		len(content),
+		headRunes,
+		tailRunes,
+		head,
+		len(runes)-headRunes-tailRunes,
+		tail,
+	)
 }
