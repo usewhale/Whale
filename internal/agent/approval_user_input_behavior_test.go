@@ -329,6 +329,15 @@ func (p *multiToolApprovalProvider) StreamResponse(_ context.Context, _ []Messag
 	))
 }
 
+type multiToolSubagentApprovalProvider struct{}
+
+func (p *multiToolSubagentApprovalProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	return eventStream(toolUseEvent(
+		toolCall("tc-subagent-1", "spawn_subagent", `{"role":"explore","task":"read files"}`),
+		toolCall("tc-count-1", "counting", `{}`),
+	))
+}
+
 type countingTool struct {
 	calls int
 }
@@ -361,6 +370,31 @@ func TestApprovalDeniedSkipsRemainingToolCalls(t *testing.T) {
 		t.Fatalf("expected later tool calls to be skipped after approval deny, got %d", counting.calls)
 	}
 	assertApprovalDeniedMarker(t, store, "s-approval-deny-multi", "write")
+}
+
+func TestSpawnSubagentApprovalDeniedSkipsRemainingToolCalls(t *testing.T) {
+	store := NewInMemoryStore()
+	counting := &countingTool{}
+	a := NewAgentWithRegistry(
+		&multiToolSubagentApprovalProvider{},
+		store,
+		NewToolRegistry([]Tool{namedNoopTool("spawn_subagent"), counting}),
+		WithToolPolicy(RulePolicy{Default: PermissionAsk}),
+		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
+			return ApprovalDeny
+		}),
+	)
+
+	events, err := a.RunStream(context.Background(), "s-subagent-approval-deny-multi", "go")
+	if err != nil {
+		t.Fatalf("run stream failed: %v", err)
+	}
+	for range events {
+	}
+	if counting.calls != 0 {
+		t.Fatalf("expected later tool calls to be skipped after spawn_subagent approval deny, got %d", counting.calls)
+	}
+	assertApprovalDeniedMarker(t, store, "s-subagent-approval-deny-multi", "spawn_subagent")
 }
 
 func assertApprovalDeniedMarker(t *testing.T, store interface {

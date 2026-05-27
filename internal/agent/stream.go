@@ -201,10 +201,6 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 	if len(dispatchCalls) == 0 {
 		return assistant, nil, lastUsage, lastModel, false, nil
 	}
-	// Identify only the safe spawn_subagent batches here. Execution remains on
-	// the existing serial path until the parallel dispatcher is implemented.
-	parallelSubagentGroups := eligibleParallelSubagentGroups(dispatchCalls)
-	_ = parallelSubagentGroups
 	results := make([]core.ToolResult, 0, len(assistant.ToolCalls))
 	for _, blockedRes := range blocked {
 		br := blockedRes
@@ -223,6 +219,7 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
 		}
 	}
+	readyParallelSubagents := []readyParallelSubagentCall{}
 	for i, call := range dispatchCalls {
 		if spec, ok := a.tools.Spec(call.Name); ok {
 			if fixed, changed := core.RenestFlatInputForSpec(spec, call.Input); changed {
@@ -485,6 +482,11 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 				a.persistApprovalDeniedMarker(sessionID, call.Name)
 				return assistant, &toolMsg, lastUsage, lastModel, true, nil
 			}
+		}
+		if ready, ok := maybeReadyParallelSubagentCall(i, call); ok {
+			readyParallelSubagents = append(readyParallelSubagents, ready)
+			parallelSubagentGroups := eligibleReadyParallelSubagentGroups(readyParallelSubagents)
+			_ = parallelSubagentGroups
 		}
 
 		if call.Name == "request_user_input" {
