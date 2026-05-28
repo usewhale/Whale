@@ -18,7 +18,10 @@ type SessionSummary struct {
 	Conversation string
 }
 
-const toolInputEventsSuffix = ".tool_input_events.jsonl"
+const (
+	toolInputEventsSuffix = ".tool_input_events.jsonl"
+	approvalEventsSuffix  = ".approval_events.jsonl"
+)
 
 func ListSessions(sessionsDir string, limit int) ([]SessionSummary, error) {
 	entries, err := os.ReadDir(sessionsDir)
@@ -131,7 +134,9 @@ func FindSessionPathByID(sessionsDir, sessionID string) string {
 }
 
 func isSessionJSONLName(name string) bool {
-	return strings.HasSuffix(name, ".jsonl") && !strings.HasSuffix(name, toolInputEventsSuffix)
+	return strings.HasSuffix(name, ".jsonl") &&
+		!strings.HasSuffix(name, toolInputEventsSuffix) &&
+		!strings.HasSuffix(name, approvalEventsSuffix)
 }
 
 func isSubagentSessionID(id string) bool {

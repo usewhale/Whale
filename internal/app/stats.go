@@ -374,7 +374,9 @@ func latestProfileSessionFiles(sessionsDir string, limit int) []profileSessionFi
 }
 
 func isProfileSessionJSONL(name string) bool {
-	if !strings.HasSuffix(name, ".jsonl") || strings.HasSuffix(name, telemetry.ToolInputEventsSuffix) {
+	if !strings.HasSuffix(name, ".jsonl") ||
+		strings.HasSuffix(name, telemetry.ToolInputEventsSuffix) ||
+		strings.HasSuffix(name, telemetry.ApprovalEventsSuffix) {
 		return false
 	}
 	id := strings.TrimSuffix(name, ".jsonl")
@@ -396,7 +398,10 @@ func profileChildSessionIndex(sessionsDir string, parentIndex map[string]int) ma
 		return out
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") || strings.HasSuffix(entry.Name(), telemetry.ToolInputEventsSuffix) {
+		if entry.IsDir() ||
+			!strings.HasSuffix(entry.Name(), ".jsonl") ||
+			strings.HasSuffix(entry.Name(), telemetry.ToolInputEventsSuffix) ||
+			strings.HasSuffix(entry.Name(), telemetry.ApprovalEventsSuffix) {
 			continue
 		}
 		id := strings.TrimSuffix(entry.Name(), ".jsonl")

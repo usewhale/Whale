@@ -31,6 +31,7 @@ type approvalsFile struct {
 const (
 	DataDirEnv            = "WHALE_HOME"
 	toolInputEventsSuffix = ".tool_input_events.jsonl"
+	approvalEventsSuffix  = ".approval_events.jsonl"
 )
 
 func NewJSONLStore(sessionsDir string) (*JSONLStore, error) {
@@ -255,7 +256,9 @@ func (s *JSONLStore) sessionPath(sessionID string) string {
 }
 
 func isSessionJSONLName(name string) bool {
-	return strings.HasSuffix(name, ".jsonl") && !strings.HasSuffix(name, toolInputEventsSuffix)
+	return strings.HasSuffix(name, ".jsonl") &&
+		!strings.HasSuffix(name, toolInputEventsSuffix) &&
+		!strings.HasSuffix(name, approvalEventsSuffix)
 }
 
 func (s *JSONLStore) approvalsPath(sessionID string) string {

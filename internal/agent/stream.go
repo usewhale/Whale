@@ -12,6 +12,7 @@ import (
 	"github.com/usewhale/whale/internal/memory"
 	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/session"
+	"github.com/usewhale/whale/internal/telemetry"
 )
 
 type preparedToolDispatch struct {
@@ -293,6 +294,7 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 		// re-evaluated by policy.
 		earlyDecision := toolPolicy.Decide(spec, call)
 		if !earlyDecision.Allow {
+			a.recordApprovalForCall(sessionID, lastModel, assistant.ID, approvalEventPolicyDenied, call, earlyDecision, "", nil, "")
 			if err := flushPendingParallelSubagents(); err != nil {
 				return core.Message{}, nil, llm.Usage{}, "", false, err
 			}
@@ -367,7 +369,7 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			if err := flushPendingParallelSubagents(); err != nil {
 				return core.Message{}, nil, llm.Usage{}, "", false, err
 			}
-			blockedCode, blockedMsg, blockedSummary, blockedData := modeBlockedDetails(a.mode)
+			blockedCode, blockedMsg, blockedSummary, blockedData := modeBlockedDetailsForCall(a.mode, call)
 			content, err := core.MarshalToolEnvelope(core.ToolEnvelope{
 				OK:      false,
 				Success: false,
@@ -396,6 +398,17 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			}) {
 				return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
 			}
+			a.recordApprovalEvent(telemetry.ApprovalEvent{
+				Session:            sessionID,
+				Model:              lastModel,
+				AssistantMessageID: assistant.ID,
+				ToolCallID:         call.ID,
+				Tool:               call.Name,
+				Event:              approvalEventModeBlocked,
+				Code:               blockedCode,
+				Reason:             blockedMsg,
+				Phase:              "denied",
+			})
 			results = append(results, tr)
 			if !emit(AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}) {
 				return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
@@ -436,6 +449,7 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
 		}
 		if !decision.Allow {
+			a.recordApprovalForCall(sessionID, lastModel, assistant.ID, approvalEventPolicyDenied, call, decision, "", nil, "")
 			if err := flushPendingParallelSubagents(); err != nil {
 				return core.Message{}, nil, llm.Usage{}, "", false, err
 			}
@@ -458,9 +472,13 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			keys := policy.ApprovalKeys(call)
 			key := policy.ApprovalKey(call)
 			approved := a.approvalCache.HasAll(sessionID, keys)
+			if approved {
+				a.recordApprovalForCall(sessionID, lastModel, assistant.ID, approvalEventCachedAllowed, call, decision, key, keys, policy.ApprovalScope(call))
+			}
 			if !approved {
 				metadata := a.previewTool(ctx, call)
 				metadata = policy.ApprovalMetadata(call, keys, metadata)
+				a.recordApprovalForCall(sessionID, lastModel, assistant.ID, approvalEventRequired, call, decision, key, keys, policy.ApprovalScope(call))
 				if !emit(AgentEvent{
 					Type: AgentEventTypeToolApprovalRequired,
 					Approval: &ToolApprovalRequired{
@@ -490,6 +508,7 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 						Metadata:  metadata,
 					})
 				}
+				a.recordApprovalForCall(sessionID, lastModel, assistant.ID, approvalDecisionEvent(approvalDecision), call, decision, key, keys, policy.ApprovalScope(call))
 				approved = approvalDecision.Approved()
 				if approvalDecision.Canceled() {
 					return core.Message{}, nil, llm.Usage{}, "", false, context.Canceled
@@ -773,8 +792,21 @@ func appendHookContextValue(existing any, hookContext string) any {
 }
 
 func modeBlockedDetails(mode session.Mode) (code, message, summary string, data map[string]any) {
+	return modeBlockedDetailsForCall(mode, core.ToolCall{})
+}
+
+func modeBlockedDetailsForCall(mode session.Mode, call core.ToolCall) (code, message, summary string, data map[string]any) {
 	switch mode {
 	case session.ModeAsk:
+		if call.Name == "shell_run" {
+			return "ask_mode_blocked",
+				"shell command is not classified as safe read-only",
+				"Current mode: ask. Ask mode allows only safe read-only shell commands. This shell command is not classified as safe read-only; switch to agent mode with /agent or Shift+Tab to execute commands with side effects.",
+				map[string]any{
+					"current_mode":    "ask",
+					"suggested_modes": []string{"/agent", "/plan", "Shift+Tab"},
+				}
+		}
 		return "ask_mode_blocked",
 			"tool unavailable in ask mode",
 			"Current mode: ask. Ask mode only allows read-only tools. To execute or modify files, switch to agent mode with /agent or Shift+Tab. To propose a reviewed approach first, switch to plan mode with /plan or Shift+Tab.",
@@ -783,6 +815,15 @@ func modeBlockedDetails(mode session.Mode) (code, message, summary string, data 
 				"suggested_modes": []string{"/agent", "/plan", "Shift+Tab"},
 			}
 	case session.ModePlan:
+		if call.Name == "shell_run" {
+			return "plan_mode_blocked",
+				"shell command is not classified as safe read-only",
+				"Current mode: plan. Plan mode allows only safe read-only shell commands. This shell command is not classified as safe read-only; stay here to refine the plan, or switch to agent mode with /agent or Shift+Tab when it's time to execute commands with side effects.",
+				map[string]any{
+					"current_mode":    "plan",
+					"suggested_modes": []string{"/agent", "Shift+Tab"},
+				}
+		}
 		return "plan_mode_blocked",
 			"tool unavailable in plan mode",
 			"Current mode: plan. Plan mode is read-only until the plan is approved. Stay here to refine the plan, or switch to agent mode with /agent or Shift+Tab when it's time to implement.",

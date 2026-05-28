@@ -43,14 +43,20 @@ var readOnlyPrefixes = []string{
 	"go version",
 	"rustc --version",
 	"python --version", "python3 --version", "node --version", "npm --version", "npx --version", "cargo --version", "deno --version", "bun --version",
-	"npx vitest run", "npx vitest", "npx jest", "npx tsc --noEmit",
-	"pytest", "python -m pytest",
-	"deno test", "bun test",
 }
 
 func Classify(command string) Decision {
-	if base, ok := stripTrailingStderrToStdout(command); ok {
+	if base, ok := stripTrailingSafeStderrRedirect(command); ok {
 		return Classify(base)
+	}
+	if parts, ok := shellsafe.SplitSequence(command); ok {
+		for _, part := range parts {
+			decision := Classify(part)
+			if !decision.Allow || decision.Level != LevelSafeRead {
+				return Decision{Code: CodeNeedsApproval, Level: LevelNeedsApproval, Reason: "; list contains a command that is not safe read-only"}
+			}
+		}
+		return safeReadDecision("; list of read-only commands", "shell:safe:sequence")
 	}
 	if parts, ok := shellsafe.SplitAndList(command); ok {
 		for _, part := range parts {
@@ -119,15 +125,104 @@ func classifyBuiltinReadOnly(argv, lower []string) Decision {
 		}
 	case "sed":
 		return classifySedReadOnly(argv)
+	case "sort":
+		return classifySort(argv)
+	case "uniq":
+		return classifyUniq(argv)
+	case "printf":
+		return classifyPrintf(lower)
 	}
 	return Decision{}
 }
 
 func classifySedReadOnly(argv []string) Decision {
-	if !sedPrintRangeReadOnly(argv) {
-		return Decision{Code: CodeNeedsApproval, Level: LevelNeedsApproval, Reason: "sed command is not classified as read-only"}
+	if sedPrintRangeReadOnly(argv) {
+		return safeReadDecision("sed range print command", semanticKey("safe", lowerArgv(argv)))
 	}
-	return safeReadDecision("sed range print command", semanticKey("safe", lowerArgv(argv)))
+	if sedSubstitutionReadOnly(argv) {
+		return safeReadDecision("sed stream substitution command", semanticKey("safe", lowerArgv(argv)))
+	}
+	return Decision{Code: CodeNeedsApproval, Level: LevelNeedsApproval, Reason: "sed command is not classified as read-only"}
+}
+
+func sedSubstitutionReadOnly(argv []string) bool {
+	if len(argv) < 2 || argv[0] != "sed" {
+		return false
+	}
+	i := 1
+	for i < len(argv) {
+		switch argv[i] {
+		case "-E", "-r", "--regexp-extended", "-n", "--quiet", "--silent":
+			i++
+		case "--":
+			i++
+			goto script
+		default:
+			goto script
+		}
+	}
+
+script:
+	if i >= len(argv) || !sedSubstitutionScriptReadOnly(argv[i]) {
+		return false
+	}
+	i++
+	for ; i < len(argv); i++ {
+		if strings.HasPrefix(argv[i], "-") {
+			return false
+		}
+	}
+	return true
+}
+
+func sedSubstitutionScriptReadOnly(script string) bool {
+	if script == "" || !strings.HasPrefix(script, "s") {
+		return false
+	}
+	runes := []rune(script)
+	if len(runes) < 4 {
+		return false
+	}
+	delim := runes[1]
+	if delim == '\\' || delim == '\n' || delim == '\r' {
+		return false
+	}
+	parts := 0
+	escaped := false
+	for i := 2; i < len(runes); i++ {
+		r := runes[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if r == '\\' {
+			escaped = true
+			continue
+		}
+		if r == delim {
+			parts++
+			if parts == 2 {
+				flags := string(runes[i+1:])
+				return sedSubstitutionFlagsReadOnly(flags)
+			}
+		}
+	}
+	return false
+}
+
+func sedSubstitutionFlagsReadOnly(flags string) bool {
+	for _, r := range flags {
+		if r >= '0' && r <= '9' {
+			continue
+		}
+		switch r {
+		case 'g', 'p', 'I', 'i', 'M', 'm':
+			continue
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func classifyDate(argv, lower []string) Decision {
@@ -228,6 +323,196 @@ func classifyCommandLookup(args []string) Decision {
 	return safeReadDecision("command lookup", "shell:safe:command-lookup")
 }
 
+func classifySort(lower []string) Decision {
+	endOptions := false
+	for i := 1; i < len(lower); i++ {
+		arg := lower[i]
+		if endOptions || !strings.HasPrefix(arg, "-") || arg == "-" {
+			continue
+		}
+		if arg == "--" {
+			endOptions = true
+			continue
+		}
+		if strings.HasPrefix(arg, "--") {
+			if arg == "--output" || strings.HasPrefix(arg, "--output=") {
+				return Decision{Code: CodeUnsafeArgs, Level: LevelNeedsApproval, Reason: "sort can write to an explicit output path with this option"}
+			}
+			if arg == "--compress-program" || strings.HasPrefix(arg, "--compress-program=") {
+				return Decision{Code: CodeUnsafeArgs, Level: LevelNeedsApproval, Reason: "sort can execute an external compressor with this option"}
+			}
+			if arg == "--temporary-directory" || strings.HasPrefix(arg, "--temporary-directory=") {
+				return Decision{Code: CodeUnsafeArgs, Level: LevelNeedsApproval, Reason: "sort can write temporary files outside the input stream with this option"}
+			}
+			if sortLongOptionConsumesNext(arg) && !strings.Contains(arg, "=") {
+				i++
+			}
+			if !sortLongOptionSafe(arg) {
+				return Decision{Code: CodeUnsafeArgs, Level: LevelNeedsApproval, Reason: "sort option is not on the safe display allowlist"}
+			}
+			continue
+		}
+		if !sortShortOptionsSafe(arg) {
+			return Decision{Code: CodeUnsafeArgs, Level: LevelNeedsApproval, Reason: "sort option is not on the safe display allowlist"}
+		}
+	}
+	return safeReadDecision("sort display command", "shell:safe:sort")
+}
+
+func classifyUniq(argv []string) Decision {
+	operands := 0
+	endOptions := false
+	for i := 1; i < len(argv); i++ {
+		arg := argv[i]
+		if endOptions || !strings.HasPrefix(arg, "-") || arg == "-" {
+			operands++
+			if operands > 1 {
+				return Decision{Code: CodeUnsafeArgs, Level: LevelNeedsApproval, Reason: "uniq can write to an output file when given a second operand"}
+			}
+			continue
+		}
+		if arg == "--" {
+			endOptions = true
+			continue
+		}
+		if strings.HasPrefix(arg, "--") {
+			if uniqLongOptionConsumesNext(arg) && !strings.Contains(arg, "=") {
+				i++
+			}
+			if !uniqLongOptionSafe(arg) {
+				return Decision{Code: CodeUnsafeArgs, Level: LevelNeedsApproval, Reason: "uniq option is not on the safe display allowlist"}
+			}
+			continue
+		}
+		consumedNext, ok := uniqShortOptionsSafe(arg)
+		if !ok {
+			return Decision{Code: CodeUnsafeArgs, Level: LevelNeedsApproval, Reason: "uniq option is not on the safe display allowlist"}
+		}
+		if consumedNext {
+			i++
+		}
+	}
+	return safeReadDecision("uniq display command", "shell:safe:uniq")
+}
+
+func uniqLongOptionSafe(arg string) bool {
+	name := arg
+	if before, _, ok := strings.Cut(arg, "="); ok {
+		name = before
+	}
+	switch name {
+	case "--count",
+		"--repeated",
+		"--all-repeated",
+		"--unique",
+		"--ignore-case",
+		"--zero-terminated",
+		"--group",
+		"--skip-fields",
+		"--skip-chars",
+		"--check-chars":
+		return true
+	default:
+		return false
+	}
+}
+
+func uniqLongOptionConsumesNext(arg string) bool {
+	name := arg
+	if before, _, ok := strings.Cut(arg, "="); ok {
+		name = before
+	}
+	switch name {
+	case "--skip-fields", "--skip-chars", "--check-chars":
+		return true
+	default:
+		return false
+	}
+}
+
+func uniqShortOptionsSafe(arg string) (consumesNext bool, ok bool) {
+	for i := 1; i < len(arg); i++ {
+		switch arg[i] {
+		case 'c', 'd', 'u', 'i', 'z':
+			continue
+		case 'f', 's', 'w':
+			return i == len(arg)-1, true
+		default:
+			return false, false
+		}
+	}
+	return false, len(arg) > 1
+}
+
+func sortLongOptionSafe(arg string) bool {
+	name := arg
+	if before, _, ok := strings.Cut(arg, "="); ok {
+		name = before
+	}
+	switch name {
+	case "--ignore-leading-blanks",
+		"--dictionary-order",
+		"--ignore-nonprinting",
+		"--ignore-case",
+		"--general-numeric-sort",
+		"--human-numeric-sort",
+		"--month-sort",
+		"--numeric-sort",
+		"--reverse",
+		"--unique",
+		"--stable",
+		"--version-sort",
+		"--zero-terminated",
+		"--check",
+		"--check=quiet",
+		"--key",
+		"--field-separator":
+		return true
+	default:
+		return false
+	}
+}
+
+func sortLongOptionConsumesNext(arg string) bool {
+	name := arg
+	if before, _, ok := strings.Cut(arg, "="); ok {
+		name = before
+	}
+	switch name {
+	case "--key", "--field-separator":
+		return true
+	default:
+		return false
+	}
+}
+
+func sortShortOptionsSafe(arg string) bool {
+	for i := 1; i < len(arg); i++ {
+		switch arg[i] {
+		case 'b', 'c', 'C', 'd', 'f', 'g', 'h', 'i', 'M', 'm', 'n', 'r', 's', 'u', 'V', 'z':
+			continue
+		case 'o':
+			return false
+		case 'T':
+			return false
+		case 'k', 't':
+			return true
+		default:
+			return false
+		}
+	}
+	return len(arg) > 1
+}
+
+func classifyPrintf(lower []string) Decision {
+	for _, arg := range lower[1:] {
+		if strings.ContainsAny(arg, "/") && strings.HasPrefix(arg, "-") {
+			return Decision{Code: CodeUnsafeArgs, Level: LevelNeedsApproval, Reason: "printf option is not on the safe display allowlist"}
+		}
+	}
+	return safeReadDecision("printf display command", "shell:safe:printf")
+}
+
 func classifyBoundedWrite(lower []string) Decision {
 	switch lower[0] {
 	case "go":
@@ -288,8 +573,64 @@ func classifyBoundedWrite(lower []string) Decision {
 				return boundedWriteDecision("pnpm run "+lower[2]+" may write project-local build or test artifacts", "shell:bounded:pnpm:run-"+lower[2], "project-local build/test artifacts")
 			}
 		}
+	case "npx":
+		if len(lower) >= 2 {
+			switch lower[1] {
+			case "jest", "vitest":
+				if hasKnownTestOutputFlag(lower[2:]) {
+					return Decision{Code: CodeUnsafeArgs, Level: LevelNeedsApproval, Reason: lower[1] + " writes to an explicit output path with this option"}
+				}
+				return boundedWriteDecision("npx "+lower[1]+" may write project-local test artifacts", "shell:bounded:npx:"+lower[1], "project-local test artifacts")
+			case "tsc":
+				if len(lower) >= 3 && lower[2] == "--noemit" {
+					return boundedWriteDecision("npx tsc --noEmit may write compiler cache files", "shell:bounded:npx:tsc-noemit", "project-local compiler cache")
+				}
+			}
+		}
+	case "pytest":
+		if hasKnownTestOutputFlag(lower[1:]) {
+			return Decision{Code: CodeUnsafeArgs, Level: LevelNeedsApproval, Reason: "pytest writes to an explicit output path with this option"}
+		}
+		return boundedWriteDecision("pytest may write project-local test artifacts", "shell:bounded:pytest", "project-local test artifacts")
+	case "python", "python3":
+		if len(lower) >= 3 && lower[1] == "-m" && lower[2] == "pytest" {
+			if hasKnownTestOutputFlag(lower[3:]) {
+				return Decision{Code: CodeUnsafeArgs, Level: LevelNeedsApproval, Reason: lower[0] + " -m pytest writes to an explicit output path with this option"}
+			}
+			return boundedWriteDecision(lower[0]+" -m pytest may write project-local test artifacts", "shell:bounded:"+lower[0]+":-m-pytest", "project-local test artifacts")
+		}
+	case "deno":
+		if len(lower) >= 2 && lower[1] == "test" {
+			return boundedWriteDecision("deno test may write project-local test artifacts", "shell:bounded:deno:test", "project-local test artifacts")
+		}
+	case "bun":
+		if len(lower) >= 2 && lower[1] == "test" {
+			return boundedWriteDecision("bun test may write project-local test artifacts", "shell:bounded:bun:test", "project-local test artifacts")
+		}
 	}
 	return Decision{}
+}
+
+func hasKnownTestOutputFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "--outputfile" ||
+			arg == "--output-file" ||
+			strings.HasPrefix(arg, "--outputfile=") ||
+			strings.HasPrefix(arg, "--output-file=") ||
+			arg == "--junitxml" ||
+			arg == "--junit-xml" ||
+			strings.HasPrefix(arg, "--junitxml=") ||
+			strings.HasPrefix(arg, "--junit-xml=") ||
+			arg == "--html" ||
+			strings.HasPrefix(arg, "--html=") ||
+			strings.HasPrefix(arg, "--cov-report=xml:") ||
+			strings.HasPrefix(arg, "--cov-report=html:") ||
+			strings.HasPrefix(arg, "--cov-report=lcov:") ||
+			strings.HasPrefix(arg, "--cov-report=json:") {
+			return true
+		}
+	}
+	return false
 }
 
 func safeReadDecision(reason, key string) Decision {
@@ -316,7 +657,7 @@ func boundedWriteDecision(reason, key, writeScope string) Decision {
 
 func autoAllowShellCommandHasUnsafeArgs(argv []string) bool {
 	for _, field := range argv[1:] {
-		if shellsafe.ArgContainsUnsafeMeta(field) {
+		if argContainsUnsafeExpansionMeta(field) {
 			return true
 		}
 	}
@@ -361,6 +702,10 @@ func autoAllowShellCommandHasUnsafeArgs(argv []string) bool {
 		return true
 	}
 	return false
+}
+
+func argContainsUnsafeExpansionMeta(arg string) bool {
+	return strings.ContainsAny(arg, "$`&<>\n\r")
 }
 
 func autoAllowMakeHasExtraArgs(argv []string) bool {
@@ -550,20 +895,28 @@ func sedRangePrintScript(script string) bool {
 	return true
 }
 
-func stripTrailingStderrToStdout(command string) (string, bool) {
+func stripTrailingSafeStderrRedirect(command string) (string, bool) {
 	trimmed := strings.TrimSpace(command)
-	const redirect = "2>&1"
-	if !strings.HasSuffix(trimmed, redirect) {
+	for _, redirect := range []string{"2>&1", "2>/dev/null", "2> /dev/null"} {
+		if base, ok := stripTrailingRedirect(trimmed, redirect); ok {
+			return base, true
+		}
+	}
+	return "", false
+}
+
+func stripTrailingRedirect(command, redirect string) (string, bool) {
+	if !strings.HasSuffix(command, redirect) {
 		return "", false
 	}
-	start := len(trimmed) - len(redirect)
-	if start == 0 || !isShellWhitespace(rune(trimmed[start-1])) {
+	start := len(command) - len(redirect)
+	if start == 0 || !isShellWhitespace(rune(command[start-1])) {
 		return "", false
 	}
-	if !shellOffsetOutsideQuotes(trimmed, start) {
+	if !shellOffsetOutsideQuotes(command, start) {
 		return "", false
 	}
-	base := strings.TrimSpace(trimmed[:start])
+	base := strings.TrimSpace(command[:start])
 	if base == "" {
 		return "", false
 	}

@@ -4,7 +4,9 @@ import (
 	"context"
 
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/store"
+	"github.com/usewhale/whale/internal/telemetry"
 )
 
 func (a *Agent) ensureApprovalCacheLoaded(ctx context.Context, sessionID string) {
@@ -40,6 +42,15 @@ func (a *Agent) persistApprovals(ctx context.Context, sessionID string, keys []s
 func (a *Agent) grantApprovals(ctx context.Context, sessionID string, call core.ToolCall, key string, keys []string, events chan<- AgentEvent) bool {
 	a.approvalCache.GrantAll(sessionID, keys)
 	a.persistApprovals(ctx, sessionID, keys)
+	a.recordApprovalEvent(telemetry.ApprovalEvent{
+		Session:    sessionID,
+		ToolCallID: call.ID,
+		Tool:       call.Name,
+		Event:      approvalEventGrantPersisted,
+		Key:        key,
+		Keys:       keys,
+		Scope:      policy.ApprovalScope(call),
+	})
 	if events != nil {
 		return sendAgentEvent(ctx, events, AgentEvent{
 			Type: AgentEventTypeToolApprovalGranted,

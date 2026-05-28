@@ -162,8 +162,11 @@ func renderToolSpecsBlock(specs []core.ToolSpec) string {
 	b.WriteString("Available tools (source of truth from registry):\n")
 	for _, s := range specs {
 		mode := "write"
-		if s.ReadOnly {
+		switch {
+		case s.ReadOnly:
 			mode = "read-only"
+		case s.ReadOnlyCheck != nil:
+			mode = "conditional read-only"
 		}
 		b.WriteString("- ")
 		b.WriteString(s.Name)
@@ -194,6 +197,9 @@ func renderToolSpecsBlock(specs []core.ToolSpec) string {
 		if strings.TrimSpace(s.ApprovalHint) != "" {
 			b.WriteString(" approval:")
 			b.WriteString(strings.TrimSpace(s.ApprovalHint))
+		}
+		if s.ReadOnlyCheck != nil {
+			b.WriteString(" note:some calls are allowed in read-only modes when their input is classified as safe read-only; mutating inputs are blocked.")
 		}
 		b.WriteString("\n")
 	}

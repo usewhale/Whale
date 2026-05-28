@@ -436,6 +436,7 @@ func (a *App) baseSessionMeta() session.SessionMeta {
 }
 
 func (a *App) SessionID() string                          { return a.sessionID }
+func (a *App) SessionsDir() string                        { return a.sessionsDir }
 func (a *App) CurrentMode() session.Mode                  { return a.currentMode }
 func (a *App) PermissionDefault() policy.PermissionAction { return a.permissionPolicy.Default }
 func (a *App) AutoAcceptPermissions() bool {

@@ -125,9 +125,6 @@ func (p ReadOnlyTurnPolicy) Decide(spec core.ToolSpec, call core.ToolCall) Polic
 	if core.IsReadOnlyToolCall(spec, call) {
 		return decision
 	}
-	if spec.Name == "shell_run" && decision.Code == "scoped_allow_prefix" && !decision.RequiresApproval {
-		return decision
-	}
 	return PolicyDecision{
 		Allow:  false,
 		Reason: "review turns are read-only",

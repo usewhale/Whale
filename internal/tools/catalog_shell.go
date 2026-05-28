@@ -4,8 +4,8 @@ import (
 	"strings"
 
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/policy/shellrisk"
 	"github.com/usewhale/whale/internal/shell"
-	"github.com/usewhale/whale/internal/shellsafe"
 )
 
 func (b *Toolset) shellTools() []core.Tool {
@@ -58,13 +58,6 @@ func shellRunDescriptionFor(rt shell.RuntimeDescription) string {
 	return base
 }
 
-var shellReadOnlyAllowPrefixes = []string{
-	"ls", "pwd", "echo", "cat", "head", "tail", "wc", "file", "tree", "find", "grep", "rg",
-	"go version",
-	"rustc --version",
-	"python --version", "python3 --version", "node --version", "npm --version", "npx --version", "cargo --version", "deno --version", "bun --version",
-}
-
 func shellReadOnlyCheck(args map[string]any) bool {
 	return shellReadOnlyCheckFor(shell.DescribeRuntime())(args)
 }
@@ -84,85 +77,8 @@ func shellReadOnlyCheckWithRuntime(rt shell.RuntimeDescription, args map[string]
 	if cmd == "" {
 		return false
 	}
-	if parts, ok := shellsafe.SplitAndList(cmd); ok {
-		for _, part := range parts {
-			if !shellReadOnlyCheckWithRuntime(rt, map[string]any{"command": part}) {
-				return false
-			}
-		}
-		return true
-	}
-	if parts, ok := shellsafe.SplitPipeline(cmd); ok {
-		for _, part := range parts {
-			if !shellReadOnlyCheckWithRuntime(rt, map[string]any{"command": part}) {
-				return false
-			}
-		}
-		return true
-	}
-	argv, ok := parsePOSIXReadOnlyShellCommand(cmd)
-	if !ok || len(argv) == 0 {
-		return false
-	}
-	if argv[0] == "git" {
-		return shellsafe.GitCommandReadOnly(argv)
-	}
-	lowerArgv := lowerShellArgv(argv)
-	if shellReadOnlyCommandHasUnsafeArgs(lowerArgv) {
-		return false
-	}
-	if lowerArgv[0] == "sed" {
-		return sedPrintRangeReadOnly(argv)
-	}
-	for _, prefix := range shellReadOnlyAllowPrefixes {
-		if shellArgvHasPrefix(lowerArgv, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func shellReadOnlyCommandHasUnsafeArgs(argv []string) bool {
-	switch {
-	case shellArgvHasPrefix(argv, "find"):
-		for _, field := range argv {
-			switch field {
-			case "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fls":
-				return true
-			}
-			if strings.HasPrefix(field, "-fprint") {
-				return true
-			}
-		}
-	case shellArgvHasPrefix(argv, "rg"):
-		for _, field := range argv {
-			if field == "--pre" || strings.HasPrefix(field, "--pre=") {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func shellArgvHasPrefix(argv []string, prefix string) bool {
-	prefixArgv := strings.Fields(strings.ToLower(strings.TrimSpace(prefix)))
-	if len(argv) < len(prefixArgv) {
-		return false
-	}
-	for i, want := range prefixArgv {
-		if argv[i] != want {
-			return false
-		}
-	}
-	return true
-}
-
-func lowerShellArgv(argv []string) []string {
-	lower := make([]string, 0, len(argv))
-	for _, arg := range argv {
-		lower = append(lower, strings.ToLower(arg))
-	}
-	return lower
+	decision := shellrisk.Classify(cmd)
+	return decision.Allow && decision.Level == shellrisk.LevelSafeRead
 }
 
 func parsePOSIXReadOnlyShellCommand(cmd string) ([]string, bool) {
@@ -230,61 +146,4 @@ func posixReadOnlyRejectedRune(r rune) bool {
 	default:
 		return false
 	}
-}
-
-func sedPrintRangeReadOnly(argv []string) bool {
-	if len(argv) < 3 || argv[0] != "sed" {
-		return false
-	}
-	i := 1
-	sawQuiet := false
-	for i < len(argv) {
-		switch argv[i] {
-		case "-n", "--quiet", "--silent":
-			sawQuiet = true
-			i++
-		case "--":
-			i++
-			goto script
-		default:
-			goto script
-		}
-	}
-
-script:
-	if !sawQuiet || i >= len(argv) || !sedRangePrintScript(argv[i]) {
-		return false
-	}
-	i++
-	for ; i < len(argv); i++ {
-		if strings.HasPrefix(argv[i], "-") {
-			return false
-		}
-	}
-	return true
-}
-
-func sedRangePrintScript(script string) bool {
-	if script == "" || !strings.HasSuffix(script, "p") {
-		return false
-	}
-	addr := strings.TrimSuffix(script, "p")
-	parts := strings.Split(addr, ",")
-	if len(parts) > 2 {
-		return false
-	}
-	for _, part := range parts {
-		if part == "$" {
-			continue
-		}
-		if part == "" {
-			return false
-		}
-		for _, r := range part {
-			if r < '0' || r > '9' {
-				return false
-			}
-		}
-	}
-	return true
 }
