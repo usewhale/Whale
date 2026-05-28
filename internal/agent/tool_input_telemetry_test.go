@@ -3,11 +3,14 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/telemetry"
 )
@@ -252,6 +255,47 @@ func TestToolInputTelemetryRecordsInvalidArgs(t *testing.T) {
 
 	events := readToolInputEvents(t, dir, "s-invalid-args")
 	assertToolInputEvent(t, events, "tool_input_invalid", "", "invalid_args")
+}
+
+func TestToolInputTelemetryConcurrentInvalidInputAppend(t *testing.T) {
+	dir := t.TempDir()
+	a := &Agent{sessionsDir: dir}
+	const count = 64
+
+	var wg sync.WaitGroup
+	wg.Add(count)
+	for i := 0; i < count; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			a.recordToolInputInvalid("s-concurrent-invalid", "deepseek-v4-pro", "msg-concurrent", core.ToolCall{
+				ID:   fmt.Sprintf("tc-%02d", i),
+				Name: "needs_path",
+			}, "invalid_input")
+		}()
+	}
+	wg.Wait()
+
+	events := readToolInputEvents(t, dir, "s-concurrent-invalid")
+	if len(events) != count {
+		t.Fatalf("expected %d events, got %d: %+v", count, len(events), events)
+	}
+	seen := make(map[string]bool, count)
+	for _, ev := range events {
+		if ev.Session != "s-concurrent-invalid" || ev.Event != "tool_input_invalid" || ev.ErrorCode != "invalid_input" {
+			t.Fatalf("unexpected event: %+v", ev)
+		}
+		if seen[ev.ToolCallID] {
+			t.Fatalf("duplicate tool call id %q in %+v", ev.ToolCallID, events)
+		}
+		seen[ev.ToolCallID] = true
+	}
+	for i := 0; i < count; i++ {
+		id := fmt.Sprintf("tc-%02d", i)
+		if !seen[id] {
+			t.Fatalf("missing tool call id %q in %+v", id, events)
+		}
+	}
 }
 
 func drainAgentEvents(t *testing.T, a *Agent, sessionID string) {

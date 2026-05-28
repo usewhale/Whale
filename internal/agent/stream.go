@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/usewhale/whale/internal/core"
@@ -11,9 +12,26 @@ import (
 	"github.com/usewhale/whale/internal/memory"
 	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/session"
+	"github.com/usewhale/whale/internal/telemetry"
 )
 
-func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history []core.Message, rt *memory.RuntimeState, events chan<- AgentEvent, toolPolicy policy.ToolPolicy) (core.Message, *core.Message, llm.Usage, string, bool, error) {
+type preparedToolDispatch struct {
+	Index          int
+	Call           core.ToolCall
+	PreHookContext string
+	GrantOnSuccess bool
+	GrantKey       string
+	GrantKeys      []string
+}
+
+type toolDispatchOutcome struct {
+	Prepared         preparedToolDispatch
+	Result           core.ToolResult
+	OK               bool
+	PrimarySucceeded bool
+}
+
+func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history []core.Message, rt *memory.RuntimeState, events chan<- AgentEvent, toolPolicy policy.ToolPolicy, tools *core.ToolRegistry) (core.Message, *core.Message, llm.Usage, string, bool, error) {
 	assistant, err := a.store.Create(ctx, core.Message{SessionID: sessionID, Role: core.RoleAssistant})
 	if err != nil {
 		return core.Message{}, nil, llm.Usage{}, "", false, fmt.Errorf("create assistant message: %w", err)
@@ -30,7 +48,7 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 		return sendAgentEvent(ctx, events, ev)
 	}
 
-	ch := a.provider.StreamResponse(ctx, a.buildTurnProviderHistory(sessionID, rt), a.tools.Tools())
+	ch := a.provider.StreamResponse(ctx, a.buildTurnProviderHistory(sessionID, rt), tools.Tools())
 	for ev := range ch {
 		switch ev.Type {
 		case llm.EventContentDelta:
@@ -166,11 +184,11 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 	blocked := []core.ToolResult{}
 	if a.repairer != nil {
 		allowed := map[string]bool{}
-		for _, spec := range a.tools.Specs() {
+		for _, spec := range tools.Specs() {
 			allowed[spec.Name] = true
 		}
 		isMutating := func(c core.ToolCall) bool {
-			spec, ok := a.tools.Spec(c.Name)
+			spec, ok := tools.Spec(c.Name)
 			if !ok {
 				return true
 			}
@@ -219,8 +237,22 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
 		}
 	}
+	pendingParallelSubagents := []preparedToolDispatch{}
+	flushPendingParallelSubagents := func() error {
+		if len(pendingParallelSubagents) == 0 {
+			return nil
+		}
+		pending := append([]preparedToolDispatch(nil), pendingParallelSubagents...)
+		pendingParallelSubagents = pendingParallelSubagents[:0]
+		return a.flushPendingParallelSubagents(ctx, sessionID, assistant.ID, lastModel, pending, events, &results, tools)
+	}
 	for i, call := range dispatchCalls {
-		if spec, ok := a.tools.Spec(call.Name); ok {
+		if call.Name != parallelSubagentToolName {
+			if err := flushPendingParallelSubagents(); err != nil {
+				return core.Message{}, nil, llm.Usage{}, "", false, err
+			}
+		}
+		if spec, ok := tools.Spec(call.Name); ok {
 			if fixed, changed := core.RenestFlatInputForSpec(spec, call.Input); changed {
 				call.Input = fixed
 				a.recordToolInputRepair(sessionID, lastModel, assistant.ID, call, "renest_flat_input")
@@ -252,7 +284,7 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 		}
 		var preHookContext string
 		a.ensureApprovalCacheLoaded(ctx, sessionID)
-		spec, ok := a.tools.Spec(call.Name)
+		spec, ok := tools.Spec(call.Name)
 		if !ok {
 			spec = core.ToolSpec{Name: call.Name}
 		}
@@ -262,6 +294,10 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 		// re-evaluated by policy.
 		earlyDecision := toolPolicy.Decide(spec, call)
 		if !earlyDecision.Allow {
+			a.recordApprovalForCall(sessionID, lastModel, assistant.ID, approvalEventPolicyDenied, call, earlyDecision, "", nil, "")
+			if err := flushPendingParallelSubagents(); err != nil {
+				return core.Message{}, nil, llm.Usage{}, "", false, err
+			}
 			if !emit(AgentEvent{
 				Type: AgentEventTypeToolPolicyDecision,
 				Policy: &ToolPolicyDecision{
@@ -297,6 +333,9 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 				return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
 			}
 			if report.Blocked {
+				if err := flushPendingParallelSubagents(); err != nil {
+					return core.Message{}, nil, llm.Usage{}, "", false, err
+				}
 				msg := "blocked by PreToolUse hook"
 				code := "hook_blocked"
 				if report.Halted {
@@ -327,7 +366,10 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			preHookContext = strings.TrimSpace(report.AdditionalContext)
 		}
 		if (a.mode == session.ModePlan || a.mode == session.ModeAsk) && !core.IsReadOnlyToolCall(spec, call) {
-			blockedCode, blockedMsg, blockedSummary, blockedData := modeBlockedDetails(a.mode)
+			if err := flushPendingParallelSubagents(); err != nil {
+				return core.Message{}, nil, llm.Usage{}, "", false, err
+			}
+			blockedCode, blockedMsg, blockedSummary, blockedData := modeBlockedDetailsForCall(a.mode, call)
 			content, err := core.MarshalToolEnvelope(core.ToolEnvelope{
 				OK:      false,
 				Success: false,
@@ -356,6 +398,17 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			}) {
 				return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
 			}
+			a.recordApprovalEvent(telemetry.ApprovalEvent{
+				Session:            sessionID,
+				Model:              lastModel,
+				AssistantMessageID: assistant.ID,
+				ToolCallID:         call.ID,
+				Tool:               call.Name,
+				Event:              approvalEventModeBlocked,
+				Code:               blockedCode,
+				Reason:             blockedMsg,
+				Phase:              "denied",
+			})
 			results = append(results, tr)
 			if !emit(AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}) {
 				return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
@@ -396,6 +449,10 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
 		}
 		if !decision.Allow {
+			a.recordApprovalForCall(sessionID, lastModel, assistant.ID, approvalEventPolicyDenied, call, decision, "", nil, "")
+			if err := flushPendingParallelSubagents(); err != nil {
+				return core.Message{}, nil, llm.Usage{}, "", false, err
+			}
 			tr := core.ToolResult{
 				ToolCallID: call.ID,
 				Name:       call.Name,
@@ -415,9 +472,14 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			keys := policy.ApprovalKeys(call)
 			key := policy.ApprovalKey(call)
 			approved := a.approvalCache.HasAll(sessionID, keys)
+			if approved {
+				a.recordApprovalForCall(sessionID, lastModel, assistant.ID, approvalEventCachedAllowed, call, decision, key, keys, policy.ApprovalScope(call))
+			}
 			if !approved {
-				metadata := a.previewTool(ctx, call)
+				metadata := a.previewTool(ctx, tools, call)
+				metadata = addPolicyApprovalMetadata(metadata, decision)
 				metadata = policy.ApprovalMetadata(call, keys, metadata)
+				a.recordApprovalForCall(sessionID, lastModel, assistant.ID, approvalEventRequired, call, decision, key, keys, policy.ApprovalScope(call))
 				if !emit(AgentEvent{
 					Type: AgentEventTypeToolApprovalRequired,
 					Approval: &ToolApprovalRequired{
@@ -447,6 +509,7 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 						Metadata:  metadata,
 					})
 				}
+				a.recordApprovalForCall(sessionID, lastModel, assistant.ID, approvalDecisionEvent(approvalDecision), call, decision, key, keys, policy.ApprovalScope(call))
 				approved = approvalDecision.Approved()
 				if approvalDecision.Canceled() {
 					return core.Message{}, nil, llm.Usage{}, "", false, context.Canceled
@@ -464,6 +527,9 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 				}
 			}
 			if !approved {
+				if err := flushPendingParallelSubagents(); err != nil {
+					return core.Message{}, nil, llm.Usage{}, "", false, err
+				}
 				tr := core.ToolResult{
 					ToolCallID: call.ID,
 					Name:       call.Name,
@@ -481,6 +547,18 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 				a.persistApprovalDeniedMarker(sessionID, call.Name)
 				return assistant, &toolMsg, lastUsage, lastModel, true, nil
 			}
+		}
+		prepared := preparedToolDispatch{
+			Index:          i,
+			Call:           call,
+			PreHookContext: preHookContext,
+			GrantOnSuccess: grantOnSuccess,
+			GrantKey:       grantKey,
+			GrantKeys:      grantKeys,
+		}
+		if _, ok := maybeReadyParallelSubagentCall(i, call); ok {
+			pendingParallelSubagents = append(pendingParallelSubagents, prepared)
+			continue
 		}
 
 		if call.Name == "request_user_input" {
@@ -519,41 +597,18 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			continue
 		}
 
-		finalRes, ok, primarySucceeded := a.dispatchWithRecovery(ctx, sessionID, assistant.ID, lastModel, call, events)
+		finalRes, ok, primarySucceeded := a.dispatchWithRecovery(ctx, sessionID, assistant.ID, lastModel, call, events, tools)
 		if err := ctx.Err(); err != nil {
 			return core.Message{}, nil, llm.Usage{}, "", false, err
 		}
 		if ok {
-			if grantOnSuccess && primarySucceeded {
-				if !a.grantApprovals(ctx, sessionID, call, grantKey, grantKeys, events) {
-					return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
-				}
-			}
-			if preHookContext != "" {
-				finalRes.Content = addHookContextToToolContent(finalRes.Content, preHookContext)
-			}
-			if !a.hooks.Empty() {
-				var toolArgs any
-				_ = json.Unmarshal([]byte(call.Input), &toolArgs)
-				report := a.hooks.Run(ctx, NewPostToolUsePayload(sessionID, call, toolArgs, finalRes.Content))
-				if !a.emitHookReport(ctx, events, report) {
-					return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
-				}
-				if strings.TrimSpace(report.AdditionalContext) != "" {
-					finalRes.Content = addHookContextToToolContent(finalRes.Content, report.AdditionalContext)
-				}
-			}
-			results = append(results, finalRes)
-			r := finalRes
-			if taskEvent, ok := taskCompletedEvent(finalRes); ok {
-				if !emit(taskEvent) {
-					return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
-				}
-			}
-			if !emit(AgentEvent{Type: AgentEventTypeToolResult, Result: &r}) {
+			if !a.appendDispatchedToolResult(ctx, sessionID, prepared, finalRes, primarySucceeded, events, &results) {
 				return core.Message{}, nil, llm.Usage{}, "", false, ctx.Err()
 			}
 		}
+	}
+	if err := flushPendingParallelSubagents(); err != nil {
+		return core.Message{}, nil, llm.Usage{}, "", false, err
 	}
 
 	toolMsg, err := a.store.Create(ctx, core.Message{SessionID: sessionID, Role: core.RoleTool, ToolResults: results})
@@ -561,6 +616,138 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 		return core.Message{}, nil, llm.Usage{}, "", false, fmt.Errorf("create tool message: %w", err)
 	}
 	return assistant, &toolMsg, lastUsage, lastModel, false, nil
+}
+
+func (a *Agent) flushPendingParallelSubagents(ctx context.Context, sessionID, assistantMessageID, model string, pending []preparedToolDispatch, events chan<- AgentEvent, results *[]core.ToolResult, tools *core.ToolRegistry) error {
+	ready := make([]readyParallelSubagentCall, 0, len(pending))
+	for _, prepared := range pending {
+		ready = append(ready, readyParallelSubagentCall{Index: prepared.Index, Call: prepared.Call})
+	}
+	groups := eligibleReadyParallelSubagentGroups(ready)
+
+	var outcomes []toolDispatchOutcome
+	if len(groups) != 1 || groups[0].Start != pending[0].Index || len(groups[0].Calls) != len(pending) {
+		for _, prepared := range pending {
+			finalRes, ok, primarySucceeded := a.dispatchWithRecovery(ctx, sessionID, assistantMessageID, model, prepared.Call, events, tools)
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			outcomes = append(outcomes, toolDispatchOutcome{
+				Prepared:         prepared,
+				Result:           finalRes,
+				OK:               ok,
+				PrimarySucceeded: primarySucceeded,
+			})
+		}
+	} else {
+		var err error
+		outcomes, err = a.dispatchParallelSubagentsWithRecovery(ctx, sessionID, assistantMessageID, model, pending, events, tools)
+		if err != nil {
+			return err
+		}
+	}
+	for _, outcome := range outcomes {
+		if !outcome.OK {
+			continue
+		}
+		if !a.appendDispatchedToolResult(ctx, sessionID, outcome.Prepared, outcome.Result, outcome.PrimarySucceeded, events, results) {
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+func (a *Agent) dispatchParallelSubagentsWithRecovery(ctx context.Context, sessionID, assistantMessageID, model string, pending []preparedToolDispatch, events chan<- AgentEvent, tools *core.ToolRegistry) ([]toolDispatchOutcome, error) {
+	limit := a.maxParallelSubagents
+	if limit <= 0 {
+		limit = defaultMaxParallelSubagents()
+	}
+	if limit > len(pending) {
+		limit = len(pending)
+	}
+	outcomeCh := make(chan toolDispatchOutcome, len(pending))
+	workCh := make(chan preparedToolDispatch)
+	for i := 0; i < limit; i++ {
+		go func() {
+			for prepared := range workCh {
+				finalRes, ok, primarySucceeded := a.dispatchWithRecovery(ctx, sessionID, assistantMessageID, model, prepared.Call, events, tools)
+				// outcomeCh is buffered for every pending call so a worker that
+				// already started can report without blocking after parent
+				// cancellation. The actual stop still depends on
+				// dispatchWithRecovery and the tool honoring ctx.
+				outcomeCh <- toolDispatchOutcome{
+					Prepared:         prepared,
+					Result:           finalRes,
+					OK:               ok,
+					PrimarySucceeded: primarySucceeded,
+				}
+			}
+		}()
+	}
+	go func() {
+		defer close(workCh)
+		for _, prepared := range pending {
+			select {
+			case workCh <- prepared:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	outcomes := make([]toolDispatchOutcome, 0, len(pending))
+	for range pending {
+		select {
+		case outcome := <-outcomeCh:
+			outcomes = append(outcomes, outcome)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	sort.SliceStable(outcomes, func(i, j int) bool {
+		return outcomes[i].Prepared.Index < outcomes[j].Prepared.Index
+	})
+	return outcomes, nil
+}
+
+func (a *Agent) appendDispatchedToolResult(ctx context.Context, sessionID string, prepared preparedToolDispatch, finalRes core.ToolResult, primarySucceeded bool, events chan<- AgentEvent, results *[]core.ToolResult) bool {
+	emit := func(ev AgentEvent) bool {
+		return sendAgentEvent(ctx, events, ev)
+	}
+	call := prepared.Call
+	if prepared.GrantOnSuccess && primarySucceeded {
+		if !a.grantApprovals(ctx, sessionID, call, prepared.GrantKey, prepared.GrantKeys, events) {
+			return false
+		}
+	}
+	if prepared.PreHookContext != "" {
+		finalRes.Content = addHookContextToToolContent(finalRes.Content, prepared.PreHookContext)
+	}
+	// Parallel spawn_subagent batches run post hooks only after the whole batch
+	// returns, in original tool-call order, so stored tool results and events
+	// stay deterministic even when the underlying subagents finish out of order.
+	if !a.hooks.Empty() {
+		var toolArgs any
+		_ = json.Unmarshal([]byte(call.Input), &toolArgs)
+		report := a.hooks.Run(ctx, NewPostToolUsePayload(sessionID, call, toolArgs, finalRes.Content))
+		if !a.emitHookReport(ctx, events, report) {
+			return false
+		}
+		if strings.TrimSpace(report.AdditionalContext) != "" {
+			finalRes.Content = addHookContextToToolContent(finalRes.Content, report.AdditionalContext)
+		}
+	}
+	*results = append(*results, finalRes)
+	r := finalRes
+	if taskEvent, ok := taskCompletedEvent(finalRes); ok {
+		if !emit(taskEvent) {
+			return false
+		}
+	}
+	if !emit(AgentEvent{Type: AgentEventTypeToolResult, Result: &r}) {
+		return false
+	}
+	return true
 }
 
 func (a *Agent) bestEffortUpdateAssistant(msg core.Message) {
@@ -606,8 +793,21 @@ func appendHookContextValue(existing any, hookContext string) any {
 }
 
 func modeBlockedDetails(mode session.Mode) (code, message, summary string, data map[string]any) {
+	return modeBlockedDetailsForCall(mode, core.ToolCall{})
+}
+
+func modeBlockedDetailsForCall(mode session.Mode, call core.ToolCall) (code, message, summary string, data map[string]any) {
 	switch mode {
 	case session.ModeAsk:
+		if call.Name == "shell_run" {
+			return "ask_mode_blocked",
+				"shell command is not classified as safe read-only",
+				"Current mode: ask. Ask mode allows only safe read-only shell commands. This shell command is not classified as safe read-only; switch to agent mode with /agent or Shift+Tab to execute commands with side effects.",
+				map[string]any{
+					"current_mode":    "ask",
+					"suggested_modes": []string{"/agent", "/plan", "Shift+Tab"},
+				}
+		}
 		return "ask_mode_blocked",
 			"tool unavailable in ask mode",
 			"Current mode: ask. Ask mode only allows read-only tools. To execute or modify files, switch to agent mode with /agent or Shift+Tab. To propose a reviewed approach first, switch to plan mode with /plan or Shift+Tab.",
@@ -616,6 +816,15 @@ func modeBlockedDetails(mode session.Mode) (code, message, summary string, data 
 				"suggested_modes": []string{"/agent", "/plan", "Shift+Tab"},
 			}
 	case session.ModePlan:
+		if call.Name == "shell_run" {
+			return "plan_mode_blocked",
+				"shell command is not classified as safe read-only",
+				"Current mode: plan. Plan mode allows only safe read-only shell commands. This shell command is not classified as safe read-only; stay here to refine the plan, or switch to agent mode with /agent or Shift+Tab when it's time to execute commands with side effects.",
+				map[string]any{
+					"current_mode":    "plan",
+					"suggested_modes": []string{"/agent", "Shift+Tab"},
+				}
+		}
 		return "plan_mode_blocked",
 			"tool unavailable in plan mode",
 			"Current mode: plan. Plan mode is read-only until the plan is approved. Stay here to refine the plan, or switch to agent mode with /agent or Shift+Tab when it's time to implement.",
@@ -651,4 +860,20 @@ func policyDenialEnvelope(d policy.PolicyDecision) string {
 		return fmt.Sprintf(`{"success":false,"error":%q,"code":%q}`, reason, code)
 	}
 	return content
+}
+
+func addPolicyApprovalMetadata(metadata map[string]any, decision policy.PolicyDecision) map[string]any {
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	if strings.TrimSpace(decision.MatchedRule) != "" {
+		metadata["matched_rule"] = decision.MatchedRule
+	}
+	if strings.TrimSpace(decision.Permission) != "" {
+		metadata["permission_kind"] = decision.Permission
+	}
+	if strings.TrimSpace(decision.Pattern) != "" {
+		metadata["permission_target"] = decision.Pattern
+	}
+	return metadata
 }

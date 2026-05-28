@@ -71,6 +71,8 @@ type PolicyDecision struct {
 	Code             string
 	Phase            string
 	MatchedRule      string
+	Permission       string
+	Pattern          string
 }
 
 type ToolPolicy interface {
@@ -125,9 +127,6 @@ func (p ReadOnlyTurnPolicy) Decide(spec core.ToolSpec, call core.ToolCall) Polic
 	if core.IsReadOnlyToolCall(spec, call) {
 		return decision
 	}
-	if spec.Name == "shell_run" && decision.Code == "scoped_allow_prefix" && !decision.RequiresApproval {
-		return decision
-	}
 	return PolicyDecision{
 		Allow:  false,
 		Reason: "review turns are read-only",
@@ -153,7 +152,7 @@ func DefaultPermissionConfig() PermissionConfig {
 			"*.env.example": "allow",
 		},
 		Edit: map[string]string{
-			"*": "ask",
+			"*": "allow",
 		},
 		Shell: map[string]string{
 			"*":                       "allow",
@@ -201,11 +200,22 @@ func DefaultPermissionConfig() PermissionConfig {
 }
 
 func (p RulePolicy) Decide(spec core.ToolSpec, call core.ToolCall) PolicyDecision {
+	if denied := p.mcpAllowedDirsDenied(spec, call); denied != "" {
+		return PolicyDecision{
+			Allow:       false,
+			Reason:      denied,
+			Code:        "mcp_allowed_dirs_denied",
+			Phase:       "denied",
+			MatchedRule: "mcp_allowed_dirs",
+			Permission:  "mcp",
+		}
+	}
 	requests := p.requestsFor(spec, call)
 	if len(requests) == 0 {
 		requests = []permissionRequest{{Kind: permissionKind(spec.Name), Pattern: permissionTarget(call)}}
 	}
 	var ask *PermissionRule
+	var askReq permissionRequest
 	for _, req := range requests {
 		rule := p.evaluate(req.Kind, req.Pattern)
 		switch rule.Action {
@@ -216,10 +226,13 @@ func (p RulePolicy) Decide(spec core.ToolSpec, call core.ToolCall) PolicyDecisio
 				Code:        "permission_denied",
 				Phase:       "denied",
 				MatchedRule: ruleLabel(rule),
+				Permission:  req.Kind,
+				Pattern:     req.Pattern,
 			}
 		case PermissionAsk:
 			copy := rule
 			ask = &copy
+			askReq = req
 		}
 	}
 	if ask != nil {
@@ -230,6 +243,8 @@ func (p RulePolicy) Decide(spec core.ToolSpec, call core.ToolCall) PolicyDecisio
 			Code:             "permission_required",
 			Phase:            "needs_approval",
 			MatchedRule:      ruleLabel(*ask),
+			Permission:       askReq.Kind,
+			Pattern:          askReq.Pattern,
 		}
 	}
 	return PolicyDecision{Allow: true, Code: "permission_allow", Phase: "allowed"}
@@ -269,6 +284,14 @@ func (p RulePolicy) requestsFor(spec core.ToolSpec, call core.ToolCall) []permis
 		for _, dir := range p.externalDirs(cmd) {
 			requests = append(requests, permissionRequest{Kind: "external_directory", Pattern: dir})
 		}
+	default:
+		if strings.HasPrefix(spec.Name, "mcp__") && mcpFilesystemTool(spec) {
+			for _, dir := range p.externalDirsFromMCPInput(call.Input) {
+				requests = append(requests, permissionRequest{Kind: "external_directory", Pattern: dir})
+			}
+		}
+	}
+	switch spec.Name {
 	case "grep", "search_files":
 		// These read-scoped tools carry a search regex/glob in their non-path
 		// fields. Evaluate read rules against the directory being searched,
@@ -631,6 +654,121 @@ func (p RulePolicy) externalDirs(command string) []string {
 		}
 	}
 	return uniqueStrings(out)
+}
+
+func (p RulePolicy) externalDirsFromMCPInput(input string) []string {
+	root := cleanAbs(p.WorkspaceRoot)
+	if root == "" || strings.TrimSpace(input) == "" {
+		return nil
+	}
+	var body map[string]any
+	if err := json.Unmarshal([]byte(input), &body); err != nil {
+		return nil
+	}
+	var out []string
+	for _, token := range mcpPathTokens(body) {
+		clean := p.resolveShellPathToken(root, token)
+		if clean == "" || pathInside(clean, root) || pathInsideTrustedTemp(clean) {
+			continue
+		}
+		out = append(out, externalDirForToken(clean))
+	}
+	return uniqueStrings(out)
+}
+
+func mcpPathTokens(body map[string]any) []string {
+	keys := []string{"path", "file_path", "root", "directory", "source", "destination"}
+	out := []string{}
+	for _, key := range keys {
+		if v, ok := body[key].(string); ok && strings.TrimSpace(v) != "" {
+			out = append(out, strings.TrimSpace(v))
+		}
+	}
+	if xs, ok := body["paths"].([]any); ok {
+		for _, x := range xs {
+			if v, ok := x.(string); ok && strings.TrimSpace(v) != "" {
+				out = append(out, strings.TrimSpace(v))
+			}
+		}
+	}
+	return out
+}
+
+func (p RulePolicy) mcpAllowedDirsDenied(spec core.ToolSpec, call core.ToolCall) string {
+	if !strings.HasPrefix(spec.Name, "mcp__") {
+		return ""
+	}
+	allowedDirs := mcpFilesystemAllowedDirs(spec)
+	if len(allowedDirs) == 0 {
+		return ""
+	}
+	var body map[string]any
+	if err := json.Unmarshal([]byte(call.Input), &body); err != nil {
+		return ""
+	}
+	for _, token := range mcpPathTokens(body) {
+		token = expandHome(token)
+		if !filepath.IsAbs(token) {
+			continue
+		}
+		clean := cleanAbs(token)
+		if !pathInsideAnyCanonical(clean, allowedDirs) {
+			return fmt.Sprintf("MCP filesystem server cannot access %s; allowed directories: %s. Use Whale built-in file tools for this path, or add the directory to the MCP server configuration.", clean, strings.Join(allowedDirs, ", "))
+		}
+	}
+	return ""
+}
+
+func mcpFilesystemAllowedDirs(spec core.ToolSpec) []string {
+	const prefix = "mcp_filesystem_allowed_dir:"
+	var out []string
+	for _, cap := range spec.Capabilities {
+		if dir, ok := strings.CutPrefix(strings.TrimSpace(cap), prefix); ok {
+			if dir = cleanAbs(dir); dir != "" {
+				out = append(out, dir)
+			}
+		}
+	}
+	return uniqueStrings(out)
+}
+
+func mcpFilesystemTool(spec core.ToolSpec) bool {
+	return hasCapability(spec, "mcp_filesystem") || len(mcpFilesystemAllowedDirs(spec)) > 0
+}
+
+func pathInsideAnyCanonical(path string, roots []string) bool {
+	path = canonicalAccessPath(path)
+	for _, root := range roots {
+		root = canonicalAccessPath(root)
+		if pathInside(path, root) {
+			return true
+		}
+	}
+	return false
+}
+
+func canonicalAccessPath(path string) string {
+	clean := cleanAbs(path)
+	if clean == "" {
+		return ""
+	}
+	if real, err := filepath.EvalSymlinks(clean); err == nil {
+		return filepath.Clean(real)
+	}
+	cur := clean
+	var suffix []string
+	for {
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return clean
+		}
+		suffix = append([]string{filepath.Base(cur)}, suffix...)
+		if real, err := filepath.EvalSymlinks(parent); err == nil {
+			parts := append([]string{filepath.Clean(real)}, suffix...)
+			return filepath.Clean(filepath.Join(parts...))
+		}
+		cur = parent
+	}
 }
 
 func shellFileCommand(command string) bool {

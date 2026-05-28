@@ -116,6 +116,52 @@ func TestTransportKindRejectsConflictsAndUnsupportedValues(t *testing.T) {
 	}
 }
 
+func TestFilesystemAllowedDirsExtractsServerFilesystemArgs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	rel := filepath.Join(t.TempDir(), "workspace")
+	cfg := ServerConfig{
+		Command: "npx",
+		Args:    []string{"-y", "@modelcontextprotocol/server-filesystem", "~/docs", rel, "--ignored-flag"},
+	}
+
+	got := cfg.filesystemAllowedDirs()
+	wantHome := filepath.Join(home, "docs")
+	wantRel, err := filepath.Abs(rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != wantHome || got[1] != wantRel {
+		t.Fatalf("filesystemAllowedDirs() = %#v, want %#v", got, []string{wantHome, wantRel})
+	}
+}
+
+func TestFilesystemAllowedDirsUsesExpandedStdioArgs(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("USERPROFILE", home)
+	cfg := ServerConfig{
+		Command: "npx",
+		Args: []string{
+			"-y",
+			"@modelcontextprotocol/server-filesystem",
+			expandStdioValue("%USERPROFILE%/docs", false, "windows", os.Getenv, os.UserHomeDir),
+		},
+	}
+
+	got := filesystemAllowedDirsFromArgs(expandStdioCommand(cfg.Command), cfg.Args)
+	want := filepath.Join(home, "docs")
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("filesystemAllowedDirsFromArgs() = %#v, want %#v", got, []string{want})
+	}
+}
+
+func TestFilesystemAllowedDirsIgnoresNonFilesystemServers(t *testing.T) {
+	got := (ServerConfig{Command: "node", Args: []string{"server.js", "/tmp"}}).filesystemAllowedDirs()
+	if len(got) != 0 {
+		t.Fatalf("filesystemAllowedDirs() = %#v, want empty", got)
+	}
+}
+
 func TestResolvedHeadersExpandsEnvAndDoesNotLeakMissingValue(t *testing.T) {
 	t.Setenv("WHALE_MCP_HEADER_TOKEN", "secret-token")
 	headers, err := resolvedHeaders(map[string]string{

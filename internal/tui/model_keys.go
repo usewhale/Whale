@@ -403,7 +403,7 @@ func (m *model) submitApprovalDecision(kind service.IntentKind, logKind, summary
 	m.addLog(logEntry{Kind: logKind, Source: m.approval.toolName, Summary: summary, Raw: notice})
 	m.mode = modeChat
 	m.status = status
-	m.appendNotice(m.approvalNoticeText(notice))
+	m.appendSystemNotice(m.approvalNotice(notice))
 	return m.flushNativeScrollbackCmd()
 }
 

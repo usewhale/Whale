@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"sync"
 	"sync/atomic"
@@ -23,8 +24,14 @@ type shellTask struct {
 	status     string
 	exitCode   *int
 	finishedAt *time.Time
-	stdout     string
-	stderr     string
+	stdout     bytes.Buffer
+	stderr     bytes.Buffer
+	lastOutput *time.Time
+	diagnosis  shellDiagnosis
+	timeoutCtx shellTimeoutContext
+	cancel     context.CancelFunc
+	done       chan struct{}
+	doneOnce   sync.Once
 }
 
 func (t *shellTask) snapshot() shellTaskSnapshot {
@@ -38,8 +45,10 @@ func (t *shellTask) snapshot() shellTaskSnapshot {
 		ExitCode:   t.exitCode,
 		StartedAt:  t.StartedAt,
 		FinishedAt: t.finishedAt,
-		Stdout:     t.stdout,
-		Stderr:     t.stderr,
+		Stdout:     decodeShellOutput(t.stdout.Bytes()),
+		Stderr:     decodeShellOutput(t.stderr.Bytes()),
+		LastOutput: t.lastOutput,
+		Diagnosis:  diagnoseShellTaskLocked(t),
 	}
 }
 
@@ -53,6 +62,8 @@ type shellTaskSnapshot struct {
 	FinishedAt *time.Time
 	Stdout     string
 	Stderr     string
+	LastOutput *time.Time
+	Diagnosis  shellDiagnosis
 }
 
 const (
@@ -82,7 +93,7 @@ func (r *shellTaskRegistry) nextID() string {
 }
 
 func (r *shellTaskRegistry) create(command, cwd string) *shellTask {
-	t := &shellTask{ID: r.nextID(), Command: command, CWD: cwd, StartedAt: time.Now(), status: "running"}
+	t := &shellTask{ID: r.nextID(), Command: command, CWD: cwd, StartedAt: time.Now(), status: "running", done: make(chan struct{})}
 	r.mu.Lock()
 	r.tasks[t.ID] = t
 	r.pruneCompletedLocked(time.Now(), t.ID)
@@ -107,6 +118,80 @@ func (r *shellTaskRegistry) release(id string) {
 	r.mu.Lock()
 	delete(r.tasks, id)
 	r.mu.Unlock()
+}
+
+func (t *shellTask) setCancel(cancel context.CancelFunc) {
+	t.mu.Lock()
+	t.cancel = cancel
+	t.mu.Unlock()
+}
+
+func (t *shellTask) cancelRun() {
+	t.mu.RLock()
+	cancel := t.cancel
+	t.mu.RUnlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (t *shellTask) setDiagnosis(diagnosis shellDiagnosis) {
+	if t == nil || diagnosis.Reason == "" {
+		return
+	}
+	t.mu.Lock()
+	t.diagnosis = diagnosis
+	t.mu.Unlock()
+}
+
+func (t *shellTask) setTimeoutContext(timeoutCtx shellTimeoutContext) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.timeoutCtx = timeoutCtx
+	t.mu.Unlock()
+}
+
+func (t *shellTask) waitDone() {
+	if t == nil || t.done == nil {
+		return
+	}
+	<-t.done
+}
+
+func (t *shellTask) closeDone() {
+	if t == nil || t.done == nil {
+		return
+	}
+	t.doneOnce.Do(func() {
+		close(t.done)
+	})
+}
+
+func (t *shellTask) outputWriter(stderr bool) io.Writer {
+	return shellTaskOutputWriter{task: t, stderr: stderr}
+}
+
+type shellTaskOutputWriter struct {
+	task   *shellTask
+	stderr bool
+}
+
+func (w shellTaskOutputWriter) Write(p []byte) (int, error) {
+	if w.task == nil {
+		return len(p), nil
+	}
+	w.task.mu.Lock()
+	defer w.task.mu.Unlock()
+	if w.stderr {
+		_, _ = w.task.stderr.Write(p)
+	} else {
+		_, _ = w.task.stdout.Write(p)
+	}
+	now := time.Now()
+	w.task.lastOutput = &now
+	return len(p), nil
 }
 
 func (r *shellTaskRegistry) pruneCompleted(keepID string) {
@@ -172,6 +257,7 @@ func shellTaskExpired(task shellTaskSnapshot, now time.Time) bool {
 }
 
 func runShellBackground(ctx context.Context, dir, command string, task *shellTask) {
+	defer task.closeDone()
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			markShellTaskFailed(task, fmt.Sprintf("panic: %v", recovered))
@@ -185,27 +271,27 @@ func runShellBackground(ctx context.Context, dir, command string, task *shellTas
 	}
 	cmd := shell.Command(spec)
 	cmd.Dir = dir
-	var stdoutBuf bytes.Buffer
-	var stderrBuf bytes.Buffer
-	cmd.Stdout = &stdoutBuf
-	cmd.Stderr = &stderrBuf
+	cmd.Stdout = task.outputWriter(false)
+	cmd.Stderr = task.outputWriter(true)
 	err = shell.RunCommand(ctx, cmd)
 
 	task.mu.Lock()
 	defer task.mu.Unlock()
 	now := time.Now()
 	task.finishedAt = &now
-	task.stdout = decodeShellOutput(stdoutBuf.Bytes())
-	task.stderr = decodeShellOutput(stderrBuf.Bytes())
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			task.status = "timeout"
 			task.exitCode = nil
+			task.diagnosis = task.timeoutDiagnosisLocked()
 			return
 		}
 		if errors.Is(ctx.Err(), context.Canceled) {
 			task.status = "canceled"
 			task.exitCode = nil
+			if task.diagnosis.Reason == "" {
+				task.diagnosis = shellDiagnosisForReason("cancelled")
+			}
 			return
 		}
 		var ex *exec.ExitError
@@ -232,7 +318,8 @@ func markShellTaskFailed(task *shellTask, stderr string) {
 	defer task.mu.Unlock()
 	now := time.Now()
 	task.finishedAt = &now
-	task.stderr = stderr
+	task.stderr.Reset()
+	_, _ = task.stderr.WriteString(stderr)
 	task.status = "failed"
 	task.exitCode = nil
 }

@@ -82,15 +82,20 @@ func TestMostRecentSessionIDIgnoresToolInputEventSidecars(t *testing.T) {
 	dir := t.TempDir()
 	sessionPath := filepath.Join(dir, "s1.jsonl")
 	sidecarPath := filepath.Join(dir, "s1.tool_input_events.jsonl")
+	approvalPath := filepath.Join(dir, "s1.approval_events.jsonl")
 	if err := os.WriteFile(sessionPath, []byte("{}\n"), 0o600); err != nil {
 		t.Fatalf("write session: %v", err)
 	}
 	if err := os.WriteFile(sidecarPath, []byte("{}\n"), 0o600); err != nil {
 		t.Fatalf("write sidecar: %v", err)
 	}
+	if err := os.WriteFile(approvalPath, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("write approval sidecar: %v", err)
+	}
 	now := time.Now()
 	_ = os.Chtimes(sessionPath, now.Add(-time.Hour), now.Add(-time.Hour))
 	_ = os.Chtimes(sidecarPath, now, now)
+	_ = os.Chtimes(approvalPath, now.Add(time.Minute), now.Add(time.Minute))
 
 	got, err := MostRecentSessionID(dir)
 	if err != nil {

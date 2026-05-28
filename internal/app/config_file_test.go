@@ -18,11 +18,12 @@ func TestConfigFileRoundTrip(t *testing.T) {
 	path := GlobalConfigPath(dir)
 	enabled := true
 	checkUpdates := false
+	showReasoning := true
 	cfg := FileConfig{
 		Model:           "deepseek-v4-pro",
 		ReasoningEffort: "max",
 		ThinkingEnabled: &enabled,
-		UI:              FileUIConfig{ViewMode: ViewModeFocus, CheckForUpdateOnStartup: &checkUpdates},
+		UI:              FileUIConfig{ViewMode: ViewModeFocus, ShowReasoning: &showReasoning, CheckForUpdateOnStartup: &checkUpdates},
 		API:             FileAPIConfig{BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1/"},
 		Permissions: FilePermissionsConfig{
 			Default:    "ask",
@@ -64,11 +65,33 @@ func TestConfigFileRoundTrip(t *testing.T) {
 	if loaded.UI.ViewMode != ViewModeFocus {
 		t.Fatalf("ui.view_mode: want focus, got %+v", loaded.UI)
 	}
+	if loaded.UI.ShowReasoning == nil || !*loaded.UI.ShowReasoning {
+		t.Fatalf("ui.show_reasoning: want true, got %+v", loaded.UI.ShowReasoning)
+	}
 	if loaded.UI.CheckForUpdateOnStartup == nil || *loaded.UI.CheckForUpdateOnStartup {
 		t.Fatalf("ui.check_for_update_on_startup: want false, got %+v", loaded.UI.CheckForUpdateOnStartup)
 	}
 	if loaded.Permissions.Default != "ask" || loaded.Permissions.AutoAccept == nil || !*loaded.Permissions.AutoAccept || loaded.Permissions.Shell["git push*"] != "ask" {
 		t.Fatalf("permissions config: %+v", loaded.Permissions)
+	}
+}
+
+func TestApplyFileConfigSupportsMaxParallelSubagents(t *testing.T) {
+	cfg := DefaultConfig()
+	if err := ApplyFileConfig(&cfg, FileConfig{Tasks: FileTasksConfig{MaxParallelSubagents: intPtr(3)}}); err != nil {
+		t.Fatalf("ApplyFileConfig: %v", err)
+	}
+	if cfg.MaxParallelSubagents != 3 {
+		t.Fatalf("max parallel subagents: want 3, got %d", cfg.MaxParallelSubagents)
+	}
+}
+
+func TestApplyFileConfigRejectsInvalidMaxParallelSubagents(t *testing.T) {
+	for _, value := range []int{0, -1} {
+		cfg := DefaultConfig()
+		if err := ApplyFileConfig(&cfg, FileConfig{Tasks: FileTasksConfig{MaxParallelSubagents: intPtr(value)}}); err == nil {
+			t.Fatalf("expected invalid tasks.max_parallel_subagents error for %d", value)
+		}
 	}
 }
 
@@ -82,6 +105,27 @@ func TestApplyFileConfigSupportsViewMode(t *testing.T) {
 	}
 	if err := ApplyFileConfig(&cfg, FileConfig{UI: FileUIConfig{ViewMode: "verbose"}}); err == nil {
 		t.Fatal("expected invalid view mode error")
+	}
+}
+
+func TestApplyFileConfigSupportsShowReasoning(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.ShowReasoning {
+		t.Fatal("default show_reasoning should be disabled")
+	}
+	enabled := true
+	if err := ApplyFileConfig(&cfg, FileConfig{UI: FileUIConfig{ShowReasoning: &enabled}}); err != nil {
+		t.Fatalf("ApplyFileConfig: %v", err)
+	}
+	if !cfg.ShowReasoning {
+		t.Fatal("expected show_reasoning to be enabled")
+	}
+	disabled := false
+	if err := ApplyFileConfig(&cfg, FileConfig{UI: FileUIConfig{ShowReasoning: &disabled}}); err != nil {
+		t.Fatalf("ApplyFileConfig: %v", err)
+	}
+	if cfg.ShowReasoning {
+		t.Fatal("expected show_reasoning to be disabled")
 	}
 }
 
@@ -183,6 +227,52 @@ func TestConfigProjectOverridesGlobal(t *testing.T) {
 	}
 	if loaded.Model != "deepseek-v4-pro" {
 		t.Fatalf("model: want project override, got %s", loaded.Model)
+	}
+}
+
+func TestConfigProjectLocalOverridesMaxParallelSubagents(t *testing.T) {
+	dataDir := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, ".whale"), 0o755); err != nil {
+		t.Fatalf("mkdir .whale: %v", err)
+	}
+	if err := SaveConfigFile(GlobalConfigPath(dataDir), FileConfig{Tasks: FileTasksConfig{MaxParallelSubagents: intPtr(2)}}); err != nil {
+		t.Fatalf("save global: %v", err)
+	}
+	if err := SaveConfigFile(ProjectConfigPath(workspace), FileConfig{Tasks: FileTasksConfig{MaxParallelSubagents: intPtr(3)}}); err != nil {
+		t.Fatalf("save project: %v", err)
+	}
+	if err := SaveConfigFile(ProjectLocalConfigPath(workspace), FileConfig{Tasks: FileTasksConfig{MaxParallelSubagents: intPtr(4)}}); err != nil {
+		t.Fatalf("save project local: %v", err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.DataDir = dataDir
+	loaded, err := LoadAndApplyConfig(cfg, workspace)
+	if err != nil {
+		t.Fatalf("LoadAndApplyConfig: %v", err)
+	}
+	if loaded.MaxParallelSubagents != 4 {
+		t.Fatalf("max parallel subagents: want project-local override 4, got %d", loaded.MaxParallelSubagents)
+	}
+}
+
+func TestConfigExplicitMaxParallelSubagentsOverridesFiles(t *testing.T) {
+	dataDir := t.TempDir()
+	workspace := t.TempDir()
+	if err := SaveConfigFile(ProjectLocalConfigPath(workspace), FileConfig{Tasks: FileTasksConfig{MaxParallelSubagents: intPtr(3)}}); err != nil {
+		t.Fatalf("save project local: %v", err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.DataDir = dataDir
+	cfg.MaxParallelSubagents = 5
+	loaded, err := LoadAndApplyConfig(cfg, workspace)
+	if err != nil {
+		t.Fatalf("LoadAndApplyConfig: %v", err)
+	}
+	if loaded.MaxParallelSubagents != 5 {
+		t.Fatalf("max parallel subagents: want explicit 5, got %d", loaded.MaxParallelSubagents)
 	}
 }
 

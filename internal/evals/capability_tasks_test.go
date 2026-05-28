@@ -130,7 +130,7 @@ func TestTaskApprovalRequiredWriteApproved(t *testing.T) {
 		Suite: SuiteCapability,
 		Scenario: ScenarioSpec{
 			AgentOptions: []agent.AgentOption{
-				agent.WithToolPolicy(policy.DefaultToolPolicy{}),
+				agent.WithToolPolicy(editApprovalPolicy()),
 				agent.WithApprovalFunc(func(req policy.ApprovalRequest) policy.ApprovalDecision { return policy.ApprovalAllow }),
 			},
 			Turns: []TurnSpec{

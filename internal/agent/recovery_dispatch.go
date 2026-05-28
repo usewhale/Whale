@@ -8,7 +8,7 @@ import (
 	"github.com/usewhale/whale/internal/core"
 )
 
-func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMessageID, model string, call core.ToolCall, events chan<- AgentEvent) (core.ToolResult, bool, bool) {
+func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMessageID, model string, call core.ToolCall, events chan<- AgentEvent, tools *core.ToolRegistry) (core.ToolResult, bool, bool) {
 	attempt := 0
 	dispatchCtx := core.WithToolResultArchive(ctx, a.toolResultArchiveDir, sessionID)
 	emit := func(ev AgentEvent) bool {
@@ -16,7 +16,11 @@ func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMe
 	}
 	for {
 		attempt++
-		res, err := a.tools.DispatchWithProgress(dispatchCtx, call, func(progress core.ToolProgress) {
+		res, err := tools.DispatchWithProgress(dispatchCtx, call, func(progress core.ToolProgress) {
+			// Progress events are emitted directly from tool goroutines, so
+			// different ToolCallIDs may interleave in parallel subagent batches.
+			// The stable contract is attribution plus each call's own
+			// progress-before-completion/result ordering.
 			info := TaskActivityInfo{
 				ToolCallID: firstNonEmptyString(progress.ToolCallID, call.ID),
 				ToolName:   firstNonEmptyString(progress.ToolName, call.Name),
@@ -62,7 +66,7 @@ func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMe
 			return res, true, false
 		}
 		if rule.Action == RecoveryActionFallbackReadOnly {
-			fallbackRes, ok := a.executeFallbackReadonly(dispatchCtx, call, res)
+			fallbackRes, ok := a.executeFallbackReadonly(dispatchCtx, tools, call, res)
 			if ok {
 				if !emit(AgentEvent{
 					Type: AgentEventTypeToolRecoveryExhausted,
@@ -176,7 +180,7 @@ func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMe
 	}
 }
 
-func (a *Agent) executeFallbackReadonly(ctx context.Context, call core.ToolCall, cause core.ToolResult) (core.ToolResult, bool) {
+func (a *Agent) executeFallbackReadonly(ctx context.Context, tools *core.ToolRegistry, call core.ToolCall, cause core.ToolResult) (core.ToolResult, bool) {
 	fallbackCall := core.ToolCall{ID: call.ID + "-fallback", Name: "list_dir", Input: `{"path":"."}`}
 	switch call.Name {
 	case "write", "edit":
@@ -197,7 +201,7 @@ func (a *Agent) executeFallbackReadonly(ctx context.Context, call core.ToolCall,
 	default:
 		return core.ToolResult{}, false
 	}
-	res, err := a.tools.Dispatch(ctx, fallbackCall)
+	res, err := tools.Dispatch(ctx, fallbackCall)
 	if err != nil {
 		return core.ToolResult{}, false
 	}

@@ -24,6 +24,7 @@ import (
 )
 
 const (
+	StatusPending   = "pending"
 	StatusDisabled  = "disabled"
 	StatusStarting  = "starting"
 	StatusConnected = "connected"
@@ -32,11 +33,13 @@ const (
 )
 
 type Manager struct {
-	mu       sync.RWMutex
-	cfg      Config
-	sessions map[string]*clientSession
-	states   map[string]ServerState
-	tools    []core.Tool
+	mu            sync.RWMutex
+	cfg           Config
+	workspaceRoot string
+	sessions      map[string]*clientSession
+	discovery     map[string][]discoveredTool
+	states        map[string]ServerState
+	tools         []core.Tool
 }
 
 type ServerState struct {
@@ -46,6 +49,11 @@ type ServerState struct {
 	Connected bool
 	Error     string
 	Tools     int
+	ToolNames []string
+	Command   string
+	URL       string
+	Headers   []string
+	Auth      string
 }
 
 type StartupEvent struct {
@@ -59,12 +67,28 @@ type clientSession struct {
 	cancel  context.CancelFunc
 }
 
-func NewManager(cfg Config) *Manager {
-	return &Manager{
-		cfg:      cfg,
-		sessions: map[string]*clientSession{},
-		states:   map[string]ServerState{},
+type discoveredTool struct {
+	serverName    string
+	toolName      string
+	spec          *sdk.Tool
+	allowedDirs   []string
+	workspaceRoot string
+}
+
+func NewManager(cfg Config, workspaceRoot ...string) *Manager {
+	root := ""
+	if len(workspaceRoot) > 0 {
+		root = strings.TrimSpace(workspaceRoot[0])
 	}
+	m := &Manager{
+		cfg:           cfg,
+		workspaceRoot: root,
+		sessions:      map[string]*clientSession{},
+		discovery:     map[string][]discoveredTool{},
+		states:        map[string]ServerState{},
+	}
+	m.resetStatesLocked()
+	return m
 }
 
 func (m *Manager) Initialize(ctx context.Context) {
@@ -77,9 +101,11 @@ func (m *Manager) InitializeWithEvents(ctx context.Context, emit func(StartupEve
 	}
 	m.mu.Lock()
 	m.tools = nil
+	m.discovery = map[string][]discoveredTool{}
+	m.resetStatesLocked()
 	m.mu.Unlock()
-	seen := map[string]bool{}
-	registered := []core.Tool{}
+	events := make(chan StartupEvent, len(m.cfg.Servers)*2+1)
+	var wg sync.WaitGroup
 	for _, name := range sortedServerNames(m.cfg.Servers) {
 		srv := m.cfg.Servers[name]
 		srv.Name = name
@@ -87,26 +113,35 @@ func (m *Manager) InitializeWithEvents(ctx context.Context, emit func(StartupEve
 			m.setStateAndEmit(ServerState{Name: name, Status: StatusDisabled, Disabled: true}, emit)
 			continue
 		}
-		m.setStateAndEmit(ServerState{Name: name, Status: StatusStarting}, emit)
-		if err := ctx.Err(); err != nil {
-			m.setStateAndEmit(ServerState{Name: name, Status: StatusCancelled, Error: err.Error()}, emit)
-			continue
-		}
-		tools, err := m.startServer(ctx, srv, seen)
-		if err != nil {
-			status := StatusFailed
-			if errors.Is(ctx.Err(), context.Canceled) {
-				status = StatusCancelled
+		wg.Add(1)
+		go func(srv ServerConfig) {
+			defer wg.Done()
+			m.setState(ServerState{Name: srv.Name, Status: StatusStarting})
+			events <- StartupEvent{State: m.stateByName(srv.Name)}
+			if err := ctx.Err(); err != nil {
+				m.setState(ServerState{Name: srv.Name, Status: StatusCancelled, Error: err.Error()})
+				events <- StartupEvent{State: m.stateByName(srv.Name)}
+				return
 			}
-			m.setStateAndEmit(ServerState{Name: name, Status: status, Error: err.Error()}, emit)
-			continue
-		}
-		registered = append(registered, tools...)
-		m.mu.Lock()
-		m.tools = append([]core.Tool(nil), registered...)
-		st := m.states[name]
-		m.mu.Unlock()
-		emitStartupEvent(emit, StartupEvent{State: st})
+			sess, discovered, toolNames, err := m.startServer(ctx, srv)
+			if err != nil {
+				status := StatusFailed
+				if errors.Is(ctx.Err(), context.Canceled) {
+					status = StatusCancelled
+				}
+				m.setState(ServerState{Name: srv.Name, Status: status, Error: err.Error()})
+				events <- StartupEvent{State: m.stateByName(srv.Name)}
+				return
+			}
+			events <- StartupEvent{State: m.registerConnectedServer(srv, sess, discovered, toolNames)}
+		}(srv)
+	}
+	go func() {
+		wg.Wait()
+		close(events)
+	}()
+	for ev := range events {
+		emitStartupEvent(emit, ev)
 	}
 	emitStartupEvent(emit, StartupEvent{Complete: true})
 }
@@ -179,10 +214,10 @@ func (m *Manager) CallTool(ctx context.Context, serverName, toolName string, arg
 	return sess.session.CallTool(callCtx, &sdk.CallToolParams{Name: toolName, Arguments: args})
 }
 
-func (m *Manager) startServer(ctx context.Context, srv ServerConfig, seen map[string]bool) ([]core.Tool, error) {
+func (m *Manager) startServer(ctx context.Context, srv ServerConfig) (*clientSession, []discoveredTool, []string, error) {
 	kind, err := srv.transportKind()
 	if err != nil {
-		return nil, fmt.Errorf("mcp server %q: %w", srv.Name, err)
+		return nil, nil, nil, fmt.Errorf("mcp server %q: %w", srv.Name, err)
 	}
 	mcpCtx, cancel := context.WithCancel(ctx)
 	timeoutCtx, timeoutCancel := context.WithTimeout(mcpCtx, srv.TimeoutDuration())
@@ -191,43 +226,98 @@ func (m *Manager) startServer(ctx context.Context, srv ServerConfig, seen map[st
 	transport, stdioCmd, httpDiag, err := createTransport(mcpCtx, kind, srv)
 	if err != nil {
 		cancel()
-		return nil, err
+		return nil, nil, nil, err
 	}
 	client := sdk.NewClient(&sdk.Implementation{Name: "whale", Title: "Whale", Version: build.CurrentVersion()}, nil)
 	session, err := client.Connect(timeoutCtx, transport, nil)
 	if err != nil {
 		cancel()
 		if isContextTimeout(timeoutCtx, err) {
-			return nil, startupTimeoutErr(srv, "connect")
+			return nil, nil, nil, startupTimeoutErr(srv, "connect")
 		}
 		if errors.Is(err, io.EOF) && stdioCmd != nil {
 			err = maybeStdioErr(err, stdioCmd)
 		}
-		return nil, startupErr(srv, "connect", err, httpDiag)
+		return nil, nil, nil, startupErr(srv, "connect", err, httpDiag)
 	}
 	listed, err := session.ListTools(timeoutCtx, &sdk.ListToolsParams{})
 	if err != nil {
 		_ = session.Close()
 		cancel()
 		if isContextTimeout(timeoutCtx, err) {
-			return nil, startupTimeoutErr(srv, "list_tools")
+			return nil, nil, nil, startupTimeoutErr(srv, "list_tools")
 		}
-		return nil, startupErr(srv, "list_tools", err, httpDiag)
+		return nil, nil, nil, startupErr(srv, "list_tools", err, httpDiag)
 	}
 	disabled := srv.disabledToolSet()
-	tools := make([]core.Tool, 0, len(listed.Tools))
+	allowedDirs := srv.filesystemAllowedDirs()
+	discovered := make([]discoveredTool, 0, len(listed.Tools))
+	toolNames := make([]string, 0, len(listed.Tools))
 	for _, tool := range listed.Tools {
 		if tool == nil || strings.TrimSpace(tool.Name) == "" || disabled[tool.Name] {
 			continue
 		}
-		name := UniqueToolName(QualifyToolName(srv.Name, tool.Name), seen)
-		tools = append(tools, &Tool{manager: m, serverName: srv.Name, toolName: tool.Name, registeredName: name, spec: tool})
+		toolNames = append(toolNames, strings.TrimSpace(tool.Name))
+		discovered = append(discovered, discoveredTool{
+			serverName:    srv.Name,
+			toolName:      tool.Name,
+			spec:          tool,
+			allowedDirs:   allowedDirs,
+			workspaceRoot: m.workspaceRoot,
+		})
 	}
+	sort.Strings(toolNames)
+	return &clientSession{cfg: srv, session: session, cancel: cancel}, discovered, toolNames, nil
+}
+
+func (m *Manager) registerConnectedServer(srv ServerConfig, sess *clientSession, discovered []discoveredTool, toolNames []string) ServerState {
 	m.mu.Lock()
-	m.sessions[srv.Name] = &clientSession{cfg: srv, session: session, cancel: cancel}
-	m.states[srv.Name] = ServerState{Name: srv.Name, Status: StatusConnected, Connected: true, Tools: len(tools)}
-	m.mu.Unlock()
-	return tools, nil
+	defer m.mu.Unlock()
+	m.sessions[srv.Name] = sess
+	m.discovery[srv.Name] = append([]discoveredTool(nil), discovered...)
+	st := serverStateFromConfig(srv, StatusConnected)
+	st.Connected = true
+	st.Tools = len(discovered)
+	st.ToolNames = append([]string(nil), toolNames...)
+	m.states[srv.Name] = st
+	m.tools = m.buildToolsLocked()
+	return st
+}
+
+func (m *Manager) buildToolsLocked() []core.Tool {
+	seen := map[string]bool{}
+	tools := []core.Tool{}
+	for _, serverName := range sortedDiscoveredServerNames(m.discovery) {
+		for _, tool := range sortedDiscoveredTools(m.discovery[serverName]) {
+			name := UniqueToolName(QualifyToolName(tool.serverName, tool.toolName), seen)
+			tools = append(tools, &Tool{
+				manager:        m,
+				serverName:     tool.serverName,
+				toolName:       tool.toolName,
+				registeredName: name,
+				spec:           tool.spec,
+				allowedDirs:    tool.allowedDirs,
+				workspaceRoot:  tool.workspaceRoot,
+			})
+		}
+	}
+	sort.Slice(tools, func(i, j int) bool { return tools[i].Name() < tools[j].Name() })
+	return tools
+}
+
+func sortedDiscoveredServerNames(discovery map[string][]discoveredTool) []string {
+	names := make([]string, 0, len(discovery))
+	for name := range discovery {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func sortedDiscoveredTools(tools []discoveredTool) []discoveredTool {
+	out := append([]discoveredTool(nil), tools...)
+	sort.Slice(out, func(i, j int) bool { return out[i].toolName < out[j].toolName })
+	return out
 }
 
 func createTransport(ctx context.Context, kind string, srv ServerConfig) (sdk.Transport, *exec.Cmd, *httpDiagnostics, error) {
@@ -302,6 +392,9 @@ func (rt headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 func (m *Manager) setState(st ServerState) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if prev, ok := m.states[st.Name]; ok {
+		st = mergeServerStateMetadata(prev, st)
+	}
 	if st.Status == "" {
 		switch {
 		case st.Disabled:
@@ -313,6 +406,191 @@ func (m *Manager) setState(st ServerState) {
 		}
 	}
 	m.states[st.Name] = st
+}
+
+func (m *Manager) stateByName(name string) ServerState {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.states[name]
+}
+
+func mergeServerStateMetadata(prev, next ServerState) ServerState {
+	if next.Command == "" {
+		next.Command = prev.Command
+	}
+	if next.URL == "" {
+		next.URL = prev.URL
+	}
+	if next.Auth == "" {
+		next.Auth = prev.Auth
+	}
+	if len(next.Headers) == 0 {
+		next.Headers = append([]string(nil), prev.Headers...)
+	}
+	if len(next.ToolNames) == 0 {
+		next.ToolNames = append([]string(nil), prev.ToolNames...)
+	}
+	return next
+}
+
+func (m *Manager) resetStatesLocked() {
+	m.states = map[string]ServerState{}
+	for _, name := range sortedServerNames(m.cfg.Servers) {
+		srv := m.cfg.Servers[name]
+		srv.Name = name
+		if srv.Disabled {
+			m.states[name] = serverStateFromConfig(srv, StatusDisabled)
+			continue
+		}
+		m.states[name] = serverStateFromConfig(srv, StatusPending)
+	}
+}
+
+func serverStateFromConfig(srv ServerConfig, status string) ServerState {
+	st := ServerState{
+		Name:    strings.TrimSpace(srv.Name),
+		Status:  status,
+		Command: displayCommand(srv),
+		URL:     displayURL(srv.URL),
+		Headers: displayHeaders(srv.Headers),
+		Auth:    displayAuth(srv),
+	}
+	if status == StatusDisabled || srv.Disabled {
+		st.Disabled = true
+	}
+	return st
+}
+
+func displayURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	return safeHTTPURL(u)
+}
+
+func displayCommand(srv ServerConfig) string {
+	command := strings.TrimSpace(srv.Command)
+	if command == "" {
+		return ""
+	}
+	parts := []string{shellQuoteDisplay(command)}
+	redactNext := false
+	for _, arg := range srv.Args {
+		display, next := redactCommandArgForDisplay(arg, redactNext)
+		redactNext = next
+		parts = append(parts, shellQuoteDisplay(display))
+	}
+	return strings.Join(parts, " ")
+}
+
+func redactCommandArgForDisplay(arg string, redact bool) (string, bool) {
+	arg = strings.TrimSpace(arg)
+	if redact {
+		return "*****", false
+	}
+	if arg == "" {
+		return arg, false
+	}
+	if key, value, ok := strings.Cut(arg, "="); ok {
+		if isSecretCommandArgKey(key) {
+			return key + "=*****", false
+		}
+		if looksSecretCommandArgValue(value) {
+			return key + "=*****", false
+		}
+		return arg, false
+	}
+	if key, value, ok := strings.Cut(arg, ":"); ok {
+		if isSecretCommandArgKey(key) || looksSecretCommandArgValue(value) {
+			return key + ":*****", false
+		}
+		return arg, false
+	}
+	if isSecretCommandArgKey(arg) {
+		return arg, true
+	}
+	if looksSecretCommandArgValue(arg) {
+		return "*****", false
+	}
+	return arg, false
+}
+
+func isSecretCommandArgKey(key string) bool {
+	key = strings.TrimLeft(strings.ToLower(strings.TrimSpace(key)), "-/")
+	key = strings.ReplaceAll(key, "_", "-")
+	for _, token := range []string{"api-key", "apikey", "auth", "authorization", "bearer", "client-secret", "credential", "password", "secret", "token"} {
+		if key == token || strings.HasSuffix(key, "-"+token) || strings.Contains(key, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksSecretCommandArgValue(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	if headerName, _, ok := strings.Cut(value, ":"); ok && isSecretCommandArgKey(headerName) {
+		return true
+	}
+	value = strings.ToLower(value)
+	return strings.HasPrefix(value, "bearer ") ||
+		strings.HasPrefix(value, "sk-") ||
+		strings.HasPrefix(value, "sk_") ||
+		strings.HasPrefix(value, "xoxb-") ||
+		strings.HasPrefix(value, "ghp_") ||
+		strings.HasPrefix(value, "github_pat_")
+}
+
+func shellQuoteDisplay(value string) string {
+	if value == "" {
+		return `""`
+	}
+	if !strings.ContainsAny(value, " \t\n\"'\\$`") {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func displayHeaders(headers map[string]string) []string {
+	if len(headers) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(headers))
+	for key := range headers {
+		key = strings.TrimSpace(key)
+		if key != "" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, key+"=*****")
+	}
+	return out
+}
+
+func displayAuth(srv ServerConfig) string {
+	if hasBearerAuthHeader(srv.Headers) {
+		return "Bearer token"
+	}
+	return "Unsupported"
+}
+
+func hasBearerAuthHeader(headers map[string]string) bool {
+	for key, value := range headers {
+		if strings.EqualFold(strings.TrimSpace(key), "Authorization") && strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "bearer ") {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) setStateAndEmit(st ServerState, emit func(StartupEvent)) {

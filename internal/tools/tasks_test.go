@@ -13,8 +13,8 @@ func TestShellTaskRegistryPrunesExpiredCompletedTasks(t *testing.T) {
 	oldFinished := now.Add(-shellTaskCompletedTTL - time.Second)
 	recentFinished := now.Add(-time.Second)
 
-	r.tasks["old"] = &shellTask{ID: "old", StartedAt: oldFinished.Add(-time.Second), finishedAt: &oldFinished, status: "exited", stdout: "old"}
-	r.tasks["recent"] = &shellTask{ID: "recent", StartedAt: recentFinished.Add(-time.Second), finishedAt: &recentFinished, status: "exited", stdout: "recent"}
+	r.tasks["old"] = completedShellTaskWithStdout("old", oldFinished.Add(-time.Second), oldFinished, "old")
+	r.tasks["recent"] = completedShellTaskWithStdout("recent", recentFinished.Add(-time.Second), recentFinished, "recent")
 	r.tasks["running"] = &shellTask{ID: "running", StartedAt: now, status: "running"}
 
 	if _, ok := r.get("recent"); !ok {
@@ -148,7 +148,7 @@ func TestShellTaskRegistryCompletionSchedulesExpiryCleanup(t *testing.T) {
 	task.mu.Lock()
 	task.finishedAt = &finished
 	task.status = "exited"
-	task.stdout = "retained until ttl"
+	_, _ = task.stdout.WriteString("retained until ttl")
 	task.mu.Unlock()
 
 	r.completed(task.ID)
@@ -183,4 +183,10 @@ func completedShellTaskCount(r *shellTaskRegistry) int {
 		}
 	}
 	return count
+}
+
+func completedShellTaskWithStdout(id string, started, finished time.Time, stdout string) *shellTask {
+	task := &shellTask{ID: id, StartedAt: started, finishedAt: &finished, status: "exited"}
+	_, _ = task.stdout.WriteString(stdout)
+	return task
 }

@@ -131,3 +131,28 @@ func TestImmutableSystemBlocksIncludeFocusOutputStyleOnlyInFocusView(t *testing.
 		}
 	}
 }
+
+func TestRenderToolSpecsMarksDynamicReadOnlyTools(t *testing.T) {
+	block := renderToolSpecsBlock([]core.ToolSpec{
+		{
+			Name:          "shell_run",
+			Description:   "Run a shell command",
+			ReadOnlyCheck: func(map[string]any) bool { return true },
+		},
+		{
+			Name:     "write",
+			ReadOnly: false,
+		},
+	})
+
+	for _, want := range []string{
+		"shell_run [conditional read-only]",
+		"some calls are allowed in read-only modes",
+		"mutating inputs are blocked",
+		"write [write]",
+	} {
+		if !strings.Contains(block, want) {
+			t.Fatalf("tool specs block missing %q:\n%s", want, block)
+		}
+	}
+}

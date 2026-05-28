@@ -99,6 +99,7 @@ func TestApprovalRequiredAndDenied(t *testing.T) {
 		prov,
 		store,
 		NewToolRegistry([]Tool{writeLikeTool{}}),
+		WithToolPolicy(editApprovalPolicy()),
 		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
 			asked++
 			return ApprovalDeny
@@ -234,6 +235,7 @@ func TestApprovalCancelDoesNotPersistDeniedMarker(t *testing.T) {
 		prov,
 		store,
 		NewToolRegistry([]Tool{writeLikeTool{}}),
+		WithToolPolicy(editApprovalPolicy()),
 		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
 			asked++
 			return ApprovalCancel
@@ -291,6 +293,7 @@ func TestApprovalDeniedMarkerIsVisibleToNextTurn(t *testing.T) {
 		prov,
 		store,
 		NewToolRegistry([]Tool{writeLikeTool{}}),
+		WithToolPolicy(editApprovalPolicy()),
 		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
 			return ApprovalDeny
 		}),
@@ -329,6 +332,15 @@ func (p *multiToolApprovalProvider) StreamResponse(_ context.Context, _ []Messag
 	))
 }
 
+type multiToolSubagentApprovalProvider struct{}
+
+func (p *multiToolSubagentApprovalProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	return eventStream(toolUseEvent(
+		toolCall("tc-subagent-1", "spawn_subagent", `{"role":"explore","task":"read files"}`),
+		toolCall("tc-count-1", "counting", `{}`),
+	))
+}
+
 type countingTool struct {
 	calls int
 }
@@ -346,6 +358,7 @@ func TestApprovalDeniedSkipsRemainingToolCalls(t *testing.T) {
 		&multiToolApprovalProvider{},
 		store,
 		NewToolRegistry([]Tool{writeLikeTool{}, counting}),
+		WithToolPolicy(editApprovalPolicy()),
 		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
 			return ApprovalDeny
 		}),
@@ -361,6 +374,31 @@ func TestApprovalDeniedSkipsRemainingToolCalls(t *testing.T) {
 		t.Fatalf("expected later tool calls to be skipped after approval deny, got %d", counting.calls)
 	}
 	assertApprovalDeniedMarker(t, store, "s-approval-deny-multi", "write")
+}
+
+func TestSpawnSubagentApprovalDeniedSkipsRemainingToolCalls(t *testing.T) {
+	store := NewInMemoryStore()
+	counting := &countingTool{}
+	a := NewAgentWithRegistry(
+		&multiToolSubagentApprovalProvider{},
+		store,
+		NewToolRegistry([]Tool{namedNoopTool("spawn_subagent"), counting}),
+		WithToolPolicy(RulePolicy{Default: PermissionAsk}),
+		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
+			return ApprovalDeny
+		}),
+	)
+
+	events, err := a.RunStream(context.Background(), "s-subagent-approval-deny-multi", "go")
+	if err != nil {
+		t.Fatalf("run stream failed: %v", err)
+	}
+	for range events {
+	}
+	if counting.calls != 0 {
+		t.Fatalf("expected later tool calls to be skipped after spawn_subagent approval deny, got %d", counting.calls)
+	}
+	assertApprovalDeniedMarker(t, store, "s-subagent-approval-deny-multi", "spawn_subagent")
 }
 
 func assertApprovalDeniedMarker(t *testing.T, store interface {
@@ -422,6 +460,7 @@ func TestApprovalAllowOnceDoesNotCacheBySessionKey(t *testing.T) {
 		prov,
 		store,
 		NewToolRegistry([]Tool{writeLikeTool{}}),
+		WithToolPolicy(editApprovalPolicy()),
 		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
 			asked++
 			return ApprovalAllow
@@ -444,6 +483,7 @@ func TestApprovalAllowForSessionCachesBySessionKey(t *testing.T) {
 		prov,
 		store,
 		NewToolRegistry([]Tool{writeLikeTool{}}),
+		WithToolPolicy(editApprovalPolicy()),
 		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
 			asked++
 			return ApprovalAllowForSession
@@ -555,6 +595,7 @@ func TestApprovalAllowForSessionCachesEditAndWriteByFile(t *testing.T) {
 		prov,
 		store,
 		NewToolRegistry([]Tool{namedNoopTool("edit"), namedNoopTool("write")}),
+		WithToolPolicy(editApprovalPolicy()),
 		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
 			asked++
 			if got, want := req.Keys, []string{"file:a.txt"}; !reflect.DeepEqual(got, want) {
@@ -599,6 +640,7 @@ func TestApprovalAllowForSessionDoesNotCacheFailedFileMutation(t *testing.T) {
 		prov,
 		store,
 		NewToolRegistry([]Tool{failingNamedTool("apply_patch"), namedNoopTool("write")}),
+		WithToolPolicy(editApprovalPolicy()),
 		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
 			asked++
 			return ApprovalAllowForSession
@@ -637,6 +679,7 @@ func TestApprovalAllowForSessionDoesNotCacheUnclassifiedFailedFileMutation(t *te
 		prov,
 		store,
 		NewToolRegistry([]Tool{notFoundEditTool{}, namedNoopTool("write")}),
+		WithToolPolicy(editApprovalPolicy()),
 		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
 			asked++
 			return ApprovalAllowForSession
@@ -671,6 +714,7 @@ func TestApprovalAllowForSessionDoesNotCacheRecoveredReadonlyFallback(t *testing
 		prov,
 		store,
 		NewToolRegistry([]Tool{failWriteTool{}, readOnlyViewTool{}}),
+		WithToolPolicy(editApprovalPolicy()),
 		WithRecoveryPolicy(RecoveryPolicy{
 			Enabled: true,
 			Rules: map[FailureClass]RecoveryRule{
@@ -717,6 +761,7 @@ func TestApprovalAllowForSessionCachesApplyPatchByIndividualFiles(t *testing.T) 
 		prov,
 		store,
 		NewToolRegistry([]Tool{namedNoopTool("apply_patch")}),
+		WithToolPolicy(editApprovalPolicy()),
 		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
 			asked++
 			switch req.ToolCall.ID {

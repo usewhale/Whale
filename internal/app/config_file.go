@@ -31,6 +31,7 @@ type FileConfig struct {
 	UI          FileUIConfig                  `toml:"ui,omitempty"`
 	API         FileAPIConfig                 `toml:"api,omitempty"`
 	Retry       FileRetryConfig               `toml:"retry,omitempty"`
+	Tasks       FileTasksConfig               `toml:"tasks,omitempty"`
 	Budget      FileBudgetConfig              `toml:"budget,omitempty"`
 	MCP         FileMCPConfig                 `toml:"mcp,omitempty"`
 	Context     FileContextConfig             `toml:"context,omitempty"`
@@ -42,6 +43,7 @@ type FileConfig struct {
 
 type FileUIConfig struct {
 	ViewMode                string `toml:"view_mode,omitempty"`
+	ShowReasoning           *bool  `toml:"show_reasoning,omitempty"`
 	CheckForUpdateOnStartup *bool  `toml:"check_for_update_on_startup,omitempty"`
 }
 
@@ -66,6 +68,10 @@ type FileRetryConfig struct {
 	MaxAttempts       *int   `toml:"max_attempts,omitempty"`
 	StreamMaxAttempts *int   `toml:"stream_max_attempts,omitempty"`
 	MaxDelay          string `toml:"max_delay,omitempty"`
+}
+
+type FileTasksConfig struct {
+	MaxParallelSubagents *int `toml:"max_parallel_subagents,omitempty"`
 }
 
 type FileBudgetConfig struct {
@@ -237,6 +243,9 @@ func ApplyFileConfig(cfg *Config, file FileConfig) error {
 		}
 		cfg.ViewMode = mode
 	}
+	if file.UI.ShowReasoning != nil {
+		cfg.ShowReasoning = *file.UI.ShowReasoning
+	}
 	if file.UI.CheckForUpdateOnStartup != nil {
 		cfg.CheckForUpdateOnStartup = *file.UI.CheckForUpdateOnStartup
 	}
@@ -274,6 +283,12 @@ func ApplyFileConfig(cfg *Config, file FileConfig) error {
 			return fmt.Errorf("invalid retry.max_delay: must be greater than 0")
 		}
 		cfg.RetryMaxDelay = d
+	}
+	if file.Tasks.MaxParallelSubagents != nil {
+		if *file.Tasks.MaxParallelSubagents <= 0 {
+			return fmt.Errorf("invalid tasks.max_parallel_subagents: must be greater than 0")
+		}
+		cfg.MaxParallelSubagents = *file.Tasks.MaxParallelSubagents
 	}
 	if file.Context.AutoCompact != nil {
 		cfg.AutoCompact = *file.Context.AutoCompact
@@ -367,6 +382,9 @@ func overlayExplicitConfig(dst *Config, src Config) {
 	if strings.TrimSpace(src.ViewMode) != "" && src.ViewMode != def.ViewMode {
 		dst.ViewMode = src.ViewMode
 	}
+	if src.ShowReasoning != def.ShowReasoning {
+		dst.ShowReasoning = src.ShowReasoning
+	}
 	if src.RetryMaxAttemptsExplicit || (src.RetryMaxAttempts != 0 && src.RetryMaxAttempts != def.RetryMaxAttempts) {
 		dst.RetryMaxAttempts = src.RetryMaxAttempts
 		dst.RetryMaxAttemptsExplicit = src.RetryMaxAttemptsExplicit
@@ -376,6 +394,9 @@ func overlayExplicitConfig(dst *Config, src Config) {
 	}
 	if src.RetryMaxDelay != 0 && src.RetryMaxDelay != def.RetryMaxDelay {
 		dst.RetryMaxDelay = src.RetryMaxDelay
+	}
+	if src.MaxParallelSubagents != 0 && src.MaxParallelSubagents != def.MaxParallelSubagents {
+		dst.MaxParallelSubagents = src.MaxParallelSubagents
 	}
 	if strings.TrimSpace(src.MCPConfigPath) != "" {
 		dst.MCPConfigPath = src.MCPConfigPath

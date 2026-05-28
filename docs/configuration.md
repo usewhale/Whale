@@ -85,7 +85,7 @@ auto_accept = false
 "*.env.example" = "allow"
 
 [permissions.edit]
-"*" = "ask"
+"*" = "allow"
 
 [permissions.shell]
 "*" = "allow"
@@ -136,6 +136,9 @@ max_attempts = 4
 stream_max_attempts = 6
 max_delay = "60s"
 
+[tasks]
+max_parallel_subagents = 4
+
 [budget]
 session_limit_usd = 1.0
 
@@ -144,6 +147,7 @@ config_path = "~/.whale/mcp.json"
 
 [ui]
 view_mode = "default" # "default" or "focus"
+show_reasoning = false
 
 [context]
 auto_compact = true
@@ -195,9 +199,18 @@ If you started with Whale v0.1.9 or newer, you do not need this command.
   streaming starts; set it to `0` to send one request and disable request
   retries. `stream_max_attempts` counts full stream attempts when the provider
   disconnects after streaming has started.
+- `[tasks].max_parallel_subagents` limits how many eligible `spawn_subagent`
+  calls can run at once in a parallel batch. If unset, Whale uses an internal
+  CPU-based default, and each batch is still capped by the number of calls in
+  that batch. Progress events from different tool call IDs may interleave;
+  final tool results and post-tool hooks are processed in original tool-call
+  order.
 - `[ui].view_mode = "focus"` starts the TUI in focus view. `/focus` toggles this
   global preference and hides thinking/tool detail while keeping prompts, tool
   summaries, and final responses visible.
+- `[ui].show_reasoning = true` shows complete thinking blocks in the normal TUI
+  view. The default is `false`, which keeps the shorter reasoning preview.
+  Focus view still hides thinking.
 - Skill enable/disable choices are stored in project local config under
   `[skills].enabled` and `[skills].disabled`. A project local enabled entry
   overrides a shared project disabled entry.
@@ -229,12 +242,11 @@ For common file commands such as `cat`, `ls`, `cp`, `mv`, `rm`, `stat`, and
 point outside the workspace or temp directories. Shell redirections are not
 treated as external directory operands.
 
-File edits (`edit`, `write`, `apply_patch`) ask for approval by default; set
-`[permissions.edit]` to `"allow"` to apply edits without prompting, or to
-`"deny"` to block them. Reading files is allowed by default except for `.env`
-files, which ask. Custom or plugin tools that advertise a `mutates_state`
-capability are evaluated under `[permissions.mutating_tool]` and ask by
-default.
+File edits (`edit`, `write`, `apply_patch`) inside the workspace are allowed by
+default; set `[permissions.edit]` to `"ask"` to review edits before they apply,
+or to `"deny"` to block them. Reading files is allowed by default except for
+`.env` files, which ask. Custom or plugin tools that advertise a `mutates_state`
+capability are evaluated under `[permissions.mutating_tool]` and ask by default.
 
 MCP rules match the registered MCP tool name, such as
 `mcp__server__tool`. Whale does not inspect MCP tool arguments for filesystem

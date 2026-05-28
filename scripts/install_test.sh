@@ -85,6 +85,13 @@ printf '%s\n' 'v9.9.9'
 EOF
 chmod 0755 "$TMPDIR/$ASSET_NAME"
 
+cat >"$INSTALL_DIR/whale" <<'EOF'
+#!/bin/sh
+printf '%s\n' 'v0.0.0'
+EOF
+chmod 0755 "$INSTALL_DIR/whale"
+ln "$INSTALL_DIR/whale" "$INSTALL_DIR/whale.oldlink"
+
 if command -v sha256sum >/dev/null 2>&1; then
   ASSET_SHA="$(sha256sum "$TMPDIR/$ASSET_NAME" | awk '{print $1}')"
 else
@@ -107,6 +114,11 @@ printf '%s\n' "$OUTPUT" | grep -F "A different install may shadow this one in PA
 
 if [ "$("$INSTALL_DIR/whale" --version)" != "v9.9.9" ]; then
   printf '%s\n' "installed whale did not run" >&2
+  exit 1
+fi
+
+if [ "$("$INSTALL_DIR/whale.oldlink" --version)" != "v0.0.0" ]; then
+  printf '%s\n' "install overwrote the old whale inode instead of replacing it" >&2
   exit 1
 fi
 

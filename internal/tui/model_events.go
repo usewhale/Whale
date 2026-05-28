@@ -70,6 +70,7 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 	case service.EventReasoningDelta:
 		m.clearProviderRetryStatus()
 		m.append("think", ev.Text)
+		m.recordModelOutputDelta(ev.Text)
 		m.addLog(logEntry{Kind: "reasoning_delta", Source: "reasoning", Summary: ev.Text, Raw: ev.Text})
 		if strings.TrimSpace(ev.Text) != "" {
 			m.sawReasoningThisTurn = true
@@ -77,6 +78,7 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 	case service.EventPlanDelta:
 		m.clearProviderRetryStatus()
 		m.appendPlanDelta(ev.Text)
+		m.recordModelOutputDelta(ev.Text)
 		m.addLog(logEntry{Kind: "plan_delta", Source: "plan", Summary: ev.Text, Raw: ev.Text})
 		if strings.TrimSpace(ev.Text) != "" {
 			m.sawPlanThisTurn = true
@@ -114,6 +116,8 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		if !isEnvironmentInventoryBlock(ev.Text) {
 			if ev.LocalResult != nil {
 				m.appendLocalResult(ev.LocalResult)
+			} else if notice := permissionNoticeFromInfo(ev.Text); notice != nil {
+				m.appendSystemNotice(notice)
 			} else if isSessionNotice(ev.Text) {
 				m.appendTranscript("notice", tuirender.KindNotice, ev.Text)
 			} else {
@@ -385,9 +389,8 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		m.viewMode = mode
 		if strings.TrimSpace(ev.Text) != "" {
 			m.setEphemeralInfo(ev.Text)
-		} else {
-			m.refreshViewportContentFollow(true)
 		}
+		eventCmd = m.redrawTranscriptForFocusToggleCmd()
 		m.status = "ready"
 	case service.EventWorktreeExitPrompt:
 		m.clearProviderRetryStatus()
@@ -624,6 +627,7 @@ func (m *model) resetTurnVisibility() {
 	m.sawReasoningThisTurn = false
 	m.sawTerminalToolOutcomeThisTurn = false
 	m.visibleAssistantThisTurn = ""
+	m.resetBusyTokenEstimate()
 	m.turnTranscriptStart = len(m.transcript)
 }
 

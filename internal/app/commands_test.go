@@ -550,6 +550,9 @@ func TestHandleLocalCommandStats(t *testing.T) {
 	for _, want := range []string{
 		"- sessions: 2",
 		"- reasoning replay: 350 tokens · 11.7% of input",
+		"By window",
+		"all-time: 2 turns",
+		"cache saved",
 		"deepseek-v4-flash: 2 turns",
 		"350 reasoning replay",
 	} {
@@ -584,6 +587,8 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		"s1: 1K sent · 3.2K raw · 2.2K saved · 1 compacted",
 		"Top reasoning replay sessions",
 		"s1: 250 tokens",
+		"Insights",
+		"reasoning replay · s1",
 		"Top work sessions",
 		"s1: $0.0001",
 		"please inspect the workspace",
@@ -610,6 +615,7 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		section string
 		field   string
 	}{
+		{"Insights", "reasoning replay · s1"},
 		{"Profile", "Reasoning replay"},
 		{"Profile", "Tool replay"},
 		{"Top tool replay sessions", "s1"},
@@ -752,6 +758,9 @@ func TestProfileStatsIncludesSubagentUsage(t *testing.T) {
 	writeUsageRecord(t, usagePath, telemetry.UsageRecord{
 		Session:                metaChildID,
 		Model:                  "deepseek-v4-flash",
+		Kind:                   "subagent",
+		ParentSessionID:        parentID,
+		SubagentRole:           "reviewer",
 		PromptTokens:           1000,
 		CompletionTokens:       100,
 		PromptCacheHit:         900,
@@ -798,6 +807,61 @@ func TestProfileStatsIncludesSubagentUsage(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected profile output to contain %q, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestUsageStatsCountsLegacySubagentSessionIDs(t *testing.T) {
+	dir := t.TempDir()
+	usagePath := filepath.Join(dir, "usage.jsonl")
+	now := time.Date(2026, 5, 12, 10, 0, 0, 0, time.Local)
+	writeUsageRecord(t, usagePath, telemetry.UsageRecord{
+		TS:               now.UnixMilli(),
+		Session:          "parent",
+		Model:            "deepseek-v4-flash",
+		PromptTokens:     1000,
+		CompletionTokens: 100,
+		PromptCacheHit:   800,
+		PromptCacheMiss:  200,
+	})
+	writeUsageRecord(t, usagePath, telemetry.UsageRecord{
+		TS:               now.UnixMilli(),
+		Session:          "parent--subagent-worker",
+		Model:            "deepseek-v4-flash",
+		PromptTokens:     2000,
+		CompletionTokens: 200,
+		PromptCacheHit:   1500,
+		PromptCacheMiss:  500,
+	})
+	writeUsageRecord(t, usagePath, telemetry.UsageRecord{
+		TS:               now.UnixMilli(),
+		Session:          "subagent-researcher",
+		Model:            "deepseek-v4-flash",
+		PromptTokens:     3000,
+		CompletionTokens: 300,
+		PromptCacheHit:   2500,
+		PromptCacheMiss:  500,
+	})
+	writeUsageRecord(t, usagePath, telemetry.UsageRecord{
+		TS:               now.UnixMilli(),
+		Session:          "metadata-child",
+		Model:            "deepseek-v4-flash",
+		Kind:             "subagent",
+		PromptTokens:     4000,
+		CompletionTokens: 400,
+		PromptCacheHit:   3500,
+		PromptCacheMiss:  500,
+	})
+
+	stats := readUsageStats(usagePath, now)
+	if stats.SubagentTurns != 3 || stats.SubagentPromptTokens != 9000 || stats.SubagentOutputTokens != 900 {
+		t.Fatalf("unexpected subagent usage totals: %+v", stats)
+	}
+	for _, bucket := range stats.Buckets {
+		if bucket.Label == "24h" || bucket.Label == "all-time" {
+			if bucket.SubagentTurns != 3 || bucket.SubagentTokens != 9900 {
+				t.Fatalf("unexpected subagent bucket %s: %+v", bucket.Label, bucket)
+			}
 		}
 	}
 }
@@ -1109,12 +1173,21 @@ func TestBuildStatusIncludesContextAndBudget(t *testing.T) {
 		sessionID:     "sess-1",
 		msgStore:      msgStore,
 		contextWindow: 1000,
-		cfg:           DefaultConfig(),
+		cfg:           Config{DataDir: dir},
 	}
+	writeUsageRecord(t, filepath.Join(dir, "usage.jsonl"), telemetry.UsageRecord{
+		Session:          "sess-1",
+		Model:            "deepseek-v4-flash",
+		PromptTokens:     1000,
+		CompletionTokens: 100,
+		PromptCacheHit:   800,
+		PromptCacheMiss:  200,
+	})
 
 	out := app.buildStatus()
 	for _, want := range []string{
 		"- context window:",
+		"- usage: 1 turns",
 		"- budget limit: disabled",
 	} {
 		if !strings.Contains(out, want) {
@@ -1146,14 +1219,22 @@ func TestBuildStatusLocalResultIncludesStructuredFields(t *testing.T) {
 		reasoningEffort:  "max",
 		thinkingEnabled:  false,
 		budgetWarningUSD: 0,
-		cfg:              DefaultConfig(),
+		cfg:              Config{DataDir: dir},
 	}
+	writeUsageRecord(t, filepath.Join(dir, "usage.jsonl"), telemetry.UsageRecord{
+		Session:          "sess-1",
+		Model:            "deepseek-v4-flash",
+		PromptTokens:     1000,
+		CompletionTokens: 100,
+		PromptCacheHit:   800,
+		PromptCacheMiss:  200,
+	})
 
 	result := app.buildStatusLocalResult()
 	if result == nil || result.Kind != "status" || result.Title != "Status" {
 		t.Fatalf("unexpected status local result: %+v", result)
 	}
-	for _, want := range []string{"Session", "Mode", "Permissions", "Model", "Effort", "Thinking", "Context window", "Budget limit"} {
+	for _, want := range []string{"Session", "Mode", "Permissions", "Model", "Effort", "Thinking", "Context window", "Usage", "Budget limit"} {
 		if !localResultHasField(result, want) {
 			t.Fatalf("expected local result field %q, got %+v", want, result.Fields)
 		}
@@ -1204,7 +1285,7 @@ func TestBuildMCPLocalResultIncludesStructuredFields(t *testing.T) {
 	app := &App{mcpManager: mgr}
 
 	result := app.buildMCPLocalResult()
-	if result == nil || result.Kind != "mcp" || result.Title != "MCP" {
+	if result == nil || result.Kind != "mcp" || result.Title != "MCP Tools" {
 		t.Fatalf("unexpected mcp local result: %+v", result)
 	}
 	if result.PlainText == "" || !strings.Contains(result.PlainText, "disabled-fs") {
@@ -1218,10 +1299,44 @@ func TestBuildMCPLocalResultIncludesStructuredFields(t *testing.T) {
 	if len(result.Sections) != 1 || result.Sections[0].Title != "disabled-fs" {
 		t.Fatalf("expected disabled-fs section, got %+v", result.Sections)
 	}
-	for _, want := range []string{"Status", "Tools"} {
+	for _, want := range []string{"Status", "Auth", "Tools"} {
 		if !localResultSectionHasField(result.Sections[0], want) {
 			t.Fatalf("expected mcp section field %q, got %+v", want, result.Sections[0].Fields)
 		}
+	}
+}
+
+func TestBuildMCPLocalResultIncludesCommandHeadersAndToolNames(t *testing.T) {
+	mgr := whalemcp.NewManager(whalemcp.Config{
+		Path: "/tmp/mcp.json",
+		Servers: map[string]whalemcp.ServerConfig{
+			"fs": {
+				Command: "npx",
+				Args:    []string{"-y", "@modelcontextprotocol/server-filesystem", "/tmp"},
+			},
+			"stitch": {
+				URL: "https://stitch.googleapis.com/mcp",
+				Headers: map[string]string{
+					"Authorization":  "Bearer ${STITCH_TOKEN}",
+					"X-Goog-Api-Key": "${STITCH_KEY}",
+				},
+			},
+		},
+	})
+	app := &App{mcpManager: mgr}
+
+	result := app.buildMCPLocalResult()
+	if got := localResultSectionFieldValue(result, "fs", "Command"); got != "npx -y @modelcontextprotocol/server-filesystem /tmp" {
+		t.Fatalf("unexpected fs command: %q", got)
+	}
+	if got := localResultSectionFieldValue(result, "fs", "Tools"); got != "(none)" {
+		t.Fatalf("unexpected fs tools before connection: %q", got)
+	}
+	if got := localResultSectionFieldValue(result, "stitch", "Auth"); got != "Bearer token" {
+		t.Fatalf("unexpected stitch auth: %q", got)
+	}
+	if got := localResultSectionFieldValue(result, "stitch", "HTTP headers"); got != "Authorization=*****, X-Goog-Api-Key=*****" {
+		t.Fatalf("unexpected stitch headers: %q", got)
 	}
 }
 
@@ -1407,15 +1522,24 @@ func localResultSectionHasField(section LocalResultSection, label string) bool {
 }
 
 func localResultHasSectionField(result *LocalResult, sectionTitle, fieldLabel string) bool {
+	return localResultSectionFieldValue(result, sectionTitle, fieldLabel) != ""
+}
+
+func localResultSectionFieldValue(result *LocalResult, sectionTitle, fieldLabel string) string {
 	if result == nil {
-		return false
+		return ""
 	}
 	for _, section := range result.Sections {
-		if section.Title == sectionTitle && localResultSectionHasField(section, fieldLabel) {
-			return true
+		if section.Title != sectionTitle {
+			continue
+		}
+		for _, field := range section.Fields {
+			if field.Label == fieldLabel {
+				return field.Value
+			}
 		}
 	}
-	return false
+	return ""
 }
 
 func TestStartupLinesIncludeEffectiveThinkingAndEffort(t *testing.T) {

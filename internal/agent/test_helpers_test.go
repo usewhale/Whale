@@ -2,6 +2,12 @@ package agent
 
 import "context"
 
+func editApprovalPolicy() ToolPolicy {
+	return DefaultToolPolicy{Rules: []PermissionRule{
+		{Permission: "edit", Pattern: "*", Action: PermissionAsk},
+	}}
+}
+
 func eventStream(events ...ProviderEvent) <-chan ProviderEvent {
 	out := make(chan ProviderEvent, len(events))
 	for _, ev := range events {

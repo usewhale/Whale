@@ -230,6 +230,12 @@ func (s *Service) Model() string           { return s.app.Model() }
 func (s *Service) ReasoningEffort() string { return s.app.ReasoningEffort() }
 func (s *Service) ThinkingEnabled() bool   { return s.app.ThinkingEnabled() }
 func (s *Service) ViewMode() string        { return s.app.ViewMode() }
+func (s *Service) ShowReasoning() bool {
+	if s == nil || s.app == nil {
+		return false
+	}
+	return s.app.ShowReasoning()
+}
 func (s *Service) SetViewMode(mode string) error {
 	if s == nil || s.app == nil {
 		return nil

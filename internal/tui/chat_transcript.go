@@ -17,6 +17,7 @@ func (m *model) resetTranscript() {
 	m.nativeScrollbackPrinted = 0
 	m.turnTranscriptStart = len(m.transcript)
 	m.visibleAssistantThisTurn = ""
+	m.resetBusyTokenEstimate()
 	m.viewportLayoutReady = false
 	m.viewportFrozen = false
 	m.frozenChatMessages = nil
@@ -69,6 +70,8 @@ func (m *model) appendTranscriptMessages(messages []tuirender.UIMessage) {
 		if strings.TrimSpace(msg.Text) == "" {
 			continue
 		}
+		msg.Streaming = false
+		msg.FullReasoning = false
 		m.transcript = append(m.transcript, msg)
 	}
 }

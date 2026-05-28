@@ -124,7 +124,7 @@ func TestReadOnlyTurnPolicyDeniesMutatingToolsWithoutApproval(t *testing.T) {
 	}
 }
 
-func TestReadOnlyTurnPolicyAllowsReadOnlyShellAndScopedPRShell(t *testing.T) {
+func TestReadOnlyTurnPolicyAllowsOnlyClassifiedReadOnlyShell(t *testing.T) {
 	p := ReadOnlyTurnPolicy{Base: ScopedAllowPolicy{
 		Base:               DefaultToolPolicy{},
 		ShellAllowPrefixes: []string{"gh pr view", "gh pr diff"},
@@ -133,7 +133,7 @@ func TestReadOnlyTurnPolicyAllowsReadOnlyShellAndScopedPRShell(t *testing.T) {
 
 	for _, command := range []string{
 		"git status --short",
-		"gh pr view 123 --json title,body",
+		"git log --oneline | grep feature | sort -u",
 	} {
 		decision := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`})
 		if !decision.Allow || decision.RequiresApproval {
@@ -141,9 +141,14 @@ func TestReadOnlyTurnPolicyAllowsReadOnlyShellAndScopedPRShell(t *testing.T) {
 		}
 	}
 
-	decision := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"make test"}`})
-	if decision.Allow || decision.RequiresApproval || decision.Code != "read_only_turn_denied" {
-		t.Fatalf("expected read-only turn to deny mutating shell without approval: %+v", decision)
+	for _, command := range []string{
+		"gh pr view 123 --json title,body",
+		"make test",
+	} {
+		decision := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`})
+		if decision.Allow || decision.RequiresApproval || decision.Code != "read_only_turn_denied" {
+			t.Fatalf("expected read-only turn to deny %q without approval: %+v", command, decision)
+		}
 	}
 }
 

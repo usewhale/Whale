@@ -66,6 +66,7 @@ func (a *App) buildStatus() string {
 	}
 	parts = append(parts, a.formatCurrentWorktreeStatusLines()...)
 	parts = append(parts, formatContextWindowStatus(a))
+	parts = append(parts, "- usage: "+a.sessionUsageStatusValue())
 	parts = append(parts, a.formatBudgetStatusLine())
 	return strings.Join(parts, "\n")
 }
@@ -91,6 +92,7 @@ func (a *App) buildStatusLocalResult() *LocalResult {
 	}
 	fields = append(fields,
 		LocalResultField{Label: "Context window", Value: contextWindowStatusValue(a)},
+		LocalResultField{Label: "Usage", Value: a.sessionUsageStatusValue()},
 		LocalResultField{Label: "Budget limit", Value: budgetStatusValue(a)},
 	)
 	return &LocalResult{
@@ -135,11 +137,22 @@ func budgetStatusValue(a *App) string {
 	return fmt.Sprintf("$%.4f", a.budgetWarningUSD)
 }
 
+func (a *App) sessionUsageStatusValue() string {
+	if a == nil {
+		return "none"
+	}
+	dataDir := strings.TrimSpace(a.cfg.DataDir)
+	if dataDir == "" {
+		return "none"
+	}
+	return formatSessionUsageSummary(readSessionUsageSummary(filepath.Join(dataDir, "usage.jsonl"), a.sessionID))
+}
+
 func (a *App) buildMCPStatus() string {
 	if a == nil || a.mcpManager == nil {
-		return "MCP\n\nconfig: unavailable\nservers: none"
+		return "MCP Tools\n\nconfig: unavailable\nservers: none"
 	}
-	lines := []string{"MCP", "", fmt.Sprintf("config: %s", a.mcpManager.ConfigPath())}
+	lines := []string{"MCP Tools", "", fmt.Sprintf("config: %s", a.mcpManager.ConfigPath())}
 	states := a.mcpManager.States()
 	if len(states) == 0 {
 		lines = append(lines, "servers: none")
@@ -147,20 +160,19 @@ func (a *App) buildMCPStatus() string {
 	}
 	lines = append(lines, fmt.Sprintf("servers: %d", len(states)))
 	for _, st := range states {
-		status := st.Status
-		if status == "" {
-			status = "disabled"
-			if st.Connected {
-				status = "connected"
-			} else if st.Error != "" {
-				status = "failed"
-			}
+		lines = append(lines, "", fmt.Sprintf("- %s", st.Name))
+		lines = append(lines, "  status: "+mcpStatusValue(st))
+		lines = append(lines, "  auth: "+mcpAuthValue(st))
+		if strings.TrimSpace(st.Command) != "" {
+			lines = append(lines, "  command: "+strings.TrimSpace(st.Command))
 		}
-		line := fmt.Sprintf("- %s: %s", st.Name, status)
-		if st.Tools > 0 {
-			line += fmt.Sprintf(" (%d tool(s))", st.Tools)
+		if strings.TrimSpace(st.URL) != "" {
+			lines = append(lines, "  url: "+strings.TrimSpace(st.URL))
 		}
-		lines = append(lines, line)
+		if len(st.Headers) > 0 {
+			lines = append(lines, "  http headers: "+strings.Join(st.Headers, ", "))
+		}
+		lines = append(lines, "  tools: "+mcpToolsValue(st))
 		if st.Error != "" {
 			lines = append(lines, "  error: "+st.Error)
 		}
@@ -186,8 +198,18 @@ func (a *App) buildMCPLocalResult() *LocalResult {
 			status := mcpStatusValue(st)
 			serverFields := []LocalResultField{
 				{Label: "Status", Value: status, Tone: mcpStatusTone(status)},
-				{Label: "Tools", Value: fmt.Sprintf("%d", st.Tools)},
+				{Label: "Auth", Value: mcpAuthValue(st)},
 			}
+			if strings.TrimSpace(st.Command) != "" {
+				serverFields = append(serverFields, LocalResultField{Label: "Command", Value: strings.TrimSpace(st.Command)})
+			}
+			if strings.TrimSpace(st.URL) != "" {
+				serverFields = append(serverFields, LocalResultField{Label: "URL", Value: strings.TrimSpace(st.URL)})
+			}
+			if len(st.Headers) > 0 {
+				serverFields = append(serverFields, LocalResultField{Label: "HTTP headers", Value: strings.Join(st.Headers, ", ")})
+			}
+			serverFields = append(serverFields, LocalResultField{Label: "Tools", Value: mcpToolsValue(st)})
 			if strings.TrimSpace(st.Error) != "" {
 				serverFields = append(serverFields, LocalResultField{Label: "Error", Value: st.Error, Tone: "error"})
 			}
@@ -199,7 +221,7 @@ func (a *App) buildMCPLocalResult() *LocalResult {
 	}
 	return &LocalResult{
 		Kind:      "mcp",
-		Title:     "MCP",
+		Title:     "MCP Tools",
 		Fields:    fields,
 		Sections:  sections,
 		PlainText: text,
@@ -243,11 +265,29 @@ func mcpStatusValue(st whalemcp.ServerState) string {
 	return whalemcp.StatusDisabled
 }
 
+func mcpAuthValue(st whalemcp.ServerState) string {
+	auth := strings.TrimSpace(st.Auth)
+	if auth == "" {
+		return "Unsupported"
+	}
+	return auth
+}
+
+func mcpToolsValue(st whalemcp.ServerState) string {
+	if len(st.ToolNames) > 0 {
+		return strings.Join(st.ToolNames, ", ")
+	}
+	if st.Tools > 0 {
+		return fmt.Sprintf("%d tool(s)", st.Tools)
+	}
+	return "(none)"
+}
+
 func mcpStatusTone(status string) string {
 	switch status {
 	case whalemcp.StatusConnected:
 		return "info"
-	case whalemcp.StatusStarting:
+	case whalemcp.StatusPending, whalemcp.StatusStarting:
 		return "warn"
 	case whalemcp.StatusFailed, whalemcp.StatusCancelled:
 		return "error"

@@ -1,11 +1,12 @@
 package tools
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/policy/shellrisk"
 	"github.com/usewhale/whale/internal/shell"
-	"github.com/usewhale/whale/internal/shellsafe"
 )
 
 func (b *Toolset) shellTools() []core.Tool {
@@ -19,8 +20,8 @@ func (b *Toolset) shellTools() []core.Tool {
 				"additionalProperties": false,
 				"properties": map[string]any{
 					"command":    map[string]any{"type": "string", "description": "Shell command to execute"},
-					"timeout_ms": map[string]any{"type": "integer", "minimum": 1, "maximum": maxBackgroundShellTimeoutMS, "description": "Command timeout in milliseconds"},
-					"background": map[string]any{"type": "boolean", "description": "When true, return immediately with task_id"},
+					"timeout_ms": map[string]any{"type": "integer", "minimum": 1, "maximum": maxBackgroundShellTimeoutMS, "description": shellRunTimeoutDescription()},
+					"background": map[string]any{"type": "boolean", "description": fmt.Sprintf("When true, return immediately with task_id. The task runtime defaults to %dms.", defaultBackgroundShellTimeoutMS)},
 					"cwd":        map[string]any{"type": "string", "description": "Optional working directory relative to the workspace root. Must stay inside the workspace. Use this for subdirectory commands instead of cd."},
 				},
 				"required": []string{"command"},
@@ -30,18 +31,32 @@ func (b *Toolset) shellTools() []core.Tool {
 		},
 		toolFn{
 			name:        "shell_wait",
-			description: "Wait for a background shell task by task_id and return status plus captured output when complete.",
+			description: "Wait for a background shell task by task_id. If it is still running, return partial output and any diagnosis; if complete, return the final output.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
 				"properties": map[string]any{
 					"task_id":    map[string]any{"type": "string"},
-					"timeout_ms": map[string]any{"type": "integer", "minimum": 1, "maximum": 120000},
+					"timeout_ms": map[string]any{"type": "integer", "minimum": 1, "maximum": maxShellWaitTimeoutMS, "description": shellWaitTimeoutDescription()},
 				},
 				"required": []string{"task_id"},
 			},
 			readOnly: true,
 			fn:       b.shellWait,
+		},
+		toolFn{
+			name:        "shell_cancel",
+			description: "Cancel a running background shell task by task_id.",
+			parameters: map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"task_id": map[string]any{"type": "string"},
+				},
+				"required": []string{"task_id"},
+			},
+			readOnly: true,
+			fn:       b.shellCancel,
 		},
 	}
 }
@@ -51,18 +66,19 @@ func shellRunDescription() string {
 }
 
 func shellRunDescriptionFor(rt shell.RuntimeDescription) string {
-	base := "Run a shell command from the current Whale workspace. Commands default to the workspace root; do not assume synthetic paths like /workspace. Use relative paths, or set cwd to a subdirectory inside the workspace, instead of prefixing commands with cd."
+	base := fmt.Sprintf("Run a shell command from the current Whale workspace. Commands default to the workspace root; do not assume synthetic paths like /workspace. Use relative paths, or set cwd to a subdirectory inside the workspace, instead of prefixing commands with cd. Foreground wait defaults to %dms and clamps at %dms; long-running commands can return a background task_id when the foreground wait expires. Continue with shell_wait instead of rerunning the same command.", defaultForegroundShellWaitMS, maxForegroundShellWaitMS)
 	if guidance := rt.ToolGuidance(); strings.TrimSpace(guidance) != "" {
 		return base + " " + strings.TrimSpace(guidance)
 	}
 	return base
 }
 
-var shellReadOnlyAllowPrefixes = []string{
-	"ls", "pwd", "echo", "cat", "head", "tail", "wc", "file", "tree", "find", "grep", "rg",
-	"go version",
-	"rustc --version",
-	"python --version", "python3 --version", "node --version", "npm --version", "npx --version", "cargo --version", "deno --version", "bun --version",
+func shellRunTimeoutDescription() string {
+	return fmt.Sprintf("Foreground wait in milliseconds for normal shell_run calls; defaults to %d and clamps at %d. Long-running commands may return a background task_id when the foreground wait expires. With background=true, this is the task runtime limit; defaults to %d and clamps at %d.", defaultForegroundShellWaitMS, maxForegroundShellWaitMS, defaultBackgroundShellTimeoutMS, maxBackgroundShellTimeoutMS)
+}
+
+func shellWaitTimeoutDescription() string {
+	return fmt.Sprintf("How long to wait for completion in milliseconds; defaults to %d and clamps at %d.", defaultShellWaitTimeoutMS, maxShellWaitTimeoutMS)
 }
 
 func shellReadOnlyCheck(args map[string]any) bool {
@@ -84,85 +100,8 @@ func shellReadOnlyCheckWithRuntime(rt shell.RuntimeDescription, args map[string]
 	if cmd == "" {
 		return false
 	}
-	if parts, ok := shellsafe.SplitAndList(cmd); ok {
-		for _, part := range parts {
-			if !shellReadOnlyCheckWithRuntime(rt, map[string]any{"command": part}) {
-				return false
-			}
-		}
-		return true
-	}
-	if parts, ok := shellsafe.SplitPipeline(cmd); ok {
-		for _, part := range parts {
-			if !shellReadOnlyCheckWithRuntime(rt, map[string]any{"command": part}) {
-				return false
-			}
-		}
-		return true
-	}
-	argv, ok := parsePOSIXReadOnlyShellCommand(cmd)
-	if !ok || len(argv) == 0 {
-		return false
-	}
-	if argv[0] == "git" {
-		return shellsafe.GitCommandReadOnly(argv)
-	}
-	lowerArgv := lowerShellArgv(argv)
-	if shellReadOnlyCommandHasUnsafeArgs(lowerArgv) {
-		return false
-	}
-	if lowerArgv[0] == "sed" {
-		return sedPrintRangeReadOnly(argv)
-	}
-	for _, prefix := range shellReadOnlyAllowPrefixes {
-		if shellArgvHasPrefix(lowerArgv, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func shellReadOnlyCommandHasUnsafeArgs(argv []string) bool {
-	switch {
-	case shellArgvHasPrefix(argv, "find"):
-		for _, field := range argv {
-			switch field {
-			case "-delete", "-exec", "-execdir", "-ok", "-okdir", "-fls":
-				return true
-			}
-			if strings.HasPrefix(field, "-fprint") {
-				return true
-			}
-		}
-	case shellArgvHasPrefix(argv, "rg"):
-		for _, field := range argv {
-			if field == "--pre" || strings.HasPrefix(field, "--pre=") {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func shellArgvHasPrefix(argv []string, prefix string) bool {
-	prefixArgv := strings.Fields(strings.ToLower(strings.TrimSpace(prefix)))
-	if len(argv) < len(prefixArgv) {
-		return false
-	}
-	for i, want := range prefixArgv {
-		if argv[i] != want {
-			return false
-		}
-	}
-	return true
-}
-
-func lowerShellArgv(argv []string) []string {
-	lower := make([]string, 0, len(argv))
-	for _, arg := range argv {
-		lower = append(lower, strings.ToLower(arg))
-	}
-	return lower
+	decision := shellrisk.Classify(cmd)
+	return decision.Allow && decision.Level == shellrisk.LevelSafeRead
 }
 
 func parsePOSIXReadOnlyShellCommand(cmd string) ([]string, bool) {
@@ -230,61 +169,4 @@ func posixReadOnlyRejectedRune(r rune) bool {
 	default:
 		return false
 	}
-}
-
-func sedPrintRangeReadOnly(argv []string) bool {
-	if len(argv) < 3 || argv[0] != "sed" {
-		return false
-	}
-	i := 1
-	sawQuiet := false
-	for i < len(argv) {
-		switch argv[i] {
-		case "-n", "--quiet", "--silent":
-			sawQuiet = true
-			i++
-		case "--":
-			i++
-			goto script
-		default:
-			goto script
-		}
-	}
-
-script:
-	if !sawQuiet || i >= len(argv) || !sedRangePrintScript(argv[i]) {
-		return false
-	}
-	i++
-	for ; i < len(argv); i++ {
-		if strings.HasPrefix(argv[i], "-") {
-			return false
-		}
-	}
-	return true
-}
-
-func sedRangePrintScript(script string) bool {
-	if script == "" || !strings.HasSuffix(script, "p") {
-		return false
-	}
-	addr := strings.TrimSuffix(script, "p")
-	parts := strings.Split(addr, ",")
-	if len(parts) > 2 {
-		return false
-	}
-	for _, part := range parts {
-		if part == "$" {
-			continue
-		}
-		if part == "" {
-			return false
-		}
-		for _, r := range part {
-			if r < '0' || r > '9' {
-				return false
-			}
-		}
-	}
-	return true
 }

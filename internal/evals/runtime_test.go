@@ -16,6 +16,12 @@ import (
 	"github.com/usewhale/whale/internal/tools"
 )
 
+func editApprovalPolicy() policy.ToolPolicy {
+	return policy.DefaultToolPolicy{Rules: []policy.PermissionRule{
+		{Permission: "edit", Pattern: "*", Action: policy.PermissionAsk},
+	}}
+}
+
 type requestUserInputProvider struct {
 	calls int
 }
@@ -239,7 +245,7 @@ func TestRuntimeApprovalDeniedStopsToolExecution(t *testing.T) {
 		provider,
 		store.NewInMemoryStore(),
 		core.NewToolRegistry(toolset.Tools()),
-		agent.WithToolPolicy(policy.DefaultToolPolicy{}),
+		agent.WithToolPolicy(editApprovalPolicy()),
 		agent.WithApprovalFunc(func(req policy.ApprovalRequest) policy.ApprovalDecision {
 			asked++
 			return policy.ApprovalDeny
@@ -308,6 +314,7 @@ func TestRuntimeApprovalDeniedSkipsRemainingToolCalls(t *testing.T) {
 		&multiToolApprovalProvider{},
 		store.NewInMemoryStore(),
 		core.NewToolRegistry([]core.Tool{writeLikeTool{}, counting}),
+		agent.WithToolPolicy(editApprovalPolicy()),
 		agent.WithApprovalFunc(func(req policy.ApprovalRequest) policy.ApprovalDecision {
 			return policy.ApprovalDeny
 		}),
@@ -769,7 +776,7 @@ func TestRuntimeApprovalCacheBySessionKey(t *testing.T) {
 		provider,
 		store.NewInMemoryStore(),
 		core.NewToolRegistry(toolset.Tools()),
-		agent.WithToolPolicy(policy.DefaultToolPolicy{}),
+		agent.WithToolPolicy(editApprovalPolicy()),
 		agent.WithApprovalFunc(func(req policy.ApprovalRequest) policy.ApprovalDecision {
 			asked++
 			return policy.ApprovalAllowForSession
@@ -829,7 +836,7 @@ func TestRuntimeApprovalCacheDoesNotCrossSessions(t *testing.T) {
 		provider,
 		store.NewInMemoryStore(),
 		core.NewToolRegistry(toolset.Tools()),
-		agent.WithToolPolicy(policy.DefaultToolPolicy{}),
+		agent.WithToolPolicy(editApprovalPolicy()),
 		agent.WithApprovalFunc(func(req policy.ApprovalRequest) policy.ApprovalDecision {
 			asked++
 			return policy.ApprovalAllowForSession
@@ -890,6 +897,7 @@ func TestRuntimeApprovalPersistsAcrossAgentInstances(t *testing.T) {
 		provider,
 		msgStore,
 		reg,
+		agent.WithToolPolicy(editApprovalPolicy()),
 		agent.WithApprovalFunc(func(req policy.ApprovalRequest) policy.ApprovalDecision {
 			asked1++
 			return policy.ApprovalAllowForSession
@@ -907,6 +915,7 @@ func TestRuntimeApprovalPersistsAcrossAgentInstances(t *testing.T) {
 		provider,
 		msgStore,
 		reg,
+		agent.WithToolPolicy(editApprovalPolicy()),
 		agent.WithApprovalFunc(func(req policy.ApprovalRequest) policy.ApprovalDecision {
 			asked2++
 			return policy.ApprovalAllowForSession

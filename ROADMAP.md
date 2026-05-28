@@ -15,7 +15,6 @@ Whale's core positioning stays the same: DeepSeek-native, terminal-first, afford
 - [x] Subagent capability optimization
 - [ ] Token usage and cache hit rate comparisons
 - [ ] Common slash command workflows
-- [ ] Image recognition (doesn't have to be a DeepSeek model)
 
 ## TUI Stability and Local Telemetry
 
@@ -163,22 +162,6 @@ Splittable issues:
 - [x] `/btw` design and implementation
 - [ ] Support `@`-based operations
 - [ ] Support rules configuration
-
-## Image Recognition
-
-Whale does not yet support image input, but this is useful in development scenarios.
-
-- [ ] Investigate vision models that support image input via API
-- [ ] Support pasting or dragging images into the TUI, converting to base64 for prompt context
-- [ ] Integrate once DeepSeek's model supports image recognition via API
-- [ ] Add corresponding TUI render display and regression tests after integration
-
-Splittable issues:
-
-- [ ] Vision model research
-- [ ] TUI image paste/drag interaction
-- [ ] Image to base64 prompt injection flow
-- [ ] Image recognition integration tests
 
 ## Not Doing (for now)
 

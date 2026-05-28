@@ -50,10 +50,12 @@ type Config struct {
 	ThinkingEnabled          bool
 	CheckForUpdateOnStartup  bool
 	ViewMode                 string
+	ShowReasoning            bool
 	RetryMaxAttempts         int
 	RetryMaxAttemptsExplicit bool
 	RetryStreamMaxAttempts   int
 	RetryMaxDelay            time.Duration
+	MaxParallelSubagents     int
 	MCPConfigPath            string
 	APIBaseURL               string
 	SkillsDisabled           []string
@@ -157,6 +159,7 @@ func DefaultConfig() Config {
 		ThinkingEnabled:         defaults.DefaultThinkingEnabled,
 		CheckForUpdateOnStartup: true,
 		ViewMode:                ViewModeDefault,
+		ShowReasoning:           false,
 		RetryMaxAttempts:        llmretry.DefaultPolicy().MaxAttempts,
 		RetryStreamMaxAttempts:  6,
 		RetryMaxDelay:           llmretry.DefaultPolicy().MaxDelay,
@@ -210,7 +213,7 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load mcp config: %w", err)
 	}
-	mcpManager := whalemcp.NewManager(mcpConfig)
+	mcpManager := whalemcp.NewManager(mcpConfig, workspaceRoot)
 	pluginManager := plugins.NewManager(plugins.Context{DataDir: cfg.DataDir, WorkspaceRoot: workspaceRoot}, cfg.PluginsDisabled)
 	pluginTools := pluginManager.Tools()
 	toolset.SetExtraSkills(pluginManager.Skills())
@@ -435,6 +438,7 @@ func (a *App) baseSessionMeta() session.SessionMeta {
 }
 
 func (a *App) SessionID() string                          { return a.sessionID }
+func (a *App) SessionsDir() string                        { return a.sessionsDir }
 func (a *App) CurrentMode() session.Mode                  { return a.currentMode }
 func (a *App) PermissionDefault() policy.PermissionAction { return a.permissionPolicy.Default }
 func (a *App) AutoAcceptPermissions() bool {
@@ -480,6 +484,12 @@ func (a *App) WorkspaceRoot() string   { return a.workspaceRoot }
 func (a *App) Model() string           { return a.model }
 func (a *App) ReasoningEffort() string { return a.reasoningEffort }
 func (a *App) ThinkingEnabled() bool   { return a.thinkingEnabled }
+func (a *App) ShowReasoning() bool {
+	if a == nil {
+		return false
+	}
+	return a.cfg.ShowReasoning
+}
 func (a *App) ViewMode() string {
 	if a == nil {
 		return ViewModeDefault

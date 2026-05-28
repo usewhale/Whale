@@ -142,3 +142,73 @@ func SplitAndList(command string) ([]string, bool) {
 	}
 	return parts, true
 }
+
+// SplitSequence splits on `;` only. It is intended for conservative static
+// classification where every command in a sequential list must independently be
+// safe.
+func SplitSequence(command string) ([]string, bool) {
+	var parts []string
+	var current strings.Builder
+	var quote rune
+	escaped := false
+	sawSeparator := false
+
+	flush := func() bool {
+		part := strings.TrimSpace(current.String())
+		current.Reset()
+		if part == "" {
+			return false
+		}
+		parts = append(parts, part)
+		return true
+	}
+
+	for _, r := range strings.TrimSpace(command) {
+		if quote == '\'' {
+			if r == '\'' {
+				quote = 0
+			}
+			current.WriteRune(r)
+			continue
+		}
+		if escaped {
+			escaped = false
+			current.WriteRune(r)
+			continue
+		}
+		switch r {
+		case '\\':
+			if quote == '"' {
+				escaped = true
+			}
+			current.WriteRune(r)
+		case '"':
+			if quote == 0 {
+				quote = '"'
+			} else if quote == '"' {
+				quote = 0
+			}
+			current.WriteRune(r)
+		case '\'':
+			if quote == 0 {
+				quote = '\''
+			}
+			current.WriteRune(r)
+		case ';':
+			if quote != 0 {
+				current.WriteRune(r)
+				continue
+			}
+			if !flush() {
+				return nil, false
+			}
+			sawSeparator = true
+		default:
+			current.WriteRune(r)
+		}
+	}
+	if quote != 0 || escaped || !sawSeparator || !flush() {
+		return nil, false
+	}
+	return parts, true
+}

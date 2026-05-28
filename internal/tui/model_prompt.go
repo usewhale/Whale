@@ -23,6 +23,7 @@ func (m *model) startBusy() {
 func (m *model) stopBusy() {
 	m.busy = false
 	m.busySince = time.Time{}
+	m.resetBusyTokenEstimate()
 }
 
 func (m *model) submitPrompt(value string) tea.Cmd {

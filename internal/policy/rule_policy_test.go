@@ -55,14 +55,26 @@ func TestRulePolicyDefaultControlsUnspecifiedTools(t *testing.T) {
 	}
 }
 
-func TestRulePolicyDefaultEditRequiresApproval(t *testing.T) {
+func TestRulePolicyDefaultEditAllowsWorkspaceMutation(t *testing.T) {
 	p := RulePolicy{Default: PermissionAllow, Rules: DefaultRules()}
 	spec := core.ToolSpec{Name: "edit"}
 	call := core.ToolCall{Name: "edit", Input: `{"file_path":"a.txt","search":"a","replace":"b"}`}
 
 	got := p.Decide(spec, call)
-	if !got.Allow || !got.RequiresApproval {
-		t.Fatalf("edit should require approval under the default posture: %+v", got)
+	if !got.Allow || got.RequiresApproval {
+		t.Fatalf("edit should be allowed under the default workspace posture: %+v", got)
+	}
+}
+
+func TestRulePolicyUserEditRuleOverridesDefaultAllow(t *testing.T) {
+	rules := append(DefaultRules(), PermissionRule{Permission: "edit", Pattern: "*", Action: PermissionAsk})
+	p := RulePolicy{Default: PermissionAllow, Rules: rules}
+	spec := core.ToolSpec{Name: "edit"}
+	call := core.ToolCall{Name: "edit", Input: `{"file_path":"a.txt","search":"a","replace":"b"}`}
+
+	got := p.Decide(spec, call)
+	if !got.Allow || !got.RequiresApproval || got.MatchedRule != "edit:*=ask" {
+		t.Fatalf("user edit ask rule should override default allow: %+v", got)
 	}
 }
 

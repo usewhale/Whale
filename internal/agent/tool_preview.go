@@ -6,11 +6,11 @@ import (
 	"github.com/usewhale/whale/internal/core"
 )
 
-func (a *Agent) previewTool(ctx context.Context, call core.ToolCall) map[string]any {
-	if a == nil || a.tools == nil {
+func (a *Agent) previewTool(ctx context.Context, tools *core.ToolRegistry, call core.ToolCall) map[string]any {
+	if a == nil || tools == nil {
 		return nil
 	}
-	tool := a.tools.Get(call.Name)
+	tool := tools.Get(call.Name)
 	previewer, ok := tool.(core.ToolPreviewer)
 	if !ok {
 		return nil

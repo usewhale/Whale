@@ -23,6 +23,17 @@ func (m *model) appendNotice(text string) {
 	m.refreshLiveViewportContent()
 }
 
+func (m *model) appendSystemNotice(notice *tuirender.SystemNotice) {
+	if notice == nil {
+		return
+	}
+	if m.assembler == nil {
+		m.assembler = tuirender.NewAssembler()
+	}
+	m.assembler.AddSystemNotice(notice)
+	m.refreshLiveViewportContent()
+}
+
 func (m *model) appendStatus(text string) {
 	if m.assembler == nil {
 		m.assembler = tuirender.NewAssembler()
@@ -72,10 +83,55 @@ func (m *model) appendLiveToolResult(text, role string) {
 func (m *model) beginTurnTranscript() {
 	m.turnTranscriptStart = len(m.transcript)
 	m.visibleAssistantThisTurn = ""
+	m.resetBusyTokenEstimate()
 }
 
 func (m *model) recordAssistantDelta(text string) {
 	m.visibleAssistantThisTurn += text
+	m.recordModelOutputDelta(text)
+}
+
+func (m *model) recordModelOutputDelta(text string) {
+	m.addBusyTokenEstimate(text)
+}
+
+// estimateTokens approximates token count from text using DeepSeek's
+// documented ratios: English char ≈ 0.3 token, Chinese char ≈ 0.6 token.
+// +1 safety margin is applied once to the total, not per-chunk.
+func estimateTokens(s string) int {
+	ascii, nonASCII := tokenEstimateCharCounts(s)
+	return estimateTokensFromCounts(ascii, nonASCII)
+}
+
+func (m *model) resetBusyTokenEstimate() {
+	m.busyTokenCount = 0
+	m.busyTokenASCIIChars = 0
+	m.busyTokenNonASCIIChars = 0
+}
+
+func (m *model) addBusyTokenEstimate(s string) {
+	ascii, nonASCII := tokenEstimateCharCounts(s)
+	m.busyTokenASCIIChars += ascii
+	m.busyTokenNonASCIIChars += nonASCII
+	m.busyTokenCount = estimateTokensFromCounts(m.busyTokenASCIIChars, m.busyTokenNonASCIIChars)
+}
+
+func tokenEstimateCharCounts(s string) (ascii int, nonASCII int) {
+	for _, r := range s {
+		if r > 127 {
+			nonASCII++
+		} else {
+			ascii++
+		}
+	}
+	return ascii, nonASCII
+}
+
+func estimateTokensFromCounts(ascii, nonASCII int) int {
+	if ascii == 0 && nonASCII == 0 {
+		return 0
+	}
+	return ascii*3/10 + nonASCII*3/5 + 1
 }
 
 func (m *model) reconcileFinalAssistant(lastResponse string) bool {

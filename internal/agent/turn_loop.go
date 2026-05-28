@@ -69,7 +69,15 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 	go func() {
 		defer close(out)
 		defer a.active.Delete(sessionID)
-		rt := memory.HydrateRuntime(memory.NewImmutablePrefix(a.buildImmutableSystemBlocks(opts)), history)
+		toolSnapshot, err := a.refreshToolSnapshot(ctx)
+		if err != nil {
+			emit := func(ev AgentEvent) bool {
+				return sendAgentEvent(ctx, out, ev)
+			}
+			emit(AgentEvent{Type: AgentEventTypeError, Err: err})
+			return
+		}
+		rt := memory.HydrateRuntime(memory.NewImmutablePrefix(a.buildImmutableSystemBlocksWithTools(toolSnapshot, opts)), history)
 		expectedPrefixFingerprint := rt.Prefix.Fingerprint()
 		toolIters := 0
 		if a.repairer != nil {
@@ -88,9 +96,19 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 		if opts.ReadOnly {
 			turnPolicy = policy.ReadOnlyTurnPolicy{Base: turnPolicy}
 		}
+		firstRequest := true
 		for {
 			rt.Scratch.ResetTurn()
-			rt.Prefix.Refresh(a.buildImmutableSystemBlocks(opts))
+			if !firstRequest {
+				var err error
+				toolSnapshot, err = a.refreshToolSnapshot(ctx)
+				if err != nil {
+					emit(AgentEvent{Type: AgentEventTypeError, Err: err})
+					return
+				}
+			}
+			firstRequest = false
+			rt.Prefix.Refresh(a.buildImmutableSystemBlocksWithTools(toolSnapshot, opts))
 			if got := rt.Prefix.Fingerprint(); got != expectedPrefixFingerprint {
 				if !emit(AgentEvent{
 					Type: AgentEventTypePrefixDrift,
@@ -134,7 +152,7 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 					}
 				}
 			}
-			assistant, toolMsg, usage, modelName, abortTurn, sErr := a.streamAndHandle(ctx, sessionID, history, rt, out, turnPolicy)
+			assistant, toolMsg, usage, modelName, abortTurn, sErr := a.streamAndHandle(ctx, sessionID, history, rt, out, turnPolicy, toolSnapshot)
 			if sErr != nil {
 				if errors.Is(sErr, context.Canceled) || errors.Is(sErr, context.DeadlineExceeded) {
 					a.persistInterruptedTurnMarker(sessionID)

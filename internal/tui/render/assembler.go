@@ -24,12 +24,100 @@ const (
 )
 
 type UIMessage struct {
-	ID       string
-	Role     string
-	Kind     MessageKind
-	Text     string
-	ToolName string
-	Local    *app.LocalResult
+	ID            string
+	Role          string
+	Kind          MessageKind
+	Text          string
+	ToolName      string
+	ToolIdentity  string
+	Streaming     bool
+	Local         *app.LocalResult
+	FocusSummary  *FocusSummary
+	Notice        *SystemNotice
+	FullReasoning bool
+}
+
+type SystemNotice struct {
+	Kind    string
+	Tone    string
+	Action  string
+	Subject string
+	Detail  string
+	Command string
+	Scope   string
+}
+
+func (n *SystemNotice) Text() string {
+	if n == nil {
+		return ""
+	}
+	parts := make([]string, 0, 4)
+	for _, part := range []string{n.Action, n.Subject, n.Detail, n.Command} {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	text := strings.Join(parts, " ")
+	if scope := strings.TrimSpace(n.Scope); scope != "" {
+		if text != "" {
+			text += " · "
+		}
+		text += scope
+	}
+	return text
+}
+
+type FocusSummary struct {
+	Parts []FocusSummaryPart
+	Hint  string
+}
+
+type FocusSummaryPart struct {
+	Kind   string
+	State  string
+	Count  int
+	Action string
+	Detail string
+	Status string
+}
+
+func (s *FocusSummary) Text() string {
+	if s == nil {
+		return ""
+	}
+	parts := make([]string, 0, len(s.Parts))
+	for _, part := range s.Parts {
+		if text := part.Text(); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	text := strings.Join(parts, ", ")
+	if s.Hint != "" {
+		if text != "" {
+			text += " "
+		}
+		text += s.Hint
+	}
+	return text
+}
+
+func (p FocusSummaryPart) Text() string {
+	text := strings.TrimSpace(p.Action)
+	detail := strings.TrimSpace(p.Detail)
+	if detail != "" {
+		if text != "" {
+			text += ": "
+		}
+		text += detail
+	}
+	if status := strings.TrimSpace(p.Status); status != "" {
+		if text != "" {
+			text += " "
+		}
+		text += status
+	}
+	return text
 }
 
 type Assembler struct {
@@ -104,15 +192,19 @@ func (a *Assembler) AppendDelta(role, text string) {
 	}
 	if n := len(a.messages); n > 0 && canCoalesce(role, a.messages[n-1]) {
 		a.messages[n-1].Text += t
+		if role == "think" {
+			a.messages[n-1].Streaming = true
+		}
 		return
 	}
 	if strings.TrimSpace(t) == "" {
 		return
 	}
 	a.messages = append(a.messages, UIMessage{
-		Role: role,
-		Kind: kindForRole(role),
-		Text: t,
+		Role:      role,
+		Kind:      kindForRole(role),
+		Text:      t,
+		Streaming: role == "think",
 	})
 }
 
@@ -162,6 +254,22 @@ func (a *Assembler) AddNotice(text string) {
 	})
 }
 
+func (a *Assembler) AddSystemNotice(notice *SystemNotice) {
+	if notice == nil {
+		return
+	}
+	text := strings.TrimSpace(notice.Text())
+	if text == "" {
+		return
+	}
+	a.messages = append(a.messages, UIMessage{
+		Role:   "notice",
+		Kind:   KindNotice,
+		Text:   text,
+		Notice: notice,
+	})
+}
+
 func (a *Assembler) AddStatus(text string) {
 	t := strings.TrimSpace(strings.TrimRight(text, "\n"))
 	if t == "" {
@@ -204,6 +312,10 @@ func (a *Assembler) AddLocalResult(result *app.LocalResult) {
 }
 
 func (a *Assembler) UpdateToolCall(toolCallID, text, role string) bool {
+	return a.UpdateToolCallWithIdentity(toolCallID, text, role, "")
+}
+
+func (a *Assembler) UpdateToolCallWithIdentity(toolCallID, text, role, identity string) bool {
 	t := strings.TrimSpace(strings.TrimRight(text, "\n"))
 	if toolCallID == "" || t == "" {
 		return false
@@ -217,6 +329,9 @@ func (a *Assembler) UpdateToolCall(toolCallID, text, role string) bool {
 	}
 	a.messages[idx].Role = role
 	a.messages[idx].Text = t
+	if strings.TrimSpace(identity) != "" {
+		a.messages[idx].ToolIdentity = identity
+	}
 	return true
 }
 

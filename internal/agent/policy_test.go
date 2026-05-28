@@ -15,11 +15,11 @@ func TestDefaultToolPolicyShellRules(t *testing.T) {
 	}
 }
 
-func TestDefaultToolPolicyApplyPatchNeedsApproval(t *testing.T) {
+func TestDefaultToolPolicyApplyPatchAllowedByDefault(t *testing.T) {
 	p := DefaultToolPolicy{}
 	spec := ToolSpec{Name: "apply_patch"}
 	d := p.Decide(spec, ToolCall{Name: "apply_patch", Input: `{"patch":"*** Begin Patch\n*** End Patch"}`})
-	if !d.Allow || !d.RequiresApproval || d.Code != "permission_required" {
+	if !d.Allow || d.RequiresApproval || d.Code != "permission_allow" {
 		t.Fatalf("unexpected apply_patch policy decision: %+v", d)
 	}
 }

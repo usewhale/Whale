@@ -37,18 +37,36 @@ func (m *model) updateToolCallFromResult(toolCallID, toolName, result, role, sum
 	if summary != "" && summary != "✓" {
 		title += "\n" + summary
 	}
-	if diff := renderFileDiffMetadataMarkdown(metadata, fileDiffPreviewMaxLines); diff != "" && role == "result_ok" {
+	if diff := renderFileDiffMetadataForChat(metadata, fileDiffPreviewMaxLines); diff != "" && role == "result_ok" {
 		title += "\n\n" + diff
 	}
+	identity := ""
 	if toolDisplayKind(toolName) == "shell" {
 		role = shellResultRole(role)
+		identity = shellCommandIdentityFromResult(result)
+		if identity == "" {
+			identity = focusShellRawCommand(previous)
+		}
 	}
-	ok := m.assembler.UpdateToolCall(toolCallID, title, role)
+	ok := m.assembler.UpdateToolCallWithIdentity(toolCallID, title, role, identity)
 	m.markToolCallResolved(toolCallID)
 	if ok {
 		m.refreshLiveViewportContent()
 	}
 	return ok
+}
+
+func shellCommandIdentityFromResult(raw string) string {
+	env := parseToolEnvelope(raw)
+	command := strings.TrimSpace(asString(env.payload["command"]))
+	if command == "" {
+		return ""
+	}
+	cwd := strings.TrimSpace(asString(env.payload["cwd"]))
+	if cwd == "" {
+		return command
+	}
+	return command + "\x00cwd=" + cwd
 }
 
 func (m *model) updateTaskProgress(toolCallID, toolName, text, status string, metadata map[string]any) bool {
@@ -122,6 +140,8 @@ func summarizeToolCallForChat(toolName, text string) string {
 		return "Updating plan"
 	case "todo":
 		return todoToolTitle(toolName, text, "running")
+	case "mcp":
+		return mcpStartedText(toolName, text)
 	default:
 		if detail == "" {
 			detail = toolName
@@ -316,6 +336,9 @@ func completedToolTitle(toolName, raw, previous string) string {
 	case "shell":
 		cmd := strings.TrimSpace(asString(env.payload["command"]))
 		if cmd == "" {
+			cmd = focusShellRawCommand(previous)
+		}
+		if cmd == "" {
 			cmd = "shell command"
 		}
 		return "Ran " + cmd
@@ -333,6 +356,8 @@ func completedToolTitle(toolName, raw, previous string) string {
 		return "Updated plan"
 	case "todo":
 		return todoToolTitle(toolName, firstNonEmpty(previousToolActionLine(previous), raw), "done")
+	case "mcp":
+		return mcpCompletedTitle(toolName, raw, previous)
 	default:
 		label := toolName
 		if label == "" {
@@ -374,8 +399,12 @@ func shouldShowUnmatchedToolResult(toolName, role, text string) bool {
 }
 
 func toolDisplayKind(toolName string) string {
-	switch strings.TrimSpace(toolName) {
-	case "shell_run", "shell_wait":
+	name := strings.TrimSpace(toolName)
+	if isMCPDisplayTool(name) {
+		return "mcp"
+	}
+	switch name {
+	case "shell_run", "shell_wait", "shell_cancel":
 		return "shell"
 	case "read_file", "list_dir", "search_files", "grep", "search_content", "fetch", "web_fetch", "web_search":
 		return "explore"
@@ -389,6 +418,23 @@ func toolDisplayKind(toolName string) string {
 		return "todo"
 	default:
 		return "unknown"
+	}
+}
+
+func mcpExplorationKind(toolName string) string {
+	name := strings.ToLower(strings.TrimSpace(toolName))
+	if !strings.HasPrefix(name, "mcp__") {
+		return ""
+	}
+	switch {
+	case strings.Contains(name, "read_text_file"), strings.Contains(name, "read_file"):
+		return "read"
+	case strings.Contains(name, "list_directory"), strings.Contains(name, "list_dir"):
+		return "list"
+	case strings.Contains(name, "search"), strings.Contains(name, "grep"):
+		return "search"
+	default:
+		return ""
 	}
 }
 
@@ -434,26 +480,48 @@ func explorationLine(toolName, fallback string, env toolResultEnvelope) string {
 	data := env.data
 	switch toolName {
 	case "read_file":
-		path := firstNonEmpty(asString(payload["file_path"]), asString(data["file_path"]), fallback, "file")
+		path := firstNonEmpty(asString(payload["file_path"]), asString(data["file_path"]), actionDetailFallback(fallback, "Read"), "file")
 		return "Read " + path
 	case "list_dir":
-		path := firstNonEmpty(asString(payload["path"]), asString(data["path"]), fallback, ".")
+		path := firstNonEmpty(asString(payload["path"]), asString(data["path"]), actionDetailFallback(fallback, "List"), ".")
 		return "List " + path
 	case "search_files":
-		return formatSearchActionLine(firstNonEmpty(searchDetailFromPayload(payload, data, ""), fallback), "files")
+		return formatSearchActionLine(firstNonEmpty(searchDetailFromPayload(payload, data, ""), actionDetailFallback(fallback, "Search")), "files")
 	case "grep", "search_content":
-		return formatSearchActionLine(firstNonEmpty(searchDetailFromPayload(payload, data, asString(payload["include"])), fallback), "content")
+		return formatSearchActionLine(firstNonEmpty(searchDetailFromPayload(payload, data, asString(payload["include"])), actionDetailFallback(fallback, "Search")), "content")
 	case "fetch", "web_fetch":
-		return "Fetch " + firstNonEmpty(asString(payload["url"]), asString(data["url"]), fallback, "url")
+		return "Fetch " + firstNonEmpty(asString(payload["url"]), asString(data["url"]), actionDetailFallback(fallback, "Fetch"), "url")
 	case "web_search":
-		query := firstNonEmpty(webSearchQueryFromMaps(payload, data), fallback)
+		query := firstNonEmpty(webSearchQueryFromMaps(payload, data), actionDetailFallback(fallback, "Search web for"), actionDetailFallback(fallback, "Search"))
 		if query != "" {
 			return "Search web for " + query
 		}
 		return "Search web"
 	default:
+		switch mcpExplorationKind(toolName) {
+		case "read":
+			path := firstNonEmpty(asString(payload["file_path"]), asString(payload["path"]), asString(data["file_path"]), asString(data["path"]), actionDetailFallback(fallback, "Read"), "file")
+			return "Read " + path
+		case "list":
+			path := firstNonEmpty(asString(payload["path"]), asString(data["path"]), actionDetailFallback(fallback, "List"), ".")
+			return "List " + path
+		case "search":
+			return formatSearchActionLine(firstNonEmpty(searchDetailFromPayload(payload, data, ""), actionDetailFallback(fallback, "Search")), "content")
+		}
 		return "Run " + firstNonEmpty(fallback, toolName)
 	}
+}
+
+func actionDetailFallback(fallback, action string) string {
+	fallback = strings.TrimSpace(fallback)
+	action = strings.TrimSpace(action)
+	if fallback == "" || action == "" {
+		return fallback
+	}
+	if after, ok := strings.CutPrefix(fallback, action+" "); ok {
+		return strings.TrimSpace(after)
+	}
+	return fallback
 }
 
 func searchDetailFromPayload(payload, data map[string]any, includeFallback string) string {

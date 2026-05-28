@@ -21,7 +21,7 @@ func (m model) focusMessages(messages []tuirender.UIMessage) []tuirender.UIMessa
 	if m.focusEnabled() {
 		return projectFocusMessages(messages)
 	}
-	return projectExpandedFocusMessages(messages)
+	return projectNormalMessages(messages, m.showReasoning)
 }
 
 func (m *model) toggleFocusView() bool {
@@ -69,19 +69,26 @@ func projectFocusMessages(messages []tuirender.UIMessage) []tuirender.UIMessage 
 		if !tools.used {
 			return
 		}
-		text := tools.text()
+		summary := tools.summary()
+		text := summary.Text()
 		if text != "" {
 			out = append(out, tuirender.UIMessage{
-				Role: "tool_summary",
-				Kind: tuirender.KindToolSummary,
-				Text: text + " (ctrl+o to expand)",
+				Role:         "tool_summary",
+				Kind:         tuirender.KindToolSummary,
+				Text:         text,
+				FocusSummary: summary,
 			})
 		}
 		tools = focusToolSummary{}
 	}
 	for _, msg := range messages {
 		if isFocusHiddenToolMessage(msg) {
-			tools.add(msg)
+			item := focusSummarizeToolMessage(msg)
+			state := focusToolState(msg)
+			if tools.shouldSplitBefore(item.Kind, state) {
+				flushTools()
+			}
+			tools.addItemWithState(state, item)
 			continue
 		}
 		if isFocusHiddenMessage(msg) {
@@ -94,15 +101,22 @@ func projectFocusMessages(messages []tuirender.UIMessage) []tuirender.UIMessage 
 	return out
 }
 
-func projectExpandedFocusMessages(messages []tuirender.UIMessage) []tuirender.UIMessage {
+func projectExpandedFocusMessages(messages []tuirender.UIMessage, showReasoning bool) []tuirender.UIMessage {
 	out := make([]tuirender.UIMessage, 0, len(messages))
 	for _, msg := range messages {
-		if isFocusHiddenMessage(msg) || isFocusHiddenToolMessage(msg) {
+		if isFocusHiddenToolMessage(msg) {
 			msg.Text = appendFocusToggleHint(msg.Text, "collapse")
+		}
+		if showReasoning && isFocusHiddenMessage(msg) {
+			msg.FullReasoning = true
 		}
 		out = append(out, msg)
 	}
 	return out
+}
+
+func projectNormalMessages(messages []tuirender.UIMessage, showReasoning bool) []tuirender.UIMessage {
+	return projectExplorationMessages(projectExpandedFocusMessages(messages, showReasoning))
 }
 
 func appendFocusToggleHint(text, action string) string {
@@ -129,11 +143,13 @@ type focusToolSummary struct {
 	shell  focusSummaryBucket
 	search focusSummaryBucket
 	read   focusSummaryBucket
+	web    focusSummaryBucket
 	list   focusSummaryBucket
 	edit   focusSummaryBucket
 	task   focusSummaryBucket
 	plan   focusSummaryBucket
 	todo   focusSummaryBucket
+	mcp    focusSummaryBucket
 	other  focusSummaryBucket
 }
 
@@ -143,57 +159,95 @@ type focusSummaryBucket struct {
 	failed  int
 	denied  int
 	details []string
+	entries []focusSummaryEntry
+}
+
+type focusSummaryEntry struct {
+	state    string
+	detail   string
+	identity string
 }
 
 func (s *focusToolSummary) add(msg tuirender.UIMessage) {
 	s.used = true
 	state := focusToolState(msg)
-	detail := focusToolDetail(msg)
-	switch focusToolKind(msg) {
+	item := focusSummarizeToolMessage(msg)
+	s.addItemWithState(state, item)
+}
+
+func (s focusToolSummary) shouldSplitBefore(kind, state string) bool {
+	if !s.used {
+		return false
+	}
+	if kind != "edit" && s.edit.count > 0 && s.edit.succeeded() == 0 && s.edit.running == 0 {
+		return false
+	}
+	if kind == "edit" && state != "done" && state != "running" {
+		return false
+	}
+	hasEdit := s.edit.count > 0
+	isEdit := kind == "edit"
+	return hasEdit != isEdit
+}
+
+func (s *focusToolSummary) addItemWithState(state string, item focusToolSummaryItem) {
+	s.used = true
+	switch item.Kind {
 	case "shell":
-		s.shell.add(state, detail)
+		s.shell.add(state, item.Detail, item.Identity)
 	case "search":
-		s.search.add(state, detail)
+		s.search.add(state, item.Detail, "")
 	case "read":
-		s.read.add(state, detail)
+		s.read.add(state, item.Detail, "")
+	case "web":
+		s.web.add(state, item.Detail, "")
 	case "list":
-		s.list.add(state, detail)
+		s.list.add(state, item.Detail, "")
 	case "edit":
-		s.edit.add(state, detail)
+		s.edit.add(state, item.Detail, "")
 	case "task":
-		s.task.add(state, focusTaskDetail(msg))
+		s.task.add(state, item.Detail, "")
 	case "plan":
-		s.plan.add(state, "")
+		s.plan.add(state, "", "")
 	case "todo":
-		s.todo.add(state, "")
+		s.todo.add(state, "", "")
+	case "mcp":
+		s.mcp.add(state, item.Detail, "")
 	default:
-		s.other.add(state, "")
+		s.other.add(state, "", "")
 	}
 }
 
-func (s focusToolSummary) text() string {
-	parts := make([]string, 0, 8)
-	add := func(text string) {
-		if text != "" {
-			parts = append(parts, text)
+func (s focusToolSummary) summary() *tuirender.FocusSummary {
+	parts := make([]tuirender.FocusSummaryPart, 0, 8)
+	add := func(part tuirender.FocusSummaryPart) {
+		if part.Text() != "" {
+			parts = append(parts, part)
 		}
 	}
-	add(focusHintSummary(s.search, "Searching for", "Searched for", "Denied", "pattern", "patterns", focusQuoteHint))
-	add(focusHintSummary(s.read, "Reading", "Read", "Denied", "file", "files", focusPlainHint))
-	add(focusHintSummary(s.list, "Listing", "Listed", "Denied", "directory", "directories", focusPlainHint))
-	add(focusShellSummary(s.shell))
-	add(focusHintSummary(s.edit, "Editing", "Edited", "Denied", "file", "files", focusPlainHint))
-	add(focusTaskSummary(s.task))
-	add(focusSimpleSummary(s.plan, "Updating plan", "Updated plan", "plan update", "plan updates"))
-	add(focusSimpleSummary(s.todo, "Updating todos", "Updated todos", "todo update", "todo updates"))
-	add(focusCountSummary(s.other, "Running", "Ran", "tool", "tools"))
-	if len(parts) == 0 {
-		return ""
+	recoveredShell, remainingShell := s.shell.splitRecovered()
+	recoveredShell = recoveredShell.withDisambiguatedShellCWD()
+	remainingShell = remainingShell.withDisambiguatedShellCWD()
+	for _, state := range []string{"denied", "failed", "running", "done"} {
+		add(focusStateHintSummaryPart("search", s.search, state, "Searching for", "Searched for", "Denied", "Failed", "pattern", "patterns", focusQuoteHint))
+		add(focusStateHintSummaryPart("read", s.read, state, "Reading", "Read", "Denied", "Failed", "file", "files", focusPlainHint))
+		add(focusStateHintSummaryPart("web", s.web, state, "Fetching", "Fetched", "Denied", "Failed", "URL", "URLs", focusPlainHint))
+		add(focusStateHintSummaryPart("list", s.list, state, "Listing", "Listed", "Denied", "Failed", "directory", "directories", focusPlainHint))
+		if state == "done" {
+			add(focusRecoveredShellSummaryPart(recoveredShell))
+		}
+		add(focusStateShellSummaryPart(remainingShell, state))
+		add(focusStateHintSummaryPart("edit", s.edit, state, "Editing", "Edited", "Denied", "Failed", "file", "files", focusPlainHint))
+		add(focusStateTaskSummaryPart(s.task, state))
+		add(focusStateSimpleSummaryPart("plan", s.plan, state, "Updating plan", "Updated plan", "Denied", "Failed", "plan update", "plan updates"))
+		add(focusStateSimpleSummaryPart("todo", s.todo, state, "Updating todos", "Updated todos", "Denied", "Failed", "todo update", "todo updates"))
+		add(focusStateHintSummaryPart("mcp", s.mcp, state, "Calling", "Called", "Denied", "Failed", "MCP tool", "MCP tools", focusPlainHint))
+		add(focusStateCountSummaryPart("other", s.other, state, "Running", "Ran", "Denied", "Failed", "tool", "tools"))
 	}
-	return strings.Join(parts, ", ")
+	return &tuirender.FocusSummary{Parts: parts, Hint: "(ctrl+o to expand)"}
 }
 
-func (b *focusSummaryBucket) add(state, detail string) {
+func (b *focusSummaryBucket) add(state, detail, identity string) {
 	b.count++
 	switch state {
 	case "running":
@@ -206,6 +260,7 @@ func (b *focusSummaryBucket) add(state, detail string) {
 	if detail != "" {
 		b.details = append(b.details, detail)
 	}
+	b.entries = append(b.entries, focusSummaryEntry{state: state, detail: detail, identity: identity})
 }
 
 func (b focusSummaryBucket) activeVerb(running, done string) string {
@@ -219,13 +274,95 @@ func (b focusSummaryBucket) allDenied() bool {
 	return b.count > 0 && b.denied == b.count
 }
 
+func (b focusSummaryBucket) succeeded() int {
+	return b.count - b.running - b.failed - b.denied
+}
+
+func (b focusSummaryBucket) splitRecovered() (focusSummaryBucket, focusSummaryBucket) {
+	pendingFailures := map[string][]int{}
+	recoveredEntries := map[int]struct{}{}
+	for i, entry := range b.entries {
+		identity := strings.TrimSpace(entry.identity)
+		if identity == "" {
+			continue
+		}
+		switch entry.state {
+		case "failed":
+			pendingFailures[identity] = append(pendingFailures[identity], i)
+		case "done":
+			pending := pendingFailures[identity]
+			if len(pending) > 0 {
+				for _, failedIndex := range pending {
+					recoveredEntries[failedIndex] = struct{}{}
+				}
+				pendingFailures[identity] = nil
+				recoveredEntries[i] = struct{}{}
+			}
+		}
+	}
+	var recovered, remaining focusSummaryBucket
+	for i, entry := range b.entries {
+		if _, ok := recoveredEntries[i]; ok {
+			recovered.add(entry.state, entry.detail, entry.identity)
+			continue
+		}
+		remaining.add(entry.state, entry.detail, entry.identity)
+	}
+	return recovered, remaining
+}
+
+func (b focusSummaryBucket) withDisambiguatedShellCWD() focusSummaryBucket {
+	identitiesByDetail := map[string]map[string]struct{}{}
+	for _, entry := range b.entries {
+		if entry.detail == "" || shellIdentityCWD(entry.identity) == "" {
+			continue
+		}
+		if identitiesByDetail[entry.detail] == nil {
+			identitiesByDetail[entry.detail] = map[string]struct{}{}
+		}
+		identitiesByDetail[entry.detail][entry.identity] = struct{}{}
+	}
+	var out focusSummaryBucket
+	for _, entry := range b.entries {
+		detail := entry.detail
+		if len(identitiesByDetail[entry.detail]) > 1 {
+			if cwd := shellIdentityCWD(entry.identity); cwd != "" {
+				detail = detail + " (cwd: " + cwd + ")"
+			}
+		}
+		out.add(entry.state, detail, entry.identity)
+	}
+	return out
+}
+
+func shellIdentityCWD(identity string) string {
+	_, cwd, ok := strings.Cut(identity, "\x00cwd=")
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(cwd)
+}
+
+func (b focusSummaryBucket) forState(state string) focusSummaryBucket {
+	var out focusSummaryBucket
+	for _, entry := range b.entries {
+		if entry.state == state {
+			out.add(entry.state, entry.detail, entry.identity)
+		}
+	}
+	return out
+}
+
 func (b focusSummaryBucket) statusSuffix() string {
-	status := make([]string, 0, 3)
+	status := make([]string, 0, 4)
 	if b.running > 0 {
 		status = append(status, fmt.Sprintf("%d running", b.running))
 	}
 	if b.failed > 0 {
 		status = append(status, fmt.Sprintf("%d failed", b.failed))
+	}
+	if succeeded := b.succeeded(); succeeded > 0 && (b.running > 0 || b.failed > 0 || b.denied > 0) {
+		status = append(status, fmt.Sprintf("%d succeeded", succeeded))
 	}
 	if b.denied > 0 {
 		status = append(status, fmt.Sprintf("%d denied/canceled", b.denied))
@@ -236,45 +373,179 @@ func (b focusSummaryBucket) statusSuffix() string {
 	return " (" + strings.Join(status, ", ") + ")"
 }
 
-func focusShellSummary(b focusSummaryBucket) string {
+func focusBucketState(b focusSummaryBucket) string {
+	switch {
+	case b.denied > 0:
+		return "denied"
+	case b.failed > 0:
+		return "failed"
+	case b.running > 0:
+		return "running"
+	default:
+		return "done"
+	}
+}
+
+func focusSummaryPart(kind string, b focusSummaryBucket, action, detail string) tuirender.FocusSummaryPart {
 	if b.count == 0 {
-		return ""
+		return tuirender.FocusSummaryPart{}
+	}
+	return tuirender.FocusSummaryPart{
+		Kind:   kind,
+		State:  focusBucketState(b),
+		Count:  b.count,
+		Action: action,
+		Detail: detail,
+		Status: strings.TrimSpace(b.statusSuffix()),
+	}
+}
+
+func focusStateShellSummaryPart(b focusSummaryBucket, state string) tuirender.FocusSummaryPart {
+	b = b.forState(state)
+	if state == "failed" {
+		return focusFailedShellSummaryPart(b)
+	}
+	return focusShellSummaryPart(b)
+}
+
+func focusRecoveredShellSummaryPart(b focusSummaryBucket) tuirender.FocusSummaryPart {
+	if b.count == 0 {
+		return tuirender.FocusSummaryPart{}
+	}
+	done := b.forState("done")
+	detail := latestFocusHint(done.details, focusPlainHint)
+	if detail == "" {
+		detail = focusSampleDetails(b.details, b.count, focusPlainHint)
+	}
+	action := "Retried shell"
+	if succeeded := b.succeeded(); succeeded > 1 {
+		action = fmt.Sprintf("Retried %d shell commands", succeeded)
+	}
+	part := focusSummaryPart("shell", b, action, detail)
+	part.State = "done"
+	return part
+}
+
+func focusShellSummaryPart(b focusSummaryBucket) tuirender.FocusSummaryPart {
+	if b.count == 0 {
+		return tuirender.FocusSummaryPart{}
 	}
 	if b.allDenied() {
-		return fmt.Sprintf("Denied %d %s%s", b.count, pluralize(b.count, "shell command", "shell commands"), b.statusSuffix())
+		return focusSummaryPart("shell", b, fmt.Sprintf("Denied %d %s", b.count, pluralize(b.count, "shell command", "shell commands")), "")
 	}
 	verb := b.activeVerb("Running", "Ran")
 	if len(b.details) == 1 {
-		return fmt.Sprintf("%s shell: %s%s", verb, b.details[0], b.statusSuffix())
+		return focusSummaryPart("shell", b, verb+" shell", b.details[0])
 	}
-	if len(b.details) > 1 && len(b.details) == b.count && len(strings.Join(b.details, "; ")) <= 120 {
-		return fmt.Sprintf("%s %d shell commands: %s%s", verb, b.count, strings.Join(b.details, "; "), b.statusSuffix())
+	if detail := focusSampleDetails(b.details, b.count, focusPlainHint); detail != "" {
+		return focusSummaryPart("shell", b, fmt.Sprintf("%s %d shell commands", verb, b.count), detail)
 	}
-	return fmt.Sprintf("%s %d %s%s", verb, b.count, pluralize(b.count, "shell command", "shell commands"), b.statusSuffix())
+	return focusSummaryPart("shell", b, fmt.Sprintf("%s %d %s", verb, b.count, pluralize(b.count, "shell command", "shell commands")), "")
 }
 
-func focusCountSummary(b focusSummaryBucket, runningVerb, doneVerb, singular, plural string) string {
+func focusFailedShellSummaryPart(b focusSummaryBucket) tuirender.FocusSummaryPart {
 	if b.count == 0 {
-		return ""
+		return tuirender.FocusSummaryPart{}
 	}
-	return fmt.Sprintf("%s %d %s%s", b.activeVerb(runningVerb, doneVerb), b.count, pluralize(b.count, singular, plural), b.statusSuffix())
+	if len(b.details) == 1 {
+		return focusSummaryPart("shell", b, "Failed shell", b.details[0])
+	}
+	if detail := focusSampleDetails(b.details, b.count, focusPlainHint); detail != "" {
+		return focusSummaryPart("shell", b, fmt.Sprintf("Failed %d shell commands", b.count), detail)
+	}
+	return focusSummaryPart("shell", b, fmt.Sprintf("Failed %d %s", b.count, pluralize(b.count, "shell command", "shell commands")), "")
 }
 
-func focusHintSummary(b focusSummaryBucket, runningVerb, doneVerb, deniedVerb, singular, plural string, formatHint func(string) string) string {
+func focusStateCountSummaryPart(kind string, b focusSummaryBucket, state, runningVerb, doneVerb, deniedVerb, failedVerb, singular, plural string) tuirender.FocusSummaryPart {
+	b = b.forState(state)
+	if state == "failed" {
+		return focusCountSummaryPartWithVerb(kind, b, failedVerb, singular, plural)
+	}
+	if state == "denied" {
+		return focusCountSummaryPartWithVerb(kind, b, deniedVerb, singular, plural)
+	}
+	return focusCountSummaryPart(kind, b, runningVerb, doneVerb, singular, plural)
+}
+
+func focusCountSummaryPart(kind string, b focusSummaryBucket, runningVerb, doneVerb, singular, plural string) tuirender.FocusSummaryPart {
 	if b.count == 0 {
-		return ""
+		return tuirender.FocusSummaryPart{}
+	}
+	return focusSummaryPart(kind, b, fmt.Sprintf("%s %d %s", b.activeVerb(runningVerb, doneVerb), b.count, pluralize(b.count, singular, plural)), "")
+}
+
+func focusCountSummaryPartWithVerb(kind string, b focusSummaryBucket, verb, singular, plural string) tuirender.FocusSummaryPart {
+	if b.count == 0 {
+		return tuirender.FocusSummaryPart{}
+	}
+	return focusSummaryPart(kind, b, fmt.Sprintf("%s %d %s", verb, b.count, pluralize(b.count, singular, plural)), "")
+}
+
+func focusStateHintSummaryPart(kind string, b focusSummaryBucket, state, runningVerb, doneVerb, deniedVerb, failedVerb, singular, plural string, formatHint func(string) string) tuirender.FocusSummaryPart {
+	b = b.forState(state)
+	if state == "failed" {
+		return focusFailedHintSummaryPart(kind, b, failedVerb, singular, plural, formatHint)
+	}
+	return focusHintSummaryPart(kind, b, runningVerb, doneVerb, deniedVerb, singular, plural, formatHint)
+}
+
+func focusHintSummaryPart(kind string, b focusSummaryBucket, runningVerb, doneVerb, deniedVerb, singular, plural string, formatHint func(string) string) tuirender.FocusSummaryPart {
+	if b.count == 0 {
+		return tuirender.FocusSummaryPart{}
 	}
 	verb := b.activeVerb(runningVerb, doneVerb)
 	if b.allDenied() {
 		verb = deniedVerb
 	}
-	text := fmt.Sprintf("%s %d %s", verb, b.count, pluralize(b.count, singular, plural))
+	part := focusSummaryPart(kind, b, fmt.Sprintf("%s %d %s", verb, b.count, pluralize(b.count, singular, plural)), "")
 	if b.running > 0 && !b.allDenied() {
 		if hint := latestFocusHint(b.details, formatHint); hint != "" {
-			text += ": " + hint
+			part.Detail = hint
+		}
+	} else if !b.allDenied() {
+		part.Detail = focusSampleDetails(b.details, b.count, formatHint)
+	}
+	return part
+}
+
+func focusFailedHintSummaryPart(kind string, b focusSummaryBucket, failedVerb, singular, plural string, formatHint func(string) string) tuirender.FocusSummaryPart {
+	if b.count == 0 {
+		return tuirender.FocusSummaryPart{}
+	}
+	part := focusSummaryPart(kind, b, fmt.Sprintf("%s %d %s", failedVerb, b.count, pluralize(b.count, singular, plural)), "")
+	part.Detail = focusSampleDetails(b.details, b.count, formatHint)
+	return part
+}
+
+func focusSampleDetails(details []string, total int, format func(string) string) string {
+	const maxDetails = 2
+	samples := make([]string, 0, maxDetails)
+	seen := map[string]struct{}{}
+	unique := 0
+	for _, detail := range details {
+		if sample := format(strings.TrimSpace(detail)); sample != "" {
+			if _, ok := seen[sample]; ok {
+				continue
+			}
+			seen[sample] = struct{}{}
+			unique++
+			if len(samples) < maxDetails {
+				samples = append(samples, sample)
+			}
 		}
 	}
-	return text + b.statusSuffix()
+	if len(samples) == 0 {
+		return ""
+	}
+	text := strings.Join(samples, "; ")
+	remaining := total - len(samples)
+	if hiddenUnique := unique - len(samples); hiddenUnique > remaining {
+		remaining = hiddenUnique
+	}
+	if remaining > 0 {
+		text += fmt.Sprintf(" (+%d)", remaining)
+	}
+	return text
 }
 
 func latestFocusHint(details []string, format func(string) string) string {
@@ -298,24 +569,51 @@ func focusQuoteHint(detail string) string {
 	return `"` + truncateFocusToolDetail(detail) + `"`
 }
 
-func focusSimpleSummary(b focusSummaryBucket, runningText, doneText, singular, plural string) string {
+func focusSimpleSummaryPart(kind string, b focusSummaryBucket, runningText, doneText, singular, plural string) tuirender.FocusSummaryPart {
 	if b.count == 0 {
-		return ""
+		return tuirender.FocusSummaryPart{}
 	}
+	action := ""
 	if b.count == 1 {
-		return b.activeVerb(runningText, doneText) + b.statusSuffix()
+		action = b.activeVerb(runningText, doneText)
+	} else {
+		action = fmt.Sprintf("%s: %d %s", b.activeVerb(runningText, doneText), b.count, pluralize(b.count, singular, plural))
 	}
-	return fmt.Sprintf("%s: %d %s%s", b.activeVerb(runningText, doneText), b.count, pluralize(b.count, singular, plural), b.statusSuffix())
+	return focusSummaryPart(kind, b, action, "")
 }
 
-func focusTaskSummary(b focusSummaryBucket) string {
+func focusStateSimpleSummaryPart(kind string, b focusSummaryBucket, state, runningText, doneText, deniedVerb, failedVerb, singular, plural string) tuirender.FocusSummaryPart {
+	b = b.forState(state)
+	switch state {
+	case "denied":
+		return focusCountSummaryPartWithVerb(kind, b, deniedVerb, singular, plural)
+	case "failed":
+		return focusCountSummaryPartWithVerb(kind, b, failedVerb, singular, plural)
+	default:
+		return focusSimpleSummaryPart(kind, b, runningText, doneText, singular, plural)
+	}
+}
+
+func focusStateTaskSummaryPart(b focusSummaryBucket, state string) tuirender.FocusSummaryPart {
+	b = b.forState(state)
+	switch state {
+	case "denied":
+		return focusCountSummaryPartWithVerb("task", b, "Denied", "subagent task", "subagent tasks")
+	case "failed":
+		return focusCountSummaryPartWithVerb("task", b, "Failed", "subagent task", "subagent tasks")
+	default:
+		return focusTaskSummaryPart(b)
+	}
+}
+
+func focusTaskSummaryPart(b focusSummaryBucket) tuirender.FocusSummaryPart {
 	if b.count == 0 {
-		return ""
+		return tuirender.FocusSummaryPart{}
 	}
 	if b.count == 1 && len(b.details) == 1 {
-		return b.details[0] + b.statusSuffix()
+		return focusSummaryPart("task", b, b.details[0], "")
 	}
-	return focusCountSummary(b, "Running", "Ran", "subagent task", "subagent tasks")
+	return focusCountSummaryPart("task", b, "Running", "Ran", "subagent task", "subagent tasks")
 }
 
 func pluralize(n int, singular, plural string) string {
@@ -336,192 +634,4 @@ func focusToolState(msg tuirender.UIMessage) string {
 	default:
 		return "done"
 	}
-}
-
-func focusToolDetail(msg tuirender.UIMessage) string {
-	text := strings.TrimSpace(msg.Text)
-	kind := focusToolKindFromName(msg.ToolName)
-	if kind == "shell" {
-		for _, prefix := range []string{"Running ", "Ran "} {
-			if after, ok := strings.CutPrefix(text, prefix); ok {
-				line := strings.TrimSpace(strings.SplitN(after, "\n", 2)[0])
-				return truncateFocusToolDetail(line)
-			}
-		}
-	}
-	if line := focusActionDetail(text); line != "" {
-		return truncateFocusToolDetail(line)
-	}
-	if detail := focusRunningDetail(text, msg.ToolName); detail != "" {
-		return truncateFocusToolDetail(detail)
-	}
-	return ""
-}
-
-func focusTaskDetail(msg tuirender.UIMessage) string {
-	line := strings.TrimSpace(strings.SplitN(strings.TrimSpace(msg.Text), "\n", 2)[0])
-	if line == "" {
-		return ""
-	}
-	return truncateFocusToolDetail(line)
-}
-
-func truncateFocusToolDetail(text string) string {
-	const max = 96
-	text = strings.Join(strings.Fields(text), " ")
-	if len([]rune(text)) <= max {
-		return text
-	}
-	runes := []rune(text)
-	return string(runes[:max-1]) + "..."
-}
-
-func focusToolKind(msg tuirender.UIMessage) string {
-	if kind := focusToolKindFromName(msg.ToolName); kind != "unknown" {
-		return kind
-	}
-	text := strings.TrimSpace(msg.Text)
-	if kind := focusToolKindFromText(text); kind != "unknown" {
-		return kind
-	}
-	return "unknown"
-}
-
-func focusToolKindFromName(toolName string) string {
-	name := strings.TrimSpace(toolName)
-	switch name {
-	case "shell_run", "shell_wait":
-		return "shell"
-	case "read_file", "fetch", "web_fetch":
-		return "read"
-	case "list_dir":
-		return "list"
-	case "search_files", "grep", "search_content", "web_search":
-		return "search"
-	case "write_file", "edit_file", "apply_patch", "write", "edit":
-		return "edit"
-	case "parallel_reason", "spawn_subagent":
-		return "task"
-	case "update_plan":
-		return "plan"
-	case "todo_add", "todo_list", "todo_update", "todo_remove", "todo_clear_done":
-		return "todo"
-	}
-	name = strings.ToLower(name)
-	switch {
-	case strings.Contains(name, "read_text_file"), strings.Contains(name, "read_file"), strings.Contains(name, "fetch"):
-		return "read"
-	case strings.Contains(name, "list_directory"), strings.Contains(name, "list_dir"):
-		return "list"
-	case strings.Contains(name, "search"), strings.Contains(name, "grep"):
-		return "search"
-	case strings.Contains(name, "write_file"), strings.Contains(name, "edit_file"), strings.Contains(name, "apply_patch"):
-		return "edit"
-	default:
-		return "unknown"
-	}
-}
-
-func focusToolKindFromText(text string) string {
-	switch {
-	case strings.HasPrefix(text, "Running shell:"), strings.HasPrefix(text, "Ran shell:"):
-		return "shell"
-	case strings.HasPrefix(text, "Exploring"), strings.HasPrefix(text, "Explored"):
-		return focusExploreKindFromAction(focusActionLine(text))
-	case strings.HasPrefix(text, "Subagent"), strings.HasPrefix(text, "Parallel reasoning"):
-		return "task"
-	case strings.HasPrefix(text, "Updating plan"), strings.HasPrefix(text, "Updated plan"):
-		return "plan"
-	case strings.Contains(text, "todo"):
-		return "todo"
-	case strings.HasPrefix(text, "Edited "), strings.HasPrefix(text, "Created "), strings.HasPrefix(text, "Deleted "), strings.HasPrefix(text, "Wrote "):
-		return "edit"
-	default:
-		return "unknown"
-	}
-}
-
-func focusRunningDetail(text, toolName string) string {
-	for _, prefix := range []string{"Running ", "Run "} {
-		if after, ok := strings.CutPrefix(strings.TrimSpace(text), prefix); ok {
-			detail := strings.TrimSpace(strings.SplitN(after, "\n", 2)[0])
-			if focusIsToolNameDetail(detail, toolName) {
-				return ""
-			}
-			return detail
-		}
-	}
-	return ""
-}
-
-func focusIsToolNameDetail(detail, toolName string) bool {
-	detail = strings.TrimSpace(detail)
-	toolName = strings.TrimSpace(toolName)
-	if detail == "" || toolName == "" {
-		return false
-	}
-	if detail == toolName {
-		return true
-	}
-	if strings.HasPrefix(toolName, "mcp__") {
-		parts := strings.Split(toolName, "__")
-		return len(parts) > 0 && detail == parts[len(parts)-1]
-	}
-	return false
-}
-
-func focusExploreKindFromAction(action string) string {
-	action = strings.TrimSpace(action)
-	switch {
-	case strings.HasPrefix(action, "Read "), strings.HasPrefix(action, "Fetch "):
-		return "read"
-	case strings.HasPrefix(action, "List "):
-		return "list"
-	case strings.HasPrefix(action, "Search "):
-		return "search"
-	default:
-		return "read"
-	}
-}
-
-func focusActionDetail(text string) string {
-	line := focusActionLine(text)
-	if line == "" {
-		return ""
-	}
-	switch {
-	case strings.HasPrefix(line, "Search web for "):
-		return strings.TrimSpace(strings.TrimPrefix(line, "Search web for "))
-	case strings.HasPrefix(line, "Search "):
-		return strings.TrimSpace(strings.TrimPrefix(line, "Search "))
-	case strings.HasPrefix(line, "Read "):
-		return strings.TrimSpace(strings.TrimPrefix(line, "Read "))
-	case strings.HasPrefix(line, "List "):
-		return strings.TrimSpace(strings.TrimPrefix(line, "List "))
-	case strings.HasPrefix(line, "Fetch "):
-		return strings.TrimSpace(strings.TrimPrefix(line, "Fetch "))
-	case strings.HasPrefix(line, "Edited "):
-		return strings.TrimSpace(strings.TrimPrefix(line, "Edited "))
-	case strings.HasPrefix(line, "Created "):
-		return strings.TrimSpace(strings.TrimPrefix(line, "Created "))
-	case strings.HasPrefix(line, "Deleted "):
-		return strings.TrimSpace(strings.TrimPrefix(line, "Deleted "))
-	case strings.HasPrefix(line, "Wrote "):
-		return strings.TrimSpace(strings.TrimPrefix(line, "Wrote "))
-	default:
-		return ""
-	}
-}
-
-func focusActionLine(text string) string {
-	lines := strings.Split(strings.TrimSpace(text), "\n")
-	for i := 1; i < len(lines); i++ {
-		if line := strings.TrimSpace(lines[i]); line != "" {
-			return line
-		}
-	}
-	if len(lines) == 1 {
-		return strings.TrimSpace(lines[0])
-	}
-	return ""
 }

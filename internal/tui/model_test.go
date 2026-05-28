@@ -3803,6 +3803,9 @@ func TestProviderRetryStreamResetClearsLiveAttempt(t *testing.T) {
 	if len(m.assembler.Snapshot()) == 0 {
 		t.Fatal("expected live attempt content before retry reset")
 	}
+	if m.busyTokenCount == 0 {
+		t.Fatal("expected live token count before retry reset")
+	}
 	m.handleServiceEvent(service.Event{
 		Kind:     service.EventProviderRetry,
 		Text:     "API stream disconnected, retrying in 1s (1/1)",
@@ -3815,11 +3818,57 @@ func TestProviderRetryStreamResetClearsLiveAttempt(t *testing.T) {
 	if m.visibleAssistantThisTurn != "" || m.sawAssistantThisTurn || m.sawReasoningThisTurn {
 		t.Fatalf("turn visibility not reset: visible=%q assistant=%v reasoning=%v", m.visibleAssistantThisTurn, m.sawAssistantThisTurn, m.sawReasoningThisTurn)
 	}
+	if m.busyTokenCount != 0 {
+		t.Fatalf("expected live token count reset, got %d", m.busyTokenCount)
+	}
 	if m.providerRetryStatus == "" {
 		t.Fatal("expected provider retry status after reset")
 	}
 	if len(m.transcript) != 0 {
 		t.Fatalf("retry reset should not append transcript: %+v", m.transcript)
+	}
+}
+
+func TestLiveTokenEstimateAccumulatesDeltas(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	full := "hello 世界"
+
+	for _, r := range full {
+		m.recordAssistantDelta(string(r))
+	}
+
+	if m.busyTokenCount != estimateTokens(full) {
+		t.Fatalf("chunked estimate = %d, want %d", m.busyTokenCount, estimateTokens(full))
+	}
+	if m.busyTokenASCIIChars != 6 || m.busyTokenNonASCIIChars != 2 {
+		t.Fatalf("unexpected token char counts: ascii=%d nonASCII=%d", m.busyTokenASCIIChars, m.busyTokenNonASCIIChars)
+	}
+}
+
+func TestLiveTokenEstimateCountsReasoningAndPlanDeltas(t *testing.T) {
+	m := newModel(nil, "", "", "")
+
+	m.handleServiceEvent(service.Event{Kind: service.EventReasoningDelta, Text: "think "})
+	m.handleServiceEvent(service.Event{Kind: service.EventPlanDelta, Text: "plan "})
+	m.handleServiceEvent(service.Event{Kind: service.EventAssistantDelta, Text: "answer"})
+
+	want := estimateTokens("think plan answer")
+	if m.busyTokenCount != want {
+		t.Fatalf("live token estimate = %d, want %d", m.busyTokenCount, want)
+	}
+	if m.visibleAssistantThisTurn != "answer" {
+		t.Fatalf("assistant visibility should only track assistant deltas, got %q", m.visibleAssistantThisTurn)
+	}
+}
+
+func TestResetTurnVisibilityClearsLiveTokenEstimate(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.recordAssistantDelta("hello 世界")
+
+	m.resetTurnVisibility()
+
+	if m.busyTokenCount != 0 || m.busyTokenASCIIChars != 0 || m.busyTokenNonASCIIChars != 0 {
+		t.Fatalf("expected token estimate reset, got count=%d ascii=%d nonASCII=%d", m.busyTokenCount, m.busyTokenASCIIChars, m.busyTokenNonASCIIChars)
 	}
 }
 
@@ -5268,17 +5317,71 @@ func TestRenderQueuedPromptsShowsPreviewLimit(t *testing.T) {
 func TestApprovalNoticeTextUsesDecisionAndSummary(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.approval.reason = "shell_run: go test ./..."
-	if got := m.approvalNoticeText("allow"); !strings.Contains(got, "You approved whale to run go test ./... this time") {
+	if got := m.approvalNoticeText("allow"); got != "Approved to run go test ./... · this time" {
 		t.Fatalf("unexpected allow notice: %q", got)
 	}
-	if got := m.approvalNoticeText("allow_session"); !strings.Contains(got, "for this session") {
+	if got := m.approvalNoticeText("allow_session"); got != "Approved to run go test ./... · for this session" {
 		t.Fatalf("unexpected session notice: %q", got)
 	}
-	if got := m.approvalNoticeText("deny"); !strings.Contains(got, "You canceled the request to run go test ./...") {
+	if got := m.approvalNoticeText("deny"); got != "Denied request to run go test ./..." {
 		t.Fatalf("unexpected deny notice: %q", got)
 	}
-	if got := m.approvalNoticeText("cancel"); !strings.Contains(got, "You canceled the request to run go test ./...") {
+	if got := m.approvalNoticeText("cancel"); got != "Canceled request to run go test ./..." {
 		t.Fatalf("unexpected cancel notice: %q", got)
+	}
+}
+
+func TestApprovalDecisionAppendsStructuredNotice(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.mode = modeApproval
+	m.approval.toolCallID = "tool-1"
+	m.approval.toolName = "shell_run"
+	m.approval.reason = "shell_run: git status"
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m = next.(model)
+	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentAllowTool || (*intents)[0].ToolCallID != "tool-1" {
+		t.Fatalf("unexpected approval intent: %+v", *intents)
+	}
+	if m.assembler == nil {
+		t.Fatal("expected assembler with approval notice")
+	}
+	snap := m.assembler.Snapshot()
+	if len(snap) == 0 {
+		t.Fatal("expected approval notice message")
+	}
+	got := snap[len(snap)-1]
+	if got.Kind != tuirender.KindNotice || got.Notice == nil {
+		t.Fatalf("expected structured notice, got: %+v", got)
+	}
+	if got.Text != "Approved to run git status · this time" {
+		t.Fatalf("unexpected notice text: %q", got.Text)
+	}
+	if got.Notice.Kind != "approval_allowed" || got.Notice.Command != "git status" || got.Notice.Scope != "this time" {
+		t.Fatalf("unexpected notice metadata: %+v", got.Notice)
+	}
+}
+
+func TestAutoAcceptInfoAppendsStructuredNotice(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventInfo, Text: "Session auto-accept enabled", AutoAccept: true, AutoAcceptKnown: true}))
+	m = next.(model)
+	if !m.autoAccept {
+		t.Fatal("expected auto-accept state to update")
+	}
+	if m.assembler == nil {
+		t.Fatal("expected assembler with permission notice")
+	}
+	snap := m.assembler.Snapshot()
+	if len(snap) == 0 {
+		t.Fatal("expected permission notice message")
+	}
+	got := snap[len(snap)-1]
+	if got.Kind != tuirender.KindNotice || got.Notice == nil {
+		t.Fatalf("expected structured permission notice, got: %+v", got)
+	}
+	if got.Text != "Session auto-accept enabled" || got.Notice.Kind != "permission_auto_accept_enabled" {
+		t.Fatalf("unexpected permission notice: text=%q notice=%+v", got.Text, got.Notice)
 	}
 }
 
@@ -5339,7 +5442,7 @@ func TestApprovalEscRemovesPendingToolCallBeforeTurnDone(t *testing.T) {
 	if strings.Contains(rendered, "Reasoning only") || strings.Contains(rendered, "did not produce a visible answer") {
 		t.Fatalf("approval cancel should suppress reasoning-only fallback:\n%s", rendered)
 	}
-	if !strings.Contains(rendered, "You canceled the request to run date") {
+	if !strings.Contains(rendered, "Canceled request to run date") {
 		t.Fatalf("expected cancel notice in transcript:\n%s", rendered)
 	}
 }
@@ -6062,10 +6165,30 @@ func TestReasoningDeltaKeepsSingleThinkingCardAcrossNewlines(t *testing.T) {
 	if got := strings.Count(joined, "Thinking"); got != 1 {
 		t.Fatalf("expected one thinking card, got %d:\n%s", got, joined)
 	}
-	for _, want := range []string{"first thought", "second thought", "third thought"} {
+	if strings.Contains(joined, "first thought") {
+		t.Fatalf("expected streaming thinking preview to hide older line:\n%s", joined)
+	}
+	for _, want := range []string{"second thought", "third thought"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("expected %q in thinking card:\n%s", want, joined)
 		}
+	}
+}
+
+func TestCommittedReasoningIsNoLongerStreaming(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventReasoningDelta, Text: "first\nsecond\nthird"}))
+	m = next.(model)
+	snap := m.assembler.Snapshot()
+	if len(snap) != 1 || !snap[0].Streaming {
+		t.Fatalf("expected live reasoning to be streaming, got %+v", snap)
+	}
+	m.commitLiveTranscript(true)
+	if got := len(m.transcript); got != 1 {
+		t.Fatalf("expected one transcript message, got %d", got)
+	}
+	if m.transcript[0].Streaming {
+		t.Fatalf("committed reasoning should not stay streaming: %+v", m.transcript[0])
 	}
 }
 
@@ -8952,6 +9075,34 @@ func TestApprovalViewSeparatesToolNameFromDetail(t *testing.T) {
 	}
 }
 
+func TestApprovalViewShowsExternalDirectoryMetadata(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 100
+	m.height = 30
+	m.mode = modeApproval
+	m.approval.toolName = "mcp__fs__list_directory"
+	m.approval.reason = "mcp__fs__list_directory"
+	m.approval.metadata = map[string]any{
+		"permission_kind":   "external_directory",
+		"permission_target": "/Users/goranka/Engineer/ai/dsk/opencode-dev",
+	}
+
+	view := xansi.Strip(m.View())
+	for _, want := range []string{
+		"Approval required: external directory",
+		"mcp__fs__list_directory",
+		"Allow access outside the current workspace.",
+		"Path: /Users/goranka/Engineer/ai/dsk/opencode-dev",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected approval view to contain %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "external_directory:*=ask") {
+		t.Fatalf("approval view should not expose raw rule labels:\n%s", view)
+	}
+}
+
 func TestApprovalViewHidesDuplicatePendingToolRow(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 100
@@ -9319,8 +9470,23 @@ func TestToolResultShowsDiffMetadata(t *testing.T) {
 	if len(snap) != 0 {
 		t.Fatalf("expected completed tool cell to leave live assembler empty, got %+v", snap)
 	}
-	if got := strings.Join(tuirender.ChatLines(m.transcript, 100), "\n"); !strings.Contains(got, "Edited a.txt") {
+	got := strings.Join(tuirender.ChatLines(m.transcript, 100), "\n")
+	plain := xansi.Strip(got)
+	if !strings.Contains(plain, "Edited a.txt") {
 		t.Fatalf("expected completed tool cell in transcript:\n%s", got)
+	}
+	if !strings.Contains(plain, "✓ · 1 replacement") {
+		t.Fatalf("expected edit status inline with singular wording:\n%s", got)
+	}
+	for _, bad := range []string{"```diff", "  └ ✓", "  └ ---"} {
+		if strings.Contains(plain, bad) {
+			t.Fatalf("tool diff/status should not render as nested markdown child %q:\n%s", bad, got)
+		}
+	}
+	for _, want := range []string{"a.txt (+1 -1)", "+whale"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected structured diff preview to contain %q:\n%s", want, got)
+		}
 	}
 	if got := strings.Join(m.renderDiffs(), "\n"); !strings.Contains(got, "+whale") {
 		t.Fatalf("expected /diff content from metadata:\n%s", got)
@@ -9350,13 +9516,17 @@ func TestToolResultShowsLargeTranslationDiffTailInChat(t *testing.T) {
 		t.Fatal("expected wait-event command")
 	}
 	got := strings.Join(tuirender.ChatLines(m.transcript, 120), "\n")
-	if !strings.Contains(got, "Edited roadmap.md") {
+	plain := xansi.Strip(got)
+	if !strings.Contains(plain, "Edited roadmap.md") {
 		t.Fatalf("expected completed tool cell in transcript:\n%s", got)
 	}
-	if !strings.Contains(got, "+English 189") {
+	if !strings.Contains(plain, "+English 189") {
 		t.Fatalf("expected output box diff preview to include translated additions:\n%s", got)
 	}
-	if strings.Contains(got, "... diff truncated (") {
+	if strings.Contains(plain, "```diff") || strings.Contains(plain, "  └ ---") {
+		t.Fatalf("expected output box diff preview to use structured diff styling:\n%s", got)
+	}
+	if strings.Contains(plain, "... diff truncated (") {
 		t.Fatalf("expected translation-size diff to fit in output preview:\n%s", got)
 	}
 }
@@ -9614,7 +9784,7 @@ func TestShellRunTranscriptKeepsStatusAndOutputSeparate(t *testing.T) {
 		Text:       `shell_run: {"command":"cd internal/tui && wc -l model.go model_events.go model_keys.go model_prompt.go"}`,
 	}))
 	m = next.(model)
-	raw := `{"success":true,"code":"ok","data":{"status":"ok","metrics":{"exit_code":0,"duration_ms":23},"payload":{"command":"cd internal/tui && wc -l model.go model_events.go model_keys.go model_prompt.go","stdout":"284 model.go\n202 model_events.go\n401 model_keys.go\n88 model_prompt.go\n975 total\n","stderr":""}}}`
+	raw := `{"success":true,"code":"ok","data":{"status":"ok","metrics":{"exit_code":0,"duration_ms":23},"payload":{"command":"cd internal/tui && wc -l model.go model_events.go model_keys.go model_prompt.go","cwd":"internal/tui","stdout":"284 model.go\n202 model_events.go\n401 model_keys.go\n88 model_prompt.go\n975 total\n","stderr":""}}}`
 	next, _ = m.Update(svcMsg(service.Event{
 		Kind:       service.EventToolResult,
 		ToolCallID: "tc-shell",
@@ -9622,6 +9792,10 @@ func TestShellRunTranscriptKeepsStatusAndOutputSeparate(t *testing.T) {
 		Text:       raw,
 	}))
 	m = next.(model)
+	wantIdentity := "cd internal/tui && wc -l model.go model_events.go model_keys.go model_prompt.go\x00cwd=internal/tui"
+	if len(m.transcript) != 1 || m.transcript[0].ToolIdentity != wantIdentity {
+		t.Fatalf("shell result should preserve payload command identity, got %+v", m.transcript)
+	}
 	rendered := strings.Join(tuirender.ChatLines(m.transcript, 100), "\n")
 	if strings.Contains(rendered, "23ms 284 model.go") {
 		t.Fatalf("status and shell output collapsed onto one line:\n%s", rendered)
@@ -9630,6 +9804,34 @@ func TestShellRunTranscriptKeepsStatusAndOutputSeparate(t *testing.T) {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected rendered transcript to contain %q:\n%s", want, rendered)
 		}
+	}
+}
+
+func TestShellResultFallsBackToRunningCommandWhenPayloadOmitsCommand(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 30}
+	next, _ := m.Update(svcMsg(service.Event{
+		Kind:       service.EventToolCall,
+		ToolCallID: "tc-shell",
+		ToolName:   "shell_run",
+		Text:       `shell_run: {"command":"git status"}`,
+	}))
+	m = next.(model)
+	raw := `{"success":false,"code":"denied","message":"denied","data":{"status":"error","summary":"denied","payload":{"stderr":"","stdout":""}}}`
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind:       service.EventToolResult,
+		ToolCallID: "tc-shell",
+		ToolName:   "shell_run",
+		Text:       raw,
+	}))
+	m = next.(model)
+	if len(m.transcript) != 1 {
+		t.Fatalf("expected one transcript message, got %+v", m.transcript)
+	}
+	if m.transcript[0].Text != "Ran git status\nDENIED · denied" {
+		t.Fatalf("shell result should preserve previous command in title, got %q", m.transcript[0].Text)
+	}
+	if m.transcript[0].ToolIdentity != "git status" {
+		t.Fatalf("shell result should use previous command as identity, got %q", m.transcript[0].ToolIdentity)
 	}
 }
 
@@ -9668,6 +9870,100 @@ func TestSummarizeToolResultForChat_PermissionDeniedShowsDenied(t *testing.T) {
 	want := "DENIED · path outside MCP fs allowed directories: /workspace not in /tmp"
 	if got != want {
 		t.Fatalf("unexpected summary:\nwant: %q\ngot:  %q", want, got)
+	}
+}
+
+func TestMCPToolCallRendersUserFacingLabelAndArgs(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 30}
+	next, _ := m.Update(svcMsg(service.Event{
+		Kind:       service.EventToolCall,
+		ToolCallID: "tc-mcp",
+		ToolName:   "mcp__fs__list_directory",
+		Text:       `mcp__fs__list_directory: {"path":"/tmp/中文目录"}`,
+	}))
+	m = next.(model)
+	snap := m.assembler.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected one MCP tool call, got %+v", snap)
+	}
+	if strings.Contains(snap[0].Text, "mcp__fs__list_directory") {
+		t.Fatalf("MCP display should hide raw tool name: %q", snap[0].Text)
+	}
+	for _, want := range []string{"Calling MCP fs · list_directory", "path: /tmp/中文目录"} {
+		if !strings.Contains(snap[0].Text, want) {
+			t.Fatalf("expected %q in MCP display text: %q", want, snap[0].Text)
+		}
+	}
+}
+
+func TestMCPToolResultKeepsLabelArgsAndOutputSeparate(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 30}
+	next, _ := m.Update(svcMsg(service.Event{
+		Kind:       service.EventToolCall,
+		ToolCallID: "tc-mcp",
+		ToolName:   "mcp__fs__list_directory",
+		Text:       `mcp__fs__list_directory: {"path":"/tmp/project"}`,
+	}))
+	m = next.(model)
+	raw := `{"ok":true,"success":true,"code":"ok","data":{"server":"fs","tool":"list_directory","text":"README.md\ncmd\n"},"metadata":{"duration_ms":121,"source_tool":"mcp__fs__list_directory"}}`
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind:       service.EventToolResult,
+		ToolCallID: "tc-mcp",
+		ToolName:   "mcp__fs__list_directory",
+		Text:       raw,
+	}))
+	m = next.(model)
+	if len(m.transcript) != 1 {
+		t.Fatalf("expected completed MCP cell in transcript, got %+v", m.transcript)
+	}
+	rendered := strings.Join(tuirender.ChatLines(m.transcript, 100), "\n")
+	plain := xansi.Strip(rendered)
+	for _, want := range []string{"Called MCP fs · list_directory", "path: /tmp/project", "✓ · 121ms", "README.md"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected rendered MCP transcript to contain %q:\n%s", want, plain)
+		}
+	}
+	if strings.Contains(plain, "mcp__fs__list_directory") || strings.Contains(plain, "source_tool") {
+		t.Fatalf("MCP transcript leaked internal fields:\n%s", plain)
+	}
+}
+
+func TestMCPToolResultSummarizesStructuredOnlyContent(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 30}
+	next, _ := m.Update(svcMsg(service.Event{
+		Kind:       service.EventToolCall,
+		ToolCallID: "tc-mcp",
+		ToolName:   "mcp__github__get_issue",
+		Text:       `mcp__github__get_issue: {"owner":"usewhale","repo":"whale","number":169}`,
+	}))
+	m = next.(model)
+	raw := `{"ok":true,"success":true,"code":"ok","data":{"server":"github","tool":"get_issue","text":"","structured_content":{"number":169,"title":"Structured MCP output","state":"open"}},"metadata":{"duration_ms":44}}`
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind:       service.EventToolResult,
+		ToolCallID: "tc-mcp",
+		ToolName:   "mcp__github__get_issue",
+		Text:       raw,
+	}))
+	m = next.(model)
+	if len(m.transcript) != 1 {
+		t.Fatalf("expected completed MCP cell in transcript, got %+v", m.transcript)
+	}
+	plain := xansi.Strip(strings.Join(tuirender.ChatLines(m.transcript, 100), "\n"))
+	for _, want := range []string{"Called MCP github · get_issue", "✓ · 44ms", "number: 169", "state: open", "title: Structured MCP output"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected structured MCP transcript to contain %q:\n%s", want, plain)
+		}
+	}
+}
+
+func TestSummarizeToolResultForChat_MCPAllowedDirsDeniedShowsDenied(t *testing.T) {
+	raw := `{"success":false,"code":"mcp_allowed_dirs_denied","message":"MCP filesystem server cannot access /workspace; allowed directories: /tmp. Use Whale built-in file tools for this path, or add the directory to the MCP server configuration."}`
+	role, got := summarizeToolResultForChat("mcp__fs__search_files", raw)
+	if role != "result_denied" {
+		t.Fatalf("expected result_denied role, got %q", role)
+	}
+	if !strings.HasPrefix(got, "DENIED · MCP filesystem server cannot access /workspace") {
+		t.Fatalf("unexpected summary: %q", got)
 	}
 }
 
@@ -9710,6 +10006,46 @@ func TestSummarizeToolResultForChat_Timeout(t *testing.T) {
 	role, got := summarizeToolResultForChat("shell_run", raw)
 	if role != "result_timeout" || got != "TIMEOUT · 15s" {
 		t.Fatalf("unexpected timeout summary: role=%q text=%q", role, got)
+	}
+}
+
+func TestSummarizeToolResultForChat_ShellRunAutoBackgrounded(t *testing.T) {
+	raw := `{"success":true,"code":"ok","data":{"status":"running","metrics":{"duration_ms":15000,"auto_backgrounded":true},"payload":{"task_id":"task-123","command":"go test ./internal/tui","done":false}}}`
+	role, got := summarizeToolResultForChat("shell_run", raw)
+	if role != "result_running" || got != "running in background · 15s · task-123" {
+		t.Fatalf("unexpected running summary: role=%q text=%q", role, got)
+	}
+}
+
+func TestSummarizeToolResultForChat_ShellRunDiagnosis(t *testing.T) {
+	raw := `{"success":true,"code":"ok","data":{"status":"running","metrics":{"duration_ms":15000,"auto_backgrounded":true},"payload":{"task_id":"task-123","command":"go test ./internal/tui","done":false},"diagnosis":{"reason":"build_test_long_running","suggested_next_action":"shell_wait"}}}`
+	role, got := summarizeToolResultForChat("shell_run", raw)
+	if role != "result_running" || got != "build/test running · 15s · task-123" {
+		t.Fatalf("unexpected diagnostic running summary: role=%q text=%q", role, got)
+	}
+}
+
+func TestSummarizeToolResultForChat_TimeoutDiagnosis(t *testing.T) {
+	raw := `{"success":false,"code":"timeout","message":"command timed out","data":{"metrics":{"duration_ms":15000},"diagnosis":{"reason":"ordinary_timeout"}}}`
+	role, got := summarizeToolResultForChat("shell_run", raw)
+	if role != "result_timeout" || got != "TIMEOUT · 15s · ordinary timeout" {
+		t.Fatalf("unexpected diagnostic timeout summary: role=%q text=%q", role, got)
+	}
+}
+
+func TestSummarizeToolResultForChat_TimeoutTooShortDiagnosis(t *testing.T) {
+	raw := `{"success":false,"code":"timeout","message":"command timed out","data":{"metrics":{"duration_ms":50},"diagnosis":{"reason":"foreground_timeout_too_short"}}}`
+	role, got := summarizeToolResultForChat("shell_run", raw)
+	if role != "result_timeout" || got != "TIMEOUT · 50ms · timeout too short" {
+		t.Fatalf("unexpected timeout-too-short summary: role=%q text=%q", role, got)
+	}
+}
+
+func TestSummarizeToolResultForChat_NetworkDiagnosis(t *testing.T) {
+	raw := `{"success":false,"code":"exec_failed","message":"command failed","data":{"status":"error","metrics":{"duration_ms":20,"exit_code":1},"payload":{"stderr":"curl: (6) Could not resolve host: example.invalid"},"diagnosis":{"reason":"network_blocked"}}}`
+	role, got := summarizeToolResultForChat("shell_run", raw)
+	if role != "result_failed" || !strings.Contains(got, "network blocked") {
+		t.Fatalf("unexpected network summary: role=%q text=%q", role, got)
 	}
 }
 

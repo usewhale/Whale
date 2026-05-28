@@ -100,6 +100,29 @@ func (r *ToolRegistry) ReplaceTools(tools []Tool) error {
 	return r.replaceToolsLocked(tools)
 }
 
+func (r *ToolRegistry) Snapshot() *ToolRegistry {
+	if r == nil {
+		return NewToolRegistry(nil)
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	byName := make(map[string]Tool, len(r.byName))
+	for name, tool := range r.byName {
+		byName[name] = tool
+	}
+	specs := make(map[string]ToolSpec, len(r.specs))
+	for name, spec := range r.specs {
+		specs[name] = spec
+	}
+	ordered := append([]Tool(nil), r.ordered...)
+	return &ToolRegistry{
+		byName:         byName,
+		specs:          specs,
+		ordered:        ordered,
+		maxResultChars: r.maxResultChars,
+	}
+}
+
 func (r *ToolRegistry) Get(name string) Tool {
 	if r == nil {
 		return nil

@@ -79,11 +79,21 @@ func TestShellRunBackgroundTimeoutKillsProcessGroup(t *testing.T) {
 		"task_id":    taskID,
 		"timeout_ms": 3000,
 	}))
-	if err != nil || waitRes.IsError {
-		t.Fatalf("shell_wait failed: err=%v res=%+v", err, waitRes)
+	if err != nil {
+		t.Fatalf("shell_wait dispatch failed: %v", err)
+	}
+	if waitRes.IsError {
+		t.Fatalf("shell_wait should return structured timeout result, got %+v", waitRes)
 	}
 	if !strings.Contains(waitRes.Content, `"status":"timeout"`) {
 		t.Fatalf("expected timeout status, got: %s", waitRes.Content)
+	}
+	env, ok := core.ParseToolEnvelope(waitRes.Content)
+	if !ok {
+		t.Fatalf("parse timeout envelope: %s", waitRes.Content)
+	}
+	if !env.Success || env.Code != "ok" {
+		t.Fatalf("expected successful wait envelope, got %+v", env)
 	}
 	waitForProcessExit(t, pid)
 }
@@ -135,6 +145,428 @@ func TestShellRunTimeoutReturnsStructuredResult(t *testing.T) {
 	}
 	if _, ok := metrics["stdout_truncation"].(map[string]any); !ok {
 		t.Fatalf("missing stdout truncation metrics: %#v", metrics)
+	}
+}
+
+func TestShellRunTimeoutDiagnosesInteractivePrompt(t *testing.T) {
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "printf 'Password:' >&2; sleep 30",
+		"timeout_ms": 50,
+	}))
+	if err != nil {
+		t.Fatalf("shell_run returned dispatch error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected timeout error result, got %+v", res)
+	}
+	diagnosis := shellRunData(t, res)["diagnosis"].(map[string]any)
+	if diagnosis["reason"] != "interactive_prompt" || diagnosis["suggested_next_action"] != "rerun_non_interactive" {
+		t.Fatalf("unexpected diagnosis: %#v", diagnosis)
+	}
+}
+
+func TestShellRunFailureDiagnosesNetworkBlocked(t *testing.T) {
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command": "printf 'curl: (6) Could not resolve host: example.invalid' >&2; exit 1",
+	}))
+	if err != nil {
+		t.Fatalf("shell_run returned dispatch error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected failed result, got %+v", res)
+	}
+	env, ok := core.ParseToolEnvelope(res.Content)
+	if !ok {
+		t.Fatalf("parse tool envelope: %s", res.Content)
+	}
+	if env.Code != "exec_failed" {
+		t.Fatalf("code = %q, want exec_failed", env.Code)
+	}
+	diagnosis := env.Data["diagnosis"].(map[string]any)
+	if diagnosis["reason"] != "network_blocked" || diagnosis["suggested_next_action"] != "check_network" {
+		t.Fatalf("unexpected diagnosis: %#v", diagnosis)
+	}
+}
+
+func TestShellRunTimeoutDiagnosesTooShortForegroundWait(t *testing.T) {
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "printf running; sleep 30",
+		"timeout_ms": 50,
+	}))
+	if err != nil {
+		t.Fatalf("shell_run returned dispatch error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected timeout error result, got %+v", res)
+	}
+	diagnosis := shellRunData(t, res)["diagnosis"].(map[string]any)
+	if diagnosis["reason"] != "foreground_timeout_too_short" || diagnosis["suggested_next_action"] != "rerun_with_longer_timeout" {
+		t.Fatalf("unexpected diagnosis: %#v", diagnosis)
+	}
+}
+
+func TestShellRunBackgroundTimeoutDiagnosesRuntimeLimit(t *testing.T) {
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	fakeGo := filepath.Join(binDir, "go")
+	if err := os.WriteFile(fakeGo, []byte("#!/bin/sh\nprintf building\nsleep 30\n"), 0o755); err != nil {
+		t.Fatalf("write fake go: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "go test ./internal/tui",
+		"background": true,
+		"timeout_ms": 50,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run background failed: err=%v res=%+v", err, startRes)
+	}
+	waitRes, err := ts.shellWait(context.Background(), tc("shell_wait", map[string]any{
+		"task_id":    backgroundTaskID(t, startRes.Content),
+		"timeout_ms": 3000,
+	}))
+	if err != nil {
+		t.Fatalf("shell_wait dispatch failed: %v", err)
+	}
+	if waitRes.IsError {
+		t.Fatalf("shell_wait should return structured timeout result, got %+v", waitRes)
+	}
+	env, ok := core.ParseToolEnvelope(waitRes.Content)
+	if !ok {
+		t.Fatalf("parse timeout envelope: %s", waitRes.Content)
+	}
+	if !env.Success || env.Code != "ok" {
+		t.Fatalf("expected successful wait envelope, got %+v", env)
+	}
+	data := env.Data
+	diagnosis := data["diagnosis"].(map[string]any)
+	if diagnosis["reason"] != "background_runtime_timeout" || diagnosis["suggested_next_action"] != "rerun_background_with_longer_timeout" {
+		t.Fatalf("unexpected diagnosis: %#v", diagnosis)
+	}
+}
+
+func TestShellRunAutoBackgroundsLongCommandAfterForegroundWait(t *testing.T) {
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	fakeGo := filepath.Join(binDir, "go")
+	if err := os.WriteFile(fakeGo, []byte("#!/bin/sh\nprintf before\nsleep 0.3\nprintf after\n"), 0o755); err != nil {
+		t.Fatalf("write fake go: %v", err)
+	}
+	oldPath := os.Getenv("PATH")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+oldPath)
+
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	start := time.Now()
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "go test ./internal/tui",
+		"timeout_ms": 50,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run should return running task, err=%v res=%+v", err, startRes)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("shell_run did not yield promptly: %s", elapsed)
+	}
+	data := shellRunData(t, startRes)
+	if data["status"] != "running" {
+		t.Fatalf("status = %#v, want running: %s", data["status"], startRes.Content)
+	}
+	metrics := data["metrics"].(map[string]any)
+	if metrics["auto_backgrounded"] != true {
+		t.Fatalf("expected auto_backgrounded metric, got %#v", metrics)
+	}
+	payload := data["payload"].(map[string]any)
+	taskID, _ := payload["task_id"].(string)
+	if taskID == "" {
+		t.Fatalf("missing task_id: %#v", payload)
+	}
+
+	waitRes, err := ts.shellWait(context.Background(), tc("shell_wait", map[string]any{
+		"task_id":    taskID,
+		"timeout_ms": 5000,
+	}))
+	if err != nil || waitRes.IsError {
+		t.Fatalf("shell_wait failed: err=%v res=%+v", err, waitRes)
+	}
+	if !strings.Contains(waitRes.Content, "beforeafter") {
+		t.Fatalf("expected completed fake go output, got: %s", waitRes.Content)
+	}
+}
+
+func TestShellRunAutoBackgroundsUnknownNonInteractiveCommand(t *testing.T) {
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	fakeCmd := filepath.Join(binDir, "slowcmd")
+	if err := os.WriteFile(fakeCmd, []byte("#!/bin/sh\nprintf before\nsleep 0.3\nprintf after\n"), 0o755); err != nil {
+		t.Fatalf("write fake command: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "slowcmd",
+		"timeout_ms": 50,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run should return running task, err=%v res=%+v", err, startRes)
+	}
+	data := shellRunData(t, startRes)
+	diagnosis := data["diagnosis"].(map[string]any)
+	if diagnosis["reason"] != "unknown_long_running" {
+		t.Fatalf("diagnosis = %#v, want unknown_long_running", diagnosis)
+	}
+	taskID := data["payload"].(map[string]any)["task_id"].(string)
+	waitRes, err := ts.shellWait(context.Background(), tc("shell_wait", map[string]any{
+		"task_id":    taskID,
+		"timeout_ms": 5000,
+	}))
+	if err != nil || waitRes.IsError {
+		t.Fatalf("shell_wait failed: err=%v res=%+v", err, waitRes)
+	}
+	if !strings.Contains(waitRes.Content, "beforeafter") {
+		t.Fatalf("expected completed fake command output, got: %s", waitRes.Content)
+	}
+}
+
+func TestShellWaitAutoBackgroundedFailureReturnsStructuredResult(t *testing.T) {
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	fakeGo := filepath.Join(binDir, "go")
+	if err := os.WriteFile(fakeGo, []byte("#!/bin/sh\nprintf before\nsleep 0.2\nprintf failed >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("write fake go: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "go test ./internal/tui",
+		"timeout_ms": 50,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run should return running task, err=%v res=%+v", err, startRes)
+	}
+	waitRes, err := ts.shellWait(context.Background(), tc("shell_wait", map[string]any{
+		"task_id":    backgroundTaskID(t, startRes.Content),
+		"timeout_ms": 5000,
+	}))
+	if err != nil {
+		t.Fatalf("shell_wait dispatch failed: %v", err)
+	}
+	if waitRes.IsError {
+		t.Fatalf("shell_wait should return structured failed result, got %+v", waitRes)
+	}
+	env, ok := core.ParseToolEnvelope(waitRes.Content)
+	if !ok {
+		t.Fatalf("parse failure envelope: %s", waitRes.Content)
+	}
+	if !env.Success || env.Code != "ok" {
+		t.Fatalf("expected successful wait envelope, got %+v", env)
+	}
+	data := env.Data
+	if data["status"] != "failed" {
+		t.Fatalf("status = %#v, want failed", data["status"])
+	}
+}
+
+func TestShellRunExplicitBackgroundReportsEffectiveTimeout(t *testing.T) {
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "sleep 5",
+		"background": true,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run background failed: err=%v res=%+v", err, startRes)
+	}
+	data := shellRunData(t, startRes)
+	metrics := data["metrics"].(map[string]any)
+	if got := metricNumber(t, data, "requested_timeout_ms"); got != 0 {
+		t.Fatalf("requested_timeout_ms = %d, want 0", got)
+	}
+	if got := metricNumber(t, data, "effective_timeout_ms"); got != defaultBackgroundShellTimeoutMS {
+		t.Fatalf("effective_timeout_ms = %d, want %d", got, defaultBackgroundShellTimeoutMS)
+	}
+	if metrics["timeout_clamped"] != false {
+		t.Fatalf("timeout_clamped = %#v, want false", metrics["timeout_clamped"])
+	}
+	taskID := data["payload"].(map[string]any)["task_id"].(string)
+	_, _ = ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{"task_id": taskID}))
+}
+
+func TestShellRunExplicitBackgroundClampsTimeout(t *testing.T) {
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "sleep 5",
+		"background": true,
+		"timeout_ms": maxBackgroundShellTimeoutMS + 1,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run background failed: err=%v res=%+v", err, startRes)
+	}
+	data := shellRunData(t, startRes)
+	metrics := data["metrics"].(map[string]any)
+	if got := metricNumber(t, data, "requested_timeout_ms"); got != maxBackgroundShellTimeoutMS+1 {
+		t.Fatalf("requested_timeout_ms = %d, want %d", got, maxBackgroundShellTimeoutMS+1)
+	}
+	if got := metricNumber(t, data, "effective_timeout_ms"); got != maxBackgroundShellTimeoutMS {
+		t.Fatalf("effective_timeout_ms = %d, want %d", got, maxBackgroundShellTimeoutMS)
+	}
+	if metrics["timeout_clamped"] != true {
+		t.Fatalf("timeout_clamped = %#v, want true", metrics["timeout_clamped"])
+	}
+	taskID := data["payload"].(map[string]any)["task_id"].(string)
+	_, _ = ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{"task_id": taskID}))
+}
+
+func TestShellWaitRunningReturnsPartialOutputAndPromptDiagnosis(t *testing.T) {
+	oldThreshold := shellStallThreshold
+	shellStallThreshold = 10 * time.Millisecond
+	t.Cleanup(func() { shellStallThreshold = oldThreshold })
+
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	fakeCmd := filepath.Join(binDir, "promptcmd")
+	if err := os.WriteFile(fakeCmd, []byte("#!/bin/sh\nprintf 'Password:' >&2\nsleep 2\n"), 0o755); err != nil {
+		t.Fatalf("write fake command: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "promptcmd",
+		"timeout_ms": 50,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run should return running task, err=%v res=%+v", err, startRes)
+	}
+	taskID := shellRunData(t, startRes)["payload"].(map[string]any)["task_id"].(string)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		task, ok := ts.tasks.get(taskID)
+		if ok && strings.Contains(task.snapshot().Stderr, "Password:") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	waitRes, err := ts.shellWait(context.Background(), tc("shell_wait", map[string]any{
+		"task_id":    taskID,
+		"timeout_ms": 50,
+	}))
+	if err != nil || waitRes.IsError {
+		t.Fatalf("shell_wait running failed: err=%v res=%+v", err, waitRes)
+	}
+	data := shellRunData(t, waitRes)
+	if data["status"] != "running" {
+		t.Fatalf("status = %#v, want running: %s", data["status"], waitRes.Content)
+	}
+	payload := data["payload"].(map[string]any)
+	if payload["stderr"] != "Password:" {
+		t.Fatalf("expected partial stderr, got %#v", payload)
+	}
+	diagnosis := data["diagnosis"].(map[string]any)
+	if diagnosis["reason"] != "interactive_prompt" || diagnosis["suggested_next_action"] != "shell_cancel" {
+		t.Fatalf("unexpected diagnosis: %#v", diagnosis)
+	}
+	_, _ = ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{"task_id": taskID}))
+}
+
+func TestShellCancelStopsBackgroundTask(t *testing.T) {
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "sleep 30 & echo $! > child.pid; wait",
+		"background": true,
+		"timeout_ms": 30000,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run background failed: err=%v res=%+v", err, startRes)
+	}
+	taskID := backgroundTaskID(t, startRes.Content)
+	pid := waitForPIDFile(t, filepath.Join(dir, "child.pid"))
+
+	cancelRes, err := ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{
+		"task_id": taskID,
+	}))
+	if err != nil || cancelRes.IsError {
+		t.Fatalf("shell_cancel failed: err=%v res=%+v", err, cancelRes)
+	}
+	if !strings.Contains(cancelRes.Content, `"status":"cancelled"`) {
+		t.Fatalf("expected cancelled status, got: %s", cancelRes.Content)
+	}
+	waitForProcessExit(t, pid)
+}
+
+func TestForegroundShellWaitCapsLongCommandRequests(t *testing.T) {
+	if got := foregroundShellWaitMS(300000, true); got != 15000 {
+		t.Fatalf("long-command foreground wait = %d, want 15000", got)
+	}
+	if got := foregroundShellWaitMS(300000, false); got != 120000 {
+		t.Fatalf("regular foreground wait = %d, want 120000", got)
+	}
+	if got := foregroundShellWaitMS(50, true); got != 50 {
+		t.Fatalf("short requested foreground wait = %d, want 50", got)
 	}
 }
 

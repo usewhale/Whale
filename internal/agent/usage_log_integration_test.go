@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"os"
 	"path/filepath"
@@ -30,6 +31,36 @@ func (p *usageLogProvider) StreamResponse(_ context.Context, _ []core.Message, _
 	}
 	close(out)
 	return out
+}
+
+func TestRecordTurnCostWritesSubagentUsageMetadata(t *testing.T) {
+	sessionsDir := t.TempDir()
+	usagePath := filepath.Join(t.TempDir(), "usage.jsonl")
+	a := NewAgentWithRegistry(&usageLogProvider{}, store.NewInMemoryStore(), nil,
+		WithSessionsDir(sessionsDir),
+		WithUsageLogPath(usagePath),
+	)
+	if err := session.SaveSessionMeta(sessionsDir, "child", session.SessionMeta{
+		Kind:            "subagent",
+		ParentSessionID: "parent",
+		Role:            "reviewer",
+		Task:            "inspect whether token replay can be reduced",
+	}); err != nil {
+		t.Fatalf("save meta: %v", err)
+	}
+	a.recordTurnCost("child", llm.Usage{PromptTokens: 100, PromptCacheHitTokens: 50, PromptCacheMissTokens: 50}, "deepseek-v4-flash", "fp")
+
+	b, err := os.ReadFile(usagePath)
+	if err != nil {
+		t.Fatalf("read usage log: %v", err)
+	}
+	var rec telemetry.UsageRecord
+	if err := json.Unmarshal(b, &rec); err != nil {
+		t.Fatalf("unmarshal usage log: %v\n%s", err, string(b))
+	}
+	if rec.Kind != "subagent" || rec.ParentSessionID != "parent" || rec.SubagentRole != "reviewer" || rec.SubagentTaskPreview == "" {
+		t.Fatalf("unexpected usage metadata: %+v", rec)
+	}
 }
 
 func TestRecordTurnCostWritesUsageLogWithoutSessionRuntime(t *testing.T) {

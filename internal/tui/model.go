@@ -50,55 +50,59 @@ const (
 )
 
 type model struct {
-	svc                  *service.Service
-	dispatch             func(service.Intent)
-	input                composer.Composer
-	viewport             viewport.Model
-	chat                 chatList
-	assembler            *tuirender.Assembler
-	pendingToolCalls     map[string]struct{}
-	transcript           []tuirender.UIMessage
-	sessionID            string
-	startupHeaderPrinted bool
-	startupHeaderOnce    *bool
-	sizeMsgReceived      bool
-	ephemeralMessages    []tuirender.UIMessage
-	logs                 []logEntry
-	diffs                []diffEntry
-	width                int
-	height               int
-	followTail           bool
-	viewportFrozen       bool
-	frozenChatMessages   []tuirender.UIMessage
-	viewportLayoutReady  bool
-	viewportLayoutPage   page
-	viewportLayoutWidth  int
-	viewportLayoutHeight int
-	mode                 mode
-	page                 page
-	status               string
-	busy                 bool
-	busySince            time.Time
-	providerRetryStatus  string
-	providerRetryUntil   time.Time
-	localSubmitPending   int
-	localSubmitCommands  []string
-	btwPanel             btwPanelState
-	deferredPlanPicker   bool
-	stopping             bool
-	sidebar              bool
-	model                string
-	effort               string
-	thinking             string
-	viewMode             string
-	chatMode             string
-	autoAccept           bool
-	product              string
-	version              string
-	cwd                  string
-	cwdPath              string
-	gitBranch            string
-	approval             struct {
+	svc                    *service.Service
+	dispatch               func(service.Intent)
+	input                  composer.Composer
+	viewport               viewport.Model
+	chat                   chatList
+	assembler              *tuirender.Assembler
+	pendingToolCalls       map[string]struct{}
+	transcript             []tuirender.UIMessage
+	sessionID              string
+	startupHeaderPrinted   bool
+	startupHeaderOnce      *bool
+	sizeMsgReceived        bool
+	ephemeralMessages      []tuirender.UIMessage
+	logs                   []logEntry
+	diffs                  []diffEntry
+	width                  int
+	height                 int
+	followTail             bool
+	viewportFrozen         bool
+	frozenChatMessages     []tuirender.UIMessage
+	viewportLayoutReady    bool
+	viewportLayoutPage     page
+	viewportLayoutWidth    int
+	viewportLayoutHeight   int
+	mode                   mode
+	page                   page
+	status                 string
+	busy                   bool
+	busySince              time.Time
+	busyTokenCount         int
+	busyTokenASCIIChars    int
+	busyTokenNonASCIIChars int
+	providerRetryStatus    string
+	providerRetryUntil     time.Time
+	localSubmitPending     int
+	localSubmitCommands    []string
+	btwPanel               btwPanelState
+	deferredPlanPicker     bool
+	stopping               bool
+	sidebar                bool
+	model                  string
+	effort                 string
+	thinking               string
+	viewMode               string
+	showReasoning          bool
+	chatMode               string
+	autoAccept             bool
+	product                string
+	version                string
+	cwd                    string
+	cwdPath                string
+	gitBranch              string
+	approval               struct {
 		toolCallID string
 		toolName   string
 		reason     string
@@ -281,8 +285,10 @@ func newModel(svc *service.Service, modelName, effort, thinking string) model {
 		thinking = "on"
 	}
 	viewMode := app.ViewModeDefault
+	showReasoning := false
 	if svc != nil {
 		viewMode = svc.ViewMode()
+		showReasoning = svc.ShowReasoning()
 	}
 	m := model{
 		svc:               svc,
@@ -303,6 +309,7 @@ func newModel(svc *service.Service, modelName, effort, thinking string) model {
 		effort:            effort,
 		thinking:          thinking,
 		viewMode:          viewMode,
+		showReasoning:     showReasoning,
 		chatMode:          "agent",
 		product:           "Whale",
 		version:           resolveVersion(),

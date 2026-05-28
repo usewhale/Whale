@@ -1,9 +1,12 @@
 package service
 
 import (
+	"time"
+
 	"github.com/usewhale/whale/internal/agent"
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/policy"
+	"github.com/usewhale/whale/internal/telemetry"
 )
 
 func (s *Service) awaitApproval(req policy.ApprovalRequest) policy.ApprovalDecision {
@@ -18,6 +21,7 @@ func (s *Service) awaitApproval(req policy.ApprovalRequest) policy.ApprovalDecis
 	if s.sessionGrantAllLocked(req.SessionID, keys) {
 		s.approveMu.Unlock()
 		s.interactionMu.Unlock()
+		s.recordApprovalPromptEvent(req, "approval_prompt_cached_allowed", keys)
 		return policy.ApprovalAllowForSession
 	}
 	ch := make(chan policy.ApprovalDecision, 1)
@@ -25,8 +29,10 @@ func (s *Service) awaitApproval(req policy.ApprovalRequest) policy.ApprovalDecis
 	s.approveMu.Unlock()
 	s.interactionMu.Unlock()
 	metadata := policy.ApprovalMetadata(req.ToolCall, keys, req.Metadata)
+	s.recordApprovalPromptEvent(req, "approval_prompt_shown", keys)
 	s.emit(Event{Kind: EventApprovalRequired, ToolCallID: toolCallID, ToolName: req.ToolCall.Name, Text: policy.ApprovalSummary(req.ToolCall), Metadata: metadata})
 	decision := <-ch
+	s.recordApprovalPromptEvent(req, approvalPromptDecisionEvent(decision), keys)
 	s.approveMu.Lock()
 	delete(s.approvals, toolCallID)
 	if decision == policy.ApprovalAllowForSession && !policy.ApprovalKeysFileScoped(keys) {
@@ -34,6 +40,37 @@ func (s *Service) awaitApproval(req policy.ApprovalRequest) policy.ApprovalDecis
 	}
 	s.approveMu.Unlock()
 	return decision
+}
+
+func (s *Service) recordApprovalPromptEvent(req policy.ApprovalRequest, event string, keys []string) {
+	if s == nil || s.app == nil {
+		return
+	}
+	_ = telemetry.AppendApprovalEvent(s.app.SessionsDir(), telemetry.ApprovalEvent{
+		Session:    req.SessionID,
+		ToolCallID: req.ToolCall.ID,
+		Tool:       req.ToolCall.Name,
+		Event:      event,
+		Source:     "service",
+		Reason:     req.Reason,
+		Code:       req.Code,
+		Key:        req.Key,
+		Keys:       keys,
+		Scope:      policy.ApprovalScope(req.ToolCall),
+	}, time.Now())
+}
+
+func approvalPromptDecisionEvent(decision policy.ApprovalDecision) string {
+	switch decision {
+	case policy.ApprovalAllow:
+		return "approval_prompt_allowed_once"
+	case policy.ApprovalAllowForSession:
+		return "approval_prompt_allowed_for_session"
+	case policy.ApprovalCancel:
+		return "approval_prompt_canceled"
+	default:
+		return "approval_prompt_denied"
+	}
 }
 
 func (s *Service) resolveApproval(toolCallID string, decision policy.ApprovalDecision) {

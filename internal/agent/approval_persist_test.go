@@ -49,6 +49,7 @@ func TestApprovalPersistsAcrossAgentInstances(t *testing.T) {
 		prov,
 		store,
 		reg,
+		WithToolPolicy(editApprovalPolicy()),
 		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
 			asked1++
 			return ApprovalAllowForSession
@@ -66,6 +67,7 @@ func TestApprovalPersistsAcrossAgentInstances(t *testing.T) {
 		prov,
 		store,
 		reg,
+		WithToolPolicy(editApprovalPolicy()),
 		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
 			asked2++
 			return ApprovalAllowForSession
@@ -108,6 +110,7 @@ func TestApprovalPersistsApplyPatchFileKeysAcrossAgentInstances(t *testing.T) {
 		prov,
 		store,
 		reg,
+		WithToolPolicy(editApprovalPolicy()),
 		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
 			asked1++
 			return ApprovalAllowForSession
@@ -125,6 +128,7 @@ func TestApprovalPersistsApplyPatchFileKeysAcrossAgentInstances(t *testing.T) {
 		prov,
 		store,
 		reg,
+		WithToolPolicy(editApprovalPolicy()),
 		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
 			asked2++
 			return ApprovalAllowForSession

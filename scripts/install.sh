@@ -105,8 +105,10 @@ install_binary() {
   dst="$2"
   mkdir -p "$dst"
   target="$dst/whale"
-  cp "$src" "$target"
-  chmod 0755 "$target"
+  tmp_target="$(mktemp "$dst/.whale.tmp.XXXXXX")"
+  cp "$src" "$tmp_target"
+  chmod 0755 "$tmp_target"
+  mv -f "$tmp_target" "$target"
   printf '%s\n' "$target"
 }
 

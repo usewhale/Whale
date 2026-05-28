@@ -25,6 +25,8 @@ config_path = "/path/to/mcp.json"
 ```
 
 Whale reads MCP config when the process starts. Restart Whale after editing the file.
+Servers are started concurrently, so `/mcp` can show some servers as `starting`
+while other servers are already connected and usable.
 
 ## Supported transports
 
@@ -155,14 +157,37 @@ It shows the config path, server count, connection status, tool count, and start
 Example:
 
 ```text
-MCP
+MCP Tools
 
 config: /Users/me/.whale/mcp.json
 servers: 2
-- context7: connected (3 tool(s))
-- remote: failed
+
+- context7
+  status: connected
+  auth: unsupported
+  command: npx -y @upstash/context7-mcp
+  tools: resolve-library-id, get-library-docs
+
+- remote
+  status: failed
+  auth: bearer token
+  url: https://example.com/mcp
+  http headers: Authorization=*****
+  tools: none
   error: mcp server "remote" failed during connect: ... (transport=http url=https://example.com/mcp status=401 Unauthorized)
 ```
+
+## Smoke test
+
+For a user-path regression with a real model call, run:
+
+```sh
+DEEPSEEK_API_KEY=... scripts/smoke/mcp_tools.sh
+```
+
+The smoke uses a temporary `WHALE_HOME`, probes `/mcp` through the TUI, verifies
+secret-like MCP command arguments are redacted, and runs `whale exec` to confirm
+the model can call the configured filesystem MCP tool.
 
 ## Common issues
 

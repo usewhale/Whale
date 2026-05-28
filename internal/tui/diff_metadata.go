@@ -28,6 +28,10 @@ func renderFileDiffMetadataMarkdown(metadata map[string]any, maxLines int) strin
 	return "```diff\n" + plain + "\n```"
 }
 
+func renderFileDiffMetadataForChat(metadata map[string]any, maxLines int) string {
+	return renderApprovalDiffMetadata(metadata, maxLines)
+}
+
 func renderFileDiffMetadataPlain(metadata map[string]any, maxLines int) string {
 	if len(metadata) == 0 || strings.TrimSpace(asString(metadata["kind"])) != "file_diff" {
 		return ""

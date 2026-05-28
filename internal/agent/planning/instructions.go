@@ -7,6 +7,7 @@ func ModeInstructions() string {
 
 Rules:
 - Explore first using non-mutating tools; resolve discoverable facts from the repo before asking.
+- Safe read-only shell commands may run in PLAN mode. If a shell command is blocked, do not say all shell commands are disabled; say that specific command is not classified as safe read-only.
 - Do not edit, write, patch, format, migrate, or otherwise change repo-tracked files.
 - Do not create plan files such as LAUNCH_PLAN.md or *_PLAN.md unless the user explicitly asks for a file.
 - If a decision cannot be discovered from context and materially changes the plan, ask the user.

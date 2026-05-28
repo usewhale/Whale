@@ -53,7 +53,7 @@ found:
 		return len(args) >= 1 && args[0] == "--get" && gitArgsAreReadOnly(args)
 	case "diff":
 		return gitArgsAreReadOnly(args) && gitDiffArgsAreReadOnly(args)
-	case "show", "log":
+	case "show", "log", "shortlog", "ls-files":
 		return gitArgsAreReadOnly(args)
 	default:
 		return false

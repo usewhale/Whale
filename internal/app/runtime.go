@@ -59,10 +59,14 @@ func (a *App) ensureAgent() (*agent.Agent, error) {
 			agent.WithUsageLogPath(filepath.Join(a.cfg.DataDir, "usage.jsonl")),
 			agent.WithAutoCompact(a.cfg.AutoCompact, a.cfg.AutoCompactThreshold, a.contextWindow),
 			agent.WithToolPolicy(a.permissionPolicy),
+			agent.WithToolRefresh(func(context.Context) error {
+				return a.refreshMCPTools()
+			}),
 			agent.WithHookRunner(a.hookRunner),
 			agent.WithExtraSystemBlocks(pluginBlocks...),
 			agent.WithProjectMemory(a.cfg.MemoryEnabled, a.cfg.MemoryMaxChars, parseCSVList(a.cfg.MemoryFileOrder), a.workspaceRoot),
 			agent.WithWorktreeContext(a.worktree.Path, a.worktree.OriginalWorkspace),
+			agent.WithMaxParallelSubagents(a.cfg.MaxParallelSubagents),
 			agent.WithDisabledSkills(a.cfg.SkillsDisabled),
 			agent.WithExtraSkills(a.pluginManager.Skills()),
 			agent.WithApprovalFunc(func(req policy.ApprovalRequest) policy.ApprovalDecision {

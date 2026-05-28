@@ -2,6 +2,7 @@ package agent
 
 import (
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/usewhale/whale/internal/core"
@@ -12,6 +13,8 @@ const (
 	toolInputEventRepaired = "tool_input_repaired"
 	toolInputEventInvalid  = "tool_input_invalid"
 )
+
+var toolInputTelemetryAppendMu sync.Mutex
 
 func (a *Agent) recordToolInputRepair(sessionID, model, assistantMessageID string, call core.ToolCall, repairKind string) {
 	a.recordToolInputRepairDetail(sessionID, model, assistantMessageID, call, core.ToolInputRepair{Kind: repairKind})
@@ -48,6 +51,8 @@ func (a *Agent) recordToolInputEvent(rec telemetry.ToolInputEvent) {
 	if a == nil || strings.TrimSpace(a.sessionsDir) == "" {
 		return
 	}
+	toolInputTelemetryAppendMu.Lock()
+	defer toolInputTelemetryAppendMu.Unlock()
 	_ = telemetry.AppendToolInputEvent(a.sessionsDir, rec, time.Now())
 }
 

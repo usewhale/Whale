@@ -55,6 +55,11 @@ func assertBlankLineBetween(t *testing.T, lines []string, before, after string) 
 	t.Fatalf("expected blank line between %q and %q, got: %q", before, after, strings.Join(lines, "\n"))
 }
 
+func containsANSIColor(text, color string) bool {
+	return strings.Contains(text, "\x1b[38;5;"+color+"m") ||
+		strings.Contains(text, "\x1b[1;38;5;"+color+"m")
+}
+
 func TestChatLines_MarkdownBoldAndList(t *testing.T) {
 	entries := []UIMessage{
 		{Role: "assistant", Kind: KindText, Text: "Hello **world**\n- one\n- two"},
@@ -69,6 +74,120 @@ func TestChatLines_MarkdownBoldAndList(t *testing.T) {
 	}
 	if !strings.Contains(joined, "one") || !strings.Contains(joined, "two") {
 		t.Fatalf("expected list items rendered, got: %q", joined)
+	}
+}
+
+func TestChatLines_FocusSummaryUsesStructuredStyles(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	entries := []UIMessage{{
+		Role: "tool_summary",
+		Kind: KindToolSummary,
+		Text: "Searched for 1 pattern, Read 1 file, Ran shell: git status --short (ctrl+o to expand)",
+		FocusSummary: &FocusSummary{
+			Hint: "(ctrl+o to expand)",
+			Parts: []FocusSummaryPart{
+				{Kind: "search", Action: "Searched for 1 pattern"},
+				{Kind: "read", Action: "Read 1 file"},
+				{Kind: "shell", Action: "Ran shell", Detail: "git status --short"},
+			},
+		},
+	}}
+
+	lines := ChatLines(entries, 80)
+	plain := joinedPlain(lines)
+	for _, want := range []string{"Searched for 1 pattern", "Read 1 file", "Ran shell: git status --short", "ctrl+o", "expand"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected focus summary text %q, got:\n%s", want, plain)
+		}
+	}
+	raw := strings.Join(lines, "\n")
+	for _, color := range []string{"212", "111", "220", "245"} {
+		if !containsANSIColor(raw, color) {
+			t.Fatalf("expected focus summary color %s in %q", color, raw)
+		}
+	}
+	if strings.Contains(raw, "\x1b[38;5;78m") {
+		t.Fatalf("focus summary should not use success green for completed work, got %q", raw)
+	}
+	assertVisibleWidthAtMost(t, lines, 80)
+}
+
+func TestChatLines_FocusSummaryStaysWithinNarrowWidth(t *testing.T) {
+	entries := []UIMessage{{
+		Role: "tool_summary",
+		Kind: KindToolSummary,
+		Text: "Ran shell: git log --oneline --no-decorate v0.1.20..HEAD, 1 file/search read (ctrl+o to expand)",
+		FocusSummary: &FocusSummary{
+			Hint: "(ctrl+o to expand)",
+			Parts: []FocusSummaryPart{
+				{Kind: "shell", Action: "Ran shell", Detail: "git log --oneline --no-decorate v0.1.20..HEAD"},
+				{Kind: "read", Action: "Read 1 file"},
+				{Kind: "search", Action: "Searched for 1 pattern"},
+			},
+		},
+	}}
+
+	lines := ChatLines(entries, 24)
+	plain := joinedPlain(lines)
+	if !strings.Contains(plain, "Ran shell") || !strings.Contains(plain, "ctrl+o") {
+		t.Fatalf("expected narrow focus summary to remain readable, got:\n%s", plain)
+	}
+	assertVisibleWidthAtMost(t, lines, 24)
+}
+
+func TestChatLines_FocusSummaryStylesFromState(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	entries := []UIMessage{{
+		Role: "tool_summary",
+		Kind: KindToolSummary,
+		Text: "Denied 1 shell command, Failed shell: go test ./..., Reading 1 file: internal/tui/focus_view.go, Searched for 1 pattern",
+		FocusSummary: &FocusSummary{
+			Parts: []FocusSummaryPart{
+				{Kind: "shell", State: "denied", Count: 1, Action: "Denied 1 shell command"},
+				{Kind: "shell", State: "failed", Count: 1, Action: "Failed shell", Detail: "go test ./..."},
+				{Kind: "read", State: "running", Count: 1, Action: "Reading 1 file", Detail: "internal/tui/focus_view.go"},
+				{Kind: "search", State: "done", Count: 1, Action: "Searched for 1 pattern"},
+			},
+		},
+	}}
+
+	raw := strings.Join(ChatLines(entries, 100), "\n")
+	for _, color := range []string{"214", "203", "117", "212"} {
+		if !containsANSIColor(raw, color) {
+			t.Fatalf("expected state-driven focus summary color %s in %q", color, raw)
+		}
+	}
+}
+
+func TestChatLines_FocusSummaryFallsBackToStatusStyle(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	entries := []UIMessage{{
+		Role: "tool_summary",
+		Kind: KindToolSummary,
+		Text: "Legacy denied (1 denied/canceled), Legacy failed (1 failed), Legacy running (1 running)",
+		FocusSummary: &FocusSummary{
+			Parts: []FocusSummaryPart{
+				{Kind: "shell", Action: "Legacy denied", Status: "(1 denied/canceled)"},
+				{Kind: "shell", Action: "Legacy failed", Status: "(1 failed)"},
+				{Kind: "read", Action: "Legacy running", Status: "(1 running)"},
+			},
+		},
+	}}
+
+	raw := strings.Join(ChatLines(entries, 100), "\n")
+	for _, color := range []string{"214", "203", "117"} {
+		if !containsANSIColor(raw, color) {
+			t.Fatalf("expected status fallback focus summary color %s in %q", color, raw)
+		}
 	}
 }
 
@@ -125,6 +244,127 @@ func TestChatLines_ThinkingCardHasDistinctLabel(t *testing.T) {
 		t.Fatalf("expected reasoning body, got: %q", joined)
 	}
 	assertBlankLineBetween(t, lines, "Thinking", "I should answer carefully.")
+}
+
+func TestChatLines_ThinkingStreamingShowsTailPreview(t *testing.T) {
+	entries := []UIMessage{
+		{
+			Role:      "think",
+			Kind:      KindThinking,
+			Streaming: true,
+			Text:      strings.Join([]string{"alpha", "bravo", "charlie", "delta", "echo"}, "\n"),
+		},
+	}
+	plain := joinedPlain(ChatLines(entries, 80))
+	for _, hidden := range []string{"alpha", "bravo"} {
+		if strings.Contains(plain, hidden) {
+			t.Fatalf("streaming thinking preview leaked %q:\n%s", hidden, plain)
+		}
+	}
+	for _, want := range []string{"...", "charlie", "delta", "echo"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("streaming thinking preview missing %q:\n%s", want, plain)
+		}
+	}
+}
+
+func TestChatLines_ThinkingSettledShowsHeadTailPreview(t *testing.T) {
+	entries := []UIMessage{
+		{
+			Role: "think",
+			Kind: KindThinking,
+			Text: strings.Join([]string{"alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf"}, "\n"),
+		},
+	}
+	plain := joinedPlain(ChatLines(entries, 80))
+	for _, want := range []string{"alpha", "bravo", "... 3 lines omitted", "foxtrot", "golf"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("settled thinking preview missing %q:\n%s", want, plain)
+		}
+	}
+	for _, hidden := range []string{"charlie", "delta", "echo"} {
+		if strings.Contains(plain, hidden) {
+			t.Fatalf("settled thinking preview leaked %q:\n%s", hidden, plain)
+		}
+	}
+}
+
+func TestChatLines_ThinkingLargeShowsTailPreview(t *testing.T) {
+	lines := make([]string, 85)
+	for i := range lines {
+		lines[i] = "line-" + string(rune('a'+i%26)) + "-" + string(rune('a'+(i/26)))
+	}
+	entries := []UIMessage{
+		{Role: "think", Kind: KindThinking, Text: strings.Join(lines, "\n")},
+	}
+	plain := joinedPlain(ChatLines(entries, 80))
+	if !strings.Contains(plain, "... reasoning scrolled past") {
+		t.Fatalf("large thinking preview missing scrolled-past hint:\n%s", plain)
+	}
+	if strings.Contains(plain, lines[0]) || strings.Contains(plain, lines[40]) {
+		t.Fatalf("large thinking preview leaked early/middle lines:\n%s", plain)
+	}
+	for _, want := range lines[len(lines)-2:] {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("large thinking preview missing tail %q:\n%s", want, plain)
+		}
+	}
+}
+
+func TestDisplayThinkingTextCapsLongStreamingSingleLine(t *testing.T) {
+	text := strings.Repeat("a", thinkingPreviewLineRuneLimit+50) + "TAIL"
+
+	got := displayThinkingText(text, true, false)
+	if strings.Contains(got, "TAIL") {
+		t.Fatalf("streaming single-line preview leaked tail suffix")
+	}
+	if gotRunes := len([]rune(got)); gotRunes > thinkingPreviewLineRuneLimit+3 {
+		t.Fatalf("streaming single-line preview length = %d, want capped", gotRunes)
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Fatalf("streaming single-line preview should show truncation marker, got suffix %q", got[len(got)-8:])
+	}
+}
+
+func TestDisplayThinkingTextCapsLongSettledSingleLine(t *testing.T) {
+	text := strings.Repeat("b", thinkingLargeCharThreshold+50) + "TAIL"
+
+	got := displayThinkingText(text, false, false)
+	if !strings.Contains(got, "... reasoning scrolled past") {
+		t.Fatalf("settled single-line preview missing large-reasoning marker:\n%s", got)
+	}
+	if strings.Contains(got, "TAIL") {
+		t.Fatalf("settled single-line preview leaked tail suffix")
+	}
+	if gotRunes := len([]rune(got)); gotRunes > thinkingPreviewLineRuneLimit+len([]rune("... reasoning scrolled past\n...")) {
+		t.Fatalf("settled single-line preview length = %d, want capped", gotRunes)
+	}
+}
+
+func TestChatLines_ThinkingFullReasoningBypassesPreview(t *testing.T) {
+	text := strings.Join([]string{"alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf"}, "\n")
+	entries := []UIMessage{
+		{Role: "think", Kind: KindThinking, Streaming: true, FullReasoning: true, Text: text},
+	}
+	plain := joinedPlain(ChatLines(entries, 80))
+	for _, want := range []string{"alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("full thinking missing %q:\n%s", want, plain)
+		}
+	}
+	if strings.Contains(plain, "omitted") || strings.Contains(plain, "scrolled past") {
+		t.Fatalf("full thinking should not show preview elision:\n%s", plain)
+	}
+}
+
+func TestAssemblerMarksLiveThinkingStreaming(t *testing.T) {
+	a := NewAssembler()
+	a.AppendDelta("think", "alpha")
+	a.AppendDelta("think", "\nbravo")
+	snap := a.Snapshot()
+	if len(snap) != 1 || !snap[0].Streaming {
+		t.Fatalf("expected live thinking to be marked streaming, got %+v", snap)
+	}
 }
 
 func TestChatLines_PlanUpdateHasDistinctLabel(t *testing.T) {
@@ -233,6 +473,65 @@ func TestChatLines_NoticeRendersAsPlainHint(t *testing.T) {
 	if strings.Contains(joined, "┃") || strings.Contains(joined, "│") {
 		t.Fatalf("notice should not render as a bordered card: %q", joined)
 	}
+}
+
+func TestChatLines_SystemNoticeUsesStructuredStyles(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	entries := []UIMessage{{
+		Role: "notice",
+		Kind: KindNotice,
+		Text: "Approved to run uptime · this time",
+		Notice: &SystemNotice{
+			Kind:    "approval_allowed",
+			Tone:    "success",
+			Action:  "Approved",
+			Detail:  "to run",
+			Command: "uptime",
+			Scope:   "this time",
+		},
+	}}
+	lines := ChatLines(entries, 80)
+	joined := strings.Join(lines, "\n")
+	plain := joinedPlain(lines)
+	for _, want := range []string{"Approved to run uptime", "this time"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected structured notice to contain %q, got: %q", want, plain)
+		}
+	}
+	if !containsANSIColor(joined, "78") {
+		t.Fatalf("expected success color for approval state, got: %q", joined)
+	}
+	if !containsANSIColor(joined, "220") {
+		t.Fatalf("expected command color for approval command, got: %q", joined)
+	}
+	if strings.Contains(joined, "┃") || strings.Contains(joined, "│") {
+		t.Fatalf("notice should not render as a bordered card: %q", joined)
+	}
+}
+
+func TestChatLines_SystemNoticeWrapsWithinNarrowWidth(t *testing.T) {
+	entries := []UIMessage{{
+		Role: "notice",
+		Kind: KindNotice,
+		Text: "Approved to run git log --oneline --decorate --graph --all · for this session",
+		Notice: &SystemNotice{
+			Kind:    "approval_allowed_session",
+			Tone:    "success",
+			Action:  "Approved",
+			Detail:  "to run",
+			Command: "git log --oneline --decorate --graph --all",
+			Scope:   "for this session",
+		},
+	}}
+	lines := ChatLines(entries, 32)
+	plain := joinedPlain(lines)
+	if !strings.Contains(plain, "for this session") {
+		t.Fatalf("expected wrapped notice to keep scope, got: %q", plain)
+	}
+	assertVisibleWidthAtMost(t, lines, 32)
 }
 
 func TestChatLines_StatusRendersAsDistinctCard(t *testing.T) {
@@ -447,8 +746,11 @@ func TestChatLines_ShellToolRendersAsEventRows(t *testing.T) {
 	if !strings.Contains(plain, "• Ran ./bin/whale --dangerously-skip-permissions") {
 		t.Fatalf("expected shell command event header, got: %q", plain)
 	}
-	if !strings.Contains(plain, "  └ (no output)") {
+	if !strings.Contains(plain, "  (no output)") {
 		t.Fatalf("expected child output row, got: %q", plain)
+	}
+	if strings.Contains(plain, "  └ (no output)") {
+		t.Fatalf("shell output should render as body text, got: %q", plain)
 	}
 	if !strings.Contains(strings.Join(lines, "\n"), "\x1b[") {
 		t.Fatalf("expected styled command event, got: %q", strings.Join(lines, "\n"))
@@ -538,13 +840,16 @@ func TestChatLines_ToolEventPreservesIndentedOutputRows(t *testing.T) {
 
 	plain := joinedPlain(ChatLines(entries, 100))
 	for _, want := range []string{
-		"  └   yaml:",
-		"  └ \t- item",
-		"  └     nested: value",
+		"    yaml:",
+		"  \t- item",
+		"      nested: value",
 	} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("expected indented output row %q in:\n%s", want, plain)
 		}
+	}
+	if strings.Contains(plain, "  └   yaml:") {
+		t.Fatalf("shell output should not render as nested action rows:\n%s", plain)
 	}
 }
 
@@ -656,6 +961,12 @@ func TestChatLines_ShellResultPreservesOutputLines(t *testing.T) {
 	joined := joinedPlain(lines)
 	if strings.Contains(joined, "23ms 284 model.go") {
 		t.Fatalf("shell status and output collapsed onto one line: %q", joined)
+	}
+	if !strings.Contains(joined, "• Ran cd internal/tui && wc -l model.go model_events.go model_keys.go model_prompt.go  ✓ · 23ms") {
+		t.Fatalf("expected shell status in header, got: %q", joined)
+	}
+	if strings.Contains(joined, "  └ 284 model.go") {
+		t.Fatalf("shell output should render as body text, got: %q", joined)
 	}
 	for _, want := range []string{"✓ · 23ms", "284 model.go", "202 model_events.go", "975 total", "NAME       SIZE", "file.txt   12K"} {
 		if !strings.Contains(joined, want) {
