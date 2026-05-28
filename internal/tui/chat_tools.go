@@ -140,6 +140,8 @@ func summarizeToolCallForChat(toolName, text string) string {
 		return "Updating plan"
 	case "todo":
 		return todoToolTitle(toolName, text, "running")
+	case "mcp":
+		return mcpStartedText(toolName, text)
 	default:
 		if detail == "" {
 			detail = toolName
@@ -354,6 +356,8 @@ func completedToolTitle(toolName, raw, previous string) string {
 		return "Updated plan"
 	case "todo":
 		return todoToolTitle(toolName, firstNonEmpty(previousToolActionLine(previous), raw), "done")
+	case "mcp":
+		return mcpCompletedTitle(toolName, raw, previous)
 	default:
 		label := toolName
 		if label == "" {
@@ -395,6 +399,9 @@ func shouldShowUnmatchedToolResult(toolName, role, text string) bool {
 }
 
 func toolDisplayKind(toolName string) string {
+	if isMCPDisplayTool(toolName) {
+		return "mcp"
+	}
 	switch strings.TrimSpace(toolName) {
 	case "shell_run", "shell_wait":
 		return "shell"

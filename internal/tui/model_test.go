@@ -9757,6 +9757,89 @@ func TestSummarizeToolResultForChat_PermissionDeniedShowsDenied(t *testing.T) {
 	}
 }
 
+func TestMCPToolCallRendersUserFacingLabelAndArgs(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 30}
+	next, _ := m.Update(svcMsg(service.Event{
+		Kind:       service.EventToolCall,
+		ToolCallID: "tc-mcp",
+		ToolName:   "mcp__fs__list_directory",
+		Text:       `mcp__fs__list_directory: {"path":"/tmp/中文目录"}`,
+	}))
+	m = next.(model)
+	snap := m.assembler.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected one MCP tool call, got %+v", snap)
+	}
+	if strings.Contains(snap[0].Text, "mcp__fs__list_directory") {
+		t.Fatalf("MCP display should hide raw tool name: %q", snap[0].Text)
+	}
+	for _, want := range []string{"Calling MCP fs · list_directory", "path: /tmp/中文目录"} {
+		if !strings.Contains(snap[0].Text, want) {
+			t.Fatalf("expected %q in MCP display text: %q", want, snap[0].Text)
+		}
+	}
+}
+
+func TestMCPToolResultKeepsLabelArgsAndOutputSeparate(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 30}
+	next, _ := m.Update(svcMsg(service.Event{
+		Kind:       service.EventToolCall,
+		ToolCallID: "tc-mcp",
+		ToolName:   "mcp__fs__list_directory",
+		Text:       `mcp__fs__list_directory: {"path":"/tmp/project"}`,
+	}))
+	m = next.(model)
+	raw := `{"ok":true,"success":true,"code":"ok","data":{"server":"fs","tool":"list_directory","text":"README.md\ncmd\n"},"metadata":{"duration_ms":121,"source_tool":"mcp__fs__list_directory"}}`
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind:       service.EventToolResult,
+		ToolCallID: "tc-mcp",
+		ToolName:   "mcp__fs__list_directory",
+		Text:       raw,
+	}))
+	m = next.(model)
+	if len(m.transcript) != 1 {
+		t.Fatalf("expected completed MCP cell in transcript, got %+v", m.transcript)
+	}
+	rendered := strings.Join(tuirender.ChatLines(m.transcript, 100), "\n")
+	plain := xansi.Strip(rendered)
+	for _, want := range []string{"Called MCP fs · list_directory", "path: /tmp/project", "✓ · 121ms", "README.md"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected rendered MCP transcript to contain %q:\n%s", want, plain)
+		}
+	}
+	if strings.Contains(plain, "mcp__fs__list_directory") || strings.Contains(plain, "source_tool") {
+		t.Fatalf("MCP transcript leaked internal fields:\n%s", plain)
+	}
+}
+
+func TestMCPToolResultSummarizesStructuredOnlyContent(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 30}
+	next, _ := m.Update(svcMsg(service.Event{
+		Kind:       service.EventToolCall,
+		ToolCallID: "tc-mcp",
+		ToolName:   "mcp__github__get_issue",
+		Text:       `mcp__github__get_issue: {"owner":"usewhale","repo":"whale","number":169}`,
+	}))
+	m = next.(model)
+	raw := `{"ok":true,"success":true,"code":"ok","data":{"server":"github","tool":"get_issue","text":"","structured_content":{"number":169,"title":"Structured MCP output","state":"open"}},"metadata":{"duration_ms":44}}`
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind:       service.EventToolResult,
+		ToolCallID: "tc-mcp",
+		ToolName:   "mcp__github__get_issue",
+		Text:       raw,
+	}))
+	m = next.(model)
+	if len(m.transcript) != 1 {
+		t.Fatalf("expected completed MCP cell in transcript, got %+v", m.transcript)
+	}
+	plain := xansi.Strip(strings.Join(tuirender.ChatLines(m.transcript, 100), "\n"))
+	for _, want := range []string{"Called MCP github · get_issue", "✓ · 44ms", "number: 169", "state: open", "title: Structured MCP output"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected structured MCP transcript to contain %q:\n%s", want, plain)
+		}
+	}
+}
+
 func TestSummarizeToolResultForChat_NonShellSummarized(t *testing.T) {
 	raw := `{"success":true,"data":{"metrics":{"total_matches":3},"payload":{"items":["a.go","b.go","c.go"]}}}`
 	role, got := summarizeToolResultForChat("search_files", raw)

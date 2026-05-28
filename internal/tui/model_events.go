@@ -387,9 +387,8 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		m.viewMode = mode
 		if strings.TrimSpace(ev.Text) != "" {
 			m.setEphemeralInfo(ev.Text)
-		} else {
-			m.refreshViewportContentFollow(true)
 		}
+		eventCmd = m.redrawTranscriptForFocusToggleCmd()
 		m.status = "ready"
 	case service.EventWorktreeExitPrompt:
 		m.clearProviderRetryStatus()

@@ -27,6 +27,7 @@ type focusToolSummaryProvider interface {
 
 var focusToolSummaryProviders = []focusToolSummaryProvider{
 	focusShellSummaryProvider{},
+	focusMCPSummaryProvider{},
 	focusExploreSummaryProvider{},
 	focusEditSummaryProvider{},
 	focusTaskSummaryProvider{},
@@ -69,6 +70,25 @@ func (focusShellSummaryProvider) Summarize(input focusToolSummaryInput) focusToo
 }
 
 type focusExploreSummaryProvider struct{}
+
+type focusMCPSummaryProvider struct{}
+
+func (focusMCPSummaryProvider) Match(input focusToolSummaryInput) bool {
+	return isMCPDisplayTool(input.ToolName)
+}
+
+func (focusMCPSummaryProvider) Summarize(input focusToolSummaryInput) focusToolSummaryItem {
+	info, ok := parseMCPDisplayInfo(input.ToolName, input.Text)
+	if !ok {
+		return focusToolSummaryItem{Kind: "mcp"}
+	}
+	switch info.Kind {
+	case mcpKindRead, mcpKindList, mcpKindSearch:
+		return focusToolSummaryItem{Kind: info.Kind, Detail: info.focusDetail(input.Text)}
+	default:
+		return focusToolSummaryItem{Kind: "mcp", Detail: info.invocation()}
+	}
+}
 
 func (focusExploreSummaryProvider) Match(input focusToolSummaryInput) bool {
 	switch focusToolKindFromName(input.ToolName) {

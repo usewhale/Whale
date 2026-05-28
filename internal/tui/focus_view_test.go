@@ -604,6 +604,42 @@ func TestProjectFocusMessagesKeepsRealMCPRunningDetail(t *testing.T) {
 	}
 }
 
+func TestProjectFocusMessagesOmitsNoisyMCPServerHint(t *testing.T) {
+	messages := []tuirender.UIMessage{
+		{Role: "result_ok", Kind: tuirender.KindToolCall, ToolName: "mcp__fs__list_allowed_directories", Text: "Called MCP fs · list_allowed_directories"},
+	}
+
+	projected := projectFocusMessages(messages)
+	if len(projected) != 1 {
+		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+	}
+	want := "Listed 1 directory (ctrl+o to expand)"
+	if got := projected[0].Text; got != want {
+		t.Fatalf("unexpected MCP allowed-directories summary:\nwant: %q\n got: %q", want, got)
+	}
+	if strings.Contains(projected[0].Text, ": fs") || strings.Contains(projected[0].Text, "mcp__") {
+		t.Fatalf("MCP allowed-directories summary should not expose server/raw name:\n%s", projected[0].Text)
+	}
+}
+
+func TestProjectFocusMessagesShowsUnknownMCPAsMCPTool(t *testing.T) {
+	messages := []tuirender.UIMessage{
+		{Role: "result_ok", Kind: tuirender.KindToolCall, ToolName: "mcp__docs__resolve_symbol", Text: "Called MCP docs · resolve_symbol\nquery: Renderer"},
+	}
+
+	projected := projectFocusMessages(messages)
+	if len(projected) != 1 {
+		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+	}
+	want := "Called 1 MCP tool: docs.resolve_symbol (ctrl+o to expand)"
+	if got := projected[0].Text; got != want {
+		t.Fatalf("unexpected unknown MCP summary:\nwant: %q\n got: %q", want, got)
+	}
+	if strings.Contains(projected[0].Text, "mcp__docs__resolve_symbol") {
+		t.Fatalf("unknown MCP summary should not expose raw tool name:\n%s", projected[0].Text)
+	}
+}
+
 func TestProjectFocusMessagesKeepsAssistantTextAsGroupBreaker(t *testing.T) {
 	messages := []tuirender.UIMessage{
 		{Role: "result_ok", Kind: tuirender.KindToolCall, ToolName: "read_file", Text: "Explored\nRead internal/tui/model.go"},
@@ -974,6 +1010,42 @@ func TestCtrlORedrawsPreviouslyPrintedTranscript(t *testing.T) {
 	for _, want := range []string{"old hidden thought", "Ran git status", "clean", "(ctrl+o to collapse)"} {
 		if !strings.Contains(expanded, want) {
 			t.Fatalf("expected expanded redraw to include %q:\n%s", want, expanded)
+		}
+	}
+}
+
+func TestViewModeChangedEventRedrawsPreviouslyPrintedTranscript(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-pro", "high", "on")
+	m.width = 100
+	m.height = 20
+	m.viewMode = app.ViewModeFocus
+	m.transcript = []tuirender.UIMessage{
+		{Role: "you", Kind: tuirender.KindText, Text: "old question"},
+		{Role: "think", Kind: tuirender.KindThinking, Text: "old hidden thought"},
+		{Role: "shell_result_ok", Kind: tuirender.KindToolCall, ToolName: "shell_run", Text: "Ran git status\nclean"},
+		{Role: "assistant", Kind: tuirender.KindText, Text: "old answer"},
+	}
+	m.nativeScrollbackPrinted = len(m.transcript)
+
+	collapsed := m.scrollbackText(m.transcript)
+	if !strings.Contains(collapsed, "Ran shell: git status") || !strings.Contains(collapsed, "(ctrl+o to expand)") {
+		t.Fatalf("test setup should start with collapsed focus transcript:\n%s", collapsed)
+	}
+
+	cmd, _, _ := m.handleServiceEvent(serviceViewModeChanged(app.ViewModeDefault))
+	if cmd == nil {
+		t.Fatal("expected /focus view-mode event to redraw printed transcript")
+	}
+	if m.viewMode != app.ViewModeDefault {
+		t.Fatalf("expected default view, got %q", m.viewMode)
+	}
+	if m.nativeScrollbackPrinted != len(m.transcript) {
+		t.Fatalf("expected redrawn transcript to be marked printed, got %d of %d", m.nativeScrollbackPrinted, len(m.transcript))
+	}
+	expanded := m.scrollbackText(m.transcript)
+	for _, want := range []string{"old hidden thought", "Ran git status", "clean", "(ctrl+o to collapse)"} {
+		if !strings.Contains(expanded, want) {
+			t.Fatalf("expected /focus redraw to include %q:\n%s", want, expanded)
 		}
 	}
 }

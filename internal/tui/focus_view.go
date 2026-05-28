@@ -136,6 +136,7 @@ type focusToolSummary struct {
 	task   focusSummaryBucket
 	plan   focusSummaryBucket
 	todo   focusSummaryBucket
+	mcp    focusSummaryBucket
 	other  focusSummaryBucket
 }
 
@@ -175,6 +176,8 @@ func (s *focusToolSummary) add(msg tuirender.UIMessage) {
 		s.plan.add(state, "", "")
 	case "todo":
 		s.todo.add(state, "", "")
+	case "mcp":
+		s.mcp.add(state, item.Detail, "")
 	default:
 		s.other.add(state, "", "")
 	}
@@ -202,6 +205,7 @@ func (s focusToolSummary) summary() *tuirender.FocusSummary {
 		add(focusStateTaskSummaryPart(s.task, state))
 		add(focusStateSimpleSummaryPart("plan", s.plan, state, "Updating plan", "Updated plan", "Denied", "Failed", "plan update", "plan updates"))
 		add(focusStateSimpleSummaryPart("todo", s.todo, state, "Updating todos", "Updated todos", "Denied", "Failed", "todo update", "todo updates"))
+		add(focusStateHintSummaryPart("mcp", s.mcp, state, "Calling", "Called", "Denied", "Failed", "MCP tool", "MCP tools", focusPlainHint))
 		add(focusStateCountSummaryPart("other", s.other, state, "Running", "Ran", "Denied", "Failed", "tool", "tools"))
 	}
 	return &tuirender.FocusSummary{Parts: parts, Hint: "(ctrl+o to expand)"}

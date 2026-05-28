@@ -46,6 +46,8 @@ func summarizeToolResultForChat(toolName, raw string) (string, string) {
 		return summarizeEditResult(toolName, env, successBySignal)
 	case "task":
 		return summarizeTaskResult(toolName, env, successBySignal)
+	case "mcp":
+		return summarizeMCPResult(env, successBySignal)
 	default:
 		if !successBySignal {
 			return summarizeFailedResult(env, "tool failed")

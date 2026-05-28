@@ -700,6 +700,8 @@ func focusSummaryKindColor(kind string) lipgloss.Color {
 		return tuitheme.Default.Plan
 	case "todo":
 		return tuitheme.Default.InfoSoft
+	case "mcp":
+		return tuitheme.Default.Info
 	default:
 		return tuitheme.Default.Muted
 	}
