@@ -195,6 +195,9 @@ func TestManagerDisplayCommandDoesNotExpandOrLeakSecrets(t *testing.T) {
 					"--token", "%MCP_TOKEN%",
 					"--api-key=sk-secret-value",
 					"Authorization: Bearer secret-value",
+					"--header=Authorization: Bearer header-secret-value",
+					"--header=X-API-Key: header-api-key-value",
+					"--header=Content-Type: application/json",
 					"--config=%APPDATA%\\server\\config.json",
 				},
 			},
@@ -211,20 +214,22 @@ func TestManagerDisplayCommandDoesNotExpandOrLeakSecrets(t *testing.T) {
 		"--token *****",
 		"--api-key=*****",
 		"Authorization:*****",
+		"--header=*****",
+		"--header=Content-Type: application/json",
 		`--config=%APPDATA%\server\config.json`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected command to contain %q, got %q", want, got)
 		}
 	}
-	for _, leaked := range []string{"sk-secret-value", "Bearer secret-value"} {
+	for _, leaked := range []string{"sk-secret-value", "Bearer secret-value", "header-secret-value", "header-api-key-value"} {
 		if strings.Contains(got, leaked) {
 			t.Fatalf("display command leaked %q: %q", leaked, got)
 		}
 	}
 }
 
-func TestManagerKeepsLaterServersVisibleWhileEarlierServerStarts(t *testing.T) {
+func TestManagerKeepsAllServersVisibleWhileServersStart(t *testing.T) {
 	mgr := NewManager(Config{
 		Servers: map[string]ServerConfig{
 			"context7": {
@@ -240,27 +245,120 @@ func TestManagerKeepsLaterServersVisibleWhileEarlierServerStarts(t *testing.T) {
 
 	checked := false
 	mgr.InitializeWithEvents(context.Background(), func(ev StartupEvent) {
-		if ev.State.Name != "context7" || ev.State.Status != StatusStarting {
+		if ev.State.Status != StatusStarting {
 			return
 		}
 		states := mgr.States()
 		if len(states) != 2 {
 			t.Fatalf("states while first server starts: %+v", states)
 		}
-		var fs ServerState
+		got := map[string]ServerState{}
 		for _, st := range states {
-			if st.Name == "fs" {
-				fs = st
-			}
+			got[st.Name] = st
 		}
-		if fs.Name != "fs" || fs.Status != StatusPending {
-			t.Fatalf("later server not visible as pending: %+v", states)
+		if got["context7"].Name != "context7" || got["fs"].Name != "fs" {
+			t.Fatalf("configured servers not all visible: %+v", states)
 		}
 		checked = true
 	})
 	t.Cleanup(func() { _ = mgr.Close() })
 	if !checked {
-		t.Fatal("did not observe context7 starting event")
+		t.Fatal("did not observe starting event")
+	}
+}
+
+func TestManagerStartsServersConcurrently(t *testing.T) {
+	slowServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+		http.Error(w, "slow failure", http.StatusInternalServerError)
+	}))
+	t.Cleanup(slowServer.Close)
+
+	mgr := NewManager(Config{
+		Servers: map[string]ServerConfig{
+			"aaa-slow": {
+				URL:     slowServer.URL,
+				Timeout: 5,
+			},
+			"zzz-fast": {
+				Command: os.Args[0],
+				Args:    []string{"-test.run=^$"},
+				Env:     map[string]string{runMCPTestServerEnv: "1"},
+				Timeout: 5,
+			},
+		},
+	})
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	fastConnected := make(chan struct{}, 1)
+	done := make(chan struct{})
+	go func() {
+		mgr.InitializeWithEvents(context.Background(), func(ev StartupEvent) {
+			if ev.State.Name == "zzz-fast" && ev.State.Status == StatusConnected {
+				select {
+				case fastConnected <- struct{}{}:
+				default:
+				}
+			}
+		})
+		close(done)
+	}()
+
+	select {
+	case <-fastConnected:
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("fast server did not connect before slow server completed")
+	}
+
+	tools := mgr.Tools()
+	if len(tools) != 1 || tools[0].Name() != "mcp__zzz_fast__echo" {
+		t.Fatalf("tools after fast connection: %+v", tools)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(4 * time.Second):
+		t.Fatal("manager initialization did not complete")
+	}
+
+	states := mgr.States()
+	byName := map[string]ServerState{}
+	for _, st := range states {
+		byName[st.Name] = st
+	}
+	if !byName["zzz-fast"].Connected || byName["aaa-slow"].Status != StatusFailed {
+		t.Fatalf("states: %+v", states)
+	}
+}
+
+func TestManagerRegistersToolsInDeterministicOrder(t *testing.T) {
+	mgr := NewManager(Config{
+		Servers: map[string]ServerConfig{
+			"b": {
+				Command: os.Args[0],
+				Args:    []string{"-test.run=^$"},
+				Env:     map[string]string{runMCPTestServerEnv: "1"},
+				Timeout: 5,
+			},
+			"a": {
+				Command: os.Args[0],
+				Args:    []string{"-test.run=^$"},
+				Env:     map[string]string{runMCPTestServerEnv: "1"},
+				Timeout: 5,
+			},
+		},
+	})
+	mgr.Initialize(context.Background())
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	tools := mgr.Tools()
+	if len(tools) != 2 {
+		t.Fatalf("tools: %+v", tools)
+	}
+	got := []string{tools[0].Name(), tools[1].Name()}
+	want := []string{"mcp__a__echo", "mcp__b__echo"}
+	if got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("tool order = %+v, want %+v", got, want)
 	}
 }
 

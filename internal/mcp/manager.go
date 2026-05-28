@@ -37,6 +37,7 @@ type Manager struct {
 	cfg           Config
 	workspaceRoot string
 	sessions      map[string]*clientSession
+	discovery     map[string][]discoveredTool
 	states        map[string]ServerState
 	tools         []core.Tool
 }
@@ -66,6 +67,14 @@ type clientSession struct {
 	cancel  context.CancelFunc
 }
 
+type discoveredTool struct {
+	serverName    string
+	toolName      string
+	spec          *sdk.Tool
+	allowedDirs   []string
+	workspaceRoot string
+}
+
 func NewManager(cfg Config, workspaceRoot ...string) *Manager {
 	root := ""
 	if len(workspaceRoot) > 0 {
@@ -75,6 +84,7 @@ func NewManager(cfg Config, workspaceRoot ...string) *Manager {
 		cfg:           cfg,
 		workspaceRoot: root,
 		sessions:      map[string]*clientSession{},
+		discovery:     map[string][]discoveredTool{},
 		states:        map[string]ServerState{},
 	}
 	m.resetStatesLocked()
@@ -91,10 +101,11 @@ func (m *Manager) InitializeWithEvents(ctx context.Context, emit func(StartupEve
 	}
 	m.mu.Lock()
 	m.tools = nil
+	m.discovery = map[string][]discoveredTool{}
 	m.resetStatesLocked()
 	m.mu.Unlock()
-	seen := map[string]bool{}
-	registered := []core.Tool{}
+	events := make(chan StartupEvent, len(m.cfg.Servers)*2+1)
+	var wg sync.WaitGroup
 	for _, name := range sortedServerNames(m.cfg.Servers) {
 		srv := m.cfg.Servers[name]
 		srv.Name = name
@@ -102,26 +113,35 @@ func (m *Manager) InitializeWithEvents(ctx context.Context, emit func(StartupEve
 			m.setStateAndEmit(ServerState{Name: name, Status: StatusDisabled, Disabled: true}, emit)
 			continue
 		}
-		m.setStateAndEmit(ServerState{Name: name, Status: StatusStarting}, emit)
-		if err := ctx.Err(); err != nil {
-			m.setStateAndEmit(ServerState{Name: name, Status: StatusCancelled, Error: err.Error()}, emit)
-			continue
-		}
-		tools, err := m.startServer(ctx, srv, seen)
-		if err != nil {
-			status := StatusFailed
-			if errors.Is(ctx.Err(), context.Canceled) {
-				status = StatusCancelled
+		wg.Add(1)
+		go func(srv ServerConfig) {
+			defer wg.Done()
+			m.setState(ServerState{Name: srv.Name, Status: StatusStarting})
+			events <- StartupEvent{State: m.stateByName(srv.Name)}
+			if err := ctx.Err(); err != nil {
+				m.setState(ServerState{Name: srv.Name, Status: StatusCancelled, Error: err.Error()})
+				events <- StartupEvent{State: m.stateByName(srv.Name)}
+				return
 			}
-			m.setStateAndEmit(ServerState{Name: name, Status: status, Error: err.Error()}, emit)
-			continue
-		}
-		registered = append(registered, tools...)
-		m.mu.Lock()
-		m.tools = append([]core.Tool(nil), registered...)
-		st := m.states[name]
-		m.mu.Unlock()
-		emitStartupEvent(emit, StartupEvent{State: st})
+			sess, discovered, toolNames, err := m.startServer(ctx, srv)
+			if err != nil {
+				status := StatusFailed
+				if errors.Is(ctx.Err(), context.Canceled) {
+					status = StatusCancelled
+				}
+				m.setState(ServerState{Name: srv.Name, Status: status, Error: err.Error()})
+				events <- StartupEvent{State: m.stateByName(srv.Name)}
+				return
+			}
+			events <- StartupEvent{State: m.registerConnectedServer(srv, sess, discovered, toolNames)}
+		}(srv)
+	}
+	go func() {
+		wg.Wait()
+		close(events)
+	}()
+	for ev := range events {
+		emitStartupEvent(emit, ev)
 	}
 	emitStartupEvent(emit, StartupEvent{Complete: true})
 }
@@ -194,10 +214,10 @@ func (m *Manager) CallTool(ctx context.Context, serverName, toolName string, arg
 	return sess.session.CallTool(callCtx, &sdk.CallToolParams{Name: toolName, Arguments: args})
 }
 
-func (m *Manager) startServer(ctx context.Context, srv ServerConfig, seen map[string]bool) ([]core.Tool, error) {
+func (m *Manager) startServer(ctx context.Context, srv ServerConfig) (*clientSession, []discoveredTool, []string, error) {
 	kind, err := srv.transportKind()
 	if err != nil {
-		return nil, fmt.Errorf("mcp server %q: %w", srv.Name, err)
+		return nil, nil, nil, fmt.Errorf("mcp server %q: %w", srv.Name, err)
 	}
 	mcpCtx, cancel := context.WithCancel(ctx)
 	timeoutCtx, timeoutCancel := context.WithTimeout(mcpCtx, srv.TimeoutDuration())
@@ -206,59 +226,98 @@ func (m *Manager) startServer(ctx context.Context, srv ServerConfig, seen map[st
 	transport, stdioCmd, httpDiag, err := createTransport(mcpCtx, kind, srv)
 	if err != nil {
 		cancel()
-		return nil, err
+		return nil, nil, nil, err
 	}
 	client := sdk.NewClient(&sdk.Implementation{Name: "whale", Title: "Whale", Version: build.CurrentVersion()}, nil)
 	session, err := client.Connect(timeoutCtx, transport, nil)
 	if err != nil {
 		cancel()
 		if isContextTimeout(timeoutCtx, err) {
-			return nil, startupTimeoutErr(srv, "connect")
+			return nil, nil, nil, startupTimeoutErr(srv, "connect")
 		}
 		if errors.Is(err, io.EOF) && stdioCmd != nil {
 			err = maybeStdioErr(err, stdioCmd)
 		}
-		return nil, startupErr(srv, "connect", err, httpDiag)
+		return nil, nil, nil, startupErr(srv, "connect", err, httpDiag)
 	}
 	listed, err := session.ListTools(timeoutCtx, &sdk.ListToolsParams{})
 	if err != nil {
 		_ = session.Close()
 		cancel()
 		if isContextTimeout(timeoutCtx, err) {
-			return nil, startupTimeoutErr(srv, "list_tools")
+			return nil, nil, nil, startupTimeoutErr(srv, "list_tools")
 		}
-		return nil, startupErr(srv, "list_tools", err, httpDiag)
+		return nil, nil, nil, startupErr(srv, "list_tools", err, httpDiag)
 	}
 	disabled := srv.disabledToolSet()
 	allowedDirs := srv.filesystemAllowedDirs()
-	tools := make([]core.Tool, 0, len(listed.Tools))
+	discovered := make([]discoveredTool, 0, len(listed.Tools))
 	toolNames := make([]string, 0, len(listed.Tools))
 	for _, tool := range listed.Tools {
 		if tool == nil || strings.TrimSpace(tool.Name) == "" || disabled[tool.Name] {
 			continue
 		}
 		toolNames = append(toolNames, strings.TrimSpace(tool.Name))
-		name := UniqueToolName(QualifyToolName(srv.Name, tool.Name), seen)
-		tools = append(tools, &Tool{
-			manager:        m,
-			serverName:     srv.Name,
-			toolName:       tool.Name,
-			registeredName: name,
-			spec:           tool,
-			allowedDirs:    allowedDirs,
-			workspaceRoot:  m.workspaceRoot,
+		discovered = append(discovered, discoveredTool{
+			serverName:    srv.Name,
+			toolName:      tool.Name,
+			spec:          tool,
+			allowedDirs:   allowedDirs,
+			workspaceRoot: m.workspaceRoot,
 		})
 	}
 	sort.Strings(toolNames)
+	return &clientSession{cfg: srv, session: session, cancel: cancel}, discovered, toolNames, nil
+}
+
+func (m *Manager) registerConnectedServer(srv ServerConfig, sess *clientSession, discovered []discoveredTool, toolNames []string) ServerState {
 	m.mu.Lock()
-	m.sessions[srv.Name] = &clientSession{cfg: srv, session: session, cancel: cancel}
+	defer m.mu.Unlock()
+	m.sessions[srv.Name] = sess
+	m.discovery[srv.Name] = append([]discoveredTool(nil), discovered...)
 	st := serverStateFromConfig(srv, StatusConnected)
 	st.Connected = true
-	st.Tools = len(tools)
-	st.ToolNames = toolNames
+	st.Tools = len(discovered)
+	st.ToolNames = append([]string(nil), toolNames...)
 	m.states[srv.Name] = st
-	m.mu.Unlock()
-	return tools, nil
+	m.tools = m.buildToolsLocked()
+	return st
+}
+
+func (m *Manager) buildToolsLocked() []core.Tool {
+	seen := map[string]bool{}
+	tools := []core.Tool{}
+	for _, serverName := range sortedDiscoveredServerNames(m.discovery) {
+		for _, tool := range sortedDiscoveredTools(m.discovery[serverName]) {
+			name := UniqueToolName(QualifyToolName(tool.serverName, tool.toolName), seen)
+			tools = append(tools, &Tool{
+				manager:        m,
+				serverName:     tool.serverName,
+				toolName:       tool.toolName,
+				registeredName: name,
+				spec:           tool.spec,
+				allowedDirs:    tool.allowedDirs,
+				workspaceRoot:  tool.workspaceRoot,
+			})
+		}
+	}
+	sort.Slice(tools, func(i, j int) bool { return tools[i].Name() < tools[j].Name() })
+	return tools
+}
+
+func sortedDiscoveredServerNames(discovery map[string][]discoveredTool) []string {
+	names := make([]string, 0, len(discovery))
+	for name := range discovery {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func sortedDiscoveredTools(tools []discoveredTool) []discoveredTool {
+	out := append([]discoveredTool(nil), tools...)
+	sort.Slice(out, func(i, j int) bool { return out[i].toolName < out[j].toolName })
+	return out
 }
 
 func createTransport(ctx context.Context, kind string, srv ServerConfig) (sdk.Transport, *exec.Cmd, *httpDiagnostics, error) {
@@ -347,6 +406,12 @@ func (m *Manager) setState(st ServerState) {
 		}
 	}
 	m.states[st.Name] = st
+}
+
+func (m *Manager) stateByName(name string) ServerState {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.states[name]
 }
 
 func mergeServerStateMetadata(prev, next ServerState) ServerState {
@@ -467,10 +532,14 @@ func isSecretCommandArgKey(key string) bool {
 }
 
 func looksSecretCommandArgValue(value string) bool {
-	value = strings.TrimSpace(strings.ToLower(value))
+	value = strings.TrimSpace(value)
 	if value == "" {
 		return false
 	}
+	if headerName, _, ok := strings.Cut(value, ":"); ok && isSecretCommandArgKey(headerName) {
+		return true
+	}
+	value = strings.ToLower(value)
 	return strings.HasPrefix(value, "bearer ") ||
 		strings.HasPrefix(value, "sk-") ||
 		strings.HasPrefix(value, "sk_") ||
