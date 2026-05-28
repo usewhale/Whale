@@ -235,7 +235,7 @@ func truncateFocusToolDetail(text string) string {
 func focusToolKindFromName(toolName string) string {
 	name := strings.TrimSpace(toolName)
 	switch name {
-	case "shell_run", "shell_wait":
+	case "shell_run", "shell_wait", "shell_cancel":
 		return "shell"
 	case "read_file", "fetch", "web_fetch":
 		return "read"

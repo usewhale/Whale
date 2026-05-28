@@ -19,6 +19,7 @@ func parseToolEnvelopeOK(raw string) (toolResultEnvelope, bool) {
 	data := body.Data
 	metrics, _ := data["metrics"].(map[string]any)
 	payload, _ := data["payload"].(map[string]any)
+	diagnosis, _ := data["diagnosis"].(map[string]any)
 	status := strings.TrimSpace(asString(data["status"]))
 	if status == "" {
 		status = "ok"
@@ -35,6 +36,7 @@ func parseToolEnvelopeOK(raw string) (toolResultEnvelope, bool) {
 		data:       data,
 		metrics:    metrics,
 		payload:    payload,
+		diagnosis:  diagnosis,
 		metadata:   body.Metadata,
 	}, true
 }

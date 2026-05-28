@@ -19,7 +19,7 @@ func (b *Toolset) shellTools() []core.Tool {
 				"additionalProperties": false,
 				"properties": map[string]any{
 					"command":    map[string]any{"type": "string", "description": "Shell command to execute"},
-					"timeout_ms": map[string]any{"type": "integer", "minimum": 1, "maximum": maxBackgroundShellTimeoutMS, "description": "Command timeout in milliseconds"},
+					"timeout_ms": map[string]any{"type": "integer", "minimum": 1, "maximum": maxBackgroundShellTimeoutMS, "description": "Foreground wait in milliseconds. Long-running commands may return a background task_id when the foreground wait expires; use shell_wait instead of rerunning."},
 					"background": map[string]any{"type": "boolean", "description": "When true, return immediately with task_id"},
 					"cwd":        map[string]any{"type": "string", "description": "Optional working directory relative to the workspace root. Must stay inside the workspace. Use this for subdirectory commands instead of cd."},
 				},
@@ -30,7 +30,7 @@ func (b *Toolset) shellTools() []core.Tool {
 		},
 		toolFn{
 			name:        "shell_wait",
-			description: "Wait for a background shell task by task_id and return status plus captured output when complete.",
+			description: "Wait for a background shell task by task_id. If it is still running, return partial output and any diagnosis; if complete, return the final output.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
@@ -43,6 +43,20 @@ func (b *Toolset) shellTools() []core.Tool {
 			readOnly: true,
 			fn:       b.shellWait,
 		},
+		toolFn{
+			name:        "shell_cancel",
+			description: "Cancel a running background shell task by task_id.",
+			parameters: map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"task_id": map[string]any{"type": "string"},
+				},
+				"required": []string{"task_id"},
+			},
+			readOnly: true,
+			fn:       b.shellCancel,
+		},
 	}
 }
 
@@ -51,7 +65,7 @@ func shellRunDescription() string {
 }
 
 func shellRunDescriptionFor(rt shell.RuntimeDescription) string {
-	base := "Run a shell command from the current Whale workspace. Commands default to the workspace root; do not assume synthetic paths like /workspace. Use relative paths, or set cwd to a subdirectory inside the workspace, instead of prefixing commands with cd."
+	base := "Run a shell command from the current Whale workspace. Commands default to the workspace root; do not assume synthetic paths like /workspace. Use relative paths, or set cwd to a subdirectory inside the workspace, instead of prefixing commands with cd. Long-running commands can return a background task_id when the foreground wait expires; continue with shell_wait instead of rerunning the same command."
 	if guidance := rt.ToolGuidance(); strings.TrimSpace(guidance) != "" {
 		return base + " " + strings.TrimSpace(guidance)
 	}

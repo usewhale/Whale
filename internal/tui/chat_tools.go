@@ -403,7 +403,7 @@ func toolDisplayKind(toolName string) string {
 		return "mcp"
 	}
 	switch strings.TrimSpace(toolName) {
-	case "shell_run", "shell_wait":
+	case "shell_run", "shell_wait", "shell_cancel":
 		return "shell"
 	case "read_file", "list_dir", "search_files", "grep", "search_content", "fetch", "web_fetch", "web_search":
 		return "explore"

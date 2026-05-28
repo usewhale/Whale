@@ -31,7 +31,7 @@ func detectGitBranchCmd(cwd string) tea.Cmd {
 
 func toolResultMayChangeGitBranch(toolName string) bool {
 	switch toolName {
-	case "shell_run", "shell_wait":
+	case "shell_run", "shell_wait", "shell_cancel":
 		return true
 	default:
 		return false

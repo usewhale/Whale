@@ -1,18 +1,16 @@
 package tools
 
 import (
-	"bytes"
 	"context"
-	"errors"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/usewhale/whale/internal/core"
-	"github.com/usewhale/whale/internal/shell"
 	"github.com/usewhale/whale/internal/shellsafe"
 )
+
+const maxForegroundShellWaitMS = 120000
 
 func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
 	var in struct {
@@ -41,9 +39,10 @@ func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolRe
 			timeout = time.Duration(in.TimeoutMS) * time.Millisecond
 		}
 		task := b.tasks.create(in.Command, relCWD)
+		cctx, cancel := context.WithTimeout(context.Background(), timeout)
+		task.setCancel(cancel)
 		go func() {
 			defer b.tasks.completed(task.ID)
-			cctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
 			runShellBackground(cctx, workdir, in.Command, task)
 		}()
@@ -59,128 +58,48 @@ func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolRe
 		})
 	}
 
-	timeout := 15 * time.Second
 	requestedTimeoutMS := in.TimeoutMS
-	effectiveTimeoutMS := int(timeout / time.Millisecond)
-	if in.TimeoutMS > 0 {
-		if in.TimeoutMS > 120000 {
-			in.TimeoutMS = 120000
-		}
-		timeout = time.Duration(in.TimeoutMS) * time.Millisecond
-		effectiveTimeoutMS = in.TimeoutMS
-	}
-	cctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	spec, err := shell.Resolve(in.Command)
-	if err != nil {
-		return marshalToolError(call, "exec_failed", err.Error()), nil
-	}
-	cmd := shell.Command(spec)
-	cmd.Dir = workdir
-	var stdoutBuf bytes.Buffer
-	var stderrBuf bytes.Buffer
-	cmd.Stdout = &stdoutBuf
-	cmd.Stderr = &stderrBuf
-	start := time.Now()
-	err = shell.RunCommand(cctx, cmd)
-	durationMS := time.Since(start).Milliseconds()
+	policy := shellPolicy(in.Command, requestedTimeoutMS)
+	effectiveTimeoutMS := policy.ForegroundWaitMS
+	task := b.tasks.create(in.Command, relCWD)
+	cctx, cancel := context.WithTimeout(context.Background(), time.Duration(maxBackgroundShellTimeoutMS)*time.Millisecond)
+	task.setCancel(cancel)
+	go func() {
+		defer b.tasks.completed(task.ID)
+		defer cancel()
+		runShellBackground(cctx, workdir, in.Command, task)
+	}()
 
-	stdoutRaw := decodeShellOutput(stdoutBuf.Bytes())
-	stderrRaw := decodeShellOutput(stderrBuf.Bytes())
-	stdout, stdoutTr := truncateTextSmart(stdoutRaw, maxToolTextChars)
-	stderr, stderrTr := truncateTextSmart(stderrRaw, maxToolTextChars)
-
-	exitCode := 0
-	summaryParts := make([]string, 0, 4)
-	if cctx.Err() == context.Canceled {
+	timer := time.NewTimer(time.Duration(effectiveTimeoutMS) * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		task.cancelRun()
+		task.waitDone()
+		b.tasks.release(task.ID)
 		return marshalToolError(call, "cancelled", "command canceled"), nil
-	}
-	if cctx.Err() == context.DeadlineExceeded {
-		result := shellRunResult(shellRunResultInput{
-			Status:             "timeout",
-			SummaryParts:       append(summaryParts, "command timed out"),
-			Command:            in.Command,
-			CWD:                relCWD,
-			Stdout:             stdout,
-			Stderr:             stderr,
-			StdoutRaw:          stdoutRaw,
-			StderrRaw:          stderrRaw,
-			StdoutTruncation:   stdoutTr,
-			StderrTruncation:   stderrTr,
-			DurationMS:         durationMS,
-			ExitCode:           nil,
-			TimedOut:           true,
-			RequestedTimeoutMS: requestedTimeoutMS,
-			EffectiveTimeoutMS: effectiveTimeoutMS,
-			Warnings:           warnings,
-		})
-		content, marshalErr := core.MarshalToolEnvelope(core.ToolEnvelope{Success: false, Data: result, Message: "command timed out", Code: "timeout"})
-		if marshalErr != nil {
-			return marshalToolError(call, "timeout", "command timed out"), nil
+	case <-task.done:
+		snap := task.snapshot()
+		b.tasks.release(task.ID)
+		return shellRunForegroundFinalResult(call, snap, requestedTimeoutMS, effectiveTimeoutMS, warnings)
+	case <-timer.C:
+		if snap := task.snapshot(); snap.Status != "running" {
+			b.tasks.release(task.ID)
+			return shellRunForegroundFinalResult(call, snap, requestedTimeoutMS, effectiveTimeoutMS, warnings)
 		}
-		return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}, nil
-	}
-	if err != nil {
-		var ex *exec.ExitError
-		if errors.As(err, &ex) {
-			exitCode = ex.ExitCode()
-			summaryParts = append(summaryParts, "command failed")
-			failHint := summarizeText(stderrRaw, 220)
-			if failHint != "" {
-				summaryParts = append(summaryParts, failHint)
-			}
-			result := shellRunResult(shellRunResultInput{
-				Status:             "error",
-				SummaryParts:       summaryParts,
-				Command:            in.Command,
-				CWD:                relCWD,
-				Stdout:             stdout,
-				Stderr:             stderr,
-				StdoutRaw:          stdoutRaw,
-				StderrRaw:          stderrRaw,
-				StdoutTruncation:   stdoutTr,
-				StderrTruncation:   stderrTr,
-				DurationMS:         durationMS,
-				ExitCode:           &exitCode,
-				TimedOut:           false,
-				RequestedTimeoutMS: requestedTimeoutMS,
-				EffectiveTimeoutMS: effectiveTimeoutMS,
-				Warnings:           warnings,
-			})
-			content, marshalErr := core.MarshalToolEnvelope(core.ToolEnvelope{Success: false, Data: result, Message: "command failed", Code: "exec_failed"})
-			if marshalErr != nil {
-				return marshalToolError(call, "exec_failed", "command failed"), nil
-			}
-			return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}, nil
+		if policy.AutoBackground {
+			return marshalToolResult(call, shellRunBackgroundedResult(task.snapshot(), requestedTimeoutMS, effectiveTimeoutMS, warnings, shellDiagnosis{
+				Reason:              policy.Reason,
+				Hint:                policy.Hint,
+				SuggestedNextAction: policy.SuggestedNextAction,
+			}))
 		}
-		return marshalToolError(call, "exec_failed", err.Error()), nil
+		task.cancelRun()
+		task.waitDone()
+		snap := task.snapshot()
+		b.tasks.release(task.ID)
+		return shellRunForegroundTimeoutResult(call, snap, requestedTimeoutMS, effectiveTimeoutMS, warnings)
 	}
-
-	if hint := summarizeText(stderrRaw, 200); hint != "" {
-		summaryParts = append(summaryParts, "stderr:"+hint)
-	}
-	if len(summaryParts) == 0 {
-		summaryParts = append(summaryParts, "command completed")
-	}
-	result := shellRunResult(shellRunResultInput{
-		Status:             "ok",
-		SummaryParts:       summaryParts,
-		Command:            in.Command,
-		CWD:                relCWD,
-		Stdout:             stdout,
-		Stderr:             stderr,
-		StdoutRaw:          stdoutRaw,
-		StderrRaw:          stderrRaw,
-		StdoutTruncation:   stdoutTr,
-		StderrTruncation:   stderrTr,
-		DurationMS:         durationMS,
-		ExitCode:           &exitCode,
-		TimedOut:           false,
-		RequestedTimeoutMS: requestedTimeoutMS,
-		EffectiveTimeoutMS: effectiveTimeoutMS,
-		Warnings:           warnings,
-	})
-	return marshalToolResult(call, result)
 }
 
 type shellRunResultInput struct {
@@ -199,6 +118,7 @@ type shellRunResultInput struct {
 	TimedOut           bool
 	RequestedTimeoutMS int
 	EffectiveTimeoutMS int
+	Diagnosis          shellDiagnosis
 	Warnings           []string
 }
 
@@ -223,7 +143,7 @@ func shellRunResult(in shellRunResultInput) map[string]any {
 		"effective_timeout_ms": in.EffectiveTimeoutMS,
 		"timeout_clamped":      in.RequestedTimeoutMS > 0 && in.EffectiveTimeoutMS > 0 && in.RequestedTimeoutMS != in.EffectiveTimeoutMS,
 	}
-	return map[string]any{
+	result := map[string]any{
 		"status":  in.Status,
 		"metrics": metrics,
 		"payload": map[string]any{
@@ -235,6 +155,144 @@ func shellRunResult(in shellRunResultInput) map[string]any {
 		"warnings": in.Warnings,
 		"summary":  strings.Join(summaryParts, " | "),
 	}
+	if diagnosis := in.Diagnosis.asMap(); diagnosis != nil {
+		result["diagnosis"] = diagnosis
+	}
+	return result
+}
+
+func shellRunForegroundFinalResult(call core.ToolCall, snap shellTaskSnapshot, requestedTimeoutMS int, effectiveTimeoutMS int, warnings []string) (core.ToolResult, error) {
+	stdout, stdoutTr := truncateTextSmart(snap.Stdout, maxToolTextChars)
+	stderr, stderrTr := truncateTextSmart(snap.Stderr, maxToolTextChars)
+	durationMS := shellTaskDurationMS(snap)
+	status := "ok"
+	summaryParts := []string{"command completed"}
+	success := true
+	code := "ok"
+	message := ""
+	timedOut := false
+	switch snap.Status {
+	case "failed":
+		status = "error"
+		summaryParts = []string{"command failed"}
+		if hint := summarizeText(snap.Stderr, 220); hint != "" {
+			summaryParts = append(summaryParts, hint)
+		}
+		success = false
+		code = "exec_failed"
+		message = "command failed"
+	case "timeout":
+		status = "timeout"
+		summaryParts = []string{"command timed out"}
+		success = false
+		code = "timeout"
+		message = "command timed out"
+		timedOut = true
+	case "canceled":
+		return marshalToolError(call, "cancelled", "command canceled"), nil
+	}
+	if snap.Status == "exited" {
+		if hint := summarizeText(snap.Stderr, 200); hint != "" {
+			summaryParts = []string{"stderr:" + hint}
+		}
+	}
+	result := shellRunResult(shellRunResultInput{
+		Status:             status,
+		SummaryParts:       summaryParts,
+		Command:            snap.Command,
+		CWD:                snap.CWD,
+		Stdout:             stdout,
+		Stderr:             stderr,
+		StdoutRaw:          snap.Stdout,
+		StderrRaw:          snap.Stderr,
+		StdoutTruncation:   stdoutTr,
+		StderrTruncation:   stderrTr,
+		DurationMS:         durationMS,
+		ExitCode:           snap.ExitCode,
+		TimedOut:           timedOut,
+		RequestedTimeoutMS: requestedTimeoutMS,
+		EffectiveTimeoutMS: effectiveTimeoutMS,
+		Diagnosis:          snap.Diagnosis,
+		Warnings:           warnings,
+	})
+	if success {
+		return marshalToolResult(call, result)
+	}
+	content, marshalErr := core.MarshalToolEnvelope(core.ToolEnvelope{Success: false, Data: result, Message: message, Code: code})
+	if marshalErr != nil {
+		return marshalToolError(call, code, message), nil
+	}
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}, nil
+}
+
+func shellRunForegroundTimeoutResult(call core.ToolCall, snap shellTaskSnapshot, requestedTimeoutMS int, effectiveTimeoutMS int, warnings []string) (core.ToolResult, error) {
+	stdout, stdoutTr := truncateTextSmart(snap.Stdout, maxToolTextChars)
+	stderr, stderrTr := truncateTextSmart(snap.Stderr, maxToolTextChars)
+	result := shellRunResult(shellRunResultInput{
+		Status:             "timeout",
+		SummaryParts:       []string{"command timed out"},
+		Command:            snap.Command,
+		CWD:                snap.CWD,
+		Stdout:             stdout,
+		Stderr:             stderr,
+		StdoutRaw:          snap.Stdout,
+		StderrRaw:          snap.Stderr,
+		StdoutTruncation:   stdoutTr,
+		StderrTruncation:   stderrTr,
+		DurationMS:         shellTaskDurationMS(snap),
+		ExitCode:           nil,
+		TimedOut:           true,
+		RequestedTimeoutMS: requestedTimeoutMS,
+		EffectiveTimeoutMS: effectiveTimeoutMS,
+		Diagnosis:          snap.Diagnosis,
+		Warnings:           warnings,
+	})
+	content, marshalErr := core.MarshalToolEnvelope(core.ToolEnvelope{Success: false, Data: result, Message: "command timed out", Code: "timeout"})
+	if marshalErr != nil {
+		return marshalToolError(call, "timeout", "command timed out"), nil
+	}
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}, nil
+}
+
+func shellRunBackgroundedResult(snap shellTaskSnapshot, requestedTimeoutMS int, effectiveTimeoutMS int, warnings []string, diagnosis shellDiagnosis) map[string]any {
+	summaryParts := []string{"command still running in background"}
+	if len(warnings) > 0 {
+		summaryParts = append(summaryParts, "warning: "+strings.Join(warnings, "; "))
+	}
+	result := map[string]any{
+		"status": "running",
+		"metrics": map[string]any{
+			"duration_ms":          shellTaskDurationMS(snap),
+			"requested_timeout_ms": requestedTimeoutMS,
+			"effective_timeout_ms": effectiveTimeoutMS,
+			"timeout_clamped":      requestedTimeoutMS > 0 && requestedTimeoutMS != effectiveTimeoutMS,
+			"auto_backgrounded":    true,
+		},
+		"payload": map[string]any{
+			"task_id":    snap.ID,
+			"command":    snap.Command,
+			"cwd":        snap.CWD,
+			"done":       false,
+			"started_at": snap.StartedAt,
+		},
+		"warnings": warnings,
+		"summary":  strings.Join(summaryParts, " | "),
+	}
+	if diagnosis.Reason == "" {
+		diagnosis = snap.Diagnosis
+	}
+	if diag := diagnosis.asMap(); diag != nil {
+		result["diagnosis"] = diag
+	}
+	return result
+}
+
+func shellTaskDurationMS(snap shellTaskSnapshot) int64 {
+	end := time.Now()
+	if snap.FinishedAt != nil {
+		end = *snap.FinishedAt
+	}
+	return end.Sub(snap.StartedAt).Milliseconds()
 }
 
 func (b *Toolset) shellRunWarnings(command string) []string {
@@ -352,17 +410,27 @@ func (b *Toolset) shellWait(ctx context.Context, call core.ToolCall) (core.ToolR
 			if snap.Status != "running" {
 				return b.shellWaitFinalResult(call, snap)
 			}
-			return marshalToolResult(call, map[string]any{
+			result := map[string]any{
 				"status": "running",
 				"payload": map[string]any{
-					"task_id":    snap.ID,
-					"command":    snap.Command,
-					"cwd":        snap.CWD,
-					"done":       false,
-					"started_at": snap.StartedAt,
+					"task_id":        snap.ID,
+					"command":        snap.Command,
+					"cwd":            snap.CWD,
+					"stdout":         summarizeTaskOutputForRunning(snap.Stdout),
+					"stderr":         summarizeTaskOutputForRunning(snap.Stderr),
+					"done":           false,
+					"started_at":     snap.StartedAt,
+					"last_output_at": snap.LastOutput,
+				},
+				"metrics": map[string]any{
+					"duration_ms": shellTaskDurationMS(snap),
 				},
 				"summary": "task still running",
-			})
+			}
+			if diagnosis := snap.Diagnosis.asMap(); diagnosis != nil {
+				result["diagnosis"] = diagnosis
+			}
+			return marshalToolResult(call, result)
 		case <-poll.C:
 		}
 	}
@@ -372,7 +440,7 @@ func (b *Toolset) shellWaitFinalResult(call core.ToolCall, snap shellTaskSnapsho
 	stdout, stdoutTr := truncateTextSmart(snap.Stdout, maxToolTextChars)
 	stderr, stderrTr := truncateTextSmart(snap.Stderr, maxToolTextChars)
 	b.tasks.release(snap.ID)
-	return marshalToolResult(call, map[string]any{
+	result := map[string]any{
 		"status": snap.Status,
 		"payload": map[string]any{
 			"task_id":    snap.ID,
@@ -388,8 +456,59 @@ func (b *Toolset) shellWaitFinalResult(call core.ToolCall, snap shellTaskSnapsho
 			"exit_code":         snap.ExitCode,
 			"stdout_truncation": stdoutTr,
 			"stderr_truncation": stderrTr,
+			"duration_ms":       shellTaskDurationMS(snap),
 		},
+	}
+	if diagnosis := snap.Diagnosis.asMap(); diagnosis != nil {
+		result["diagnosis"] = diagnosis
+	}
+	return marshalToolResult(call, result)
+}
+
+func (b *Toolset) shellCancel(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
+	var in struct {
+		TaskID string `json:"task_id"`
+	}
+	if err := decodeInput(call.Input, &in); err != nil {
+		return marshalToolError(call, "invalid_args", err.Error()), nil
+	}
+	taskID := strings.TrimSpace(in.TaskID)
+	if taskID == "" {
+		return marshalToolError(call, "invalid_args", "task_id is required"), nil
+	}
+	task, ok := b.tasks.get(taskID)
+	if !ok {
+		return marshalToolError(call, "not_found", "task not found"), nil
+	}
+	task.cancelRun()
+	select {
+	case <-ctx.Done():
+		return marshalToolError(call, "cancelled", ctx.Err().Error()), nil
+	case <-task.done:
+	case <-time.After(3 * time.Second):
+	}
+	snap := task.snapshot()
+	return marshalToolResult(call, map[string]any{
+		"status": "cancelled",
+		"payload": map[string]any{
+			"task_id":    snap.ID,
+			"command":    snap.Command,
+			"cwd":        snap.CWD,
+			"done":       snap.Status != "running",
+			"started_at": snap.StartedAt,
+			"ended_at":   snap.FinishedAt,
+		},
+		"metrics": map[string]any{
+			"duration_ms": shellTaskDurationMS(snap),
+		},
+		"diagnosis": shellDiagnosisForReason("cancelled").asMap(),
+		"summary":   "task cancelled",
 	})
+}
+
+func summarizeTaskOutputForRunning(text string) string {
+	out, _ := truncateTextSmart(text, maxToolTextChars)
+	return out
 }
 
 func (b *Toolset) resolveShellCWD(raw string) (abs string, rel string, err error) {
