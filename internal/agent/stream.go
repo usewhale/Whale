@@ -477,6 +477,7 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			}
 			if !approved {
 				metadata := a.previewTool(ctx, call)
+				metadata = addPolicyApprovalMetadata(metadata, decision)
 				metadata = policy.ApprovalMetadata(call, keys, metadata)
 				a.recordApprovalForCall(sessionID, lastModel, assistant.ID, approvalEventRequired, call, decision, key, keys, policy.ApprovalScope(call))
 				if !emit(AgentEvent{
@@ -859,4 +860,20 @@ func policyDenialEnvelope(d policy.PolicyDecision) string {
 		return fmt.Sprintf(`{"success":false,"error":%q,"code":%q}`, reason, code)
 	}
 	return content
+}
+
+func addPolicyApprovalMetadata(metadata map[string]any, decision policy.PolicyDecision) map[string]any {
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	if strings.TrimSpace(decision.MatchedRule) != "" {
+		metadata["matched_rule"] = decision.MatchedRule
+	}
+	if strings.TrimSpace(decision.Permission) != "" {
+		metadata["permission_kind"] = decision.Permission
+	}
+	if strings.TrimSpace(decision.Pattern) != "" {
+		metadata["permission_target"] = decision.Pattern
+	}
+	return metadata
 }

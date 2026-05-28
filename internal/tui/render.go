@@ -290,11 +290,14 @@ func (m model) renderApprovalPrompt() string {
 
 	review := isFileDiffApproval(m.approval.toolName, m.approval.metadata)
 	memory := memoryApprovalKind(m.approval.metadata)
+	externalDirectory := approvalPermissionKind(m.approval.metadata) == "external_directory"
 	titleText := "Approval required"
 	if review {
 		titleText = "Approval required: file diff review"
 	} else if memory != "" {
 		titleText = "Approval required: " + memory
+	} else if externalDirectory {
+		titleText = "Approval required: external directory"
 	}
 	bodyParts := []string{}
 	if review {
@@ -303,6 +306,11 @@ func (m model) renderApprovalPrompt() string {
 		bodyParts = append(bodyParts, "Review memory before Whale saves it.")
 	} else if memory == "memory delete" {
 		bodyParts = append(bodyParts, "Review memory before Whale deletes it.")
+	} else if externalDirectory {
+		bodyParts = append(bodyParts, "Allow access outside the current workspace.")
+		if target := approvalPermissionTarget(m.approval.metadata); target != "" {
+			bodyParts = append(bodyParts, "Path: "+target)
+		}
 	}
 	if memory != "" {
 		if memoryPreview := renderApprovalMemoryMetadata(m.approval.metadata); memoryPreview != "" {
@@ -371,6 +379,14 @@ func memoryApprovalKind(metadata map[string]any) string {
 
 func approvalSessionScope(metadata map[string]any) string {
 	return strings.TrimSpace(asString(metadata["approval_session_scope"]))
+}
+
+func approvalPermissionKind(metadata map[string]any) string {
+	return strings.TrimSpace(asString(metadata["permission_kind"]))
+}
+
+func approvalPermissionTarget(metadata map[string]any) string {
+	return strings.TrimSpace(asString(metadata["permission_target"]))
 }
 
 func approvalSessionOptionLabel(metadata map[string]any) string {

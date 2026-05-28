@@ -257,7 +257,7 @@ func summarizeFailedResult(env toolResultEnvelope, fallback string) (string, str
 	switch env.code {
 	case "request_replan":
 		return "result_failed", summarizeReplanRequired(env)
-	case "approval_denied", "policy_denied", "permission_denied":
+	case "approval_denied", "policy_denied", "permission_denied", "mcp_allowed_dirs_denied":
 		return "result_denied", "DENIED · " + detail
 	case "timeout":
 		if reason := shellDiagnosisLabel(asString(env.diagnosis["reason"])); reason != "" {

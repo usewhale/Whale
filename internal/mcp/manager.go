@@ -33,11 +33,12 @@ const (
 )
 
 type Manager struct {
-	mu       sync.RWMutex
-	cfg      Config
-	sessions map[string]*clientSession
-	states   map[string]ServerState
-	tools    []core.Tool
+	mu            sync.RWMutex
+	cfg           Config
+	workspaceRoot string
+	sessions      map[string]*clientSession
+	states        map[string]ServerState
+	tools         []core.Tool
 }
 
 type ServerState struct {
@@ -65,11 +66,16 @@ type clientSession struct {
 	cancel  context.CancelFunc
 }
 
-func NewManager(cfg Config) *Manager {
+func NewManager(cfg Config, workspaceRoot ...string) *Manager {
+	root := ""
+	if len(workspaceRoot) > 0 {
+		root = strings.TrimSpace(workspaceRoot[0])
+	}
 	m := &Manager{
-		cfg:      cfg,
-		sessions: map[string]*clientSession{},
-		states:   map[string]ServerState{},
+		cfg:           cfg,
+		workspaceRoot: root,
+		sessions:      map[string]*clientSession{},
+		states:        map[string]ServerState{},
 	}
 	m.resetStatesLocked()
 	return m
@@ -224,6 +230,7 @@ func (m *Manager) startServer(ctx context.Context, srv ServerConfig, seen map[st
 		return nil, startupErr(srv, "list_tools", err, httpDiag)
 	}
 	disabled := srv.disabledToolSet()
+	allowedDirs := srv.filesystemAllowedDirs()
 	tools := make([]core.Tool, 0, len(listed.Tools))
 	toolNames := make([]string, 0, len(listed.Tools))
 	for _, tool := range listed.Tools {
@@ -232,7 +239,15 @@ func (m *Manager) startServer(ctx context.Context, srv ServerConfig, seen map[st
 		}
 		toolNames = append(toolNames, strings.TrimSpace(tool.Name))
 		name := UniqueToolName(QualifyToolName(srv.Name, tool.Name), seen)
-		tools = append(tools, &Tool{manager: m, serverName: srv.Name, toolName: tool.Name, registeredName: name, spec: tool})
+		tools = append(tools, &Tool{
+			manager:        m,
+			serverName:     srv.Name,
+			toolName:       tool.Name,
+			registeredName: name,
+			spec:           tool,
+			allowedDirs:    allowedDirs,
+			workspaceRoot:  m.workspaceRoot,
+		})
 	}
 	sort.Strings(toolNames)
 	m.mu.Lock()

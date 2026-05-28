@@ -9026,6 +9026,34 @@ func TestApprovalViewSeparatesToolNameFromDetail(t *testing.T) {
 	}
 }
 
+func TestApprovalViewShowsExternalDirectoryMetadata(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 100
+	m.height = 30
+	m.mode = modeApproval
+	m.approval.toolName = "mcp__fs__list_directory"
+	m.approval.reason = "mcp__fs__list_directory"
+	m.approval.metadata = map[string]any{
+		"permission_kind":   "external_directory",
+		"permission_target": "/Users/goranka/Engineer/ai/dsk/opencode-dev",
+	}
+
+	view := xansi.Strip(m.View())
+	for _, want := range []string{
+		"Approval required: external directory",
+		"mcp__fs__list_directory",
+		"Allow access outside the current workspace.",
+		"Path: /Users/goranka/Engineer/ai/dsk/opencode-dev",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected approval view to contain %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "external_directory:*=ask") {
+		t.Fatalf("approval view should not expose raw rule labels:\n%s", view)
+	}
+}
+
 func TestApprovalViewHidesDuplicatePendingToolRow(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 100
@@ -9857,6 +9885,17 @@ func TestMCPToolResultSummarizesStructuredOnlyContent(t *testing.T) {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("expected structured MCP transcript to contain %q:\n%s", want, plain)
 		}
+	}
+}
+
+func TestSummarizeToolResultForChat_MCPAllowedDirsDeniedShowsDenied(t *testing.T) {
+	raw := `{"success":false,"code":"mcp_allowed_dirs_denied","message":"MCP filesystem server cannot access /workspace; allowed directories: /tmp. Use Whale built-in file tools for this path, or add the directory to the MCP server configuration."}`
+	role, got := summarizeToolResultForChat("mcp__fs__search_files", raw)
+	if role != "result_denied" {
+		t.Fatalf("expected result_denied role, got %q", role)
+	}
+	if !strings.HasPrefix(got, "DENIED · MCP filesystem server cannot access /workspace") {
+		t.Fatalf("unexpected summary: %q", got)
 	}
 }
 

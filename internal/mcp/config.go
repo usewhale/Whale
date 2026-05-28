@@ -137,6 +137,49 @@ func (s ServerConfig) disabledToolSet() map[string]bool {
 	return out
 }
 
+func (s ServerConfig) filesystemAllowedDirs() []string {
+	return filesystemAllowedDirsFromArgs(
+		expandStdioCommand(s.Command),
+		expandStdioArgs(s.Args),
+	)
+}
+
+func filesystemAllowedDirsFromArgs(command string, args []string) []string {
+	start := -1
+	if isFilesystemServerCommand(command) {
+		start = 0
+	}
+	for i, arg := range args {
+		if isFilesystemServerCommand(arg) {
+			start = i + 1
+			break
+		}
+	}
+	if start < 0 || start >= len(args) {
+		return nil
+	}
+	out := make([]string, 0, len(args)-start)
+	seen := map[string]bool{}
+	for _, arg := range args[start:] {
+		arg = strings.TrimSpace(arg)
+		if arg == "" || strings.HasPrefix(arg, "-") {
+			continue
+		}
+		dir := cleanAbsPath(arg)
+		if dir == "." || seen[dir] {
+			continue
+		}
+		out = append(out, dir)
+		seen[dir] = true
+	}
+	return out
+}
+
+func isFilesystemServerCommand(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	return strings.Contains(value, "server-filesystem")
+}
+
 func expandEnvRefs(value string) (string, error) {
 	var out strings.Builder
 	for {
