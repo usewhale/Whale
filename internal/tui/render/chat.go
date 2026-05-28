@@ -762,7 +762,7 @@ func focusSummaryKindColor(kind string) lipgloss.Color {
 		return tuitheme.Default.Tool
 	case "search":
 		return tuitheme.Default.Palette
-	case "read", "list":
+	case "read", "web", "list":
 		return tuitheme.Default.Info
 	case "edit":
 		return tuitheme.Default.Warn

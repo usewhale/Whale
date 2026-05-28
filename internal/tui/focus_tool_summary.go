@@ -94,12 +94,12 @@ func (focusMCPSummaryProvider) Summarize(input focusToolSummaryInput) focusToolS
 
 func (focusExploreSummaryProvider) Match(input focusToolSummaryInput) bool {
 	switch focusToolKindFromName(input.ToolName) {
-	case "read", "search", "list":
+	case "read", "web", "search", "list":
 		return true
 	}
 	if strings.HasPrefix(input.Text, "Exploring") || strings.HasPrefix(input.Text, "Explored") {
 		switch focusExploreKindFromAction(focusActionLine(input.Text)) {
-		case "read", "search", "list":
+		case "read", "web", "search", "list":
 			return true
 		}
 	}
@@ -108,7 +108,7 @@ func (focusExploreSummaryProvider) Match(input focusToolSummaryInput) bool {
 
 func (focusExploreSummaryProvider) Summarize(input focusToolSummaryInput) focusToolSummaryItem {
 	kind := focusToolKindFromName(input.ToolName)
-	if kind != "read" && kind != "search" && kind != "list" {
+	if kind != "read" && kind != "web" && kind != "search" && kind != "list" {
 		kind = focusExploreKindFromAction(focusActionLine(input.Text))
 	}
 	return focusToolSummaryItem{Kind: kind, Detail: focusStandardDetail(input)}
@@ -318,8 +318,10 @@ func focusToolKindFromName(toolName string) string {
 	switch name {
 	case "shell_run", "shell_wait", "shell_cancel":
 		return "shell"
-	case "read_file", "fetch", "web_fetch":
+	case "read_file":
 		return "read"
+	case "fetch", "web_fetch":
+		return "web"
 	case "list_dir":
 		return "list"
 	case "search_files", "grep", "search_content", "web_search":
@@ -335,7 +337,9 @@ func focusToolKindFromName(toolName string) string {
 	}
 	name = strings.ToLower(name)
 	switch {
-	case strings.Contains(name, "read_text_file"), strings.Contains(name, "read_file"), strings.Contains(name, "fetch"):
+	case strings.Contains(name, "fetch"):
+		return "web"
+	case strings.Contains(name, "read_text_file"), strings.Contains(name, "read_file"):
 		return "read"
 	case strings.Contains(name, "list_directory"), strings.Contains(name, "list_dir"):
 		return "list"
@@ -351,8 +355,10 @@ func focusToolKindFromName(toolName string) string {
 func focusExploreKindFromAction(action string) string {
 	action = strings.TrimSpace(action)
 	switch {
-	case strings.HasPrefix(action, "Read "), strings.HasPrefix(action, "Fetch "):
+	case strings.HasPrefix(action, "Read "):
 		return "read"
+	case strings.HasPrefix(action, "Fetch "):
+		return "web"
 	case strings.HasPrefix(action, "List "):
 		return "list"
 	case strings.HasPrefix(action, "Search "):

@@ -676,6 +676,25 @@ func TestProjectFocusMessagesSeparatesExplorationAndEditSummaries(t *testing.T) 
 	}
 }
 
+func TestProjectFocusMessagesUsesURLLanguageForFetch(t *testing.T) {
+	messages := []tuirender.UIMessage{
+		{Role: "result_failed", Kind: tuirender.KindToolCall, ToolName: "fetch", Text: "Explored\nFetch https://7a65d37d.whale-site.pages.dev"},
+		{Role: "result_ok", Kind: tuirender.KindToolCall, ToolName: "web_fetch", Text: "Explored\nFetch https://whale-site.pages.dev"},
+	}
+
+	projected := projectFocusMessages(messages)
+	if len(projected) != 1 {
+		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+	}
+	want := "Failed 1 URL: https://7a65d37d.whale-site.pages.dev (1 failed), Fetched 1 URL: https://whale-site.pages.dev (ctrl+o to expand)"
+	if got := projected[0].Text; got != want {
+		t.Fatalf("unexpected web fetch summary:\nwant: %q\n got: %q", want, got)
+	}
+	if strings.Contains(projected[0].Text, "file") {
+		t.Fatalf("web fetch summary should not use file wording:\n%s", projected[0].Text)
+	}
+}
+
 func TestProjectFocusMessagesDoesNotSplitToolSummaryOnHiddenThinking(t *testing.T) {
 	messages := []tuirender.UIMessage{
 		{Role: "result_ok", Kind: tuirender.KindToolCall, ToolName: "read_file", Text: "Explored\nRead internal/tui/model.go"},

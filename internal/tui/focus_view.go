@@ -143,6 +143,7 @@ type focusToolSummary struct {
 	shell  focusSummaryBucket
 	search focusSummaryBucket
 	read   focusSummaryBucket
+	web    focusSummaryBucket
 	list   focusSummaryBucket
 	edit   focusSummaryBucket
 	task   focusSummaryBucket
@@ -198,6 +199,8 @@ func (s *focusToolSummary) addItemWithState(state string, item focusToolSummaryI
 		s.search.add(state, item.Detail, "")
 	case "read":
 		s.read.add(state, item.Detail, "")
+	case "web":
+		s.web.add(state, item.Detail, "")
 	case "list":
 		s.list.add(state, item.Detail, "")
 	case "edit":
@@ -228,6 +231,7 @@ func (s focusToolSummary) summary() *tuirender.FocusSummary {
 	for _, state := range []string{"denied", "failed", "running", "done"} {
 		add(focusStateHintSummaryPart("search", s.search, state, "Searching for", "Searched for", "Denied", "Failed", "pattern", "patterns", focusQuoteHint))
 		add(focusStateHintSummaryPart("read", s.read, state, "Reading", "Read", "Denied", "Failed", "file", "files", focusPlainHint))
+		add(focusStateHintSummaryPart("web", s.web, state, "Fetching", "Fetched", "Denied", "Failed", "URL", "URLs", focusPlainHint))
 		add(focusStateHintSummaryPart("list", s.list, state, "Listing", "Listed", "Denied", "Failed", "directory", "directories", focusPlainHint))
 		if state == "done" {
 			add(focusRecoveredShellSummaryPart(recoveredShell))

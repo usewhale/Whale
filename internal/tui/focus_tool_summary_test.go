@@ -42,6 +42,11 @@ func TestFocusSummarizeToolMessageProviders(t *testing.T) {
 			want: focusToolSummaryItem{Kind: "read", Detail: "internal/tui/model.go"},
 		},
 		{
+			name: "web fetch action",
+			msg:  tuirender.UIMessage{ToolName: "web_fetch", Text: "Explored\nFetch https://whale-site.pages.dev"},
+			want: focusToolSummaryItem{Kind: "web", Detail: "https://whale-site.pages.dev"},
+		},
+		{
 			name: "search action",
 			msg:  tuirender.UIMessage{ToolName: "grep", Text: "Explored\nSearch focus summary"},
 			want: focusToolSummaryItem{Kind: "search", Detail: "focus summary"},
