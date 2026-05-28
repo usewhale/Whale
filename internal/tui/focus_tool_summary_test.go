@@ -14,18 +14,27 @@ func TestFocusSummarizeToolMessageProviders(t *testing.T) {
 	}{
 		{
 			name: "shell command",
-			msg:  tuirender.UIMessage{ToolName: "shell_run", Text: "Ran git status\nclean"},
-			want: focusToolSummaryItem{Kind: "shell", Detail: "git status"},
+			msg:  tuirender.UIMessage{ToolName: "shell_run", Text: "Ran git status"},
+			want: focusToolSummaryItem{Kind: "shell", Detail: "git status", Identity: "git status"},
 		},
 		{
 			name: "shell text prefix",
 			msg:  tuirender.UIMessage{Text: "Running shell: git status"},
-			want: focusToolSummaryItem{Kind: "shell", Detail: "git status"},
+			want: focusToolSummaryItem{Kind: "shell", Detail: "git status", Identity: "git status"},
 		},
 		{
 			name: "shell placeholder omitted",
 			msg:  tuirender.UIMessage{ToolName: "shell_run", Text: "Ran shell command"},
 			want: focusToolSummaryItem{Kind: "shell"},
+		},
+		{
+			name: "shell identity uses payload command",
+			msg: tuirender.UIMessage{
+				ToolName:     "shell_run",
+				ToolIdentity: "make test",
+				Text:         "Ran make test\n✓ · 23ms\nok",
+			},
+			want: focusToolSummaryItem{Kind: "shell", Detail: "make test", Identity: "make test"},
 		},
 		{
 			name: "read action",

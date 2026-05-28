@@ -60,6 +60,261 @@ func TestProjectFocusMessagesKeepsSingleShellCommandVisible(t *testing.T) {
 	}
 }
 
+func TestProjectFocusMessagesShowsRecoveredShellRetryCost(t *testing.T) {
+	messages := []tuirender.UIMessage{
+		{Role: "shell_result_failed", Kind: tuirender.KindToolCall, ToolName: "shell_run", Text: "Ran gh pr create"},
+		{Role: "shell_result_ok", Kind: tuirender.KindToolCall, ToolName: "shell_run", Text: "Ran gh pr create"},
+	}
+
+	projected := projectFocusMessages(messages)
+	if len(projected) != 1 {
+		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+	}
+	want := "Retried shell: gh pr create (1 failed, 1 succeeded) (ctrl+o to expand)"
+	if got := projected[0].Text; got != want {
+		t.Fatalf("unexpected recovered shell summary:\nwant: %q\n got: %q", want, got)
+	}
+	part := projected[0].FocusSummary.Parts[0]
+	if part.Kind != "shell" || part.State != "done" || part.Action != "Retried shell" || part.Detail != "gh pr create" || part.Status != "(1 failed, 1 succeeded)" {
+		t.Fatalf("unexpected recovered shell part: %+v", part)
+	}
+}
+
+func TestProjectFocusMessagesRecoversShellRetryWithResultOutput(t *testing.T) {
+	messages := []tuirender.UIMessage{
+		{Role: "shell_result_failed", Kind: tuirender.KindToolCall, ToolName: "shell_run", ToolIdentity: "make test", Text: "Ran make test\n✗ · 1.2s\nFAIL"},
+		{Role: "shell_result_ok", Kind: tuirender.KindToolCall, ToolName: "shell_run", ToolIdentity: "make test", Text: "Ran make test\n✓ · 1.1s\nok"},
+	}
+
+	projected := projectFocusMessages(messages)
+	if len(projected) != 1 {
+		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+	}
+	want := "Retried shell: make test (1 failed, 1 succeeded) (ctrl+o to expand)"
+	if got := projected[0].Text; got != want {
+		t.Fatalf("unexpected recovered shell summary with output:\nwant: %q\n got: %q", want, got)
+	}
+}
+
+func TestProjectFocusMessagesRecoversMultipleFailedShellAttempts(t *testing.T) {
+	messages := []tuirender.UIMessage{
+		{Role: "shell_result_failed", Kind: tuirender.KindToolCall, ToolName: "shell_run", ToolIdentity: "make test", Text: "Ran make test\n✗ · 1.2s\nFAIL"},
+		{Role: "shell_result_failed", Kind: tuirender.KindToolCall, ToolName: "shell_run", ToolIdentity: "make test", Text: "Ran make test\n✗ · 1.1s\nFAIL"},
+		{Role: "shell_result_ok", Kind: tuirender.KindToolCall, ToolName: "shell_run", ToolIdentity: "make test", Text: "Ran make test\n✓ · 1s\nok"},
+	}
+
+	projected := projectFocusMessages(messages)
+	if len(projected) != 1 {
+		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+	}
+	want := "Retried shell: make test (2 failed, 1 succeeded) (ctrl+o to expand)"
+	if got := projected[0].Text; got != want {
+		t.Fatalf("unexpected recovered shell summary:\nwant: %q\n got: %q", want, got)
+	}
+	if strings.Contains(projected[0].Text, "Failed shell") {
+		t.Fatalf("recovered repeated retry should not leave a failed shell part:\n%s", projected[0].Text)
+	}
+}
+
+func TestProjectFocusMessagesKeepsFailureAfterRecoveredShellRetry(t *testing.T) {
+	messages := []tuirender.UIMessage{
+		{Role: "shell_result_failed", Kind: tuirender.KindToolCall, ToolName: "shell_run", ToolIdentity: "make test", Text: "Ran make test\n✗ · 1.2s\nFAIL"},
+		{Role: "shell_result_ok", Kind: tuirender.KindToolCall, ToolName: "shell_run", ToolIdentity: "make test", Text: "Ran make test\n✓ · 1s\nok"},
+		{Role: "shell_result_failed", Kind: tuirender.KindToolCall, ToolName: "shell_run", ToolIdentity: "make test", Text: "Ran make test\n✗ · 1.1s\nFAIL"},
+	}
+
+	projected := projectFocusMessages(messages)
+	if len(projected) != 1 {
+		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+	}
+	for _, want := range []string{
+		"Failed shell: make test",
+		"Retried shell: make test (1 failed, 1 succeeded)",
+	} {
+		if !strings.Contains(projected[0].Text, want) {
+			t.Fatalf("focus summary missing %q:\n%s", want, projected[0].Text)
+		}
+	}
+}
+
+func TestProjectFocusMessagesKeepsUnrelatedShellFailureVisible(t *testing.T) {
+	messages := []tuirender.UIMessage{
+		{Role: "shell_result_failed", Kind: tuirender.KindToolCall, ToolName: "shell_run", Text: "Ran go test ./internal/tui\nFAIL"},
+		{Role: "shell_result_ok", Kind: tuirender.KindToolCall, ToolName: "shell_run", Text: "Ran git status\nclean"},
+	}
+
+	projected := projectFocusMessages(messages)
+	if len(projected) != 1 {
+		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+	}
+	for _, want := range []string{
+		"Failed shell: go test ./internal/tui",
+		"Ran shell: git status",
+		"(1 failed)",
+	} {
+		if !strings.Contains(projected[0].Text, want) {
+			t.Fatalf("focus summary missing %q:\n%s", want, projected[0].Text)
+		}
+	}
+	if strings.Contains(projected[0].Text, "Retried shell") || strings.Contains(projected[0].Text, "1 succeeded") {
+		t.Fatalf("unrelated shell success should not be marked recovered:\n%s", projected[0].Text)
+	}
+}
+
+func TestProjectFocusMessagesKeepsUnrecoveredShellFailureVisible(t *testing.T) {
+	messages := []tuirender.UIMessage{
+		{Role: "shell_result_failed", Kind: tuirender.KindToolCall, ToolName: "shell_run", Text: "Ran go test ./internal/tui\nFAIL"},
+		{Role: "shell_result_failed", Kind: tuirender.KindToolCall, ToolName: "shell_run", Text: "Ran gh pr create"},
+		{Role: "shell_result_ok", Kind: tuirender.KindToolCall, ToolName: "shell_run", Text: "Ran gh pr create"},
+	}
+
+	projected := projectFocusMessages(messages)
+	if len(projected) != 1 {
+		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+	}
+	for _, want := range []string{
+		"Retried shell: gh pr create (1 failed, 1 succeeded)",
+		"Failed shell: go test ./internal/tui",
+	} {
+		if !strings.Contains(projected[0].Text, want) {
+			t.Fatalf("focus summary missing %q:\n%s", want, projected[0].Text)
+		}
+	}
+	if strings.Contains(projected[0].Text, "Failed 2 shell commands") {
+		t.Fatalf("recovered retry should be split from unresolved shell failure:\n%s", projected[0].Text)
+	}
+}
+
+func TestProjectFocusMessagesKeepsUnrelatedSuccessfulShellVisibleWithRecoveredRetry(t *testing.T) {
+	messages := []tuirender.UIMessage{
+		{Role: "shell_result_failed", Kind: tuirender.KindToolCall, ToolName: "shell_run", Text: "Ran gh pr create"},
+		{Role: "shell_result_ok", Kind: tuirender.KindToolCall, ToolName: "shell_run", Text: "Ran gh pr create"},
+		{Role: "shell_result_ok", Kind: tuirender.KindToolCall, ToolName: "shell_run", Text: "Ran git status\nclean"},
+	}
+
+	projected := projectFocusMessages(messages)
+	if len(projected) != 1 {
+		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+	}
+	for _, want := range []string{
+		"Retried shell: gh pr create (1 failed, 1 succeeded)",
+		"Ran shell: git status",
+	} {
+		if !strings.Contains(projected[0].Text, want) {
+			t.Fatalf("focus summary missing %q:\n%s", want, projected[0].Text)
+		}
+	}
+}
+
+func TestProjectFocusMessagesDoesNotRecoverShellByTruncatedPrefix(t *testing.T) {
+	prefix := "go test ./internal/tui -run TestProjectFocusMessagesDoesNotRecoverShellByTruncatedPrefix"
+	failedCommand := prefix + "A -count=1"
+	successCommand := prefix + "B -count=1"
+	messages := []tuirender.UIMessage{
+		{Role: "shell_result_failed", Kind: tuirender.KindToolCall, ToolName: "shell_run", Text: "Ran " + failedCommand + "\nFAIL"},
+		{Role: "shell_result_ok", Kind: tuirender.KindToolCall, ToolName: "shell_run", Text: "Ran " + successCommand + "\nok"},
+	}
+
+	projected := projectFocusMessages(messages)
+	if len(projected) != 1 {
+		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+	}
+	for _, want := range []string{"Failed shell:", "Ran shell:"} {
+		if !strings.Contains(projected[0].Text, want) {
+			t.Fatalf("focus summary missing %q:\n%s", want, projected[0].Text)
+		}
+	}
+	if strings.Contains(projected[0].Text, "Retried shell") || strings.Contains(projected[0].Text, "1 succeeded") {
+		t.Fatalf("commands with only matching truncated display should not be recovered:\n%s", projected[0].Text)
+	}
+}
+
+func TestProjectFocusMessagesDoesNotRecoverShellBySignificantWhitespace(t *testing.T) {
+	messages := []tuirender.UIMessage{
+		{Role: "shell_result_failed", Kind: tuirender.KindToolCall, ToolName: "shell_run", Text: "Ran printf 'a  b'"},
+		{Role: "shell_result_ok", Kind: tuirender.KindToolCall, ToolName: "shell_run", Text: "Ran printf 'a b'"},
+	}
+
+	projected := projectFocusMessages(messages)
+	if len(projected) != 1 {
+		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+	}
+	for _, want := range []string{"Failed shell: printf 'a b'", "Ran shell: printf 'a b'"} {
+		if !strings.Contains(projected[0].Text, want) {
+			t.Fatalf("focus summary missing %q:\n%s", want, projected[0].Text)
+		}
+	}
+	if strings.Contains(projected[0].Text, "Retried shell") || strings.Contains(projected[0].Text, "1 succeeded") {
+		t.Fatalf("commands that differ by shell-significant whitespace should not be recovered:\n%s", projected[0].Text)
+	}
+}
+
+func TestProjectFocusMessagesDoesNotRecoverShellByFirstLineOnly(t *testing.T) {
+	messages := []tuirender.UIMessage{
+		{Role: "shell_result_failed", Kind: tuirender.KindToolCall, ToolName: "shell_run", ToolIdentity: "printf setup\nfalse", Text: "Ran printf setup\n✗ · 1ms\nFAIL"},
+		{Role: "shell_result_ok", Kind: tuirender.KindToolCall, ToolName: "shell_run", ToolIdentity: "printf setup\ntrue", Text: "Ran printf setup\n✓ · 1ms\nok"},
+	}
+
+	projected := projectFocusMessages(messages)
+	if len(projected) != 1 {
+		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+	}
+	for _, want := range []string{"Failed shell: printf setup", "Ran shell: printf setup"} {
+		if !strings.Contains(projected[0].Text, want) {
+			t.Fatalf("focus summary missing %q:\n%s", want, projected[0].Text)
+		}
+	}
+	if strings.Contains(projected[0].Text, "Retried shell") || strings.Contains(projected[0].Text, "1 succeeded") {
+		t.Fatalf("multi-line commands that differ after the first line should not be recovered:\n%s", projected[0].Text)
+	}
+}
+
+func TestProjectFocusMessagesDoesNotRecoverShellAcrossCWD(t *testing.T) {
+	messages := []tuirender.UIMessage{
+		{Role: "shell_result_failed", Kind: tuirender.KindToolCall, ToolName: "shell_run", ToolIdentity: "make test\x00cwd=internal/tui", Text: "Ran make test\nFAIL"},
+		{Role: "shell_result_ok", Kind: tuirender.KindToolCall, ToolName: "shell_run", ToolIdentity: "make test\x00cwd=internal/app", Text: "Ran make test\nok"},
+	}
+
+	projected := projectFocusMessages(messages)
+	if len(projected) != 1 {
+		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+	}
+	for _, want := range []string{"Failed shell: make test", "Ran shell: make test"} {
+		if !strings.Contains(projected[0].Text, want) {
+			t.Fatalf("focus summary missing %q:\n%s", want, projected[0].Text)
+		}
+	}
+	for _, want := range []string{"(cwd: internal/tui)", "(cwd: internal/app)"} {
+		if !strings.Contains(projected[0].Text, want) {
+			t.Fatalf("focus summary should disambiguate cwd with %q:\n%s", want, projected[0].Text)
+		}
+	}
+	if strings.Contains(projected[0].Text, "Retried shell") || strings.Contains(projected[0].Text, "1 succeeded") {
+		t.Fatalf("same command in different cwd should not be recovered:\n%s", projected[0].Text)
+	}
+}
+
+func TestProjectFocusMessagesKeepsDeniedBeforeRecoveredShellRetry(t *testing.T) {
+	messages := []tuirender.UIMessage{
+		{Role: "result_denied", Kind: tuirender.KindToolCall, ToolName: "edit_file", Text: "Edited internal/tui/focus_view.go"},
+		{Role: "shell_result_failed", Kind: tuirender.KindToolCall, ToolName: "shell_run", Text: "Ran gh pr create"},
+		{Role: "shell_result_ok", Kind: tuirender.KindToolCall, ToolName: "shell_run", Text: "Ran gh pr create"},
+	}
+
+	projected := projectFocusMessages(messages)
+	if len(projected) != 1 {
+		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+	}
+	deniedAt := strings.Index(projected[0].Text, "Denied 1 file")
+	retriedAt := strings.Index(projected[0].Text, "Retried shell")
+	if deniedAt < 0 || retriedAt < 0 {
+		t.Fatalf("focus summary missing denied or retried part:\n%s", projected[0].Text)
+	}
+	if deniedAt > retriedAt {
+		t.Fatalf("denied work should remain before recovered retry:\n%s", projected[0].Text)
+	}
+}
+
 func TestProjectFocusMessagesCollapsesSubagentCells(t *testing.T) {
 	messages := []tuirender.UIMessage{
 		{Role: "you", Kind: tuirender.KindText, Text: "inspect this"},

@@ -9668,7 +9668,7 @@ func TestShellRunTranscriptKeepsStatusAndOutputSeparate(t *testing.T) {
 		Text:       `shell_run: {"command":"cd internal/tui && wc -l model.go model_events.go model_keys.go model_prompt.go"}`,
 	}))
 	m = next.(model)
-	raw := `{"success":true,"code":"ok","data":{"status":"ok","metrics":{"exit_code":0,"duration_ms":23},"payload":{"command":"cd internal/tui && wc -l model.go model_events.go model_keys.go model_prompt.go","stdout":"284 model.go\n202 model_events.go\n401 model_keys.go\n88 model_prompt.go\n975 total\n","stderr":""}}}`
+	raw := `{"success":true,"code":"ok","data":{"status":"ok","metrics":{"exit_code":0,"duration_ms":23},"payload":{"command":"cd internal/tui && wc -l model.go model_events.go model_keys.go model_prompt.go","cwd":"internal/tui","stdout":"284 model.go\n202 model_events.go\n401 model_keys.go\n88 model_prompt.go\n975 total\n","stderr":""}}}`
 	next, _ = m.Update(svcMsg(service.Event{
 		Kind:       service.EventToolResult,
 		ToolCallID: "tc-shell",
@@ -9676,6 +9676,10 @@ func TestShellRunTranscriptKeepsStatusAndOutputSeparate(t *testing.T) {
 		Text:       raw,
 	}))
 	m = next.(model)
+	wantIdentity := "cd internal/tui && wc -l model.go model_events.go model_keys.go model_prompt.go\x00cwd=internal/tui"
+	if len(m.transcript) != 1 || m.transcript[0].ToolIdentity != wantIdentity {
+		t.Fatalf("shell result should preserve payload command identity, got %+v", m.transcript)
+	}
 	rendered := strings.Join(tuirender.ChatLines(m.transcript, 100), "\n")
 	if strings.Contains(rendered, "23ms 284 model.go") {
 		t.Fatalf("status and shell output collapsed onto one line:\n%s", rendered)
@@ -9684,6 +9688,34 @@ func TestShellRunTranscriptKeepsStatusAndOutputSeparate(t *testing.T) {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected rendered transcript to contain %q:\n%s", want, rendered)
 		}
+	}
+}
+
+func TestShellResultFallsBackToRunningCommandWhenPayloadOmitsCommand(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 30}
+	next, _ := m.Update(svcMsg(service.Event{
+		Kind:       service.EventToolCall,
+		ToolCallID: "tc-shell",
+		ToolName:   "shell_run",
+		Text:       `shell_run: {"command":"git status"}`,
+	}))
+	m = next.(model)
+	raw := `{"success":false,"code":"denied","message":"denied","data":{"status":"error","summary":"denied","payload":{"stderr":"","stdout":""}}}`
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind:       service.EventToolResult,
+		ToolCallID: "tc-shell",
+		ToolName:   "shell_run",
+		Text:       raw,
+	}))
+	m = next.(model)
+	if len(m.transcript) != 1 {
+		t.Fatalf("expected one transcript message, got %+v", m.transcript)
+	}
+	if m.transcript[0].Text != "Ran git status\nDENIED · denied" {
+		t.Fatalf("shell result should preserve previous command in title, got %q", m.transcript[0].Text)
+	}
+	if m.transcript[0].ToolIdentity != "git status" {
+		t.Fatalf("shell result should use previous command as identity, got %q", m.transcript[0].ToolIdentity)
 	}
 }
 

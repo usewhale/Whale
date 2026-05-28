@@ -149,8 +149,9 @@ type focusSummaryBucket struct {
 }
 
 type focusSummaryEntry struct {
-	state  string
-	detail string
+	state    string
+	detail   string
+	identity string
 }
 
 func (s *focusToolSummary) add(msg tuirender.UIMessage) {
@@ -159,23 +160,23 @@ func (s *focusToolSummary) add(msg tuirender.UIMessage) {
 	item := focusSummarizeToolMessage(msg)
 	switch item.Kind {
 	case "shell":
-		s.shell.add(state, item.Detail)
+		s.shell.add(state, item.Detail, item.Identity)
 	case "search":
-		s.search.add(state, item.Detail)
+		s.search.add(state, item.Detail, "")
 	case "read":
-		s.read.add(state, item.Detail)
+		s.read.add(state, item.Detail, "")
 	case "list":
-		s.list.add(state, item.Detail)
+		s.list.add(state, item.Detail, "")
 	case "edit":
-		s.edit.add(state, item.Detail)
+		s.edit.add(state, item.Detail, "")
 	case "task":
-		s.task.add(state, item.Detail)
+		s.task.add(state, item.Detail, "")
 	case "plan":
-		s.plan.add(state, "")
+		s.plan.add(state, "", "")
 	case "todo":
-		s.todo.add(state, "")
+		s.todo.add(state, "", "")
 	default:
-		s.other.add(state, "")
+		s.other.add(state, "", "")
 	}
 }
 
@@ -186,11 +187,17 @@ func (s focusToolSummary) summary() *tuirender.FocusSummary {
 			parts = append(parts, part)
 		}
 	}
+	recoveredShell, remainingShell := s.shell.splitRecovered()
+	recoveredShell = recoveredShell.withDisambiguatedShellCWD()
+	remainingShell = remainingShell.withDisambiguatedShellCWD()
 	for _, state := range []string{"denied", "failed", "running", "done"} {
 		add(focusStateHintSummaryPart("search", s.search, state, "Searching for", "Searched for", "Denied", "Failed", "pattern", "patterns", focusQuoteHint))
 		add(focusStateHintSummaryPart("read", s.read, state, "Reading", "Read", "Denied", "Failed", "file", "files", focusPlainHint))
 		add(focusStateHintSummaryPart("list", s.list, state, "Listing", "Listed", "Denied", "Failed", "directory", "directories", focusPlainHint))
-		add(focusStateShellSummaryPart(s.shell, state))
+		if state == "done" {
+			add(focusRecoveredShellSummaryPart(recoveredShell))
+		}
+		add(focusStateShellSummaryPart(remainingShell, state))
 		add(focusStateHintSummaryPart("edit", s.edit, state, "Editing", "Edited", "Denied", "Failed", "file", "files", focusPlainHint))
 		add(focusStateTaskSummaryPart(s.task, state))
 		add(focusStateSimpleSummaryPart("plan", s.plan, state, "Updating plan", "Updated plan", "Denied", "Failed", "plan update", "plan updates"))
@@ -200,7 +207,7 @@ func (s focusToolSummary) summary() *tuirender.FocusSummary {
 	return &tuirender.FocusSummary{Parts: parts, Hint: "(ctrl+o to expand)"}
 }
 
-func (b *focusSummaryBucket) add(state, detail string) {
+func (b *focusSummaryBucket) add(state, detail, identity string) {
 	b.count++
 	switch state {
 	case "running":
@@ -213,7 +220,7 @@ func (b *focusSummaryBucket) add(state, detail string) {
 	if detail != "" {
 		b.details = append(b.details, detail)
 	}
-	b.entries = append(b.entries, focusSummaryEntry{state: state, detail: detail})
+	b.entries = append(b.entries, focusSummaryEntry{state: state, detail: detail, identity: identity})
 }
 
 func (b focusSummaryBucket) activeVerb(running, done string) string {
@@ -227,23 +234,95 @@ func (b focusSummaryBucket) allDenied() bool {
 	return b.count > 0 && b.denied == b.count
 }
 
+func (b focusSummaryBucket) succeeded() int {
+	return b.count - b.running - b.failed - b.denied
+}
+
+func (b focusSummaryBucket) splitRecovered() (focusSummaryBucket, focusSummaryBucket) {
+	pendingFailures := map[string][]int{}
+	recoveredEntries := map[int]struct{}{}
+	for i, entry := range b.entries {
+		identity := strings.TrimSpace(entry.identity)
+		if identity == "" {
+			continue
+		}
+		switch entry.state {
+		case "failed":
+			pendingFailures[identity] = append(pendingFailures[identity], i)
+		case "done":
+			pending := pendingFailures[identity]
+			if len(pending) > 0 {
+				for _, failedIndex := range pending {
+					recoveredEntries[failedIndex] = struct{}{}
+				}
+				pendingFailures[identity] = nil
+				recoveredEntries[i] = struct{}{}
+			}
+		}
+	}
+	var recovered, remaining focusSummaryBucket
+	for i, entry := range b.entries {
+		if _, ok := recoveredEntries[i]; ok {
+			recovered.add(entry.state, entry.detail, entry.identity)
+			continue
+		}
+		remaining.add(entry.state, entry.detail, entry.identity)
+	}
+	return recovered, remaining
+}
+
+func (b focusSummaryBucket) withDisambiguatedShellCWD() focusSummaryBucket {
+	identitiesByDetail := map[string]map[string]struct{}{}
+	for _, entry := range b.entries {
+		if entry.detail == "" || shellIdentityCWD(entry.identity) == "" {
+			continue
+		}
+		if identitiesByDetail[entry.detail] == nil {
+			identitiesByDetail[entry.detail] = map[string]struct{}{}
+		}
+		identitiesByDetail[entry.detail][entry.identity] = struct{}{}
+	}
+	var out focusSummaryBucket
+	for _, entry := range b.entries {
+		detail := entry.detail
+		if len(identitiesByDetail[entry.detail]) > 1 {
+			if cwd := shellIdentityCWD(entry.identity); cwd != "" {
+				detail = detail + " (cwd: " + cwd + ")"
+			}
+		}
+		out.add(entry.state, detail, entry.identity)
+	}
+	return out
+}
+
+func shellIdentityCWD(identity string) string {
+	_, cwd, ok := strings.Cut(identity, "\x00cwd=")
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(cwd)
+}
+
 func (b focusSummaryBucket) forState(state string) focusSummaryBucket {
 	var out focusSummaryBucket
 	for _, entry := range b.entries {
 		if entry.state == state {
-			out.add(entry.state, entry.detail)
+			out.add(entry.state, entry.detail, entry.identity)
 		}
 	}
 	return out
 }
 
 func (b focusSummaryBucket) statusSuffix() string {
-	status := make([]string, 0, 3)
+	status := make([]string, 0, 4)
 	if b.running > 0 {
 		status = append(status, fmt.Sprintf("%d running", b.running))
 	}
 	if b.failed > 0 {
 		status = append(status, fmt.Sprintf("%d failed", b.failed))
+	}
+	if succeeded := b.succeeded(); succeeded > 0 && (b.running > 0 || b.failed > 0 || b.denied > 0) {
+		status = append(status, fmt.Sprintf("%d succeeded", succeeded))
 	}
 	if b.denied > 0 {
 		status = append(status, fmt.Sprintf("%d denied/canceled", b.denied))
@@ -287,6 +366,24 @@ func focusStateShellSummaryPart(b focusSummaryBucket, state string) tuirender.Fo
 		return focusFailedShellSummaryPart(b)
 	}
 	return focusShellSummaryPart(b)
+}
+
+func focusRecoveredShellSummaryPart(b focusSummaryBucket) tuirender.FocusSummaryPart {
+	if b.count == 0 {
+		return tuirender.FocusSummaryPart{}
+	}
+	done := b.forState("done")
+	detail := latestFocusHint(done.details, focusPlainHint)
+	if detail == "" {
+		detail = focusSampleDetails(b.details, b.count, focusPlainHint)
+	}
+	action := "Retried shell"
+	if succeeded := b.succeeded(); succeeded > 1 {
+		action = fmt.Sprintf("Retried %d shell commands", succeeded)
+	}
+	part := focusSummaryPart("shell", b, action, detail)
+	part.State = "done"
+	return part
 }
 
 func focusShellSummaryPart(b focusSummaryBucket) tuirender.FocusSummaryPart {

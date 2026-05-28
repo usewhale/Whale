@@ -29,6 +29,7 @@ type UIMessage struct {
 	Kind         MessageKind
 	Text         string
 	ToolName     string
+	ToolIdentity string
 	Local        *app.LocalResult
 	FocusSummary *FocusSummary
 	Notice       *SystemNotice
@@ -305,6 +306,10 @@ func (a *Assembler) AddLocalResult(result *app.LocalResult) {
 }
 
 func (a *Assembler) UpdateToolCall(toolCallID, text, role string) bool {
+	return a.UpdateToolCallWithIdentity(toolCallID, text, role, "")
+}
+
+func (a *Assembler) UpdateToolCallWithIdentity(toolCallID, text, role, identity string) bool {
 	t := strings.TrimSpace(strings.TrimRight(text, "\n"))
 	if toolCallID == "" || t == "" {
 		return false
@@ -318,6 +323,9 @@ func (a *Assembler) UpdateToolCall(toolCallID, text, role string) bool {
 	}
 	a.messages[idx].Role = role
 	a.messages[idx].Text = t
+	if strings.TrimSpace(identity) != "" {
+		a.messages[idx].ToolIdentity = identity
+	}
 	return true
 }
 

@@ -40,15 +40,33 @@ func (m *model) updateToolCallFromResult(toolCallID, toolName, result, role, sum
 	if diff := renderFileDiffMetadataMarkdown(metadata, fileDiffPreviewMaxLines); diff != "" && role == "result_ok" {
 		title += "\n\n" + diff
 	}
+	identity := ""
 	if toolDisplayKind(toolName) == "shell" {
 		role = shellResultRole(role)
+		identity = shellCommandIdentityFromResult(result)
+		if identity == "" {
+			identity = focusShellRawCommand(previous)
+		}
 	}
-	ok := m.assembler.UpdateToolCall(toolCallID, title, role)
+	ok := m.assembler.UpdateToolCallWithIdentity(toolCallID, title, role, identity)
 	m.markToolCallResolved(toolCallID)
 	if ok {
 		m.refreshLiveViewportContent()
 	}
 	return ok
+}
+
+func shellCommandIdentityFromResult(raw string) string {
+	env := parseToolEnvelope(raw)
+	command := strings.TrimSpace(asString(env.payload["command"]))
+	if command == "" {
+		return ""
+	}
+	cwd := strings.TrimSpace(asString(env.payload["cwd"]))
+	if cwd == "" {
+		return command
+	}
+	return command + "\x00cwd=" + cwd
 }
 
 func (m *model) updateTaskProgress(toolCallID, toolName, text, status string, metadata map[string]any) bool {
@@ -315,6 +333,9 @@ func completedToolTitle(toolName, raw, previous string) string {
 	switch toolDisplayKind(toolName) {
 	case "shell":
 		cmd := strings.TrimSpace(asString(env.payload["command"]))
+		if cmd == "" {
+			cmd = focusShellRawCommand(previous)
+		}
 		if cmd == "" {
 			cmd = "shell command"
 		}

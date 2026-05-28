@@ -7,15 +7,17 @@ import (
 )
 
 type focusToolSummaryInput struct {
-	ToolName string
-	Role     string
-	Text     string
-	Kind     tuirender.MessageKind
+	ToolName     string
+	ToolIdentity string
+	Role         string
+	Text         string
+	Kind         tuirender.MessageKind
 }
 
 type focusToolSummaryItem struct {
-	Kind   string
-	Detail string
+	Kind     string
+	Detail   string
+	Identity string
 }
 
 type focusToolSummaryProvider interface {
@@ -33,10 +35,11 @@ var focusToolSummaryProviders = []focusToolSummaryProvider{
 
 func focusSummarizeToolMessage(msg tuirender.UIMessage) focusToolSummaryItem {
 	input := focusToolSummaryInput{
-		ToolName: strings.TrimSpace(msg.ToolName),
-		Role:     strings.TrimSpace(msg.Role),
-		Text:     strings.TrimSpace(msg.Text),
-		Kind:     msg.Kind,
+		ToolName:     strings.TrimSpace(msg.ToolName),
+		ToolIdentity: strings.TrimSpace(msg.ToolIdentity),
+		Role:         strings.TrimSpace(msg.Role),
+		Text:         strings.TrimSpace(msg.Text),
+		Kind:         msg.Kind,
 	}
 	for _, provider := range focusToolSummaryProviders {
 		if provider.Match(input) {
@@ -58,7 +61,11 @@ func (focusShellSummaryProvider) Match(input focusToolSummaryInput) bool {
 }
 
 func (focusShellSummaryProvider) Summarize(input focusToolSummaryInput) focusToolSummaryItem {
-	return focusToolSummaryItem{Kind: "shell", Detail: focusShellDetail(input.Text)}
+	return focusToolSummaryItem{
+		Kind:     "shell",
+		Detail:   focusShellDetail(input.Text),
+		Identity: focusShellIdentity(input),
+	}
 }
 
 type focusExploreSummaryProvider struct{}
@@ -149,15 +156,39 @@ func focusStandardDetail(input focusToolSummaryInput) string {
 }
 
 func focusShellDetail(text string) string {
+	command := focusShellDisplayCommand(text)
+	if strings.TrimSpace(command) == "shell command" {
+		return ""
+	}
+	return truncateFocusToolDetail(command)
+}
+
+func focusShellIdentity(input focusToolSummaryInput) string {
+	command := strings.TrimSpace(input.ToolIdentity)
+	if command == "" {
+		command = focusShellRawCommand(input.Text)
+	}
+	if strings.TrimSpace(command) == "shell command" {
+		return ""
+	}
+	return command
+}
+
+func focusShellDisplayCommand(text string) string {
+	command := focusShellRawCommand(text)
+	line := strings.TrimSpace(strings.SplitN(command, "\n", 2)[0])
+	return strings.Join(strings.Fields(line), " ")
+}
+
+func focusShellRawCommand(text string) string {
 	text = strings.TrimSpace(text)
 	for _, prefix := range []string{"Running ", "Ran "} {
 		if after, ok := strings.CutPrefix(text, prefix); ok {
-			line := strings.TrimSpace(strings.SplitN(after, "\n", 2)[0])
-			line = strings.TrimSpace(strings.TrimPrefix(line, "shell:"))
-			if strings.TrimSpace(line) == "shell command" {
-				return ""
+			command := strings.TrimSpace(after)
+			if afterShell, ok := strings.CutPrefix(command, "shell:"); ok {
+				command = strings.TrimSpace(afterShell)
 			}
-			return truncateFocusToolDetail(line)
+			return command
 		}
 	}
 	return ""
