@@ -1204,7 +1204,7 @@ func TestBuildMCPLocalResultIncludesStructuredFields(t *testing.T) {
 	app := &App{mcpManager: mgr}
 
 	result := app.buildMCPLocalResult()
-	if result == nil || result.Kind != "mcp" || result.Title != "MCP" {
+	if result == nil || result.Kind != "mcp" || result.Title != "MCP Tools" {
 		t.Fatalf("unexpected mcp local result: %+v", result)
 	}
 	if result.PlainText == "" || !strings.Contains(result.PlainText, "disabled-fs") {
@@ -1218,10 +1218,44 @@ func TestBuildMCPLocalResultIncludesStructuredFields(t *testing.T) {
 	if len(result.Sections) != 1 || result.Sections[0].Title != "disabled-fs" {
 		t.Fatalf("expected disabled-fs section, got %+v", result.Sections)
 	}
-	for _, want := range []string{"Status", "Tools"} {
+	for _, want := range []string{"Status", "Auth", "Tools"} {
 		if !localResultSectionHasField(result.Sections[0], want) {
 			t.Fatalf("expected mcp section field %q, got %+v", want, result.Sections[0].Fields)
 		}
+	}
+}
+
+func TestBuildMCPLocalResultIncludesCommandHeadersAndToolNames(t *testing.T) {
+	mgr := whalemcp.NewManager(whalemcp.Config{
+		Path: "/tmp/mcp.json",
+		Servers: map[string]whalemcp.ServerConfig{
+			"fs": {
+				Command: "npx",
+				Args:    []string{"-y", "@modelcontextprotocol/server-filesystem", "/tmp"},
+			},
+			"stitch": {
+				URL: "https://stitch.googleapis.com/mcp",
+				Headers: map[string]string{
+					"Authorization":  "Bearer ${STITCH_TOKEN}",
+					"X-Goog-Api-Key": "${STITCH_KEY}",
+				},
+			},
+		},
+	})
+	app := &App{mcpManager: mgr}
+
+	result := app.buildMCPLocalResult()
+	if got := localResultSectionFieldValue(result, "fs", "Command"); got != "npx -y @modelcontextprotocol/server-filesystem /tmp" {
+		t.Fatalf("unexpected fs command: %q", got)
+	}
+	if got := localResultSectionFieldValue(result, "fs", "Tools"); got != "(none)" {
+		t.Fatalf("unexpected fs tools before connection: %q", got)
+	}
+	if got := localResultSectionFieldValue(result, "stitch", "Auth"); got != "Bearer token" {
+		t.Fatalf("unexpected stitch auth: %q", got)
+	}
+	if got := localResultSectionFieldValue(result, "stitch", "HTTP headers"); got != "Authorization=*****, X-Goog-Api-Key=*****" {
+		t.Fatalf("unexpected stitch headers: %q", got)
 	}
 }
 
@@ -1407,15 +1441,24 @@ func localResultSectionHasField(section LocalResultSection, label string) bool {
 }
 
 func localResultHasSectionField(result *LocalResult, sectionTitle, fieldLabel string) bool {
+	return localResultSectionFieldValue(result, sectionTitle, fieldLabel) != ""
+}
+
+func localResultSectionFieldValue(result *LocalResult, sectionTitle, fieldLabel string) string {
 	if result == nil {
-		return false
+		return ""
 	}
 	for _, section := range result.Sections {
-		if section.Title == sectionTitle && localResultSectionHasField(section, fieldLabel) {
-			return true
+		if section.Title != sectionTitle {
+			continue
+		}
+		for _, field := range section.Fields {
+			if field.Label == fieldLabel {
+				return field.Value
+			}
 		}
 	}
-	return false
+	return ""
 }
 
 func TestStartupLinesIncludeEffectiveThinkingAndEffort(t *testing.T) {

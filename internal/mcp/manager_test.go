@@ -75,6 +75,9 @@ func TestManagerInitializesAndCallsStdioTool(t *testing.T) {
 	if !states[0].Connected || states[0].Error != "" || states[0].Tools != 1 {
 		t.Fatalf("state: %+v", states[0])
 	}
+	if len(states[0].ToolNames) != 1 || states[0].ToolNames[0] != "echo" {
+		t.Fatalf("tool names: %+v", states[0].ToolNames)
+	}
 
 	tools := mgr.Tools()
 	if len(tools) != 1 {
@@ -122,6 +125,142 @@ func TestManagerRecordsFailedServer(t *testing.T) {
 	states := mgr.States()
 	if len(states) != 1 || states[0].Error == "" || states[0].Connected {
 		t.Fatalf("states: %+v", states)
+	}
+}
+
+func TestManagerStatesIncludePendingConfiguredServers(t *testing.T) {
+	mgr := NewManager(Config{
+		Servers: map[string]ServerConfig{
+			"context7": {Command: "context7-mcp"},
+			"fs":       {Command: "fs-mcp"},
+			"off":      {Command: "off-mcp", Disabled: true},
+		},
+	})
+
+	states := mgr.States()
+	if len(states) != 3 {
+		t.Fatalf("states: %+v", states)
+	}
+	got := map[string]string{}
+	for _, st := range states {
+		got[st.Name] = st.Status
+	}
+	if got["context7"] != StatusPending || got["fs"] != StatusPending || got["off"] != StatusDisabled {
+		t.Fatalf("unexpected initial states: %+v", states)
+	}
+}
+
+func TestManagerStatesIncludeDisplayConfig(t *testing.T) {
+	mgr := NewManager(Config{
+		Servers: map[string]ServerConfig{
+			"fs": {
+				Command: "npx",
+				Args:    []string{"-y", "@modelcontextprotocol/server-filesystem", "/tmp"},
+			},
+			"remote": {
+				URL: "https://example.com/mcp?secret=hidden",
+				Headers: map[string]string{
+					"Authorization": "Bearer ${TOKEN}",
+					"X-API-Key":     "${API_KEY}",
+				},
+			},
+		},
+	})
+
+	states := mgr.States()
+	byName := map[string]ServerState{}
+	for _, st := range states {
+		byName[st.Name] = st
+	}
+	if got := byName["fs"].Command; got != "npx -y @modelcontextprotocol/server-filesystem /tmp" {
+		t.Fatalf("command = %q", got)
+	}
+	if got := byName["remote"].Auth; got != "Bearer token" {
+		t.Fatalf("auth = %q", got)
+	}
+	if got := byName["remote"].URL; got != "https://example.com/mcp" {
+		t.Fatalf("url = %q", got)
+	}
+	if got := strings.Join(byName["remote"].Headers, ", "); got != "Authorization=*****, X-API-Key=*****" {
+		t.Fatalf("headers = %q", got)
+	}
+}
+
+func TestManagerDisplayCommandDoesNotExpandOrLeakSecrets(t *testing.T) {
+	mgr := NewManager(Config{
+		Servers: map[string]ServerConfig{
+			"secret": {
+				Command: `%USERPROFILE%\bin\server.exe`,
+				Args: []string{
+					"--token", "%MCP_TOKEN%",
+					"--api-key=sk-secret-value",
+					"Authorization: Bearer secret-value",
+					"--config=%APPDATA%\\server\\config.json",
+				},
+			},
+		},
+	})
+
+	states := mgr.States()
+	if len(states) != 1 {
+		t.Fatalf("states: %+v", states)
+	}
+	got := states[0].Command
+	for _, want := range []string{
+		`%USERPROFILE%\bin\server.exe`,
+		"--token *****",
+		"--api-key=*****",
+		"Authorization:*****",
+		`--config=%APPDATA%\server\config.json`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected command to contain %q, got %q", want, got)
+		}
+	}
+	for _, leaked := range []string{"sk-secret-value", "Bearer secret-value"} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("display command leaked %q: %q", leaked, got)
+		}
+	}
+}
+
+func TestManagerKeepsLaterServersVisibleWhileEarlierServerStarts(t *testing.T) {
+	mgr := NewManager(Config{
+		Servers: map[string]ServerConfig{
+			"context7": {
+				Command: "definitely-not-a-whale-mcp-command",
+				Timeout: 1,
+			},
+			"fs": {
+				Command: "also-not-a-whale-mcp-command",
+				Timeout: 1,
+			},
+		},
+	})
+
+	checked := false
+	mgr.InitializeWithEvents(context.Background(), func(ev StartupEvent) {
+		if ev.State.Name != "context7" || ev.State.Status != StatusStarting {
+			return
+		}
+		states := mgr.States()
+		if len(states) != 2 {
+			t.Fatalf("states while first server starts: %+v", states)
+		}
+		var fs ServerState
+		for _, st := range states {
+			if st.Name == "fs" {
+				fs = st
+			}
+		}
+		if fs.Name != "fs" || fs.Status != StatusPending {
+			t.Fatalf("later server not visible as pending: %+v", states)
+		}
+		checked = true
+	})
+	t.Cleanup(func() { _ = mgr.Close() })
+	if !checked {
+		t.Fatal("did not observe context7 starting event")
 	}
 }
 

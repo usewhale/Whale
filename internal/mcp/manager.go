@@ -24,6 +24,7 @@ import (
 )
 
 const (
+	StatusPending   = "pending"
 	StatusDisabled  = "disabled"
 	StatusStarting  = "starting"
 	StatusConnected = "connected"
@@ -46,6 +47,11 @@ type ServerState struct {
 	Connected bool
 	Error     string
 	Tools     int
+	ToolNames []string
+	Command   string
+	URL       string
+	Headers   []string
+	Auth      string
 }
 
 type StartupEvent struct {
@@ -60,11 +66,13 @@ type clientSession struct {
 }
 
 func NewManager(cfg Config) *Manager {
-	return &Manager{
+	m := &Manager{
 		cfg:      cfg,
 		sessions: map[string]*clientSession{},
 		states:   map[string]ServerState{},
 	}
+	m.resetStatesLocked()
+	return m
 }
 
 func (m *Manager) Initialize(ctx context.Context) {
@@ -77,6 +85,7 @@ func (m *Manager) InitializeWithEvents(ctx context.Context, emit func(StartupEve
 	}
 	m.mu.Lock()
 	m.tools = nil
+	m.resetStatesLocked()
 	m.mu.Unlock()
 	seen := map[string]bool{}
 	registered := []core.Tool{}
@@ -216,16 +225,23 @@ func (m *Manager) startServer(ctx context.Context, srv ServerConfig, seen map[st
 	}
 	disabled := srv.disabledToolSet()
 	tools := make([]core.Tool, 0, len(listed.Tools))
+	toolNames := make([]string, 0, len(listed.Tools))
 	for _, tool := range listed.Tools {
 		if tool == nil || strings.TrimSpace(tool.Name) == "" || disabled[tool.Name] {
 			continue
 		}
+		toolNames = append(toolNames, strings.TrimSpace(tool.Name))
 		name := UniqueToolName(QualifyToolName(srv.Name, tool.Name), seen)
 		tools = append(tools, &Tool{manager: m, serverName: srv.Name, toolName: tool.Name, registeredName: name, spec: tool})
 	}
+	sort.Strings(toolNames)
 	m.mu.Lock()
 	m.sessions[srv.Name] = &clientSession{cfg: srv, session: session, cancel: cancel}
-	m.states[srv.Name] = ServerState{Name: srv.Name, Status: StatusConnected, Connected: true, Tools: len(tools)}
+	st := serverStateFromConfig(srv, StatusConnected)
+	st.Connected = true
+	st.Tools = len(tools)
+	st.ToolNames = toolNames
+	m.states[srv.Name] = st
 	m.mu.Unlock()
 	return tools, nil
 }
@@ -302,6 +318,9 @@ func (rt headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error
 func (m *Manager) setState(st ServerState) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if prev, ok := m.states[st.Name]; ok {
+		st = mergeServerStateMetadata(prev, st)
+	}
 	if st.Status == "" {
 		switch {
 		case st.Disabled:
@@ -313,6 +332,181 @@ func (m *Manager) setState(st ServerState) {
 		}
 	}
 	m.states[st.Name] = st
+}
+
+func mergeServerStateMetadata(prev, next ServerState) ServerState {
+	if next.Command == "" {
+		next.Command = prev.Command
+	}
+	if next.URL == "" {
+		next.URL = prev.URL
+	}
+	if next.Auth == "" {
+		next.Auth = prev.Auth
+	}
+	if len(next.Headers) == 0 {
+		next.Headers = append([]string(nil), prev.Headers...)
+	}
+	if len(next.ToolNames) == 0 {
+		next.ToolNames = append([]string(nil), prev.ToolNames...)
+	}
+	return next
+}
+
+func (m *Manager) resetStatesLocked() {
+	m.states = map[string]ServerState{}
+	for _, name := range sortedServerNames(m.cfg.Servers) {
+		srv := m.cfg.Servers[name]
+		srv.Name = name
+		if srv.Disabled {
+			m.states[name] = serverStateFromConfig(srv, StatusDisabled)
+			continue
+		}
+		m.states[name] = serverStateFromConfig(srv, StatusPending)
+	}
+}
+
+func serverStateFromConfig(srv ServerConfig, status string) ServerState {
+	st := ServerState{
+		Name:    strings.TrimSpace(srv.Name),
+		Status:  status,
+		Command: displayCommand(srv),
+		URL:     displayURL(srv.URL),
+		Headers: displayHeaders(srv.Headers),
+		Auth:    displayAuth(srv),
+	}
+	if status == StatusDisabled || srv.Disabled {
+		st.Disabled = true
+	}
+	return st
+}
+
+func displayURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	return safeHTTPURL(u)
+}
+
+func displayCommand(srv ServerConfig) string {
+	command := strings.TrimSpace(srv.Command)
+	if command == "" {
+		return ""
+	}
+	parts := []string{shellQuoteDisplay(command)}
+	redactNext := false
+	for _, arg := range srv.Args {
+		display, next := redactCommandArgForDisplay(arg, redactNext)
+		redactNext = next
+		parts = append(parts, shellQuoteDisplay(display))
+	}
+	return strings.Join(parts, " ")
+}
+
+func redactCommandArgForDisplay(arg string, redact bool) (string, bool) {
+	arg = strings.TrimSpace(arg)
+	if redact {
+		return "*****", false
+	}
+	if arg == "" {
+		return arg, false
+	}
+	if key, value, ok := strings.Cut(arg, "="); ok {
+		if isSecretCommandArgKey(key) {
+			return key + "=*****", false
+		}
+		if looksSecretCommandArgValue(value) {
+			return key + "=*****", false
+		}
+		return arg, false
+	}
+	if key, value, ok := strings.Cut(arg, ":"); ok {
+		if isSecretCommandArgKey(key) || looksSecretCommandArgValue(value) {
+			return key + ":*****", false
+		}
+		return arg, false
+	}
+	if isSecretCommandArgKey(arg) {
+		return arg, true
+	}
+	if looksSecretCommandArgValue(arg) {
+		return "*****", false
+	}
+	return arg, false
+}
+
+func isSecretCommandArgKey(key string) bool {
+	key = strings.TrimLeft(strings.ToLower(strings.TrimSpace(key)), "-/")
+	key = strings.ReplaceAll(key, "_", "-")
+	for _, token := range []string{"api-key", "apikey", "auth", "authorization", "bearer", "client-secret", "credential", "password", "secret", "token"} {
+		if key == token || strings.HasSuffix(key, "-"+token) || strings.Contains(key, token) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksSecretCommandArgValue(value string) bool {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return false
+	}
+	return strings.HasPrefix(value, "bearer ") ||
+		strings.HasPrefix(value, "sk-") ||
+		strings.HasPrefix(value, "sk_") ||
+		strings.HasPrefix(value, "xoxb-") ||
+		strings.HasPrefix(value, "ghp_") ||
+		strings.HasPrefix(value, "github_pat_")
+}
+
+func shellQuoteDisplay(value string) string {
+	if value == "" {
+		return `""`
+	}
+	if !strings.ContainsAny(value, " \t\n\"'\\$`") {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
+func displayHeaders(headers map[string]string) []string {
+	if len(headers) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(headers))
+	for key := range headers {
+		key = strings.TrimSpace(key)
+		if key != "" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, key+"=*****")
+	}
+	return out
+}
+
+func displayAuth(srv ServerConfig) string {
+	if hasBearerAuthHeader(srv.Headers) {
+		return "Bearer token"
+	}
+	return "Unsupported"
+}
+
+func hasBearerAuthHeader(headers map[string]string) bool {
+	for key, value := range headers {
+		if strings.EqualFold(strings.TrimSpace(key), "Authorization") && strings.HasPrefix(strings.ToLower(strings.TrimSpace(value)), "bearer ") {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) setStateAndEmit(st ServerState, emit func(StartupEvent)) {
