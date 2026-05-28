@@ -69,7 +69,7 @@ func statsSummaryFields(view string, usage usageStats, toolInput toolInputStats)
 		{Label: "Turns", Value: fmt.Sprintf("%d", usage.Turns)},
 		{Label: "Sessions", Value: fmt.Sprintf("%d", len(usage.Sessions))},
 		{Label: "Tokens", Value: formatCount(totalTokens)},
-		{Label: "Cost", Value: fmt.Sprintf("$%.4f total · $%.4f last 7d", usage.CostUSD, usage.Last7CostUSD)},
+		{Label: "Cost", Value: fmt.Sprintf("$%.4f total · $%.4f last 7d · $%.4f cache saved", usage.CostUSD, usage.Last7CostUSD, usage.CacheSavingsUSD)},
 		{Label: "Tool input", Value: fmt.Sprintf("%d repaired · %d invalid", toolInput.Repaired, toolInput.Invalid)},
 	}
 }
@@ -79,7 +79,7 @@ func usageOverviewFields(usage usageStats) []LocalResultField {
 	fields := []LocalResultField{
 		{Label: "Turns", Value: fmt.Sprintf("%d", usage.Turns)},
 		{Label: "Tokens", Value: formatCount(totalTokens)},
-		{Label: "Cost", Value: fmt.Sprintf("$%.4f total · $%.4f last 7d", usage.CostUSD, usage.Last7CostUSD)},
+		{Label: "Cost", Value: fmt.Sprintf("$%.4f total · $%.4f last 7d · $%.4f cache saved", usage.CostUSD, usage.Last7CostUSD, usage.CacheSavingsUSD)},
 	}
 	if model := topUsageModel(usage.ByModel); model != nil {
 		fields = append(fields, LocalResultField{Label: "Top model", Value: fmt.Sprintf("%s · %d turns · $%.4f", model.Model, model.Turns, model.CostUSD)})
@@ -109,8 +109,18 @@ func usageStatsSections(stats usageStats) []LocalResultSection {
 		{Label: "Sessions", Value: fmt.Sprintf("%d", len(stats.Sessions))},
 		{Label: "Tokens", Value: fmt.Sprintf("%s total · %s input · %s output", formatCount(stats.PromptTokens+stats.CompletionTokens), formatCount(stats.PromptTokens), formatCount(stats.CompletionTokens))},
 		{Label: "Cache", Value: fmt.Sprintf("%s hit · %s miss · %.1f%%", formatCount(stats.CacheHit), formatCount(stats.CacheMiss), ratioPercent(stats.CacheHit, stats.CacheHit+stats.CacheMiss))},
-		{Label: "Estimated cost", Value: fmt.Sprintf("$%.4f total · $%.4f last 7d", stats.CostUSD, stats.Last7CostUSD)},
+		{Label: "Estimated cost", Value: fmt.Sprintf("$%.4f total · $%.4f last 7d · $%.4f cache saved", stats.CostUSD, stats.Last7CostUSD, stats.CacheSavingsUSD)},
 	}}}
+	if stats.SubagentTurns > 0 {
+		sections[0].Fields = append(sections[0].Fields, LocalResultField{Label: "Subagents", Value: fmt.Sprintf("%d turns · %s tokens · $%.4f", stats.SubagentTurns, formatCount(stats.SubagentPromptTokens+stats.SubagentOutputTokens), stats.SubagentCostUSD)})
+	}
+	if len(stats.Buckets) > 0 {
+		fields := make([]LocalResultField, 0, len(stats.Buckets))
+		for _, b := range stats.Buckets {
+			fields = append(fields, LocalResultField{Label: b.Label, Value: fmt.Sprintf("%d turns · %s tokens · %.1f%% cache · $%.4f cost · $%.4f cache saved", b.Turns, formatCount(b.PromptTokens+b.CompletionTokens), ratioPercent(b.CacheHit, b.CacheHit+b.CacheMiss), b.CostUSD, b.CacheSavingsUSD)})
+		}
+		sections = append(sections, LocalResultSection{Title: "By window", Fields: fields})
+	}
 	if len(stats.ByModel) > 0 {
 		fields := make([]LocalResultField, 0, statsRecentLimit)
 		for _, ms := range topUsageModels(stats.ByModel, statsRecentLimit) {
@@ -209,6 +219,13 @@ func profileStatsSections(stats profileStats) []LocalResultSection {
 		profileFields = append(profileFields, LocalResultField{Label: "Tool replay", Value: fmt.Sprintf("%s sent · %s raw · %s saved · %d compacted", formatCount(allInToolReplayTokens), formatCount(allInToolRawTokens), formatCount(allInToolSavedTokens), allInToolCompacted)})
 	}
 	sections := []LocalResultSection{{Title: "Profile", Fields: profileFields}}
+	if len(stats.Insights) > 0 {
+		fields := make([]LocalResultField, 0, len(stats.Insights))
+		for _, insight := range stats.Insights {
+			fields = append(fields, LocalResultField{Label: insight.Kind + " · " + insight.SessionID, Value: insight.Detail, Tone: "warn"})
+		}
+		sections = append(sections, LocalResultSection{Title: "Insights", Fields: fields})
+	}
 	if len(stats.ByTool) > 0 {
 		fields := make([]LocalResultField, 0, statsRecentLimit)
 		for _, ts := range topProfileTools(stats.ByTool, statsRecentLimit) {

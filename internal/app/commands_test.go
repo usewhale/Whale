@@ -550,6 +550,9 @@ func TestHandleLocalCommandStats(t *testing.T) {
 	for _, want := range []string{
 		"- sessions: 2",
 		"- reasoning replay: 350 tokens · 11.7% of input",
+		"By window",
+		"all-time: 2 turns",
+		"cache saved",
 		"deepseek-v4-flash: 2 turns",
 		"350 reasoning replay",
 	} {
@@ -584,6 +587,8 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		"s1: 1K sent · 3.2K raw · 2.2K saved · 1 compacted",
 		"Top reasoning replay sessions",
 		"s1: 250 tokens",
+		"Insights",
+		"reasoning replay · s1",
 		"Top work sessions",
 		"s1: $0.0001",
 		"please inspect the workspace",
@@ -610,6 +615,7 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		section string
 		field   string
 	}{
+		{"Insights", "reasoning replay · s1"},
 		{"Profile", "Reasoning replay"},
 		{"Profile", "Tool replay"},
 		{"Top tool replay sessions", "s1"},
@@ -752,6 +758,9 @@ func TestProfileStatsIncludesSubagentUsage(t *testing.T) {
 	writeUsageRecord(t, usagePath, telemetry.UsageRecord{
 		Session:                metaChildID,
 		Model:                  "deepseek-v4-flash",
+		Kind:                   "subagent",
+		ParentSessionID:        parentID,
+		SubagentRole:           "reviewer",
 		PromptTokens:           1000,
 		CompletionTokens:       100,
 		PromptCacheHit:         900,
@@ -798,6 +807,61 @@ func TestProfileStatsIncludesSubagentUsage(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected profile output to contain %q, got:\n%s", want, out)
+		}
+	}
+}
+
+func TestUsageStatsCountsLegacySubagentSessionIDs(t *testing.T) {
+	dir := t.TempDir()
+	usagePath := filepath.Join(dir, "usage.jsonl")
+	now := time.Date(2026, 5, 12, 10, 0, 0, 0, time.Local)
+	writeUsageRecord(t, usagePath, telemetry.UsageRecord{
+		TS:               now.UnixMilli(),
+		Session:          "parent",
+		Model:            "deepseek-v4-flash",
+		PromptTokens:     1000,
+		CompletionTokens: 100,
+		PromptCacheHit:   800,
+		PromptCacheMiss:  200,
+	})
+	writeUsageRecord(t, usagePath, telemetry.UsageRecord{
+		TS:               now.UnixMilli(),
+		Session:          "parent--subagent-worker",
+		Model:            "deepseek-v4-flash",
+		PromptTokens:     2000,
+		CompletionTokens: 200,
+		PromptCacheHit:   1500,
+		PromptCacheMiss:  500,
+	})
+	writeUsageRecord(t, usagePath, telemetry.UsageRecord{
+		TS:               now.UnixMilli(),
+		Session:          "subagent-researcher",
+		Model:            "deepseek-v4-flash",
+		PromptTokens:     3000,
+		CompletionTokens: 300,
+		PromptCacheHit:   2500,
+		PromptCacheMiss:  500,
+	})
+	writeUsageRecord(t, usagePath, telemetry.UsageRecord{
+		TS:               now.UnixMilli(),
+		Session:          "metadata-child",
+		Model:            "deepseek-v4-flash",
+		Kind:             "subagent",
+		PromptTokens:     4000,
+		CompletionTokens: 400,
+		PromptCacheHit:   3500,
+		PromptCacheMiss:  500,
+	})
+
+	stats := readUsageStats(usagePath, now)
+	if stats.SubagentTurns != 3 || stats.SubagentPromptTokens != 9000 || stats.SubagentOutputTokens != 900 {
+		t.Fatalf("unexpected subagent usage totals: %+v", stats)
+	}
+	for _, bucket := range stats.Buckets {
+		if bucket.Label == "24h" || bucket.Label == "all-time" {
+			if bucket.SubagentTurns != 3 || bucket.SubagentTokens != 9900 {
+				t.Fatalf("unexpected subagent bucket %s: %+v", bucket.Label, bucket)
+			}
 		}
 	}
 }
@@ -1109,12 +1173,21 @@ func TestBuildStatusIncludesContextAndBudget(t *testing.T) {
 		sessionID:     "sess-1",
 		msgStore:      msgStore,
 		contextWindow: 1000,
-		cfg:           DefaultConfig(),
+		cfg:           Config{DataDir: dir},
 	}
+	writeUsageRecord(t, filepath.Join(dir, "usage.jsonl"), telemetry.UsageRecord{
+		Session:          "sess-1",
+		Model:            "deepseek-v4-flash",
+		PromptTokens:     1000,
+		CompletionTokens: 100,
+		PromptCacheHit:   800,
+		PromptCacheMiss:  200,
+	})
 
 	out := app.buildStatus()
 	for _, want := range []string{
 		"- context window:",
+		"- usage: 1 turns",
 		"- budget limit: disabled",
 	} {
 		if !strings.Contains(out, want) {
@@ -1146,14 +1219,22 @@ func TestBuildStatusLocalResultIncludesStructuredFields(t *testing.T) {
 		reasoningEffort:  "max",
 		thinkingEnabled:  false,
 		budgetWarningUSD: 0,
-		cfg:              DefaultConfig(),
+		cfg:              Config{DataDir: dir},
 	}
+	writeUsageRecord(t, filepath.Join(dir, "usage.jsonl"), telemetry.UsageRecord{
+		Session:          "sess-1",
+		Model:            "deepseek-v4-flash",
+		PromptTokens:     1000,
+		CompletionTokens: 100,
+		PromptCacheHit:   800,
+		PromptCacheMiss:  200,
+	})
 
 	result := app.buildStatusLocalResult()
 	if result == nil || result.Kind != "status" || result.Title != "Status" {
 		t.Fatalf("unexpected status local result: %+v", result)
 	}
-	for _, want := range []string{"Session", "Mode", "Permissions", "Model", "Effort", "Thinking", "Context window", "Budget limit"} {
+	for _, want := range []string{"Session", "Mode", "Permissions", "Model", "Effort", "Thinking", "Context window", "Usage", "Budget limit"} {
 		if !localResultHasField(result, want) {
 			t.Fatalf("expected local result field %q, got %+v", want, result.Fields)
 		}

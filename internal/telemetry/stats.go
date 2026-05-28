@@ -48,6 +48,21 @@ func EstimateUsageRecordUSD(rec UsageRecord) float64 {
 	})
 }
 
+func EstimateCacheSavingsUSD(model string, cacheHitTokens int) float64 {
+	if cacheHitTokens <= 0 {
+		return 0
+	}
+	p := pricingForModel(model)
+	return (float64(cacheHitTokens) / 1_000_000.0) * (p.InputMissUSDPerMTok - p.InputHitUSDPerMTok)
+}
+
+func EstimateUsageRecordCacheSavingsUSD(rec UsageRecord) float64 {
+	if rec.CacheSavingsUSD > 0 {
+		return rec.CacheSavingsUSD
+	}
+	return EstimateCacheSavingsUSD(rec.Model, rec.PromptCacheHit)
+}
+
 func InputCostUSD(model string, usage llm.Usage) float64 {
 	p := pricingForModel(model)
 	promptNonCache := max(usage.PromptTokens-usage.PromptCacheHitTokens, 0)

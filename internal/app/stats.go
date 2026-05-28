@@ -19,6 +19,7 @@ import (
 const statsRecentLimit = 5
 const statsProfileSessionLimit = 50
 const statsProfileToolHeavyChars = 12_000
+const statsProfileInsightLimit = 5
 
 type usageStats struct {
 	Turns                 int
@@ -30,8 +31,30 @@ type usageStats struct {
 	ReasoningReplayTokens int
 	CostUSD               float64
 	Last7CostUSD          float64
+	CacheSavingsUSD       float64
+	SubagentTurns         int
+	SubagentCostUSD       float64
+	SubagentPromptTokens  int
+	SubagentOutputTokens  int
+	Buckets               []usageBucketStats
 	ByModel               map[string]*usageModelStats
 	Recent                []telemetry.UsageRecord
+}
+
+type usageBucketStats struct {
+	Label            string
+	Cutoff           time.Time
+	Turns            int
+	PromptTokens     int
+	CompletionTokens int
+	CacheHit         int
+	CacheMiss        int
+	CostUSD          float64
+	CacheSavingsUSD  float64
+	ReasoningReplay  int
+	SubagentTurns    int
+	SubagentCostUSD  float64
+	SubagentTokens   int
 }
 
 type usageModelStats struct {
@@ -109,6 +132,13 @@ type profileStats struct {
 	ByTool                         map[string]*profileToolStats
 	TopSessions                    []profileSessionStats
 	UsageMatchedSessions           int
+	Insights                       []profileInsight
+}
+
+type profileInsight struct {
+	Kind      string
+	SessionID string
+	Detail    string
 }
 
 type profileSessionStats struct {
@@ -162,6 +192,21 @@ type profileToolStats struct {
 	ResultChars int
 }
 
+type sessionUsageSummary struct {
+	Turns            int
+	PromptTokens     int
+	CompletionTokens int
+	CacheHit         int
+	CacheMiss        int
+	CostUSD          float64
+	CacheSavingsUSD  float64
+	LastPromptTokens int
+	LastTS           int64
+	SubagentTurns    int
+	SubagentTokens   int
+	SubagentCostUSD  float64
+}
+
 func (a *App) buildStats() string {
 	return a.buildStatsViewAt("overview", time.Now())
 }
@@ -206,6 +251,7 @@ func readUsageStats(path string, now time.Time) usageStats {
 	stats := usageStats{
 		Sessions: map[string]bool{},
 		ByModel:  map[string]*usageModelStats{},
+		Buckets:  usageBuckets(now),
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -233,10 +279,19 @@ func readUsageStats(path string, now time.Time) usageStats {
 		stats.CacheMiss += rec.PromptCacheMiss
 		stats.ReasoningReplayTokens += rec.ReasoningReplayTok
 		cost := telemetry.EstimateUsageRecordUSD(rec)
+		cacheSavings := telemetry.EstimateUsageRecordCacheSavingsUSD(rec)
 		stats.CostUSD += cost
+		stats.CacheSavingsUSD += cacheSavings
 		if rec.TS >= cutoff {
 			stats.Last7CostUSD += cost
 		}
+		if isUsageSubagentRecord(rec) {
+			stats.SubagentTurns++
+			stats.SubagentCostUSD += cost
+			stats.SubagentPromptTokens += rec.PromptTokens
+			stats.SubagentOutputTokens += rec.CompletionTokens
+		}
+		addUsageBuckets(stats.Buckets, rec, cost, cacheSavings)
 		model := strings.TrimSpace(rec.Model)
 		if model == "" {
 			model = "(unknown)"
@@ -258,6 +313,118 @@ func readUsageStats(path string, now time.Time) usageStats {
 		stats.Recent = appendRecentUsage(stats.Recent, rec)
 	}
 	return stats
+}
+
+func readSessionUsageSummary(path, sessionID string) sessionUsageSummary {
+	var out sessionUsageSummary
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return out
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return out
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		var rec telemetry.UsageRecord
+		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
+			continue
+		}
+		if !isSupportedUsageModel(rec.Model) {
+			continue
+		}
+		isMain := rec.Session == sessionID && !strings.EqualFold(strings.TrimSpace(rec.Kind), "subagent")
+		isSubagent := strings.EqualFold(strings.TrimSpace(rec.Kind), "subagent") && strings.TrimSpace(rec.ParentSessionID) == sessionID
+		if !isSubagent && strings.HasPrefix(rec.Session, sessionID+"--subagent-") {
+			isSubagent = true
+		}
+		if !isMain && !isSubagent {
+			continue
+		}
+		cost := telemetry.EstimateUsageRecordUSD(rec)
+		cacheSavings := telemetry.EstimateUsageRecordCacheSavingsUSD(rec)
+		out.Turns++
+		out.PromptTokens += rec.PromptTokens
+		out.CompletionTokens += rec.CompletionTokens
+		out.CacheHit += rec.PromptCacheHit
+		out.CacheMiss += rec.PromptCacheMiss
+		out.CostUSD += cost
+		out.CacheSavingsUSD += cacheSavings
+		if rec.TS >= out.LastTS {
+			out.LastTS = rec.TS
+			out.LastPromptTokens = rec.PromptTokens
+		}
+		if isSubagent {
+			out.SubagentTurns++
+			out.SubagentTokens += rec.PromptTokens + rec.CompletionTokens
+			out.SubagentCostUSD += cost
+		}
+	}
+	return out
+}
+
+func formatSessionUsageSummary(summary sessionUsageSummary) string {
+	if summary.Turns == 0 {
+		return "none"
+	}
+	parts := []string{
+		fmt.Sprintf("%d turns", summary.Turns),
+		fmt.Sprintf("$%.4f", summary.CostUSD),
+		fmt.Sprintf("%.1f%% cache", ratioPercent(summary.CacheHit, summary.CacheHit+summary.CacheMiss)),
+		fmt.Sprintf("last prompt %s", formatCount(summary.LastPromptTokens)),
+	}
+	if summary.CacheSavingsUSD > 0 {
+		parts = append(parts, fmt.Sprintf("$%.4f cache saved", summary.CacheSavingsUSD))
+	}
+	if summary.SubagentTurns > 0 {
+		parts = append(parts, fmt.Sprintf("subagents %d turns/%s/$%.4f", summary.SubagentTurns, formatCount(summary.SubagentTokens), summary.SubagentCostUSD))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func usageBuckets(now time.Time) []usageBucketStats {
+	return []usageBucketStats{
+		{Label: "24h", Cutoff: now.Add(-24 * time.Hour)},
+		{Label: "7d", Cutoff: now.Add(-7 * 24 * time.Hour)},
+		{Label: "30d", Cutoff: now.Add(-30 * 24 * time.Hour)},
+		{Label: "all-time"},
+	}
+}
+
+func addUsageBuckets(buckets []usageBucketStats, rec telemetry.UsageRecord, cost, cacheSavings float64) {
+	for i := range buckets {
+		if !buckets[i].Cutoff.IsZero() && rec.TS < buckets[i].Cutoff.UnixMilli() {
+			continue
+		}
+		buckets[i].Turns++
+		buckets[i].PromptTokens += rec.PromptTokens
+		buckets[i].CompletionTokens += rec.CompletionTokens
+		buckets[i].CacheHit += rec.PromptCacheHit
+		buckets[i].CacheMiss += rec.PromptCacheMiss
+		buckets[i].CostUSD += cost
+		buckets[i].CacheSavingsUSD += cacheSavings
+		buckets[i].ReasoningReplay += rec.ReasoningReplayTok
+		if isUsageSubagentRecord(rec) {
+			buckets[i].SubagentTurns++
+			buckets[i].SubagentCostUSD += cost
+			buckets[i].SubagentTokens += rec.PromptTokens + rec.CompletionTokens
+		}
+	}
+}
+
+func isUsageSubagentRecord(rec telemetry.UsageRecord) bool {
+	if strings.EqualFold(strings.TrimSpace(rec.Kind), "subagent") {
+		return true
+	}
+	return isLegacyUsageSubagentSessionID(rec.Session)
+}
+
+func isLegacyUsageSubagentSessionID(sessionID string) bool {
+	sessionID = strings.TrimSpace(sessionID)
+	return strings.Contains(sessionID, "--subagent-") || strings.HasPrefix(sessionID, "subagent-")
 }
 
 func readProfileStats(sessionsDir, usagePath string, limit int) profileStats {
@@ -331,6 +498,7 @@ func readProfileStats(sessionsDir, usagePath string, limit int) profileStats {
 	}
 	stats.MainWorkSessions = len(stats.Sessions) - stats.TrivialSessions
 	stats.TopSessions = topProfileSessions(stats.Sessions, statsRecentLimit, false)
+	stats.Insights = buildProfileInsights(stats.Sessions, statsProfileInsightLimit)
 	return stats
 }
 
@@ -496,6 +664,12 @@ func readProfileUsage(path string, sessionIndex map[string]int, childSessionInde
 		if !isSupportedUsageModel(rec.Model) {
 			continue
 		}
+		if strings.EqualFold(strings.TrimSpace(rec.Kind), "subagent") && strings.TrimSpace(rec.ParentSessionID) != "" {
+			if idx, ok := sessionIndex[strings.TrimSpace(rec.ParentSessionID)]; ok {
+				addProfileSubagentUsage(&stats.Sessions[idx], stats, rec)
+				continue
+			}
+		}
 		if idx, ok := sessionIndex[rec.Session]; ok {
 			cost := telemetry.EstimateUsageRecordUSD(rec)
 			sp := &stats.Sessions[idx]
@@ -527,31 +701,34 @@ func readProfileUsage(path string, sessionIndex map[string]int, childSessionInde
 			continue
 		}
 		if idx, ok := childSessionIndex[rec.Session]; ok {
-			cost := telemetry.EstimateUsageRecordUSD(rec)
-			sp := &stats.Sessions[idx]
-			sp.SubagentPromptTokens += rec.PromptTokens
-			sp.SubagentCompletionTokens += rec.CompletionTokens
-			sp.SubagentCacheHit += rec.PromptCacheHit
-			sp.SubagentCacheMiss += rec.PromptCacheMiss
-			sp.SubagentReasoningReplay += rec.ReasoningReplayTok
-			stats.SubagentReasoningReplay += rec.ReasoningReplayTok
-			sp.SubagentToolResultRawChars += rec.ToolResultRawChars
-			sp.SubagentToolResultReplayChars += rec.ToolResultReplayChars
-			sp.SubagentToolResultRawTokens += rec.ToolResultRawTokens
-			sp.SubagentToolResultReplayTokens += rec.ToolResultReplayTokens
-			sp.SubagentToolResultTokensSaved += rec.ToolResultTokensSaved
-			sp.SubagentToolResultsCompacted += rec.ToolResultsCompacted
-			stats.SubagentToolResultRawChars += rec.ToolResultRawChars
-			stats.SubagentToolResultReplayChars += rec.ToolResultReplayChars
-			stats.SubagentToolResultRawTokens += rec.ToolResultRawTokens
-			stats.SubagentToolResultReplayTokens += rec.ToolResultReplayTokens
-			stats.SubagentToolResultTokensSaved += rec.ToolResultTokensSaved
-			stats.SubagentToolResultsCompacted += rec.ToolResultsCompacted
-			sp.SubagentCostUSD += cost
-			if rec.PromptTokens > sp.SubagentMaxPromptTokens {
-				sp.SubagentMaxPromptTokens = rec.PromptTokens
-			}
+			addProfileSubagentUsage(&stats.Sessions[idx], stats, rec)
 		}
+	}
+}
+
+func addProfileSubagentUsage(sp *profileSessionStats, stats *profileStats, rec telemetry.UsageRecord) {
+	cost := telemetry.EstimateUsageRecordUSD(rec)
+	sp.SubagentPromptTokens += rec.PromptTokens
+	sp.SubagentCompletionTokens += rec.CompletionTokens
+	sp.SubagentCacheHit += rec.PromptCacheHit
+	sp.SubagentCacheMiss += rec.PromptCacheMiss
+	sp.SubagentReasoningReplay += rec.ReasoningReplayTok
+	stats.SubagentReasoningReplay += rec.ReasoningReplayTok
+	sp.SubagentToolResultRawChars += rec.ToolResultRawChars
+	sp.SubagentToolResultReplayChars += rec.ToolResultReplayChars
+	sp.SubagentToolResultRawTokens += rec.ToolResultRawTokens
+	sp.SubagentToolResultReplayTokens += rec.ToolResultReplayTokens
+	sp.SubagentToolResultTokensSaved += rec.ToolResultTokensSaved
+	sp.SubagentToolResultsCompacted += rec.ToolResultsCompacted
+	stats.SubagentToolResultRawChars += rec.ToolResultRawChars
+	stats.SubagentToolResultReplayChars += rec.ToolResultReplayChars
+	stats.SubagentToolResultRawTokens += rec.ToolResultRawTokens
+	stats.SubagentToolResultReplayTokens += rec.ToolResultReplayTokens
+	stats.SubagentToolResultTokensSaved += rec.ToolResultTokensSaved
+	stats.SubagentToolResultsCompacted += rec.ToolResultsCompacted
+	sp.SubagentCostUSD += cost
+	if rec.PromptTokens > sp.SubagentMaxPromptTokens {
+		sp.SubagentMaxPromptTokens = rec.PromptTokens
 	}
 }
 
@@ -724,10 +901,23 @@ func formatUsageStats(stats usageStats) []string {
 		fmt.Sprintf("- sessions: %d", len(stats.Sessions)),
 		fmt.Sprintf("- tokens: %s total · %s input · %s output", formatCount(totalTokens), formatCount(stats.PromptTokens), formatCount(stats.CompletionTokens)),
 		fmt.Sprintf("- cache: %s hit · %s miss · %.1f%%", formatCount(stats.CacheHit), formatCount(stats.CacheMiss), ratioPercent(stats.CacheHit, stats.CacheHit+stats.CacheMiss)),
-		fmt.Sprintf("- estimated cost: $%.4f total · $%.4f last 7d", stats.CostUSD, stats.Last7CostUSD),
+		fmt.Sprintf("- estimated cost: $%.4f total · $%.4f last 7d · $%.4f cache saved", stats.CostUSD, stats.Last7CostUSD, stats.CacheSavingsUSD),
 	}
 	if stats.ReasoningReplayTokens > 0 {
 		lines = append(lines, fmt.Sprintf("- reasoning replay: %s tokens · %.1f%% of input", formatCount(stats.ReasoningReplayTokens), ratioPercent(stats.ReasoningReplayTokens, stats.PromptTokens)))
+	}
+	if stats.SubagentTurns > 0 {
+		lines = append(lines, fmt.Sprintf("- subagents: %d turns · %s tokens · $%.4f", stats.SubagentTurns, formatCount(stats.SubagentPromptTokens+stats.SubagentOutputTokens), stats.SubagentCostUSD))
+	}
+	if len(stats.Buckets) > 0 {
+		lines = append(lines, "", "By window")
+		for _, b := range stats.Buckets {
+			subagentDetail := ""
+			if b.SubagentTurns > 0 {
+				subagentDetail = fmt.Sprintf(" · subagents %d/$%.4f", b.SubagentTurns, b.SubagentCostUSD)
+			}
+			lines = append(lines, fmt.Sprintf("- %s: %d turns · %s tokens · %.1f%% cache · $%.4f cost · $%.4f cache saved%s", b.Label, b.Turns, formatCount(b.PromptTokens+b.CompletionTokens), ratioPercent(b.CacheHit, b.CacheHit+b.CacheMiss), b.CostUSD, b.CacheSavingsUSD, subagentDetail))
+		}
 	}
 	if len(stats.ByModel) > 0 {
 		lines = append(lines, "", "By model")
@@ -776,6 +966,12 @@ func formatProfileStats(stats profileStats) []string {
 	allInToolCompacted := stats.ToolResultsCompacted + stats.SubagentToolResultsCompacted
 	if allInToolReplayTokens > 0 || allInToolRawTokens > 0 || allInToolSavedTokens > 0 || allInToolCompacted > 0 {
 		lines = append(lines, fmt.Sprintf("- tool replay: %s sent · %s raw · %s saved · %d compacted", formatCount(allInToolReplayTokens), formatCount(allInToolRawTokens), formatCount(allInToolSavedTokens), allInToolCompacted))
+	}
+	if len(stats.Insights) > 0 {
+		lines = append(lines, "", "Insights")
+		for _, insight := range stats.Insights {
+			lines = append(lines, fmt.Sprintf("- %s · %s: %s", insight.Kind, insight.SessionID, insight.Detail))
+		}
 	}
 	if len(stats.ByTool) > 0 {
 		lines = append(lines, "", "Top tools")
@@ -1067,6 +1263,50 @@ func profileSessionToolSavedTokens(sp profileSessionStats) int {
 
 func profileSessionToolCompacted(sp profileSessionStats) int {
 	return sp.ToolResultsCompacted + sp.SubagentToolResultsCompacted
+}
+
+func buildProfileInsights(sessions []profileSessionStats, limit int) []profileInsight {
+	if limit <= 0 {
+		return nil
+	}
+	var out []profileInsight
+	add := func(kind, sessionID, detail string) {
+		if len(out) < limit {
+			out = append(out, profileInsight{Kind: kind, SessionID: sessionID, Detail: detail})
+		}
+	}
+	for _, sp := range sessions {
+		if sp.Trivial {
+			continue
+		}
+		if input := sp.PromptTokens; input >= 8_000 {
+			cachePct := ratioPercent(sp.CacheHit, sp.CacheHit+sp.CacheMiss)
+			if cachePct < 80 {
+				add("low cache", sp.ID, fmt.Sprintf("%.1f%% cache on %s input; inspect prefix and tool-schema churn", cachePct, formatCount(input)))
+			}
+		}
+		if len(sp.PrefixFingerprints) > 1 {
+			add("prefix churn", sp.ID, fmt.Sprintf("%d prefix fingerprints; check system blocks, memory, and tool schemas", len(sp.PrefixFingerprints)))
+		}
+		reasoningReplay := profileSessionReasoningReplayTokens(sp)
+		input := sp.PromptTokens + sp.SubagentPromptTokens
+		if reasoningReplay >= 1_000 || ratioPercent(reasoningReplay, input) >= 5 {
+			add("reasoning replay", sp.ID, fmt.Sprintf("%s tokens replayed; %.1f%% of input", formatCount(reasoningReplay), ratioPercent(reasoningReplay, input)))
+		}
+		toolReplay := profileSessionToolReplayTokens(sp)
+		if toolReplay >= 4_000 {
+			add("tool replay", sp.ID, fmt.Sprintf("%s tool-result tokens resent; tune replay caps or summaries", formatCount(toolReplay)))
+		}
+		toolRaw := profileSessionToolRawTokens(sp)
+		toolSaved := profileSessionToolSavedTokens(sp)
+		if toolRaw >= 4_000 && ratioPercent(toolSaved, toolRaw) < 25 {
+			add("weak tool compaction", sp.ID, fmt.Sprintf("%s saved from %s raw; lower replay caps or summarize earlier", formatCount(toolSaved), formatCount(toolRaw)))
+		}
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
 }
 
 func topToolInputTools(in map[string]*toolInputToolStats, limit int) []*toolInputToolStats {

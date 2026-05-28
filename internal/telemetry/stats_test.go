@@ -23,6 +23,14 @@ func TestEstimateTurnUSD_FlashVsPro(t *testing.T) {
 	}
 }
 
+func TestEstimateCacheSavingsUSD(t *testing.T) {
+	got := EstimateCacheSavingsUSD("deepseek-v4-flash", 1_000_000)
+	want := 0.1372
+	if math.Abs(got-want) > 0.0000001 {
+		t.Fatalf("unexpected cache savings: %.9f, want %.9f", got, want)
+	}
+}
+
 func TestBuildTurnStats_ReasoningReplayAndCacheRatio(t *testing.T) {
 	u := llm.Usage{
 		PromptCacheHitTokens:  300,

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/usewhale/whale/internal/llm"
@@ -44,8 +45,36 @@ func (a *Agent) recordTurnCost(sessionID string, usage llm.Usage, modelName, pre
 			meta.TotalCostUSD += cost
 		})
 	}
-	_ = telemetry.AppendUsage(a.usageLogPath, sessionID, modelName, prefixFingerprint, usage, cost, time.Now())
+	_ = telemetry.AppendUsage(a.usageLogPath, sessionID, modelName, prefixFingerprint, usage, cost, time.Now(), a.usageMetadata(sessionID))
 	return cost
+}
+
+func (a *Agent) usageMetadata(sessionID string) telemetry.UsageMetadata {
+	if a == nil || a.sessionRuntime == nil || !a.sessionRuntime.Enabled() {
+		return telemetry.UsageMetadata{}
+	}
+	meta, err := a.sessionRuntime.LoadMeta(sessionID)
+	if err != nil || !strings.EqualFold(strings.TrimSpace(meta.Kind), "subagent") {
+		return telemetry.UsageMetadata{}
+	}
+	return telemetry.UsageMetadata{
+		Kind:                "subagent",
+		ParentSessionID:     strings.TrimSpace(meta.ParentSessionID),
+		SubagentRole:        strings.TrimSpace(meta.Role),
+		SubagentTaskPreview: previewUsageTask(meta.Task, 80),
+	}
+}
+
+func previewUsageTask(task string, maxRunes int) string {
+	task = strings.Join(strings.Fields(task), " ")
+	if maxRunes <= 0 || len([]rune(task)) <= maxRunes {
+		return task
+	}
+	runes := []rune(task)
+	if maxRunes <= 3 {
+		return string(runes[:maxRunes])
+	}
+	return string(runes[:maxRunes-3]) + "..."
 }
 
 func buildPrefixCacheMetrics(model string, usage llm.Usage, fingerprint string) *PrefixCacheMetricsInfo {

@@ -66,6 +66,7 @@ func (a *App) buildStatus() string {
 	}
 	parts = append(parts, a.formatCurrentWorktreeStatusLines()...)
 	parts = append(parts, formatContextWindowStatus(a))
+	parts = append(parts, "- usage: "+a.sessionUsageStatusValue())
 	parts = append(parts, a.formatBudgetStatusLine())
 	return strings.Join(parts, "\n")
 }
@@ -91,6 +92,7 @@ func (a *App) buildStatusLocalResult() *LocalResult {
 	}
 	fields = append(fields,
 		LocalResultField{Label: "Context window", Value: contextWindowStatusValue(a)},
+		LocalResultField{Label: "Usage", Value: a.sessionUsageStatusValue()},
 		LocalResultField{Label: "Budget limit", Value: budgetStatusValue(a)},
 	)
 	return &LocalResult{
@@ -133,6 +135,17 @@ func budgetStatusValue(a *App) string {
 		return "disabled"
 	}
 	return fmt.Sprintf("$%.4f", a.budgetWarningUSD)
+}
+
+func (a *App) sessionUsageStatusValue() string {
+	if a == nil {
+		return "none"
+	}
+	dataDir := strings.TrimSpace(a.cfg.DataDir)
+	if dataDir == "" {
+		return "none"
+	}
+	return formatSessionUsageSummary(readSessionUsageSummary(filepath.Join(dataDir, "usage.jsonl"), a.sessionID))
 }
 
 func (a *App) buildMCPStatus() string {
