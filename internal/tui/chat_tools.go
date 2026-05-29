@@ -346,6 +346,9 @@ func completedToolTitle(toolName, raw, previous string) string {
 		if cmd == "" {
 			cmd = "shell command"
 		}
+		if !toolEnvelopeSucceeded(env) && env.code == "exec_failed" {
+			return shellFailureLabel(env) + ": " + cmd
+		}
 		return "Ran " + cmd
 	case "explore":
 		return "Explored\n" + explorationLine(toolName, previousToolActionLine(previous), env)
@@ -388,6 +391,14 @@ func shellResultRole(role string) string {
 		return "shell_result_error"
 	case "result_running":
 		return "shell_result_running"
+	case "result_blocked":
+		return "shell_result_blocked"
+	case "result_mode_hint":
+		return "shell_result_mode_hint"
+	case "result_http_error":
+		return "shell_result_http_error"
+	case "result_usage_hint":
+		return "shell_result_usage_hint"
 	default:
 		return role
 	}

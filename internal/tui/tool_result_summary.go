@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 
 	xansi "github.com/charmbracelet/x/ansi"
@@ -161,14 +162,8 @@ func summarizeFailedShellResult(env toolResultEnvelope) (string, string) {
 	if output == "" {
 		return summarizeFailedResult(env, "command failed")
 	}
-	exitCode := asInt(env.metrics["exit_code"])
-	hasExitCode := hasInt(env.metrics["exit_code"])
 	duration := formatDurationMS(asInt64(env.metrics["duration_ms"]))
-	prefix := "✗"
-	if hasExitCode && exitCode > 0 {
-		prefix = fmt.Sprintf("✗ (exit %d)", exitCode)
-	}
-	parts := []string{prefix}
+	parts := []string{shellFailureLabel(env)}
 	if duration != "" {
 		parts = append(parts, duration)
 	}
@@ -176,6 +171,14 @@ func summarizeFailedShellResult(env toolResultEnvelope) (string, string) {
 		parts = append(parts, reason)
 	}
 	return "result_failed", strings.Join(parts, " · ") + "\n" + output
+}
+
+func shellFailureLabel(env toolResultEnvelope) string {
+	exitCode := asInt(env.metrics["exit_code"])
+	if hasInt(env.metrics["exit_code"]) && exitCode > 0 {
+		return fmt.Sprintf("Command failed (exit %d)", exitCode)
+	}
+	return "Command failed"
 }
 
 func shellFailureUsesGenericSummary(env toolResultEnvelope) bool {
@@ -259,7 +262,22 @@ func summarizeFailedResult(env toolResultEnvelope, fallback string) (string, str
 	switch env.code {
 	case "request_replan":
 		return "result_failed", summarizeReplanRequired(env)
-	case "approval_denied", "policy_denied", "permission_denied", "mcp_allowed_dirs_denied":
+	case "ask_mode_blocked", "plan_mode_blocked", "mode_blocked":
+		return "result_mode_hint", summarizeModeBlocked(env)
+	case "fetch_failed", "web_fetch_failed":
+		if status := httpStatusSummary(env); status != "" {
+			return "result_http_error", status
+		}
+	case "invalid_args":
+		return "result_usage_hint", summarizeInvalidArgs(detail)
+	case "not_file":
+		return "result_blocked", summarizePathIsDirectory(env, detail)
+	case "approval_denied", "policy_denied":
+		return "result_denied", "DENIED · " + detail
+	case "permission_denied", "mcp_allowed_dirs_denied":
+		if isOutsideWorkspaceDetail(detail) {
+			return "result_blocked", firstNonEmpty(outsideWorkspaceSummary(env, detail), "Outside workspace")
+		}
 		return "result_denied", "DENIED · " + detail
 	case "timeout":
 		if reason := shellDiagnosisLabel(core.AsString(env.diagnosis["reason"])); reason != "" {
@@ -277,6 +295,12 @@ func summarizeFailedResult(env toolResultEnvelope, fallback string) (string, str
 	}
 
 	lower := strings.ToLower(detail + " " + env.code)
+	if strings.Contains(lower, "outside") && (strings.Contains(lower, "workspace") || strings.Contains(lower, "allowed directories")) {
+		return "result_blocked", firstNonEmpty(outsideWorkspaceSummary(env, detail), "Outside workspace")
+	}
+	if strings.Contains(lower, " is a directory") || strings.Contains(lower, "use list_dir") || strings.Contains(lower, "use list_directory") {
+		return "result_blocked", summarizePathIsDirectory(env, detail)
+	}
 	if strings.Contains(lower, "denied") || strings.Contains(lower, "approval") || strings.Contains(lower, "policy") {
 		return "result_denied", "DENIED · " + detail
 	}
@@ -298,6 +322,145 @@ func summarizeFailedResult(env toolResultEnvelope, fallback string) (string, str
 		return "result_failed", fmt.Sprintf("%s · %s · %s", prefix, duration, detail)
 	}
 	return "result_failed", fmt.Sprintf("%s · %s", prefix, detail)
+}
+
+func summarizeModeBlocked(env toolResultEnvelope) string {
+	mode := "Current mode"
+	switch env.code {
+	case "ask_mode_blocked":
+		mode = "Ask mode"
+	case "plan_mode_blocked":
+		mode = "Plan mode"
+	}
+	summary := firstLine(firstNonEmpty(env.summary, env.message, asString(env.data["summary"])))
+	if strings.Contains(summary, "/agent") {
+		return mode + " · switch to /agent to edit"
+	}
+	if summary != "" {
+		return mode + " · " + summary
+	}
+	return mode + " · tool unavailable"
+}
+
+func summarizeInvalidArgs(detail string) string {
+	detail = firstLine(strings.TrimSpace(detail))
+	if detail == "" {
+		return "Invalid tool input"
+	}
+	if field, typ, ok := parseJSONUnmarshalFieldType(detail); ok {
+		return "Invalid tool input · " + field + " must be " + typ
+	}
+	return "Invalid tool input · " + detail
+}
+
+func parseJSONUnmarshalFieldType(detail string) (string, string, bool) {
+	const fieldMarker = " into Go struct field ."
+	fieldStart := strings.Index(detail, fieldMarker)
+	if fieldStart < 0 {
+		return "", "", false
+	}
+	fieldStart += len(fieldMarker)
+	fieldEnd := strings.Index(detail[fieldStart:], " ")
+	if fieldEnd < 0 {
+		return "", "", false
+	}
+	field := strings.TrimSpace(detail[fieldStart : fieldStart+fieldEnd])
+	const typeMarker = " of type "
+	typeStart := strings.LastIndex(detail, typeMarker)
+	if typeStart < 0 {
+		return "", "", false
+	}
+	typ := strings.TrimSpace(detail[typeStart+len(typeMarker):])
+	if field == "" || typ == "" {
+		return "", "", false
+	}
+	return field, typ, true
+}
+
+func httpStatusSummary(env toolResultEnvelope) string {
+	message := strings.ToLower(strings.TrimSpace(firstNonEmpty(env.message, env.summary, asString(env.data["summary"]))))
+	fields := strings.Fields(message)
+	for i, field := range fields {
+		if strings.Trim(field, ":") != "http" || i+1 >= len(fields) {
+			continue
+		}
+		codeText := strings.Trim(fields[i+1], ".,:;")
+		code := 0
+		for _, r := range codeText {
+			if r < '0' || r > '9' {
+				code = 0
+				break
+			}
+			code = code*10 + int(r-'0')
+		}
+		if code > 0 {
+			if text := http.StatusText(code); text != "" {
+				return fmt.Sprintf("HTTP %d %s", code, text)
+			}
+			return fmt.Sprintf("HTTP %d", code)
+		}
+	}
+	return ""
+}
+
+func summarizePathIsDirectory(env toolResultEnvelope, detail string) string {
+	path := firstNonEmpty(asString(env.payload["file_path"]), asString(env.payload["path"]), asString(env.data["file_path"]), asString(env.data["path"]))
+	if path == "" {
+		path = pathFromDirectoryMessage(detail)
+	}
+	if path != "" {
+		return "Path is a directory · " + path
+	}
+	return "Path is a directory"
+}
+
+func pathFromDirectoryMessage(detail string) string {
+	before, _, ok := strings.Cut(detail, " is a directory")
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(before)
+}
+
+func outsideWorkspaceSummary(env toolResultEnvelope, detail string) string {
+	path := firstNonEmpty(asString(env.payload["file_path"]), asString(env.payload["path"]), asString(env.data["file_path"]), asString(env.data["path"]))
+	if path == "" {
+		path = outsideWorkspacePath(detail)
+	}
+	if path != "" {
+		return "Outside workspace · " + path
+	}
+	if detail != "" && isOutsideWorkspaceDetail(detail) {
+		return "Outside workspace · " + detail
+	}
+	return ""
+}
+
+func isOutsideWorkspaceDetail(detail string) bool {
+	lower := strings.ToLower(detail)
+	return strings.Contains(lower, "outside") && (strings.Contains(lower, "workspace") || strings.Contains(lower, "allowed directories")) ||
+		strings.Contains(lower, "path outside") ||
+		strings.Contains(lower, "outside allowed directories") ||
+		strings.Contains(lower, "cannot access") && strings.Contains(lower, "allowed directories")
+}
+
+func outsideWorkspacePath(detail string) string {
+	for _, marker := range []string{"outside workspace:", "outside workspace", "cannot access", "allowed directories:"} {
+		lower := strings.ToLower(detail)
+		idx := strings.Index(lower, marker)
+		if idx < 0 {
+			continue
+		}
+		rest := strings.TrimSpace(detail[idx+len(marker):])
+		if rest == "" {
+			continue
+		}
+		fields := strings.Fields(strings.Trim(rest, " .;:,"))
+		if len(fields) > 0 {
+			return strings.Trim(fields[0], " .;:,")
+		}
+	}
+	return ""
 }
 
 func shellDiagnosisLabel(reason string) string {

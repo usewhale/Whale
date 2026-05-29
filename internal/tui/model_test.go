@@ -2811,6 +2811,25 @@ func TestMarkNoFinalAnswerIfNeededSkippedWithTerminalToolOutcome(t *testing.T) {
 	}
 }
 
+func TestSuppressesNoFinalAnswerForSemanticTerminalToolRoles(t *testing.T) {
+	for _, role := range []string{
+		"result_denied",
+		"result_canceled",
+		"result_timeout",
+		"result_blocked",
+		"result_mode_hint",
+		"result_http_error",
+		"result_usage_hint",
+	} {
+		if !suppressesNoFinalAnswer(role) {
+			t.Fatalf("expected %q to suppress no-final-answer notice", role)
+		}
+	}
+	if suppressesNoFinalAnswer("result_failed") {
+		t.Fatal("ordinary failures should not suppress no-final-answer notice")
+	}
+}
+
 func TestMarkNoFinalAnswerIfNeededSkippedWithAssistant(t *testing.T) {
 	m := model{
 		assembler:            tuirender.NewAssembler(),
@@ -9841,7 +9860,7 @@ func TestSummarizeToolResultForChat_ShellRunFailureShowsReason(t *testing.T) {
 	if role != "result_failed" {
 		t.Fatalf("expected result_failed role, got %q", role)
 	}
-	want := "✗ (exit 2) · 1.2s\nls: cannot access x: No such file or directory"
+	want := "Command failed (exit 2) · 1.2s\nls: cannot access x: No such file or directory"
 	if got != want {
 		t.Fatalf("unexpected summary text:\nwant: %q\ngot:  %q", want, got)
 	}
@@ -9856,18 +9875,30 @@ func TestSummarizeToolResultForChat_RequestReplanHidesInternalRecoveryText(t *te
 	if strings.Contains(got, "recovery exhausted") || strings.Contains(got, "replan required") {
 		t.Fatalf("summary leaked internal recovery text: %q", got)
 	}
-	if !strings.Contains(got, "DENIED") || !strings.Contains(got, "outside allowed directories") {
-		t.Fatalf("expected user-facing access denial, got %q", got)
+	if !strings.Contains(got, "Outside workspace") || !strings.Contains(got, "/workspace") {
+		t.Fatalf("expected user-facing workspace block, got %q", got)
 	}
 }
 
-func TestSummarizeToolResultForChat_PermissionDeniedShowsDenied(t *testing.T) {
+func TestSummarizeToolResultForChat_PermissionDeniedOutsideWorkspaceShowsBlocked(t *testing.T) {
 	raw := `{"success":false,"code":"permission_denied","message":"path outside MCP fs allowed directories: /workspace not in /tmp"}`
 	role, got := summarizeToolResultForChat("mcp__fs__search_files", raw)
+	if role != "result_blocked" {
+		t.Fatalf("expected result_blocked role, got %q", role)
+	}
+	want := "Outside workspace · /workspace"
+	if got != want {
+		t.Fatalf("unexpected summary:\nwant: %q\ngot:  %q", want, got)
+	}
+}
+
+func TestSummarizeToolResultForChat_PermissionDeniedPolicyShowsDenied(t *testing.T) {
+	raw := `{"success":false,"code":"permission_denied","message":"shell denied by permission rule"}`
+	role, got := summarizeToolResultForChat("shell_run", raw)
 	if role != "result_denied" {
 		t.Fatalf("expected result_denied role, got %q", role)
 	}
-	want := "DENIED · path outside MCP fs allowed directories: /workspace not in /tmp"
+	want := "DENIED · shell denied by permission rule"
 	if got != want {
 		t.Fatalf("unexpected summary:\nwant: %q\ngot:  %q", want, got)
 	}
@@ -9959,10 +9990,10 @@ func TestMCPToolResultSummarizesStructuredOnlyContent(t *testing.T) {
 func TestSummarizeToolResultForChat_MCPAllowedDirsDeniedShowsDenied(t *testing.T) {
 	raw := `{"success":false,"code":"mcp_allowed_dirs_denied","message":"MCP filesystem server cannot access /workspace; allowed directories: /tmp. Use Whale built-in file tools for this path, or add the directory to the MCP server configuration."}`
 	role, got := summarizeToolResultForChat("mcp__fs__search_files", raw)
-	if role != "result_denied" {
-		t.Fatalf("expected result_denied role, got %q", role)
+	if role != "result_blocked" {
+		t.Fatalf("expected result_blocked role, got %q", role)
 	}
-	if !strings.HasPrefix(got, "DENIED · MCP filesystem server cannot access /workspace") {
+	if got != "Outside workspace · /workspace" {
 		t.Fatalf("unexpected summary: %q", got)
 	}
 }
@@ -9992,12 +10023,36 @@ func TestSummarizeToolResultForChat_Denied(t *testing.T) {
 func TestSummarizeToolResultForChat_AskModeBlockedShowsProductCommands(t *testing.T) {
 	raw := `{"success":false,"code":"ask_mode_blocked","message":"tool unavailable in ask mode","summary":"Current mode: ask. Ask mode only allows read-only tools. To execute or modify files, switch to agent mode with /agent or Shift+Tab. To propose a reviewed approach first, switch to plan mode with /plan or Shift+Tab.","data":{"current_mode":"ask","suggested_modes":["/agent","/plan","Shift+Tab"]}}`
 	role, got := summarizeToolResultForChat("shell_run", raw)
-	if role != "result_failed" {
-		t.Fatalf("expected result_failed role, got %q", role)
+	if role != "result_mode_hint" {
+		t.Fatalf("expected result_mode_hint role, got %q", role)
 	}
-	want := "✗ · Current mode: ask. Ask mode only allows read-only tools. To execute or modify files, switch to agent mode with /agent or Shift+Tab. To propose a reviewed approach first, switch to plan mode with /plan or Shift+Tab."
+	want := "Ask mode · switch to /agent to edit"
 	if got != want {
 		t.Fatalf("unexpected ask-mode summary:\nwant: %q\ngot:  %q", want, got)
+	}
+}
+
+func TestSummarizeToolResultForChat_FetchHTTPStatusShowsHTTPError(t *testing.T) {
+	raw := `{"success":false,"code":"fetch_failed","message":"http 403"}`
+	role, got := summarizeToolResultForChat("fetch", raw)
+	if role != "result_http_error" || got != "HTTP 403 Forbidden" {
+		t.Fatalf("unexpected HTTP summary: role=%q text=%q", role, got)
+	}
+}
+
+func TestSummarizeToolResultForChat_ReadDirectoryShowsUsageHint(t *testing.T) {
+	raw := `{"success":false,"code":"not_file","message":"internal/plugins is a directory; use list_dir for directories"}`
+	role, got := summarizeToolResultForChat("read_file", raw)
+	if role != "result_blocked" || got != "Path is a directory · internal/plugins" {
+		t.Fatalf("unexpected directory summary: role=%q text=%q", role, got)
+	}
+}
+
+func TestSummarizeToolResultForChat_InvalidArgsShowsUsageHint(t *testing.T) {
+	raw := `{"success":false,"code":"invalid_args","message":"json: cannot unmarshal string into Go struct field .literal_text of type bool"}`
+	role, got := summarizeToolResultForChat("grep", raw)
+	if role != "result_usage_hint" || got != "Invalid tool input · literal_text must be bool" {
+		t.Fatalf("unexpected invalid args summary: role=%q text=%q", role, got)
 	}
 }
 
@@ -10091,10 +10146,10 @@ func TestSummarizeToolResultForChat_FailedNoExitCodeDoesNotShowZero(t *testing.T
 	if role != "result_failed" {
 		t.Fatalf("expected result_failed role, got %q", role)
 	}
-	if got == "✗ (exit 0) · 41ms · unknown flag: --bad" {
+	if got == "Command failed (exit 0) · 41ms\nunknown flag: --bad" {
 		t.Fatalf("must not show fake exit 0: %q", got)
 	}
-	if got != "✗ · 41ms\nunknown flag: --bad" {
+	if got != "Command failed · 41ms\nunknown flag: --bad" {
 		t.Fatalf("unexpected failed summary: %q", got)
 	}
 }

@@ -732,6 +732,8 @@ func focusSummaryActionStyle(part FocusSummaryPart) lipgloss.Style {
 		return style.Foreground(tuitheme.Default.Error)
 	case "denied":
 		return style.Foreground(tuitheme.Default.ResultDenied)
+	case "blocked", "mode_hint", "http_error", "usage_hint":
+		return style.Foreground(tuitheme.Default.Warn)
 	case "running":
 		return style.Foreground(tuitheme.Default.ResultRunning)
 	default:
@@ -741,7 +743,7 @@ func focusSummaryActionStyle(part FocusSummaryPart) lipgloss.Style {
 
 func focusSummaryState(part FocusSummaryPart) string {
 	switch strings.TrimSpace(part.State) {
-	case "done", "running", "failed", "denied":
+	case "done", "running", "failed", "denied", "blocked", "mode_hint", "http_error", "usage_hint":
 		return strings.TrimSpace(part.State)
 	}
 	status := strings.TrimSpace(part.Status)
@@ -750,6 +752,14 @@ func focusSummaryState(part FocusSummaryPart) string {
 		return "failed"
 	case strings.Contains(status, "denied"), strings.Contains(status, "canceled"):
 		return "denied"
+	case strings.Contains(status, "blocked"):
+		return "blocked"
+	case strings.Contains(status, "mode hint"):
+		return "mode_hint"
+	case strings.Contains(status, "HTTP error"):
+		return "http_error"
+	case strings.Contains(status, "usage hint"):
+		return "usage_hint"
 	case strings.Contains(status, "running"):
 		return "running"
 	default:
@@ -771,6 +781,8 @@ func focusSummaryKindColor(kind string) lipgloss.Color {
 		return tuitheme.Default.Result
 	case "plan":
 		return tuitheme.Default.Plan
+	case "mode":
+		return tuitheme.Default.Warn
 	case "todo":
 		return tuitheme.Default.InfoSoft
 	case "mcp":
@@ -794,6 +806,8 @@ func focusSummaryStatusStyle(part FocusSummaryPart) lipgloss.Style {
 		return style.Foreground(tuitheme.Default.Error).Bold(true)
 	case "denied":
 		return style.Foreground(tuitheme.Default.ResultDenied).Bold(true)
+	case "blocked", "mode_hint", "http_error", "usage_hint":
+		return style.Foreground(tuitheme.Default.Warn).Bold(true)
 	case "running":
 		return style.Foreground(tuitheme.Default.ResultRunning).Bold(true)
 	default:
@@ -1085,6 +1099,12 @@ func splitStatusLinePreservingSpace(text string) (string, string) {
 	if text == "" {
 		return "", ""
 	}
+	if strings.HasPrefix(text, "Command failed") {
+		if idx := strings.Index(text, " · "); idx >= 0 {
+			return text[:idx], text[idx:]
+		}
+		return text, ""
+	}
 	for i, r := range text {
 		if r == ' ' || r == '\t' {
 			return text[:i], text[i:]
@@ -1134,7 +1154,11 @@ func renderToolStatusLine(line string) string {
 }
 
 func normalizedStatusToken(token string) string {
-	switch strings.ToUpper(strings.TrimSpace(token)) {
+	normalized := strings.ToUpper(strings.TrimSpace(token))
+	if strings.HasPrefix(normalized, "COMMAND FAILED") {
+		return "error"
+	}
+	switch normalized {
 	case "✓", "OK", "DONE", "SUCCESS":
 		return "success"
 	case "DENIED":
