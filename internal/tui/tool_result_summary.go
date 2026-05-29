@@ -337,7 +337,7 @@ func summarizeModeBlocked(env toolResultEnvelope) string {
 	case "plan_mode_blocked":
 		mode = "Plan mode"
 	}
-	summary := firstLine(firstNonEmpty(env.summary, env.message, asString(env.data["summary"])))
+	summary := firstLine(firstNonEmpty(env.summary, env.message, core.AsString(env.data["summary"])))
 	if strings.Contains(summary, "/agent") {
 		return mode + " · switch to /agent to edit"
 	}
@@ -383,7 +383,7 @@ func parseJSONUnmarshalFieldType(detail string) (string, string, bool) {
 }
 
 func httpStatusSummary(env toolResultEnvelope) string {
-	message := strings.ToLower(strings.TrimSpace(firstNonEmpty(env.message, env.summary, asString(env.data["summary"]))))
+	message := strings.ToLower(strings.TrimSpace(firstNonEmpty(env.message, env.summary, core.AsString(env.data["summary"]))))
 	fields := strings.Fields(message)
 	for i, field := range fields {
 		if strings.Trim(field, ":") != "http" || i+1 >= len(fields) {
@@ -409,7 +409,7 @@ func httpStatusSummary(env toolResultEnvelope) string {
 }
 
 func summarizePathIsDirectory(env toolResultEnvelope, detail string) string {
-	path := firstNonEmpty(asString(env.payload["file_path"]), asString(env.payload["path"]), asString(env.data["file_path"]), asString(env.data["path"]))
+	path := firstNonEmpty(core.AsString(env.payload["file_path"]), core.AsString(env.payload["path"]), core.AsString(env.data["file_path"]), core.AsString(env.data["path"]))
 	if path == "" {
 		path = pathFromDirectoryMessage(detail)
 	}
@@ -428,7 +428,7 @@ func pathFromDirectoryMessage(detail string) string {
 }
 
 func accessBlockedSummary(env toolResultEnvelope, detail string) string {
-	path := firstNonEmpty(asString(env.payload["file_path"]), asString(env.payload["path"]), asString(env.data["file_path"]), asString(env.data["path"]))
+	path := firstNonEmpty(core.AsString(env.payload["file_path"]), core.AsString(env.payload["path"]), core.AsString(env.data["file_path"]), core.AsString(env.data["path"]))
 	if path == "" {
 		path = outsideWorkspacePath(detail)
 	}
