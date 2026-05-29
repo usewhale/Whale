@@ -11,9 +11,9 @@ import (
 // planState groups the plan-tracking vars that would otherwise be scattered
 // as individual locals across streamAndHandle.
 type planState struct {
-	parser   core.ProposedPlanParser
-	text     strings.Builder
-	started  bool
+	parser    core.ProposedPlanParser
+	text      strings.Builder
+	started   bool
 	completed bool
 }
 
