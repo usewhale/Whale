@@ -103,7 +103,7 @@ func approvalKeyGranted(granted map[string]bool, key string) bool {
 		if !ok {
 			continue
 		}
-		if pathInside(target, filepath.Clean(filepath.FromSlash(grantedRoot))) {
+		if pathInsideOrFalse(target, filepath.Clean(filepath.FromSlash(grantedRoot))) {
 			return true
 		}
 	}

@@ -103,22 +103,17 @@ func prepareResumeWorktree(args []string, last bool, opts *cliOptions) error {
 		return nil
 	}
 	targetWorkspace := sess.Path
-	if workspace := strings.TrimSpace(sess.Workspace); workspace != "" && pathInside(workspace, sess.Path) {
-		targetWorkspace = workspace
+	if workspace := strings.TrimSpace(sess.Workspace); workspace != "" {
+		inside, err := core.PathInside(workspace, sess.Path)
+		if err == nil && inside {
+			targetWorkspace = workspace
+		}
 	}
 	if err := os.Chdir(targetWorkspace); err != nil {
 		return fmt.Errorf("enter resume worktree: %w", err)
 	}
 	opts.worktreeSession = sess
 	return nil
-}
-
-func pathInside(path, root string) bool {
-	ok, err := core.PathInside(path, root)
-	if err != nil {
-		return false
-	}
-	return ok
 }
 
 func newDoctorCmd(opts *cliOptions) *cobra.Command {

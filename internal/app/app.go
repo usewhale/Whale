@@ -168,40 +168,201 @@ func DefaultConfig() Config {
 
 func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 	workspaceRoot, _ := os.Getwd()
-	if !cfg.ConfigLoaded {
-		resolved, err := LoadAndApplyConfig(cfg, workspaceRoot)
-		if err != nil {
-			return nil, err
-		}
-		cfg = resolved
+	cfg, err := loadNewConfig(cfg, workspaceRoot)
+	if err != nil {
+		return nil, err
 	}
+	sessionInit, err := initAppSession(cfg, start, workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	toolInit, err := initAppTools(cfg, start, workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	sessionInit, err = completeAppSessionState(sessionInit, start, workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	var appRef *App
+	runtimeInit, err := initAppRuntime(cfg, sessionInit, toolInit, workspaceRoot, func() string {
+		if appRef != nil {
+			return appRef.sessionID
+		}
+		return sessionInit.sessionID
+	})
+	if err != nil {
+		return nil, err
+	}
+	cfg = runtimeInit.cfg
+
+	app := &App{
+		ctx:                   ctx,
+		sessionsDir:           sessionInit.sessionsDir,
+		workspaceRoot:         workspaceRoot,
+		branch:                sessionInit.branch,
+		msgStore:              sessionInit.msgStore,
+		toolRegistry:          runtimeInit.toolRegistry,
+		baseToolRegistry:      toolInit.baseToolRegistry,
+		toolset:               toolInit.toolset,
+		baseTools:             append([]core.Tool{}, toolInit.baseTools...),
+		taskTools:             append([]core.Tool{}, runtimeInit.taskTools...),
+		hooks:                 toolInit.hooks,
+		hookRunner:            toolInit.hookRunner,
+		hookSources:           toolInit.hookSources,
+		currentMode:           sessionInit.mode,
+		sessionID:             sessionInit.sessionID,
+		permissionPolicy:      policy.RulePolicy{Default: cfg.PermissionDefault, Rules: append([]policy.PermissionRule{}, cfg.PermissionRules...), WorkspaceRoot: workspaceRoot, WorktreeRoot: start.Worktree.Path},
+		autoAcceptPermissions: cfg.AutoAcceptPermissions,
+		budgetWarningUSD:      cfg.BudgetWarningUSD,
+		cfg:                   cfg,
+		model:                 runtimeInit.model,
+		reasoningEffort:       runtimeInit.effort,
+		thinkingEnabled:       runtimeInit.thinking,
+		contextWindow:         runtimeInit.contextWindow,
+		mcpManager:            toolInit.mcpManager,
+		pluginManager:         toolInit.pluginManager,
+		pluginTools:           append([]core.Tool{}, toolInit.pluginTools...),
+		worktree:              start.Worktree,
+		apiKey:                runtimeInit.apiKey,
+		approvalFn:            defaultApprovalFunc(start.ApprovalFunc),
+		userInput:             defaultUserInputFunc(start.UserInputFunc),
+	}
+	appRef = app
+	return app, nil
+}
+
+type appSessionInit struct {
+	sessionsDir string
+	msgStore    *store.JSONLStore
+	sessionID   string
+	branch      string
+	mode        session.Mode
+}
+
+type appToolInit struct {
+	toolset          *tools.Toolset
+	mcpManager       *whalemcp.Manager
+	pluginManager    *plugins.Manager
+	pluginTools      []core.Tool
+	baseTools        []core.Tool
+	baseToolRegistry *core.ToolRegistry
+	hooks            []agent.ResolvedHook
+	hookRunner       *agent.HookRunner
+	hookSources      []string
+}
+
+type appRuntimeInit struct {
+	cfg           Config
+	model         string
+	effort        string
+	thinking      bool
+	contextWindow int
+	apiKey        string
+	taskTools     []core.Tool
+	toolRegistry  *core.ToolRegistry
+}
+
+func loadNewConfig(cfg Config, workspaceRoot string) (Config, error) {
+	if cfg.ConfigLoaded {
+		return cfg, nil
+	}
+	return LoadAndApplyConfig(cfg, workspaceRoot)
+}
+
+func initAppSession(cfg Config, start StartOptions, workspaceRoot string) (appSessionInit, error) {
 	sessionsDir := store.DefaultSessionsDir(cfg.DataDir)
 	msgStore, err := store.NewJSONLStore(sessionsDir)
 	if err != nil {
-		return nil, fmt.Errorf("init session store failed: %w", err)
+		return appSessionInit{}, fmt.Errorf("init session store failed: %w", err)
 	}
-	sessionID := ""
-	if sid := strings.TrimSpace(start.SessionID); sid != "" {
-		sessionID = sid
-	} else if start.NewSession || start.ResumeMenu {
-		sessionID = newSessionID(time.Now())
-	} else {
-		var err error
-		sessionID, err = resolveInitialSessionID(sessionsDir)
-		if err != nil {
-			return nil, fmt.Errorf("resolve session failed: %w", err)
-		}
+	sessionID, err := initialAppSessionID(sessionsDir, start)
+	if err != nil {
+		return appSessionInit{}, err
 	}
 	if !start.NewSession && !start.ResumeMenu {
 		if msg, blocked, err := CheckResumeWorkspace(sessionsDir, sessionID, workspaceRoot); err != nil {
-			return nil, err
+			return appSessionInit{}, err
 		} else if blocked {
-			return nil, &CrossWorkspaceResumeError{Message: msg}
+			return appSessionInit{}, &CrossWorkspaceResumeError{Message: msg}
 		}
 	}
+	return appSessionInit{
+		sessionsDir: sessionsDir,
+		msgStore:    msgStore,
+		sessionID:   sessionID,
+	}, nil
+}
+
+func initialAppSessionID(sessionsDir string, start StartOptions) (string, error) {
+	if sid := strings.TrimSpace(start.SessionID); sid != "" {
+		return sid, nil
+	}
+	if start.NewSession || start.ResumeMenu {
+		return newSessionID(time.Now()), nil
+	}
+	sessionID, err := resolveInitialSessionID(sessionsDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve session failed: %w", err)
+	}
+	return sessionID, nil
+}
+
+func completeAppSessionState(init appSessionInit, start StartOptions, workspaceRoot string) (appSessionInit, error) {
+	mode, err := initialAppMode(init.sessionsDir, init.sessionID, start)
+	if err != nil {
+		return appSessionInit{}, err
+	}
+	branch := session.DetectGitBranch(workspaceRoot)
+	if err := patchNewSessionMeta(init.sessionsDir, init.sessionID, workspaceRoot, branch, start); err != nil {
+		return appSessionInit{}, err
+	}
+	init.mode = mode
+	init.branch = branch
+	return init, nil
+}
+
+func initialAppMode(sessionsDir, sessionID string, start StartOptions) (session.Mode, error) {
+	modeState, err := session.LoadModeState(sessionsDir, sessionID)
+	if err != nil {
+		return "", fmt.Errorf("load session mode failed: %w", err)
+	}
+	if raw := strings.TrimSpace(start.ModeOverride); raw != "" {
+		mode, err := session.ParseMode(raw)
+		if err != nil {
+			return "", err
+		}
+		modeState.Mode = mode
+		if err := session.SaveModeState(sessionsDir, sessionID, mode); err != nil {
+			return "", fmt.Errorf("save mode state failed: %w", err)
+		}
+	}
+	return modeState.Mode, nil
+}
+
+func patchNewSessionMeta(sessionsDir, sessionID, workspaceRoot, branch string, start StartOptions) error {
+	if !start.NewSession && !start.ResumeMenu {
+		return nil
+	}
+	meta := session.SessionMeta{Workspace: workspaceRoot, Branch: branch}
+	if strings.TrimSpace(start.Worktree.Name) != "" {
+		meta.WorktreeName = start.Worktree.Name
+		meta.WorktreePath = start.Worktree.Path
+		meta.WorktreeBranch = start.Worktree.Branch
+		meta.OriginalWorkspace = start.Worktree.OriginalWorkspace
+		meta.OriginalBranch = start.Worktree.OriginalBranch
+		meta.OriginalHeadCommit = start.Worktree.OriginalHeadCommit
+	}
+	if _, err := session.PatchSessionMeta(sessionsDir, sessionID, session.SessionMetaPatchFromMeta(meta)); err != nil {
+		return fmt.Errorf("patch session meta failed: %w", err)
+	}
+	return nil
+}
+
+func initAppTools(cfg Config, start StartOptions, workspaceRoot string) (appToolInit, error) {
 	toolset, err := tools.NewToolset(workspaceRoot)
 	if err != nil {
-		return nil, fmt.Errorf("init tools failed: %w", err)
+		return appToolInit{}, fmt.Errorf("init tools failed: %w", err)
 	}
 	toolset.SetWorktreeContext(start.Worktree.Path, start.Worktree.OriginalWorkspace)
 	toolset.SetSkillDisabled(cfg.SkillsDisabled)
@@ -211,7 +372,7 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 	}
 	mcpConfig, err := whalemcp.LoadConfig(mcpConfigPath)
 	if err != nil {
-		return nil, fmt.Errorf("load mcp config: %w", err)
+		return appToolInit{}, fmt.Errorf("load mcp config: %w", err)
 	}
 	mcpManager := whalemcp.NewManager(mcpConfig, workspaceRoot)
 	pluginManager := plugins.NewManager(plugins.Context{DataDir: cfg.DataDir, WorkspaceRoot: workspaceRoot}, cfg.PluginsDisabled)
@@ -220,56 +381,40 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 	baseTools := append([]core.Tool{}, toolset.Tools()...)
 	baseToolRegistry, err := core.NewToolRegistryChecked(baseTools)
 	if err != nil {
-		return nil, fmt.Errorf("init base tool registry failed: %w", err)
+		return appToolInit{}, fmt.Errorf("init base tool registry failed: %w", err)
 	}
 	hooks, hookSources, hookLoadErr := agent.LoadHooks(workspaceRoot, cfg.DataDir)
 	if hookLoadErr != nil {
-		return nil, fmt.Errorf("load hooks failed: %w", hookLoadErr)
+		return appToolInit{}, fmt.Errorf("load hooks failed: %w", hookLoadErr)
 	}
 	hookRunner := agent.NewHookRunner(hooks, workspaceRoot)
 	hookRunner.AddHandlers(pluginManager.Hooks()...)
-	modeState, err := session.LoadModeState(sessionsDir, sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("load session mode failed: %w", err)
-	}
-	if raw := strings.TrimSpace(start.ModeOverride); raw != "" {
-		mode, err := session.ParseMode(raw)
-		if err != nil {
-			return nil, err
-		}
-		modeState.Mode = mode
-		if err := session.SaveModeState(sessionsDir, sessionID, mode); err != nil {
-			return nil, fmt.Errorf("save mode state failed: %w", err)
-		}
-	}
-	branch := session.DetectGitBranch(workspaceRoot)
-	if start.NewSession || start.ResumeMenu {
-		meta := session.SessionMeta{Workspace: workspaceRoot, Branch: branch}
-		if strings.TrimSpace(start.Worktree.Name) != "" {
-			meta.WorktreeName = start.Worktree.Name
-			meta.WorktreePath = start.Worktree.Path
-			meta.WorktreeBranch = start.Worktree.Branch
-			meta.OriginalWorkspace = start.Worktree.OriginalWorkspace
-			meta.OriginalBranch = start.Worktree.OriginalBranch
-			meta.OriginalHeadCommit = start.Worktree.OriginalHeadCommit
-		}
-		if _, err := session.PatchSessionMeta(sessionsDir, sessionID, session.SessionMetaPatchFromMeta(meta)); err != nil {
-			return nil, fmt.Errorf("patch session meta failed: %w", err)
-		}
-	}
+	return appToolInit{
+		toolset:          toolset,
+		mcpManager:       mcpManager,
+		pluginManager:    pluginManager,
+		pluginTools:      pluginTools,
+		baseTools:        baseTools,
+		baseToolRegistry: baseToolRegistry,
+		hooks:            hooks,
+		hookRunner:       hookRunner,
+		hookSources:      hookSources,
+	}, nil
+}
 
+func initAppRuntime(cfg Config, sessionInit appSessionInit, toolInit appToolInit, workspaceRoot string, parentSessionIDFunc func() string) (appRuntimeInit, error) {
 	model := core.FirstNonEmpty(strings.TrimSpace(cfg.Model), defaults.DefaultModel)
 	effort := normalizeEffort(core.FirstNonEmpty(strings.TrimSpace(cfg.ReasoningEffort), defaults.DefaultReasoningEffort))
 	viewMode, err := NormalizeViewMode(cfg.ViewMode)
 	if err != nil {
-		return nil, err
+		return appRuntimeInit{}, err
 	}
 	cfg.ViewMode = viewMode
 	thinking := cfg.ThinkingEnabled
 	contextWindow := contextWindowForModel(model)
 	apiKey, err := LoadDeepSeekAPIKey(cfg.DataDir)
 	if err != nil {
-		return nil, fmt.Errorf("load api key failed: %w", err)
+		return appRuntimeInit{}, fmt.Errorf("load api key failed: %w", err)
 	}
 	providerFactory := func(model string, maxTokens int) (llm.Provider, error) {
 		if strings.TrimSpace(model) == "" {
@@ -286,19 +431,13 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 			StreamMaxAttempts: cfg.RetryStreamMaxAttempts,
 		})
 	}
-	var appRef *App
 	taskRunner := tasks.NewRunner(tasks.RunnerConfig{
-		ProviderFactory: providerFactory,
-		ParentTools:     baseToolRegistry,
-		MessageStore:    msgStore,
-		SessionsDir:     sessionsDir,
-		ParentSessionID: sessionID,
-		ParentSessionIDFunc: func() string {
-			if appRef != nil {
-				return appRef.sessionID
-			}
-			return sessionID
-		},
+		ProviderFactory:      providerFactory,
+		ParentTools:          toolInit.baseToolRegistry,
+		MessageStore:         sessionInit.msgStore,
+		SessionsDir:          sessionInit.sessionsDir,
+		ParentSessionID:      sessionInit.sessionID,
+		ParentSessionIDFunc:  parentSessionIDFunc,
 		WorkspaceRoot:        workspaceRoot,
 		MemoryEnabled:        cfg.MemoryEnabled,
 		MemoryMaxChars:       cfg.MemoryMaxChars,
@@ -312,48 +451,23 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 		UsageLogPath:         filepath.Join(cfg.DataDir, "usage.jsonl"),
 	})
 	taskTools := tasks.NewTools(taskRunner)
-	registeredTools := append([]core.Tool{}, baseTools...)
-	registeredTools = append(registeredTools, pluginTools...)
+	registeredTools := append([]core.Tool{}, toolInit.baseTools...)
+	registeredTools = append(registeredTools, toolInit.pluginTools...)
 	registeredTools = append(registeredTools, taskTools...)
 	toolRegistry, err := core.NewToolRegistryChecked(registeredTools)
 	if err != nil {
-		return nil, fmt.Errorf("init tool registry failed: %w", err)
+		return appRuntimeInit{}, fmt.Errorf("init tool registry failed: %w", err)
 	}
-
-	app := &App{
-		ctx:                   ctx,
-		sessionsDir:           sessionsDir,
-		workspaceRoot:         workspaceRoot,
-		branch:                branch,
-		msgStore:              msgStore,
-		toolRegistry:          toolRegistry,
-		baseToolRegistry:      baseToolRegistry,
-		toolset:               toolset,
-		baseTools:             append([]core.Tool{}, baseTools...),
-		taskTools:             append([]core.Tool{}, taskTools...),
-		hooks:                 hooks,
-		hookRunner:            hookRunner,
-		hookSources:           hookSources,
-		currentMode:           modeState.Mode,
-		sessionID:             sessionID,
-		permissionPolicy:      policy.RulePolicy{Default: cfg.PermissionDefault, Rules: append([]policy.PermissionRule{}, cfg.PermissionRules...), WorkspaceRoot: workspaceRoot, WorktreeRoot: start.Worktree.Path},
-		autoAcceptPermissions: cfg.AutoAcceptPermissions,
-		budgetWarningUSD:      cfg.BudgetWarningUSD,
-		cfg:                   cfg,
-		model:                 model,
-		reasoningEffort:       effort,
-		thinkingEnabled:       thinking,
-		contextWindow:         contextWindow,
-		mcpManager:            mcpManager,
-		pluginManager:         pluginManager,
-		pluginTools:           append([]core.Tool{}, pluginTools...),
-		worktree:              start.Worktree,
-		apiKey:                apiKey,
-		approvalFn:            defaultApprovalFunc(start.ApprovalFunc),
-		userInput:             defaultUserInputFunc(start.UserInputFunc),
-	}
-	appRef = app
-	return app, nil
+	return appRuntimeInit{
+		cfg:           cfg,
+		model:         model,
+		effort:        effort,
+		thinking:      thinking,
+		contextWindow: contextWindow,
+		apiKey:        apiKey,
+		taskTools:     taskTools,
+		toolRegistry:  toolRegistry,
+	}, nil
 }
 
 func defaultApprovalFunc(fn policy.ApprovalFunc) policy.ApprovalFunc {

@@ -29,40 +29,54 @@ type webSearchEntry struct {
 }
 
 func (b *Toolset) webSearch(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
-	var in struct {
-		Query       string `json:"query"`
-		Q           string `json:"q"`
-		MaxResults  int    `json:"max_results"`
-		TimeoutMS   int    `json:"timeout_ms"`
-		SearchQuery []struct {
-			Q          string `json:"q"`
-			Query      string `json:"query"`
-			MaxResults int    `json:"max_results"`
-		} `json:"search_query"`
-	}
+	var in webSearchInput
 	if err := decodeInput(call.Input, &in); err != nil {
 		return marshalToolError(call, "invalid_args", err.Error()), nil
 	}
-	query := strings.TrimSpace(in.Query)
-	if query == "" {
-		query = strings.TrimSpace(in.Q)
-	}
-	if query == "" {
-		for _, sq := range in.SearchQuery {
-			if strings.TrimSpace(sq.Q) != "" {
-				query = strings.TrimSpace(sq.Q)
-				break
-			}
-			if strings.TrimSpace(sq.Query) != "" {
-				query = strings.TrimSpace(sq.Query)
-				break
-			}
-		}
-	}
+	query := webSearchQuery(in)
 	if query == "" {
 		return marshalToolError(call, "invalid_args", "query is required"), nil
 	}
+	maxResults := normalizeWebSearchMaxResults(in)
+	timeoutMS := normalizeWebSearchTimeoutMS(in.TimeoutMS)
+	results, source, note, err := b.searchWithFallback(ctx, query, maxResults, timeoutMS)
+	if err != nil {
+		return marshalToolError(call, "web_search_failed", err.Error()), nil
+	}
+	return marshalToolResult(call, buildWebSearchResult(query, source, note, results))
+}
 
+type webSearchInput struct {
+	Query       string `json:"query"`
+	Q           string `json:"q"`
+	MaxResults  int    `json:"max_results"`
+	TimeoutMS   int    `json:"timeout_ms"`
+	SearchQuery []struct {
+		Q          string `json:"q"`
+		Query      string `json:"query"`
+		MaxResults int    `json:"max_results"`
+	} `json:"search_query"`
+}
+
+func webSearchQuery(in webSearchInput) string {
+	if query := strings.TrimSpace(in.Query); query != "" {
+		return query
+	}
+	if query := strings.TrimSpace(in.Q); query != "" {
+		return query
+	}
+	for _, sq := range in.SearchQuery {
+		if query := strings.TrimSpace(sq.Q); query != "" {
+			return query
+		}
+		if query := strings.TrimSpace(sq.Query); query != "" {
+			return query
+		}
+	}
+	return ""
+}
+
+func normalizeWebSearchMaxResults(in webSearchInput) int {
 	maxResults := in.MaxResults
 	if maxResults <= 0 && len(in.SearchQuery) > 0 && in.SearchQuery[0].MaxResults > 0 {
 		maxResults = in.SearchQuery[0].MaxResults
@@ -73,20 +87,20 @@ func (b *Toolset) webSearch(ctx context.Context, call core.ToolCall) (core.ToolR
 	if maxResults > maxWebSearchResults {
 		maxResults = maxWebSearchResults
 	}
+	return maxResults
+}
 
-	timeoutMS := in.TimeoutMS
+func normalizeWebSearchTimeoutMS(timeoutMS int) int {
 	if timeoutMS <= 0 {
 		timeoutMS = defaultWebSearchTimeoutMS
 	}
 	if timeoutMS > maxWebSearchTimeoutMS {
 		timeoutMS = maxWebSearchTimeoutMS
 	}
+	return timeoutMS
+}
 
-	results, source, note, err := b.searchWithFallback(ctx, query, maxResults, timeoutMS)
-	if err != nil {
-		return marshalToolError(call, "web_search_failed", err.Error()), nil
-	}
-
+func buildWebSearchResult(query, source, note string, results []webSearchEntry) map[string]any {
 	message := fmt.Sprintf("Found %d result(s)", len(results))
 	if len(results) == 0 {
 		message = "No results found"
@@ -102,7 +116,7 @@ func (b *Toolset) webSearch(ctx context.Context, call core.ToolCall) (core.ToolR
 		"message": message,
 		"results": results,
 	}
-	return marshalToolResult(call, data)
+	return data
 }
 
 func (b *Toolset) searchWithFallback(ctx context.Context, query string, maxResults int, timeoutMS int) ([]webSearchEntry, string, string, error) {

@@ -25,13 +25,7 @@ const (
 )
 
 func (b *Toolset) searchContent(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
-	var in struct {
-		Path        string `json:"path"`
-		Pattern     string `json:"pattern"`
-		Include     string `json:"include"`
-		LiteralText bool   `json:"literal_text"`
-		Limit       int    `json:"limit"`
-	}
+	var in grepInput
 	if err := decodeInput(call.Input, &in); err != nil {
 		return marshalToolError(call, "invalid_args", err.Error()), nil
 	}
@@ -44,14 +38,33 @@ func (b *Toolset) searchContent(ctx context.Context, call core.ToolCall) (core.T
 	}
 
 	limit := normalizeGrepLimit(in.Limit)
+	matches, byFile, meta, err := b.runContentSearch(in, abs, limit)
+	if err != nil {
+		return marshalToolError(call, "exec_failed", err.Error()), nil
+	}
+	return marshalToolResult(call, buildGrepResult(in.Pattern, matches, byFile, meta, limit))
+}
+
+type grepInput struct {
+	Path        string `json:"path"`
+	Pattern     string `json:"pattern"`
+	Include     string `json:"include"`
+	LiteralText bool   `json:"literal_text"`
+	Limit       int    `json:"limit"`
+}
+
+func (b *Toolset) runContentSearch(in grepInput, abs string, limit int) ([]matchRow, map[string]int, grepMeta, error) {
 	matches, byFile, meta, searchErr := searchWithRipgrep(in.Pattern, abs, in.Include, in.LiteralText, limit, b.displayPath)
 	if searchErr != nil {
 		matches, byFile, meta, searchErr = searchWithGo(in.Pattern, abs, in.Include, in.LiteralText, limit, b.displayPath)
 		if searchErr != nil {
-			return marshalToolError(call, "exec_failed", searchErr.Error()), nil
+			return nil, nil, grepMeta{}, searchErr
 		}
 	}
+	return matches, byFile, meta, nil
+}
 
+func buildGrepResult(pattern string, matches []matchRow, byFile map[string]int, meta grepMeta, limit int) map[string]any {
 	summaryParts := make([]string, 0, maxSummarySamples)
 	for f, c := range byFile {
 		summaryParts = append(summaryParts, f+":"+strconv.Itoa(c))
@@ -79,7 +92,7 @@ func (b *Toolset) searchContent(ctx context.Context, call core.ToolCall) (core.T
 			"total_matches":       len(matches),
 			"returned_matches":    len(matches),
 			"files_matched":       len(byFile),
-			"pattern_length":      len([]rune(in.Pattern)),
+			"pattern_length":      len([]rune(pattern)),
 			"match_limit":         limit,
 			"match_limit_reached": meta.MatchLimitReached,
 			"lines_truncated":     meta.LinesTruncated,
@@ -91,7 +104,7 @@ func (b *Toolset) searchContent(ctx context.Context, call core.ToolCall) (core.T
 		},
 		"summary": summary,
 	}
-	return marshalToolResult(call, result)
+	return result
 }
 
 type submatch struct {
