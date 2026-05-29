@@ -247,7 +247,7 @@ func (m *model) markMissingProposedPlanIfNeeded(wasBusy bool) bool {
 
 func suppressesNoFinalAnswer(role string) bool {
 	switch strings.TrimSpace(role) {
-	case "result_denied", "result_canceled", "result_timeout":
+	case "result_denied", "result_canceled", "result_timeout", "result_blocked", "result_mode_hint", "result_http_error", "result_usage_hint":
 		return true
 	default:
 		return false

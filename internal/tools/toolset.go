@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,22 @@ type Toolset struct {
 	beforeFileCommit func(string)
 	skillDisabled    []string
 	extraSkills      []*skills.Skill
+}
+
+type externalReadRootsKey struct{}
+
+func WithApprovedExternalReadRoots(ctx context.Context, roots []string) context.Context {
+	cleaned := make([]string, 0, len(roots))
+	for _, root := range roots {
+		root = cleanOptionalAbsPath(root)
+		if root != "" {
+			cleaned = append(cleaned, root)
+		}
+	}
+	if len(cleaned) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, externalReadRootsKey{}, cleaned)
 }
 
 func NewToolset(root string) (*Toolset, error) {
@@ -120,36 +137,9 @@ func (b *Toolset) pathDiagnosticMessage(raw, resolved, reason string) string {
 		"Current workspace root: "+b.root,
 		"Requested path: "+requested,
 		"Resolved path: "+resolved,
-		"Filesystem tools resolve relative paths inside the current workspace. A path like \"codex\" means a \"codex\" entry under this workspace, not a sibling project.",
-		"If you meant a sibling project outside this workspace, use shell_run with a shell path such as "+siblingShellExample(requested)+" or restart Whale from the parent workspace.",
+		"Filesystem tools resolve relative paths inside the current workspace. External read paths require file access approval.",
 	)
 	return strings.Join(parts, "\n")
-}
-
-func siblingShellExample(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" || raw == "." {
-		return "`ls ../<project>`"
-	}
-	cleaned := filepath.Clean(raw)
-	for strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
-		cleaned = strings.TrimPrefix(cleaned, ".."+string(filepath.Separator))
-	}
-	for strings.HasPrefix(cleaned, "."+string(filepath.Separator)) {
-		cleaned = strings.TrimPrefix(cleaned, "."+string(filepath.Separator))
-	}
-	for strings.HasPrefix(cleaned, string(filepath.Separator)) {
-		cleaned = strings.TrimPrefix(cleaned, string(filepath.Separator))
-	}
-	first := cleaned
-	if idx := strings.IndexAny(first, `/\`); idx >= 0 {
-		first = first[:idx]
-	}
-	if first == "" || first == "." || first == ".." {
-		first = "<project>"
-	}
-	siblingPath := shellSingleQuote("../" + first)
-	return "`ls " + siblingPath + "` or `git -C " + siblingPath + " ...`"
 }
 
 func (b *Toolset) safePath(raw string) (string, error) {
@@ -180,7 +170,17 @@ func (b *Toolset) safeWorkspacePath(raw string) (string, error) {
 	return target, nil
 }
 
-func (b *Toolset) safeReadPath(raw string) (string, error) {
+func (b *Toolset) safeReadPath(ctx context.Context, raw string) (string, error) {
+	if expanded := expandHomePath(raw); expanded != strings.TrimSpace(raw) {
+		target := cleanTargetPath(expanded, b.root)
+		if target == "" {
+			return "", fmt.Errorf("path escapes workspace: %s", raw)
+		}
+		if b.isProjectReadPath(target) || b.isApprovedExternalReadPath(ctx, target) || b.isDiscoveredSkillReadPath(target) {
+			return target, nil
+		}
+		return "", fmt.Errorf("path escapes workspace: %s", strings.TrimSpace(raw))
+	}
 	if abs, err := b.safeWorkspacePath(raw); err == nil {
 		return abs, nil
 	}
@@ -188,10 +188,31 @@ func (b *Toolset) safeReadPath(raw string) (string, error) {
 	if target == "" {
 		return "", fmt.Errorf("path escapes workspace: %s", raw)
 	}
+	if b.isProjectReadPath(target) || b.isApprovedExternalReadPath(ctx, target) {
+		return target, nil
+	}
 	if b.isDiscoveredSkillReadPath(target) {
 		return target, nil
 	}
 	return "", fmt.Errorf("path escapes workspace: %s", strings.TrimSpace(raw))
+}
+
+func expandHomePath(path string) string {
+	path = strings.TrimSpace(path)
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return path
+	}
+	switch {
+	case path == "~", path == "$HOME":
+		return home
+	case strings.HasPrefix(path, "~/"):
+		return filepath.Join(home, strings.TrimPrefix(path, "~/"))
+	case strings.HasPrefix(path, "$HOME/"):
+		return filepath.Join(home, strings.TrimPrefix(path, "$HOME/"))
+	default:
+		return path
+	}
 }
 
 func cleanTargetPath(raw, root string) string {
@@ -226,6 +247,54 @@ func (b *Toolset) isDiscoveredSkillReadPath(target string) bool {
 		}
 	}
 	return false
+}
+
+func (b *Toolset) isProjectReadPath(target string) bool {
+	if b.worktreeRoot == "" {
+		return false
+	}
+	targetReal, err := existingRealPath(target)
+	if err != nil {
+		return false
+	}
+	rootReal, err := existingRealPath(b.worktreeRoot)
+	if err != nil {
+		return false
+	}
+	return pathWithin(targetReal, rootReal)
+}
+
+func (b *Toolset) isApprovedExternalReadPath(ctx context.Context, target string) bool {
+	roots, _ := ctx.Value(externalReadRootsKey{}).([]string)
+	if len(roots) == 0 {
+		return false
+	}
+	targetReal := existingOrCleanPath(target)
+	if targetReal == "" {
+		return false
+	}
+	for _, root := range roots {
+		rootReal := existingOrCleanPath(root)
+		if rootReal == "" {
+			continue
+		}
+		if pathWithin(targetReal, rootReal) {
+			return true
+		}
+	}
+	return false
+}
+
+func existingOrCleanPath(path string) string {
+	real, err := existingRealPath(path)
+	if err == nil {
+		return real
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return ""
+	}
+	return filepath.Clean(abs)
 }
 
 func existingRealPath(path string) (string, error) {

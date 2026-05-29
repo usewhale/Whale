@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/usewhale/whale/internal/app"
+	"github.com/usewhale/whale/internal/core"
 	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
 
@@ -74,9 +75,9 @@ func spacedCardStyle(width int, borderColor lipgloss.Color) lipgloss.Style {
 func renderEntryText(role, text string, width int) string {
 	quiet := role == "you"
 	switch role {
-	case "assistant", "think", "plan", "status", "result", "result_ok", "result_denied", "result_failed", "result_timeout", "result_canceled", "result_error", "result_running", "error", "info", "tool", "tool_summary":
+	case "assistant", "think", "plan", "status", "result", "result_ok", "result_neutral", "result_denied", "result_failed", "result_timeout", "result_canceled", "result_error", "result_running", "error", "info", "tool", "tool_summary":
 		return Markdown(text, width, quiet)
-	case "shell_result_ok", "shell_result_denied", "shell_result_failed", "shell_result_timeout", "shell_result_canceled", "shell_result_error", "shell_result_running":
+	case "shell_result_ok", "shell_result_neutral", "shell_result_denied", "shell_result_failed", "shell_result_timeout", "shell_result_canceled", "shell_result_error", "shell_result_running":
 		return text
 	default:
 		return text
@@ -731,6 +732,8 @@ func focusSummaryActionStyle(part FocusSummaryPart) lipgloss.Style {
 		return style.Foreground(tuitheme.Default.Error)
 	case "denied":
 		return style.Foreground(tuitheme.Default.ResultDenied)
+	case "blocked", "mode_hint", "http_error", "usage_hint":
+		return style.Foreground(tuitheme.Default.Warn)
 	case "running":
 		return style.Foreground(tuitheme.Default.ResultRunning)
 	default:
@@ -740,7 +743,7 @@ func focusSummaryActionStyle(part FocusSummaryPart) lipgloss.Style {
 
 func focusSummaryState(part FocusSummaryPart) string {
 	switch strings.TrimSpace(part.State) {
-	case "done", "running", "failed", "denied":
+	case "done", "running", "failed", "denied", "blocked", "mode_hint", "http_error", "usage_hint":
 		return strings.TrimSpace(part.State)
 	}
 	status := strings.TrimSpace(part.Status)
@@ -749,6 +752,14 @@ func focusSummaryState(part FocusSummaryPart) string {
 		return "failed"
 	case strings.Contains(status, "denied"), strings.Contains(status, "canceled"):
 		return "denied"
+	case strings.Contains(status, "blocked"):
+		return "blocked"
+	case strings.Contains(status, "mode hint"):
+		return "mode_hint"
+	case strings.Contains(status, "HTTP error"):
+		return "http_error"
+	case strings.Contains(status, "usage hint"):
+		return "usage_hint"
 	case strings.Contains(status, "running"):
 		return "running"
 	default:
@@ -770,6 +781,8 @@ func focusSummaryKindColor(kind string) lipgloss.Color {
 		return tuitheme.Default.Result
 	case "plan":
 		return tuitheme.Default.Plan
+	case "mode":
+		return tuitheme.Default.Warn
 	case "todo":
 		return tuitheme.Default.InfoSoft
 	case "mcp":
@@ -793,6 +806,8 @@ func focusSummaryStatusStyle(part FocusSummaryPart) lipgloss.Style {
 		return style.Foreground(tuitheme.Default.Error).Bold(true)
 	case "denied":
 		return style.Foreground(tuitheme.Default.ResultDenied).Bold(true)
+	case "blocked", "mode_hint", "http_error", "usage_hint":
+		return style.Foreground(tuitheme.Default.Warn).Bold(true)
 	case "running":
 		return style.Foreground(tuitheme.Default.ResultRunning).Bold(true)
 	default:
@@ -812,6 +827,9 @@ func renderToolEvent(m UIMessage, block string, width int) []string {
 	header := strings.TrimSpace(rawLines[0])
 	if header == "" {
 		return nil
+	}
+	if m.Kind == KindSubagent {
+		return renderSubagentEvent(m, header, rawLines[1:], width, contentWidth)
 	}
 	if isShellToolEvent(m) {
 		return renderShellToolEvent(m, header, rawLines[1:], width, contentWidth)
@@ -833,6 +851,104 @@ func renderToolEvent(m UIMessage, block string, width int) []string {
 		out = append(out, renderToolEventChild(line, contentWidth)...)
 	}
 	return out
+}
+
+const subagentCardMaxVisibleSteps = 5
+const subagentCardMaxSummaryLen = 120
+
+func renderSubagentEvent(m UIMessage, header string, bodyLines []string, width, contentWidth int) []string {
+	// Determine status glyph from accumulated step statuses
+	statusGlyph := "◐"
+	role := subagentRoleFromHeader(header)
+	for _, line := range bodyLines {
+		if strings.HasPrefix(line, "role:") {
+			role = strings.TrimSpace(strings.TrimPrefix(line, "role:"))
+		}
+	}
+	if len(m.SubagentSteps) > 0 {
+		last := m.SubagentSteps[len(m.SubagentSteps)-1]
+		switch last.Status {
+		case "completed", "done", "success":
+			statusGlyph = "✓"
+		case "failed", "error", "tool_failed":
+			statusGlyph = "✗"
+		case "cancelled":
+			statusGlyph = "⊘"
+		}
+	}
+
+	// Build content
+	shortHeader := statusGlyph + " Subagent " + role
+	stepCount := len(m.SubagentSteps)
+	if stepCount > 0 {
+		shortHeader += " (" + fmt.Sprintf("%d steps)", stepCount)
+		// Show at most subagentCardMaxVisibleSteps, oldest truncated
+		var visible []core.SubagentStep
+		truncated := 0
+		if stepCount > subagentCardMaxVisibleSteps {
+			truncated = stepCount - subagentCardMaxVisibleSteps
+			visible = m.SubagentSteps[truncated:]
+		} else {
+			visible = m.SubagentSteps
+		}
+		if truncated > 0 {
+			shortHeader += "\n···"
+		}
+		for _, step := range visible {
+			label := step.ToolName
+			if label == "" {
+				label = "agent_event"
+			}
+			detail := truncateSubagentSummary(step.Summary)
+			if label == "subagent" {
+				// Final result row — visually separate from tool steps
+				shortHeader += "\n" + tuitheme.MutedStyle().Render("── result ──")
+				if detail != "" {
+					shortHeader += "\n" + detail
+				}
+			} else if detail != "" {
+				shortHeader += "\n" + label + ": " + detail
+			} else {
+				shortHeader += "\n" + label
+			}
+		}
+	} else {
+		// No steps yet - show original body
+		for _, line := range bodyLines {
+			shortHeader += "\n" + line
+		}
+	}
+
+	// Render as a card with border
+	card := spacedCardStyle(width, lipgloss.Color("#6c6c6c")).
+		Render(strings.TrimRight(shortHeader, "\n"))
+	return strings.Split(strings.TrimRight(card, "\n"), "\n")
+}
+
+func truncateSubagentSummary(s string) string {
+	s = strings.TrimSpace(s)
+	runes := []rune(s)
+	if len(runes) <= subagentCardMaxSummaryLen {
+		return s
+	}
+	cut := subagentCardMaxSummaryLen
+	// Try to break at a word boundary (space or punctuation) for cleaner cut
+	for i := cut; i > cut/2; i-- {
+		r := runes[i]
+		if r == ' ' || r == '\n' || r == '，' || r == '。' || r == '.' || r == ',' {
+			cut = i
+			break
+		}
+	}
+	return string(runes[:cut]) + " " + tuitheme.MutedStyle().Render("... omitted")
+}
+
+func subagentRoleFromHeader(header string) string {
+	fields := strings.Fields(strings.TrimSpace(header))
+	if len(fields) >= 2 && fields[0] == "Subagent" {
+		return fields[1]
+	}
+	return "explore"
 }
 
 func renderEditToolEvent(m UIMessage, header string, rawLines []string, width, contentWidth int) []string {
@@ -983,6 +1099,12 @@ func splitStatusLinePreservingSpace(text string) (string, string) {
 	if text == "" {
 		return "", ""
 	}
+	if strings.HasPrefix(text, "Command failed") {
+		if idx := strings.Index(text, " · "); idx >= 0 {
+			return text[:idx], text[idx:]
+		}
+		return text, ""
+	}
 	for i, r := range text {
 		if r == ' ' || r == '\t' {
 			return text[:i], text[i:]
@@ -1032,7 +1154,11 @@ func renderToolStatusLine(line string) string {
 }
 
 func normalizedStatusToken(token string) string {
-	switch strings.ToUpper(strings.TrimSpace(token)) {
+	normalized := strings.ToUpper(strings.TrimSpace(token))
+	if strings.HasPrefix(normalized, "COMMAND FAILED") {
+		return "error"
+	}
+	switch normalized {
 	case "✓", "OK", "DONE", "SUCCESS":
 		return "success"
 	case "DENIED":
@@ -1041,7 +1167,7 @@ func normalizedStatusToken(token string) string {
 		return "error"
 	case "TIMEOUT":
 		return "timeout"
-	case "WARN", "WARNING":
+	case "WARN", "WARNING", "HTTP":
 		return "warning"
 	case "CANCELED", "CANCELLED":
 		return "canceled"

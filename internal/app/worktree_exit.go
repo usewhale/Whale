@@ -3,9 +3,9 @@ package app
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
+	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/session"
 	whaleworktree "github.com/usewhale/whale/internal/worktree"
 )
@@ -135,38 +135,11 @@ func worktreeRemovalCwdState(worktreePath string) (string, bool, error) {
 	if err != nil {
 		return "", false, fmt.Errorf("resolve current directory before worktree removal: %w", err)
 	}
-	inside, err := pathInside(previousCwd, worktreePath)
+	inside, err := core.PathInside(previousCwd, worktreePath)
 	if err != nil {
 		return "", false, fmt.Errorf("check current directory before worktree removal: %w", err)
 	}
 	return previousCwd, inside, nil
-}
-
-func pathInside(path, parent string) (bool, error) {
-	path = strings.TrimSpace(path)
-	parent = strings.TrimSpace(parent)
-	if path == "" || parent == "" {
-		return false, nil
-	}
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return false, err
-	}
-	absParent, err := filepath.Abs(parent)
-	if err != nil {
-		return false, err
-	}
-	if resolved, err := filepath.EvalSymlinks(absPath); err == nil {
-		absPath = resolved
-	}
-	if resolved, err := filepath.EvalSymlinks(absParent); err == nil {
-		absParent = resolved
-	}
-	rel, err := filepath.Rel(absParent, absPath)
-	if err != nil {
-		return false, err
-	}
-	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))), nil
 }
 
 func (a *App) markWorktreeExited() error {
@@ -174,7 +147,7 @@ func (a *App) markWorktreeExited() error {
 		a.worktree = WorktreeSession{}
 		return nil
 	}
-	workspace := firstNonEmpty(strings.TrimSpace(a.worktree.OriginalWorkspace), strings.TrimSpace(a.workspaceRoot))
+	workspace := core.FirstNonEmpty(strings.TrimSpace(a.worktree.OriginalWorkspace), strings.TrimSpace(a.workspaceRoot))
 	branch := strings.TrimSpace(a.worktree.OriginalBranch)
 	if _, err := session.UpdateSessionMeta(a.sessionsDir, a.sessionID, func(meta *session.SessionMeta) {
 		if workspace != "" {

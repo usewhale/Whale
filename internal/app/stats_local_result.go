@@ -218,6 +218,17 @@ func profileStatsSections(stats profileStats) []LocalResultSection {
 	if allInToolReplayTokens > 0 || allInToolRawTokens > 0 || allInToolSavedTokens > 0 || allInToolCompacted > 0 {
 		profileFields = append(profileFields, LocalResultField{Label: "Tool replay", Value: fmt.Sprintf("%s sent · %s raw · %s saved · %d compacted", formatCount(allInToolReplayTokens), formatCount(allInToolRawTokens), formatCount(allInToolSavedTokens), allInToolCompacted)})
 	}
+	if stats.ApprovalAuditEvents > 0 {
+		profileFields = append(profileFields, LocalResultField{
+			Label: "Approval prompts",
+			Value: fmt.Sprintf("%d prompts · %d allow-once · %d allow-session · %d denied · %d canceled", stats.ApprovalPrompts, stats.ApprovalAllowedOnce, stats.ApprovalAllowedForSession, stats.ApprovalDenied, stats.ApprovalCanceled),
+		})
+		profileFields = append(profileFields, LocalResultField{
+			Label: "Approval audit",
+			Value: fmt.Sprintf("%d reused/cached · %d policy/mode blocks · %d audit events", stats.ApprovalReused, stats.ApprovalPolicyBlocks+stats.ApprovalModeBlocks, stats.ApprovalAuditEvents),
+			Tone:  "muted",
+		})
+	}
 	sections := []LocalResultSection{{Title: "Profile", Fields: profileFields}}
 	if len(stats.Insights) > 0 {
 		fields := make([]LocalResultField, 0, len(stats.Insights))

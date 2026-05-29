@@ -1,6 +1,10 @@
 package shellsafe
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/usewhale/whale/internal/core"
+)
 
 func GitCommandReadOnly(argv []string) bool {
 	if len(argv) < 2 || argv[0] != "git" {
@@ -128,7 +132,7 @@ func gitArgsAreReadOnly(args []string) bool {
 }
 
 func gitDiffArgsAreReadOnly(args []string) bool {
-	if !containsArg(args, "--no-index") {
+	if !core.ContainsArg(args, "--no-index") {
 		return true
 	}
 	paths := gitDiffNoIndexPaths(args)
@@ -191,13 +195,4 @@ func gitRelativePathAllowed(path string, allowDevNull bool) bool {
 
 func ArgContainsUnsafeMeta(arg string) bool {
 	return strings.ContainsAny(arg, "$`;&|<>\n\r")
-}
-
-func containsArg(argv []string, want string) bool {
-	for _, got := range argv {
-		if got == want {
-			return true
-		}
-	}
-	return false
 }

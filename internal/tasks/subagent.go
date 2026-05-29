@@ -145,6 +145,7 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 	var toolCalls []string
 	childActions := map[string]childToolAction{}
 	progressCount := 0
+	var progressMessages []core.SubagentStep
 	fail := func(code string, err error) (SpawnSubagentResponse, error) {
 		msg := "subagent failed"
 		if code == "cancelled" {
@@ -164,7 +165,13 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 				action := summarizeChildToolCall(*ev.ToolCall)
 				childActions[ev.ToolCall.ID] = action
 				progressCount++
-				emitSubagentProgress(progress, role, model, progressCount, "running", action.Running, map[string]any{
+				step := core.SubagentStep{
+					ToolName: ev.ToolCall.Name,
+					Status:   "running",
+					Summary:  action.Running,
+				}
+				progressMessages = append(progressMessages, step)
+				emitSubagentProgressWithSteps(progress, role, model, progressCount, "running", action.Running, progressMessages, map[string]any{
 					"child_session_id": sessionID,
 					"child_tool":       ev.ToolCall.Name,
 				})
@@ -177,7 +184,14 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 					status = "tool_failed"
 				}
 				action := childActions[ev.Result.ToolCallID]
-				emitSubagentProgress(progress, role, model, progressCount, status, summarizeChildToolResult(*ev.Result, action), map[string]any{
+				summary := summarizeChildToolResult(*ev.Result, action)
+				step := core.SubagentStep{
+					ToolName: ev.Result.Name,
+					Status:   status,
+					Summary:  summary,
+				}
+				progressMessages = append(progressMessages, step)
+				emitSubagentProgressWithSteps(progress, role, model, progressCount, status, summary, progressMessages, map[string]any{
 					"child_session_id": sessionID,
 					"child_tool":       ev.Result.Name,
 				})
@@ -189,7 +203,12 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 				if progressSummary == "" {
 					progressSummary = "child completed"
 				}
-				emitSubagentProgress(progress, role, model, progressCount, "completed", progressSummary, map[string]any{
+				progressMessages = append(progressMessages, core.SubagentStep{
+					ToolName: "subagent",
+					Status:   "completed",
+					Summary:  progressSummary,
+				})
+				emitSubagentProgressWithSteps(progress, role, model, progressCount, "completed", progressSummary, progressMessages, map[string]any{
 					"child_session_id": sessionID,
 					"truncated":        truncated,
 				})
@@ -208,7 +227,13 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 					metadata = map[string]any{}
 				}
 				metadata["child_session_id"] = sessionID
-				emitSubagentProgress(progress, role, model, progressCount, status, eventSummary, metadata)
+				step := core.SubagentStep{
+					ToolName: "agent_event",
+					Status:   status,
+					Summary:  eventSummary,
+				}
+				progressMessages = append(progressMessages, step)
+				emitSubagentProgressWithSteps(progress, role, model, progressCount, status, eventSummary, progressMessages, metadata)
 			}
 			// Other child events are intentionally drained here. The parent only
 			// exposes stable subagent lifecycle/progress updates, not every

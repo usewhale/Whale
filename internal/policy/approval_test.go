@@ -93,6 +93,87 @@ func TestApprovalMetadataIncludesShellRisk(t *testing.T) {
 	}
 }
 
+func TestApprovalKeysForDecisionUseExternalReadDirectoryScope(t *testing.T) {
+	decision := PolicyDecision{Permission: "external_directory", Pattern: "/repo/external", RequiresApproval: true}
+	calls := []core.ToolCall{
+		{Name: "read_file", Input: `{"file_path":"../external/a.go"}`},
+		{Name: "list_dir", Input: `{"path":"../external"}`},
+		{Name: "grep", Input: `{"path":"../external","pattern":"needle"}`},
+		{Name: "search_files", Input: `{"path":"../external","pattern":"a"}`},
+	}
+	for _, call := range calls {
+		if got, want := ApprovalKeysForDecision(call, decision), []string{"external_read:/repo/external"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s external read keys = %v, want %v", call.Name, got, want)
+		}
+	}
+
+	roots := ExternalReadApprovalRootsFromKeys([]string{"external_read:/repo/external"})
+	if !reflect.DeepEqual(roots, []string{"/repo/external"}) {
+		t.Fatalf("external read roots = %v", roots)
+	}
+}
+
+func TestApprovalKeysForDecisionPreserveReadRuleApprovalForExternalReads(t *testing.T) {
+	p := RulePolicy{Default: PermissionAllow, Rules: DefaultRules(), WorkspaceRoot: "/repo"}
+	call := core.ToolCall{Name: "read_file", Input: `{"file_path":"/outside/.env"}`}
+	decision := p.Decide(core.ToolSpec{Name: "read_file"}, call)
+	if !decision.RequiresApproval || decision.Permission != "external_directory" {
+		t.Fatalf("external .env decision = %+v, want external_directory approval with read requirement", decision)
+	}
+
+	keys := ApprovalKeysForDecision(call, decision)
+	want := []string{"external_read:/outside", `read_file|{"file_path":"/outside/.env"}`}
+	if !reflect.DeepEqual(keys, want) {
+		t.Fatalf("external .env keys = %v, want %v", keys, want)
+	}
+
+	cache := NewSessionApprovalCache()
+	cache.Grant("s", "external_read:/outside")
+	if cache.HasAll("s", keys) {
+		t.Fatal("external directory grant must not bypass the sensitive read approval key")
+	}
+	cache.Grant("s", `read_file|{"file_path":"/outside/.env"}`)
+	if !cache.HasAll("s", keys) {
+		t.Fatal("expected cache hit after both external directory and sensitive read keys are granted")
+	}
+}
+
+func TestExternalReadRootsForDecisionPreserveConfiguredAllowWithReadApproval(t *testing.T) {
+	rules := append(DefaultRules(), PermissionRule{Permission: "external_directory", Pattern: "/outside", Action: PermissionAllow})
+	p := RulePolicy{Default: PermissionAllow, Rules: rules, WorkspaceRoot: "/repo"}
+	call := core.ToolCall{Name: "read_file", Input: `{"file_path":"/outside/.env"}`}
+	decision := p.Decide(core.ToolSpec{Name: "read_file"}, call)
+	if !decision.RequiresApproval || decision.Permission != "read" {
+		t.Fatalf("external .env decision = %+v, want read approval with configured external allow", decision)
+	}
+
+	keys := ApprovalKeysForDecision(call, decision)
+	wantKeys := []string{`read_file|{"file_path":"/outside/.env"}`}
+	if !reflect.DeepEqual(keys, wantKeys) {
+		t.Fatalf("mixed approval keys = %v, want only read approval key %v", keys, wantKeys)
+	}
+
+	roots := ExternalReadApprovalRootsForDecision(call, decision)
+	if !reflect.DeepEqual(roots, []string{"/outside"}) {
+		t.Fatalf("external read roots = %v, want configured /outside root", roots)
+	}
+}
+
+func TestSessionApprovalCacheReusesExternalReadParentRoots(t *testing.T) {
+	cache := NewSessionApprovalCache()
+	cache.Grant("s", "external_read:/outside")
+
+	if !cache.Has("s", "external_read:/outside/sub/file.go") {
+		t.Fatal("expected parent external_read approval to cover descendant")
+	}
+	if cache.Has("s", "external_read:/outside-other/file.go") {
+		t.Fatal("external_read approval must not cover sibling paths")
+	}
+	if cache.Has("s", "external_read:/out") {
+		t.Fatal("external_read child approval must not imply parent approval")
+	}
+}
+
 func TestNormalizeShellApprovalCommand(t *testing.T) {
 	tests := map[string]string{
 		"go test ./...":                  "go test ./...",

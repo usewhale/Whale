@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/usewhale/whale/internal/core"
 )
 
 const (
@@ -127,7 +129,7 @@ func (m mcpDisplayInfo) focusDetail(text string) string {
 func mcpStartedText(toolName, text string) string {
 	info, ok := parseMCPDisplayInfo(toolName, text)
 	if !ok {
-		return "Running " + firstNonEmpty(toolCallDetail(text), toolName)
+		return "Running " + core.FirstNonEmpty(toolCallDetail(text), toolName)
 	}
 	lines := []string{"Calling " + info.label()}
 	lines = append(lines, mcpArgLines(info.Args, 3)...)
@@ -140,13 +142,13 @@ func mcpCompletedTitle(toolName, raw, previous string) string {
 		info, ok = parseMCPDisplayInfo(toolName, "")
 	}
 	if !ok {
-		return "Called " + firstNonEmpty(toolName, "MCP tool")
+		return "Called " + core.FirstNonEmpty(toolName, "MCP tool")
 	}
 	env := parseToolEnvelope(raw)
-	if server := strings.TrimSpace(asString(env.data["server"])); server != "" {
+	if server := strings.TrimSpace(core.AsString(env.data["server"])); server != "" {
 		info.Server = server
 	}
-	if tool := strings.TrimSpace(asString(env.data["tool"])); tool != "" {
+	if tool := strings.TrimSpace(core.AsString(env.data["tool"])); tool != "" {
 		info.Tool = tool
 	}
 	lines := []string{"Called " + info.label()}
@@ -163,7 +165,7 @@ func summarizeMCPResult(env toolResultEnvelope, successBySignal bool) (string, s
 	if duration != "" {
 		parts = append(parts, duration)
 	}
-	text := summarizeMCPOutput(asString(env.data["text"]))
+	text := summarizeMCPOutput(core.AsString(env.data["text"]))
 	if text == "" {
 		text = summarizeMCPStructuredContent(env.data["structured_content"])
 	}
@@ -233,7 +235,7 @@ func mcpArgLines(args map[string]any, max int) []string {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
-	out := make([]string, 0, minInt(max, len(keys)))
+	out := make([]string, 0, min(max, len(keys)))
 	for _, key := range keys {
 		value := asDisplayString(args[key])
 		if value == "" {

@@ -109,6 +109,7 @@ type model struct {
 		metadata   map[string]any
 		selected   int
 	}
+	resumeMenu     bool
 	sessionChoices []string
 	sessionIndex   int
 	userInput      struct {
@@ -408,70 +409,11 @@ func (m model) Init() tea.Cmd {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		// "Real" resize means we have already received at least one
-		// WindowSizeMsg this session and the new size differs from it.
-		// newModel seeds m.width/m.height with defaults (80x24), so a
-		// dimension comparison alone would misclassify the very first size
-		// event as a resize whenever the real terminal isn't exactly 80x24
-		// — and that would wipe the user's existing terminal scrollback on
-		// launch. The explicit "have we ever seen a size message" flag is
-		// the only reliable signal.
-		isRealResize := m.sizeMsgReceived &&
-			(msg.Width != m.width || msg.Height != m.height)
-		m.sizeMsgReceived = true
-		m.width = msg.Width
-		m.height = msg.Height
-		m.input.SetWidth(max(20, m.width-4))
-		var scrollbackReplayCmd tea.Cmd
-		if isRealResize && m.width > 0 && m.height > 0 {
-			// Bubble Tea's standard (inline) renderer positions the next frame
-			// using a stale lastLinesRendered counter that does not survive
-			// terminal-side reflow on resize, and during rapid resize / live
-			// streaming each frame can leak its previous body into scrollback.
-			// View() is called *before* any returned Cmd runs, so a
-			// tea.ClearScreen Cmd would fire too late. Synchronously reset the
-			// cursor, clear the visible region, AND clear scrollback so the
-			// upcoming View() lands cleanly.
-			fmt.Fprint(os.Stdout, "\x1b[H\x1b[2J\x1b[3J")
-			// We just wiped the scrollback that held the startup banner and
-			// the previously-flushed transcript. Reset the print gates so
-			// startupHeaderPrintCmd / replayNativeScrollbackCmd will re-emit
-			// the whole history into the fresh scrollback — even when the
-			// user is scrolled up or the viewport is frozen, because those
-			// states would otherwise short-circuit the normal flush path and
-			// leave history accessible only through PgUp.
-			if m.startupHeaderOnce != nil {
-				*m.startupHeaderOnce = false
-			}
-			m.startupHeaderPrinted = false
-			m.nativeScrollbackPrinted = 0
-			scrollbackReplayCmd = m.replayNativeScrollbackCmd()
-		}
-		headerCmd := m.startupHeaderPrintCmd()
-		m.refreshViewportContent()
-		return m, m.sequenceCmds(headerCmd, scrollbackReplayCmd)
+		return m.handleWindowSizeMsg(msg)
 	case svcMsg:
-		eventCmd, quit, direct := m.handleServiceEvents([]service.Event{service.Event(msg)})
-		if quit {
-			return m, m.sequenceCmds(tea.Quit)
-		}
-		if direct {
-			return m, m.sequenceCmds(eventCmd)
-		}
-		headerCmd := m.startupHeaderPrintCmd()
-		scrollbackCmd := m.flushNativeScrollbackCmd()
-		return m, m.sequenceCmds(eventCmd, headerCmd, scrollbackCmd, waitEventCmd(m.svc))
+		return m.handleServiceUpdate([]service.Event{service.Event(msg)})
 	case svcBatchMsg:
-		eventCmd, quit, direct := m.handleServiceEvents([]service.Event(msg))
-		if quit {
-			return m, m.sequenceCmds(tea.Quit)
-		}
-		if direct {
-			return m, m.sequenceCmds(eventCmd)
-		}
-		headerCmd := m.startupHeaderPrintCmd()
-		scrollbackCmd := m.flushNativeScrollbackCmd()
-		return m, m.sequenceCmds(eventCmd, headerCmd, scrollbackCmd, waitEventCmd(m.svc))
+		return m.handleServiceUpdate([]service.Event(msg))
 	case windowsDeferredEnterMsg:
 		return m, m.sequenceCmds(m.handleWindowsDeferredEnter(msg))
 	case windowsPendingEnterTailMsg:
@@ -514,34 +456,104 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshViewportContent()
 		return m, m.sequenceCmds()
 	case tea.KeyMsg:
-		if !msg.Paste && m.consumeMouseCSIFragment(msg) {
-			m.refreshViewportContent()
-			return m, m.sequenceCmds()
+		cmd, quit, handled := m.handleUpdateKeyMsg(msg)
+		if quit {
+			return m, m.sequenceCmds(tea.Quit)
 		}
-		preRoutedWindowsPaste := false
-		if m.shouldRouteWindowsPasteFallbackBeforeLayout(msg) {
-			preRoutedWindowsPaste = true
-			cmd, quit, handled := m.handleKeyMsg(msg)
-			if quit {
-				return m, m.sequenceCmds(tea.Quit)
-			}
-			if handled {
-				return m, m.sequenceCmds(cmd)
-			}
-		}
-		prevMainWidth, _ := m.layoutDims()
-		prevBodyHeight := m.viewportBodyHeight(prevMainWidth)
-		if !preRoutedWindowsPaste {
-			cmd, quit, handled := m.handleKeyMsg(msg)
-			if quit {
-				return m, m.sequenceCmds(tea.Quit)
-			}
-			if handled {
-				m.refreshViewportContentIfBodyHeightChanged(prevMainWidth, prevBodyHeight)
-				return m, m.sequenceCmds(cmd)
-			}
+		if handled {
+			return m, m.sequenceCmds(cmd)
 		}
 	}
+	return m.updateComposerInput(msg)
+}
+
+func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
+	// "Real" resize means we have already received at least one
+	// WindowSizeMsg this session and the new size differs from it.
+	// newModel seeds m.width/m.height with defaults (80x24), so a
+	// dimension comparison alone would misclassify the very first size
+	// event as a resize whenever the real terminal isn't exactly 80x24
+	// — and that would wipe the user's existing terminal scrollback on
+	// launch. The explicit "have we ever seen a size message" flag is
+	// the only reliable signal.
+	isRealResize := m.sizeMsgReceived &&
+		(msg.Width != m.width || msg.Height != m.height)
+	m.sizeMsgReceived = true
+	m.width = msg.Width
+	m.height = msg.Height
+	m.input.SetWidth(max(20, m.width-4))
+	var scrollbackReplayCmd tea.Cmd
+	if isRealResize && m.width > 0 && m.height > 0 {
+		// Bubble Tea's standard (inline) renderer positions the next frame
+		// using a stale lastLinesRendered counter that does not survive
+		// terminal-side reflow on resize, and during rapid resize / live
+		// streaming each frame can leak its previous body into scrollback.
+		// View() is called *before* any returned Cmd runs, so a
+		// tea.ClearScreen Cmd would fire too late. Synchronously reset the
+		// cursor, clear the visible region, AND clear scrollback so the
+		// upcoming View() lands cleanly.
+		fmt.Fprint(os.Stdout, "\x1b[H\x1b[2J\x1b[3J")
+		// We just wiped the scrollback that held the startup banner and
+		// the previously-flushed transcript. Reset the print gates so
+		// startupHeaderPrintCmd / replayNativeScrollbackCmd will re-emit
+		// the whole history into the fresh scrollback — even when the
+		// user is scrolled up or the viewport is frozen, because those
+		// states would otherwise short-circuit the normal flush path and
+		// leave history accessible only through PgUp.
+		if m.startupHeaderOnce != nil {
+			*m.startupHeaderOnce = false
+		}
+		m.startupHeaderPrinted = false
+		m.nativeScrollbackPrinted = 0
+		scrollbackReplayCmd = m.replayNativeScrollbackCmd()
+	}
+	headerCmd := m.startupHeaderPrintCmd()
+	m.refreshViewportContent()
+	return m, m.sequenceCmds(headerCmd, scrollbackReplayCmd)
+}
+
+func (m model) handleServiceUpdate(events []service.Event) (tea.Model, tea.Cmd) {
+	eventCmd, quit, direct := m.handleServiceEvents(events)
+	if quit {
+		return m, m.sequenceCmds(tea.Quit)
+	}
+	if direct {
+		return m, m.sequenceCmds(eventCmd)
+	}
+	headerCmd := m.startupHeaderPrintCmd()
+	scrollbackCmd := m.flushNativeScrollbackCmd()
+	return m, m.sequenceCmds(eventCmd, headerCmd, scrollbackCmd, waitEventCmd(m.svc))
+}
+
+func (m *model) handleUpdateKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
+	if !msg.Paste && m.consumeMouseCSIFragment(msg) {
+		m.refreshViewportContent()
+		return nil, false, true
+	}
+	preRoutedWindowsPaste := false
+	if m.shouldRouteWindowsPasteFallbackBeforeLayout(msg) {
+		preRoutedWindowsPaste = true
+		cmd, quit, handled := m.handleKeyMsg(msg)
+		if quit || handled {
+			return cmd, quit, handled
+		}
+	}
+	prevMainWidth, _ := m.layoutDims()
+	prevBodyHeight := m.viewportBodyHeight(prevMainWidth)
+	if !preRoutedWindowsPaste {
+		cmd, quit, handled := m.handleKeyMsg(msg)
+		if quit {
+			return cmd, true, handled
+		}
+		if handled {
+			m.refreshViewportContentIfBodyHeightChanged(prevMainWidth, prevBodyHeight)
+			return cmd, false, true
+		}
+	}
+	return nil, false, false
+}
+
+func (m model) updateComposerInput(msg tea.Msg) (tea.Model, tea.Cmd) {
 	prevMainWidth, _ := m.layoutDims()
 	prevBodyHeight := m.viewportBodyHeight(prevMainWidth)
 	prevInput := m.input.Value()

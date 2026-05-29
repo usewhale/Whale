@@ -956,6 +956,59 @@ func TestProfileStatsIncludesSubagentUsageFromDefaultLogForCustomDataDir(t *test
 	}
 }
 
+func TestProfileStatsSeparatesApprovalPromptsFromAuditEvents(t *testing.T) {
+	dir := t.TempDir()
+	sessionsDir := filepath.Join(dir, "sessions")
+	usagePath := filepath.Join(dir, "usage.jsonl")
+	parentID := "approval-parent"
+	childID := parentID + "--subagent-worker"
+
+	writeSessionMessages(t, sessionsDir, parentID, []core.Message{
+		{ID: "m-1", SessionID: parentID, Role: core.RoleUser, Text: "inspect approvals"},
+		{ID: "m-2", SessionID: parentID, Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "tc-1", Name: "shell_run"}}},
+	})
+	writeSessionMessages(t, sessionsDir, childID, []core.Message{
+		{ID: "m-1", SessionID: childID, Role: core.RoleUser, Text: "child"},
+	})
+	for i := 0; i < 5; i++ {
+		writeApprovalEvent(t, sessionsDir, parentID, "approval_required")
+	}
+	writeApprovalEventForToolCall(t, sessionsDir, parentID, "tc-dedupe", "approval_required", "agent")
+	writeApprovalEventForToolCall(t, sessionsDir, parentID, "tc-dedupe", "approval_prompt_shown", "service")
+	writeApprovalEvent(t, sessionsDir, parentID, "approval_allowed_once")
+	writeApprovalEventForToolCall(t, sessionsDir, parentID, "tc-dedupe", "approval_prompt_allowed_once", "service")
+	writeApprovalEventForToolCall(t, sessionsDir, parentID, "tc-dedupe", "approval_allowed_once", "agent")
+	writeApprovalEvent(t, sessionsDir, parentID, "approval_allowed_for_session")
+	writeApprovalEvent(t, sessionsDir, parentID, "approval_grant_persisted")
+	writeApprovalEvent(t, sessionsDir, parentID, "approval_denied")
+	writeApprovalEvent(t, sessionsDir, parentID, "approval_canceled")
+	for i := 0; i < 31; i++ {
+		writeApprovalEvent(t, sessionsDir, parentID, "approval_cached_allowed")
+	}
+	writeApprovalEvent(t, sessionsDir, childID, "approval_policy_denied")
+	writeApprovalEvent(t, sessionsDir, childID, "approval_mode_blocked")
+
+	stats := readProfileStats(sessionsDir, usagePath, 50)
+	if len(stats.Sessions) != 1 {
+		t.Fatalf("expected one main session, got %+v", stats.Sessions)
+	}
+	if stats.ApprovalPrompts != 6 || stats.ApprovalReused != 31 || stats.ApprovalAuditEvents != 47 {
+		t.Fatalf("approval prompt/audit totals were not separated: %+v", stats)
+	}
+	if stats.ApprovalAllowedOnce != 2 || stats.ApprovalAllowedForSession != 1 || stats.ApprovalDenied != 1 || stats.ApprovalCanceled != 1 || stats.ApprovalPolicyBlocks != 1 || stats.ApprovalModeBlocks != 1 {
+		t.Fatalf("unexpected approval decision/block totals: %+v", stats)
+	}
+
+	out := strings.Join(formatProfileStats(stats), "\n")
+	for _, want := range []string{
+		"- approvals: 6 prompts · 2 allow-once · 1 allow-session · 1 denied · 1 canceled · 31 reused/cached · 2 policy/mode blocks · 47 audit events",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected profile output to contain %q, got:\n%s", want, out)
+		}
+	}
+}
+
 func TestHandleLocalCommandFocusTogglesAndPersists(t *testing.T) {
 	dir := t.TempDir()
 	a := &App{cfg: Config{DataDir: dir, ViewMode: ViewModeDefault}}
@@ -2356,5 +2409,23 @@ func writeToolInputEvent(t *testing.T, sessionsDir, sessionID string, rec teleme
 	t.Helper()
 	if err := telemetry.AppendToolInputEvent(sessionsDir, rec, time.UnixMilli(rec.TS)); err != nil {
 		t.Fatalf("append tool input event for %s: %v", sessionID, err)
+	}
+}
+
+func writeApprovalEvent(t *testing.T, sessionsDir, sessionID, event string) {
+	t.Helper()
+	writeApprovalEventForToolCall(t, sessionsDir, sessionID, "", event, "")
+}
+
+func writeApprovalEventForToolCall(t *testing.T, sessionsDir, sessionID, toolCallID, event, source string) {
+	t.Helper()
+	if err := telemetry.AppendApprovalEvent(sessionsDir, telemetry.ApprovalEvent{
+		Session:    sessionID,
+		Event:      event,
+		Source:     source,
+		ToolCallID: toolCallID,
+		Tool:       "shell_run",
+	}, time.UnixMilli(1)); err != nil {
+		t.Fatalf("append approval event for %s: %v", sessionID, err)
 	}
 }

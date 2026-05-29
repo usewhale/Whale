@@ -11,6 +11,7 @@ import (
 	"github.com/usewhale/whale/internal/agent"
 	appcommands "github.com/usewhale/whale/internal/app/commands"
 	"github.com/usewhale/whale/internal/compact"
+	"github.com/usewhale/whale/internal/core"
 	whalemcp "github.com/usewhale/whale/internal/mcp"
 	"github.com/usewhale/whale/internal/plugins"
 	"github.com/usewhale/whale/internal/session"
@@ -62,7 +63,7 @@ func (a *App) buildStatus() string {
 		fmt.Sprintf("- permissions.default: %s", a.permissionPolicy.Default),
 		fmt.Sprintf("- model: %s", a.model),
 		fmt.Sprintf("- effort: %s", a.reasoningEffort),
-		fmt.Sprintf("- thinking: %s", onOff(a.thinkingEnabled)),
+		fmt.Sprintf("- thinking: %s", OnOff(a.thinkingEnabled)),
 	}
 	parts = append(parts, a.formatCurrentWorktreeStatusLines()...)
 	parts = append(parts, formatContextWindowStatus(a))
@@ -79,7 +80,7 @@ func (a *App) buildStatusLocalResult() *LocalResult {
 		{Label: "Permissions", Value: string(a.permissionPolicy.Default)},
 		{Label: "Model", Value: a.model, Tone: "info"},
 		{Label: "Effort", Value: a.reasoningEffort},
-		{Label: "Thinking", Value: onOff(a.thinkingEnabled)},
+		{Label: "Thinking", Value: OnOff(a.thinkingEnabled)},
 	}
 	if strings.TrimSpace(a.worktree.Name) != "" {
 		fields = append(fields,
@@ -436,7 +437,7 @@ func (a *App) SkillReport() skills.Report {
 				Source:        "plugin",
 				Status:        skills.AvailabilityReady,
 			}
-			if skillNameDisabled(skill.Name, a.cfg.SkillsDisabled) {
+			if core.SkillNameDisabled(skill.Name, a.cfg.SkillsDisabled) {
 				view.Status = skills.AvailabilityDisabled
 				view.Reason = "Disabled in config"
 				report.Disabled = append(report.Disabled, view)
@@ -528,7 +529,7 @@ func (a *App) buildSkillSyntheticPrompt(name, args string) (string, string, erro
 	skill, _, ok := skills.Find(roots, name)
 	if !ok && a.pluginManager != nil {
 		for _, candidate := range a.pluginManager.Skills() {
-			if candidate != nil && candidate.Name == name && !skillNameDisabled(name, a.cfg.SkillsDisabled) {
+			if candidate != nil && candidate.Name == name && !core.SkillNameDisabled(name, a.cfg.SkillsDisabled) {
 				cp := *candidate
 				skill = &cp
 				ok = true
@@ -567,7 +568,7 @@ func (a *App) buildSkillSyntheticPromptFromBinding(name, args string, binding Sk
 	}
 	roots := skills.DefaultRoots(a.workspaceRoot)
 	if strings.HasPrefix(bindingPath, "plugin://") && a.pluginManager != nil {
-		if skillNameDisabled(name, a.cfg.SkillsDisabled) {
+		if core.SkillNameDisabled(name, a.cfg.SkillsDisabled) {
 			return "", "", fmt.Errorf("skill disabled: %s", name)
 		}
 		for _, candidate := range a.pluginManager.Skills() {
@@ -829,16 +830,6 @@ func reportHasSkill(report skills.Report, name string) bool {
 	name = strings.ToLower(strings.TrimSpace(name))
 	for _, view := range allReportSkills(report) {
 		if strings.ToLower(view.Name) == name {
-			return true
-		}
-	}
-	return false
-}
-
-func skillNameDisabled(name string, disabled []string) bool {
-	name = strings.ToLower(strings.TrimSpace(name))
-	for _, candidate := range disabled {
-		if strings.ToLower(strings.TrimSpace(candidate)) == name {
 			return true
 		}
 	}

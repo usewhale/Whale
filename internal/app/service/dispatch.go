@@ -45,6 +45,8 @@ func (s *Service) Dispatch(in Intent) {
 		s.emit(Event{Kind: EventInfo, Text: res.Message})
 		if res.Resumed {
 			s.emitSessionHydrated()
+		} else {
+			s.emitSessionChoices()
 		}
 	case IntentShutdown:
 		s.cancelMu.Lock()
@@ -66,7 +68,7 @@ func (s *Service) Dispatch(in Intent) {
 		if strings.EqualFold(strings.TrimSpace(in.Thinking), "off") {
 			s.app.SetThinkingEnabled(false)
 		}
-		s.emit(Event{Kind: EventInfo, Text: fmt.Sprintf("model set: %s  effort: %s  thinking: %s", s.app.Model(), s.app.ReasoningEffort(), onOff(s.app.ThinkingEnabled()))})
+		s.emit(Event{Kind: EventInfo, Text: fmt.Sprintf("model set: %s  effort: %s  thinking: %s", s.app.Model(), s.app.ReasoningEffort(), app.OnOff(s.app.ThinkingEnabled()))})
 		s.emit(Event{Kind: EventTurnDone})
 	case IntentSetApprovalMode:
 		enabled := in.ApprovalMode == "auto_accept"
@@ -234,7 +236,7 @@ func (s *Service) handleLocalSubmit(line string) {
 			CurrentModel:    s.app.Model(),
 			CurrentEffort:   s.app.ReasoningEffort(),
 			ThinkingChoices: []string{"on", "off"},
-			CurrentThinking: onOff(s.app.ThinkingEnabled()),
+			CurrentThinking: app.OnOff(s.app.ThinkingEnabled()),
 		})
 		return
 	}
@@ -328,16 +330,48 @@ func (s *Service) handleLocalSubmit(line string) {
 }
 
 func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.SkillBinding) {
-	line = strings.TrimSpace(line)
-	if line == "" {
+	state := submitState{
+		line:         strings.TrimSpace(line),
+		hiddenInput:  hiddenInput,
+		turnOptions:  agent.RunOptions{HiddenInput: hiddenInput},
+		skillBinding: skillBinding,
+	}
+	if state.line == "" {
 		return
 	}
-	skipHooks := false
-	skipSkillInjection := false
-	turnOptions := agent.RunOptions{HiddenInput: hiddenInput}
-	line = appcommands.ExpandUniqueSlashPrefix(line, app.CommandsHelp, "/mcp")
-	prevSessionID := s.app.SessionID()
-	if line == "/model" {
+	state.line = appcommands.ExpandUniqueSlashPrefix(state.line, app.CommandsHelp, "/mcp")
+	state.prevSessionID = s.app.SessionID()
+	if s.handleSubmitMenuCommand(&state) {
+		return
+	}
+	if s.handleSubmitModeCommand(&state) {
+		return
+	}
+	if s.handleSubmitSlashCommand(&state) {
+		return
+	}
+	if s.handleSubmitLocalCommand(&state) {
+		return
+	}
+	if s.applySubmitHooks(&state) {
+		return
+	}
+	s.startSubmitTurn(&state)
+}
+
+type submitState struct {
+	line               string
+	hiddenInput        bool
+	prevSessionID      string
+	skipHooks          bool
+	skipSkillInjection bool
+	turnOptions        agent.RunOptions
+	skillBinding       *app.SkillBinding
+}
+
+func (s *Service) handleSubmitMenuCommand(state *submitState) bool {
+	switch state.line {
+	case "/model":
 		s.emit(Event{
 			Kind:            EventModelPicker,
 			ModelChoices:    s.app.SupportedModels(),
@@ -345,85 +379,89 @@ func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.
 			CurrentModel:    s.app.Model(),
 			CurrentEffort:   s.app.ReasoningEffort(),
 			ThinkingChoices: []string{"on", "off"},
-			CurrentThinking: onOff(s.app.ThinkingEnabled()),
+			CurrentThinking: app.OnOff(s.app.ThinkingEnabled()),
 		})
-		return
-	}
-	if line == "/permissions" {
+		return true
+	case "/permissions":
 		s.emit(Event{Kind: EventPermissionsMenu, AutoAccept: s.app.AutoAcceptPermissions(), AutoAcceptKnown: true})
-		return
-	}
-	if line == "/focus" {
+		return true
+	case "/focus":
 		mode, err := s.app.ToggleViewMode()
 		if err != nil {
 			s.emit(Event{Kind: EventError, Text: err.Error()})
 			s.emit(Event{Kind: EventTurnDone})
-			return
+			return true
 		}
 		msg := app.ViewModeToggleMessage(mode)
 		s.emit(Event{Kind: EventViewModeChanged, ViewMode: mode, Text: msg})
 		s.emit(Event{Kind: EventTurnDone, LastResponse: msg})
-		return
-	}
-	if line == "/skills" {
+		return true
+	case "/skills":
 		s.emit(Event{Kind: EventSkillsMenu})
-		return
-	}
-	if line == "/plugins" {
+		return true
+	case "/plugins":
 		s.emit(Event{Kind: EventPluginsManager, Plugins: s.PluginsForManager()})
-		return
-	}
-	if line == "/review" {
+		return true
+	case "/review":
 		s.emit(Event{Kind: EventReviewMenu})
-		return
+		return true
+	default:
+		return false
 	}
-	if prompt, ok := appcommands.PlanPromptFromSlash(line); ok {
+}
+
+func (s *Service) handleSubmitModeCommand(state *submitState) bool {
+	if prompt, ok := appcommands.PlanPromptFromSlash(state.line); ok {
 		out, err := s.app.SetMode(session.ModePlan)
 		if err != nil {
 			s.emit(Event{Kind: EventError, Text: err.Error()})
 			s.emit(Event{Kind: EventTurnDone})
-			return
+			return true
 		}
 		s.emit(Event{Kind: EventInfo, Text: out})
-		line = prompt
-		hiddenInput = false
+		state.line = prompt
+		state.hiddenInput = false
 	}
-	if prompt, ok := appcommands.AskPromptFromSlash(line); ok {
+	if prompt, ok := appcommands.AskPromptFromSlash(state.line); ok {
 		out, err := s.app.SetMode(session.ModeAsk)
 		if err != nil {
 			s.emit(Event{Kind: EventError, Text: err.Error()})
 			s.emit(Event{Kind: EventTurnDone})
-			return
+			return true
 		}
 		s.emit(Event{Kind: EventInfo, Text: out})
-		line = prompt
-		hiddenInput = false
+		state.line = prompt
+		state.hiddenInput = false
 	}
-	if s.app.IsResumeMenu(line) {
+	return false
+}
+
+func (s *Service) handleSubmitSlashCommand(state *submitState) bool {
+	if s.app.IsResumeMenu(state.line) {
 		s.emitSessionChoices()
 		s.emit(Event{Kind: EventTurnDone})
-		return
+		return true
 	}
-	if strings.HasPrefix(line, "/model ") {
+	if strings.HasPrefix(state.line, "/model ") {
 		s.emit(Event{Kind: EventError, Text: "usage: /model"})
 		s.emit(Event{Kind: EventTurnDone})
-		return
+		return true
 	}
-	if question, ok := btwQuestionFromLine(line); ok {
+	if question, ok := btwQuestionFromLine(state.line); ok {
 		if question == "" {
 			s.emit(Event{Kind: EventError, Text: "Usage: /btw <your question>"})
 			s.emit(Event{Kind: EventTurnDone})
-			return
+			return true
 		}
 		s.runSideQuestion(question)
 		s.emit(Event{Kind: EventTurnDone})
-		return
+		return true
 	}
-	cmd, err := s.app.ExecuteSlash(line)
+	cmd, err := s.app.ExecuteSlash(state.line)
 	if err != nil {
 		s.emit(Event{Kind: EventError, Text: err.Error()})
 		s.emit(Event{Kind: EventTurnDone})
-		return
+		return true
 	}
 	if cmd.Handled {
 		if cmd.ClearScreen {
@@ -432,7 +470,7 @@ func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.
 		if cmd.ShouldExit {
 			s.requestExit()
 		}
-		if s.app.SessionID() != prevSessionID {
+		if s.app.SessionID() != state.prevSessionID {
 			s.emitSessionHydrated()
 		}
 		// Emit Info after session hydration so the text isn't
@@ -442,23 +480,27 @@ func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.
 		}
 		if cmd.Turn == nil {
 			s.emit(Event{Kind: EventTurnDone, LastResponse: cmd.Text})
-			return
+			return true
 		}
-		line = cmd.Turn.Input
-		hiddenInput = cmd.Turn.Hidden
-		turnOptions = agent.RunOptions{
+		state.line = cmd.Turn.Input
+		state.hiddenInput = cmd.Turn.Hidden
+		state.turnOptions = agent.RunOptions{
 			HiddenInput:        cmd.Turn.Hidden,
 			ReadOnly:           cmd.Turn.ReadOnly,
 			ShellAllowPrefixes: append([]string(nil), cmd.Turn.ShellAllowPrefixes...),
 		}
-		skipHooks = cmd.Turn.SkipUserPromptHooks
-		skipSkillInjection = cmd.Turn.SkipSkillInjection
+		state.skipHooks = cmd.Turn.SkipUserPromptHooks
+		state.skipSkillInjection = cmd.Turn.SkipSkillInjection
 	}
-	cmd, err = s.app.ExecuteLocalCommand(line)
+	return false
+}
+
+func (s *Service) handleSubmitLocalCommand(state *submitState) bool {
+	cmd, err := s.app.ExecuteLocalCommand(state.line)
 	if err != nil {
 		s.emit(Event{Kind: EventError, Text: err.Error()})
 		s.emit(Event{Kind: EventTurnDone})
-		return
+		return true
 	}
 	if cmd.Handled {
 		if cmd.Text != "" {
@@ -466,42 +508,51 @@ func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.
 		}
 		if cmd.Turn == nil {
 			s.emit(Event{Kind: EventTurnDone, LastResponse: cmd.Text})
-			return
+			return true
 		}
-		line = cmd.Turn.Input
-		hiddenInput = cmd.Turn.Hidden
-		turnOptions = agent.RunOptions{
+		state.line = cmd.Turn.Input
+		state.hiddenInput = cmd.Turn.Hidden
+		state.turnOptions = agent.RunOptions{
 			HiddenInput:        cmd.Turn.Hidden,
 			ReadOnly:           cmd.Turn.ReadOnly,
 			ShellAllowPrefixes: append([]string(nil), cmd.Turn.ShellAllowPrefixes...),
 		}
-		skipHooks = cmd.Turn.SkipUserPromptHooks
-		skipSkillInjection = cmd.Turn.SkipSkillInjection
+		state.skipHooks = cmd.Turn.SkipUserPromptHooks
+		state.skipSkillInjection = cmd.Turn.SkipSkillInjection
 	}
-	if !cmd.Handled && appcommands.LooksLikeSlashCommand(line) {
-		s.emit(Event{Kind: EventError, Text: fmt.Sprintf("• Unrecognized command %q. Type \"/\" for a list of supported commands.", line)})
+	if !cmd.Handled && appcommands.LooksLikeSlashCommand(state.line) {
+		s.emit(Event{Kind: EventError, Text: fmt.Sprintf("• Unrecognized command %q. Type \"/\" for a list of supported commands.", state.line)})
 		s.emit(Event{Kind: EventTurnDone})
+		return true
+	}
+	return false
+}
+
+func (s *Service) applySubmitHooks(state *submitState) bool {
+	if state.skipHooks {
+		return false
+	}
+	blocked, out, updated := s.app.RunUserPromptSubmitHook(state.line)
+	state.line = updated
+	if out != "" {
+		s.emit(Event{Kind: EventInfo, Text: out})
+	}
+	if blocked {
+		if out == "" {
+			out = "blocked by UserPromptSubmit hook"
+		}
+		s.emit(Event{Kind: EventTurnDone, LastResponse: out})
+		return true
+	}
+	return false
+}
+
+func (s *Service) startSubmitTurn(state *submitState) {
+	if state.hiddenInput || state.skipSkillInjection {
+		s.goTracked(func() { s.runTurnWithOptions(state.line, state.turnOptions) })
 		return
 	}
-	if !skipHooks {
-		blocked, out, updated := s.app.RunUserPromptSubmitHook(line)
-		line = updated
-		if out != "" {
-			s.emit(Event{Kind: EventInfo, Text: out})
-		}
-		if blocked {
-			if out == "" {
-				out = "blocked by UserPromptSubmit hook"
-			}
-			s.emit(Event{Kind: EventTurnDone, LastResponse: out})
-			return
-		}
-	}
-	if hiddenInput || skipSkillInjection {
-		s.goTracked(func() { s.runTurnWithOptions(line, turnOptions) })
-		return
-	}
-	skillMention, skillOut, skillSynthetic, err := s.app.BuildSkillMentionSyntheticPromptWithBinding(line, skillBinding)
+	skillMention, skillOut, skillSynthetic, err := s.app.BuildSkillMentionSyntheticPromptWithBinding(state.line, state.skillBinding)
 	if err != nil {
 		s.emit(Event{Kind: EventError, Text: err.Error()})
 		s.emit(Event{Kind: EventTurnDone})
@@ -511,10 +562,10 @@ func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.
 		if skillOut != "" {
 			s.emit(Event{Kind: EventSkillLoaded, Text: skillOut})
 		}
-		s.goTracked(func() { s.runInjectedTurn(line, skillSynthetic) })
+		s.goTracked(func() { s.runInjectedTurn(state.line, skillSynthetic) })
 		return
 	}
-	s.goTracked(func() { s.runTurn(line, hiddenInput) })
+	s.goTracked(func() { s.runTurn(state.line, state.hiddenInput) })
 }
 
 func (s *Service) emitSessionHydrated() {
@@ -568,4 +619,11 @@ func btwQuestionFromLine(line string) (string, bool) {
 		return "", false
 	}
 	return strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "/btw")), true
+}
+
+func autoAcceptMessage(enabled bool) string {
+	if enabled {
+		return "Session auto-accept enabled"
+	}
+	return "Session auto-accept disabled"
 }

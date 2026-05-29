@@ -8,9 +8,23 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/usewhale/whale/internal/core"
 )
 
 const ApprovalEventsSuffix = ".approval_events.jsonl"
+
+type ApprovalEventClass string
+
+const (
+	ApprovalEventClassUnknown     ApprovalEventClass = "unknown"
+	ApprovalEventClassPromptShown ApprovalEventClass = "prompt_shown"
+	ApprovalEventClassDecision    ApprovalEventClass = "decision"
+	ApprovalEventClassReused      ApprovalEventClass = "reused"
+	ApprovalEventClassAudit       ApprovalEventClass = "audit"
+	ApprovalEventClassPolicyBlock ApprovalEventClass = "policy_block"
+	ApprovalEventClassModeBlock   ApprovalEventClass = "mode_block"
+)
 
 type ApprovalEvent struct {
 	TS                 int64    `json:"ts"`
@@ -30,8 +44,43 @@ type ApprovalEvent struct {
 	Scope              string   `json:"scope,omitempty"`
 }
 
+func ClassifyApprovalEvent(event string) ApprovalEventClass {
+	switch strings.TrimSpace(event) {
+	case "approval_required", "approval_prompt_shown":
+		return ApprovalEventClassPromptShown
+	case "approval_allowed_once", "approval_allowed_for_session",
+		"approval_denied", "approval_canceled",
+		"approval_prompt_allowed_once", "approval_prompt_allowed_for_session",
+		"approval_prompt_denied", "approval_prompt_canceled":
+		return ApprovalEventClassDecision
+	case "approval_cached_allowed", "approval_prompt_cached_allowed":
+		return ApprovalEventClassReused
+	case "approval_grant_persisted":
+		return ApprovalEventClassAudit
+	case "approval_policy_denied":
+		return ApprovalEventClassPolicyBlock
+	case "approval_mode_blocked":
+		return ApprovalEventClassModeBlock
+	default:
+		return ApprovalEventClassUnknown
+	}
+}
+
+func ApprovalEventCountsAsPrompt(event string) bool {
+	return ClassifyApprovalEvent(event) == ApprovalEventClassPromptShown
+}
+
+func ApprovalEventIsUserVisible(event string) bool {
+	switch ClassifyApprovalEvent(event) {
+	case ApprovalEventClassPromptShown, ApprovalEventClassDecision, ApprovalEventClassPolicyBlock, ApprovalEventClassModeBlock:
+		return true
+	default:
+		return false
+	}
+}
+
 func ApprovalEventsPath(sessionsDir, sessionID string) string {
-	return filepath.Join(strings.TrimSpace(sessionsDir), sanitizeSessionID(sessionID)+ApprovalEventsSuffix)
+	return filepath.Join(strings.TrimSpace(sessionsDir), core.SanitizeSessionID(sessionID)+ApprovalEventsSuffix)
 }
 
 func AppendApprovalEvent(sessionsDir string, rec ApprovalEvent, now time.Time) error {

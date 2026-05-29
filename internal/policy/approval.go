@@ -75,11 +75,39 @@ func (c *SessionApprovalCache) HasAll(sessionID string, keys []string) bool {
 		return false
 	}
 	for _, key := range keys {
-		if strings.TrimSpace(key) == "" || !bySession[key] {
+		if strings.TrimSpace(key) == "" || !approvalKeyGranted(bySession, key) {
 			return false
 		}
 	}
 	return true
+}
+
+func approvalKeyGranted(granted map[string]bool, key string) bool {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return false
+	}
+	if granted[key] {
+		return true
+	}
+	root, ok := strings.CutPrefix(key, "external_read:")
+	if !ok {
+		return false
+	}
+	target := filepath.Clean(filepath.FromSlash(root))
+	for grantedKey, allowed := range granted {
+		if !allowed {
+			continue
+		}
+		grantedRoot, ok := strings.CutPrefix(strings.TrimSpace(grantedKey), "external_read:")
+		if !ok {
+			continue
+		}
+		if pathInsideOrFalse(target, filepath.Clean(filepath.FromSlash(grantedRoot))) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *SessionApprovalCache) Grant(sessionID, key string) {
@@ -177,6 +205,62 @@ func ApprovalKeys(call core.ToolCall) []string {
 		}
 	}
 	return []string{base + "|" + strings.TrimSpace(call.Input)}
+}
+
+func ApprovalKeysForDecision(call core.ToolCall, decision PolicyDecision) []string {
+	if decision.Permission == "external_directory" && strings.TrimSpace(decision.Pattern) != "" && readOnlyFilesystemTool(call.Name) {
+		keys := []string{externalReadApprovalKey(decision.Pattern)}
+		if decisionRequiresNonExternalApproval(decision) {
+			keys = append(keys, ApprovalKeys(call)...)
+		}
+		return compactApprovalKeys(keys)
+	}
+	return ApprovalKeys(call)
+}
+
+func decisionRequiresNonExternalApproval(decision PolicyDecision) bool {
+	for _, req := range decision.ApprovalRequirements {
+		if strings.TrimSpace(req.Permission) != "" && req.Permission != "external_directory" {
+			return true
+		}
+	}
+	return false
+}
+
+func ExternalReadApprovalRootsFromKeys(keys []string) []string {
+	var roots []string
+	for _, key := range compactApprovalKeys(keys) {
+		if root, ok := strings.CutPrefix(key, "external_read:"); ok && strings.TrimSpace(root) != "" {
+			roots = append(roots, filepath.Clean(filepath.FromSlash(root)))
+		}
+	}
+	return roots
+}
+
+func ExternalReadApprovalRootsForDecision(call core.ToolCall, decision PolicyDecision) []string {
+	if !readOnlyFilesystemTool(call.Name) {
+		return nil
+	}
+	roots := ExternalReadApprovalRootsFromKeys(ApprovalKeysForDecision(call, decision))
+	for _, req := range decision.AllowedRequirements {
+		if req.Permission == "external_directory" && strings.TrimSpace(req.Pattern) != "" {
+			roots = append(roots, filepath.Clean(req.Pattern))
+		}
+	}
+	return uniqueStrings(roots)
+}
+
+func readOnlyFilesystemTool(name string) bool {
+	switch name {
+	case "read_file", "list_dir", "grep", "search_files":
+		return true
+	default:
+		return false
+	}
+}
+
+func externalReadApprovalKey(path string) string {
+	return "external_read:" + filepath.ToSlash(filepath.Clean(strings.TrimSpace(path)))
 }
 
 func memoryWritePayloadHash(body map[string]any) string {

@@ -28,6 +28,7 @@ type focusToolSummaryProvider interface {
 }
 
 var focusToolSummaryProviders = []focusToolSummaryProvider{
+	focusModeHintSummaryProvider{},
 	focusShellSummaryProvider{},
 	focusMCPSummaryProvider{},
 	focusExploreSummaryProvider{},
@@ -60,7 +61,8 @@ type focusShellSummaryProvider struct{}
 func (focusShellSummaryProvider) Match(input focusToolSummaryInput) bool {
 	return focusToolKindFromName(input.ToolName) == "shell" ||
 		strings.HasPrefix(input.Text, "Running shell:") ||
-		strings.HasPrefix(input.Text, "Ran shell:")
+		strings.HasPrefix(input.Text, "Ran shell:") ||
+		strings.HasPrefix(input.Text, "Command failed")
 }
 
 func (focusShellSummaryProvider) Summarize(input focusToolSummaryInput) focusToolSummaryItem {
@@ -74,6 +76,16 @@ func (focusShellSummaryProvider) Summarize(input focusToolSummaryInput) focusToo
 type focusExploreSummaryProvider struct{}
 
 type focusMCPSummaryProvider struct{}
+
+type focusModeHintSummaryProvider struct{}
+
+func (focusModeHintSummaryProvider) Match(input focusToolSummaryInput) bool {
+	return input.Role == "result_mode_hint" || input.Role == "shell_result_mode_hint"
+}
+
+func (focusModeHintSummaryProvider) Summarize(input focusToolSummaryInput) focusToolSummaryItem {
+	return focusToolSummaryItem{Kind: "mode", Detail: focusSemanticResultDetail(input)}
+}
 
 func (focusMCPSummaryProvider) Match(input focusToolSummaryInput) bool {
 	return isMCPDisplayTool(input.ToolName)
@@ -111,6 +123,9 @@ func (focusExploreSummaryProvider) Summarize(input focusToolSummaryInput) focusT
 	if kind != "read" && kind != "web" && kind != "search" && kind != "list" {
 		kind = focusExploreKindFromAction(focusActionLine(input.Text))
 	}
+	if detail := focusSemanticResultDetail(input); detail != "" {
+		return focusToolSummaryItem{Kind: kind, Detail: detail}
+	}
 	return focusToolSummaryItem{Kind: kind, Detail: focusStandardDetail(input)}
 }
 
@@ -127,6 +142,9 @@ func (focusEditSummaryProvider) Match(input focusToolSummaryInput) bool {
 }
 
 func (focusEditSummaryProvider) Summarize(input focusToolSummaryInput) focusToolSummaryItem {
+	if detail := focusSemanticResultDetail(input); detail != "" {
+		return focusToolSummaryItem{Kind: "edit", Detail: detail}
+	}
 	return focusToolSummaryItem{Kind: "edit", Detail: focusEditDetail(input)}
 }
 
@@ -168,6 +186,9 @@ func (focusSimpleSummaryProvider) Summarize(input focusToolSummaryInput) focusTo
 }
 
 func focusStandardDetail(input focusToolSummaryInput) string {
+	if detail := focusSemanticResultDetail(input); detail != "" {
+		return detail
+	}
 	if line := focusActionDetail(input.Text); line != "" {
 		return truncateFocusToolDetail(line)
 	}
@@ -283,6 +304,12 @@ func focusShellDisplayCommand(text string) string {
 
 func focusShellRawCommand(text string) string {
 	text = strings.TrimSpace(text)
+	if strings.HasPrefix(text, "Command failed") {
+		first := strings.TrimSpace(strings.SplitN(text, "\n", 2)[0])
+		if _, after, ok := strings.Cut(first, ":"); ok {
+			return strings.TrimSpace(after)
+		}
+	}
 	for _, prefix := range []string{"Running ", "Ran "} {
 		if after, ok := strings.CutPrefix(text, prefix); ok {
 			command := strings.TrimSpace(after)
@@ -290,6 +317,41 @@ func focusShellRawCommand(text string) string {
 				command = strings.TrimSpace(afterShell)
 			}
 			return command
+		}
+	}
+	return ""
+}
+
+func focusSemanticResultDetail(input focusToolSummaryInput) string {
+	switch input.Role {
+	case "result_blocked", "shell_result_blocked", "result_mode_hint", "shell_result_mode_hint", "result_http_error", "shell_result_http_error", "result_usage_hint", "shell_result_usage_hint":
+	default:
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(input.Text), "\n")
+	start := 1
+	if len(lines) == 1 {
+		start = 0
+	}
+	for i := start; i < len(lines); i++ {
+		line := strings.TrimSpace(xansi.Strip(lines[i]))
+		switch {
+		case strings.HasPrefix(line, "Permission required"):
+			return truncateFocusToolDetail(line)
+		case strings.HasPrefix(line, "Access blocked"), strings.HasPrefix(line, "Outside workspace"):
+			return truncateFocusToolDetail(line)
+		case strings.HasPrefix(line, "Path is a directory"):
+			return truncateFocusToolDetail(line)
+		case strings.HasPrefix(line, "Ask mode"), strings.HasPrefix(line, "Plan mode"), strings.HasPrefix(line, "Current mode"):
+			return truncateFocusToolDetail(line)
+		case strings.HasPrefix(line, "HTTP "):
+			url := focusActionDetail(input.Text)
+			if url != "" {
+				return truncateFocusToolDetail(line + ": " + url)
+			}
+			return truncateFocusToolDetail(line)
+		case strings.HasPrefix(line, "Invalid tool input"):
+			return truncateFocusToolDetail(line)
 		}
 	}
 	return ""
@@ -334,6 +396,8 @@ func focusToolKindFromName(toolName string) string {
 		return "plan"
 	case "todo_add", "todo_list", "todo_update", "todo_remove", "todo_clear_done":
 		return "todo"
+	case "mode":
+		return "mode"
 	}
 	name = strings.ToLower(name)
 	switch {

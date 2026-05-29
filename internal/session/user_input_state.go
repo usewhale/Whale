@@ -20,7 +20,7 @@ type UserInputState struct {
 }
 
 func userInputStatePath(sessionsDir, sessionID string) string {
-	return filepath.Join(sessionsDir, sanitizeSessionID(sessionID)+".user_input.json")
+	return filepath.Join(sessionsDir, core.SanitizeSessionID(sessionID)+".user_input.json")
 }
 
 func LoadUserInputState(sessionsDir, sessionID string) (UserInputState, error) {

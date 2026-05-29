@@ -88,7 +88,7 @@ func TestAgentE2ENewToolsFlow(t *testing.T) {
 		agent.WithSessionsDir(sessionsDir),
 	)
 
-	if _, err := a.Run(context.Background(), "s-e2e-tools", "run"); err != nil {
+	if _, err := a.RunSession(context.Background(), "s-e2e-tools", "run"); err != nil {
 		t.Fatalf("run1 failed: %v", err)
 	}
 	msgs, err := store.List(context.Background(), "s-e2e-tools")
@@ -100,10 +100,10 @@ func TestAgentE2ENewToolsFlow(t *testing.T) {
 		t.Fatalf("failed to capture task_id from shell_run result")
 	}
 
-	if _, err := a.Run(context.Background(), "s-e2e-tools", "wait"); err != nil {
+	if _, err := a.RunSession(context.Background(), "s-e2e-tools", "wait"); err != nil {
 		t.Fatalf("run2 failed: %v", err)
 	}
-	if _, err := a.Run(context.Background(), "s-e2e-tools", "finish"); err != nil {
+	if _, err := a.RunSession(context.Background(), "s-e2e-tools", "finish"); err != nil {
 		t.Fatalf("run3 failed: %v", err)
 	}
 

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/shellsafe"
 )
 
@@ -698,7 +699,7 @@ func autoAllowShellCommandHasUnsafeArgs(argv []string) bool {
 			return true
 		}
 	}
-	if (argvHasPrefix(argv, "npx jest") || argvHasPrefix(argv, "npx vitest") || argvHasPrefix(argv, "npx vitest run")) && containsArg(argv, "-u") {
+	if (argvHasPrefix(argv, "npx jest") || argvHasPrefix(argv, "npx vitest") || argvHasPrefix(argv, "npx vitest run")) && core.ContainsArg(argv, "-u") {
 		return true
 	}
 	return false
@@ -827,15 +828,6 @@ func argvHasPrefix(argv []string, prefix string) bool {
 		}
 	}
 	return true
-}
-
-func containsArg(argv []string, want string) bool {
-	for _, got := range argv {
-		if got == want {
-			return true
-		}
-	}
-	return false
 }
 
 func sedPrintRangeReadOnly(argv []string) bool {

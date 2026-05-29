@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -90,6 +91,176 @@ func TestRulePolicyExternalDirectory(t *testing.T) {
 		if !got.Allow || !got.RequiresApproval || got.MatchedRule != "external_directory:*=ask" {
 			t.Fatalf("external dir decision for %q = %+v, want external_directory approval", command, got)
 		}
+	}
+}
+
+func TestRulePolicyExternalDirectoryForReadOnlyFileTools(t *testing.T) {
+	home, err := os.MkdirTemp(".", "whale-ext-read-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, err = filepath.Abs(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(home) })
+
+	root := filepath.Join(home, "repo")
+	external := filepath.Join(home, "external")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(external, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	p := RulePolicy{Default: PermissionAllow, Rules: DefaultRules(), WorkspaceRoot: root}
+	cases := []core.ToolCall{
+		{Name: "read_file", Input: `{"file_path":"../external/README.md"}`},
+		{Name: "list_dir", Input: `{"path":"../external"}`},
+		{Name: "grep", Input: `{"path":"../external","pattern":"needle"}`},
+		{Name: "search_files", Input: `{"path":"../external","pattern":"README"}`},
+	}
+	for _, call := range cases {
+		got := p.Decide(core.ToolSpec{Name: call.Name}, call)
+		if !got.Allow || !got.RequiresApproval || got.Permission != "external_directory" || got.MatchedRule != "external_directory:*=ask" {
+			t.Fatalf("%s external read decision = %+v, want external_directory approval", call.Name, got)
+		}
+	}
+
+	inside := p.Decide(core.ToolSpec{Name: "read_file"}, core.ToolCall{Name: "read_file", Input: `{"file_path":"README.md"}`})
+	if !inside.Allow || inside.RequiresApproval {
+		t.Fatalf("workspace read should not require external approval: %+v", inside)
+	}
+}
+
+func TestRulePolicyExternalReadAllowsDiscoveredGlobalSkillReferences(t *testing.T) {
+	workspace := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	skillDir := filepath.Join(home, ".whale", "skills", "global-skill")
+	refDir := filepath.Join(skillDir, "references")
+	if err := os.MkdirAll(refDir, 0o755); err != nil {
+		t.Fatalf("mkdir skill reference dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: global-skill\ndescription: Global test skill.\n---\n\n# Global Skill\n"), 0o644); err != nil {
+		t.Fatalf("write skill: %v", err)
+	}
+	refPath := filepath.Join(refDir, "guide.md")
+	if err := os.WriteFile(refPath, []byte("reference marker\n"), 0o644); err != nil {
+		t.Fatalf("write reference: %v", err)
+	}
+
+	p := RulePolicy{Default: PermissionAllow, Rules: DefaultRules(), WorkspaceRoot: workspace}
+	cases := []core.ToolCall{
+		{Name: "read_file", Input: fmt.Sprintf(`{"file_path":%q}`, refPath)},
+		{Name: "list_dir", Input: fmt.Sprintf(`{"path":%q}`, refDir)},
+		{Name: "grep", Input: fmt.Sprintf(`{"path":%q,"pattern":"reference marker"}`, skillDir)},
+		{Name: "search_files", Input: fmt.Sprintf(`{"path":%q,"pattern":"guide"}`, skillDir)},
+	}
+	for _, call := range cases {
+		got := p.Decide(core.ToolSpec{Name: call.Name}, call)
+		if !got.Allow || got.RequiresApproval || got.Permission == "external_directory" {
+			t.Fatalf("%s skill reference decision = %+v, want direct allow without external_directory approval", call.Name, got)
+		}
+	}
+
+	outside := filepath.Join(home, "outside", "guide.md")
+	got := p.Decide(core.ToolSpec{Name: "read_file"}, core.ToolCall{Name: "read_file", Input: fmt.Sprintf(`{"file_path":%q}`, outside)})
+	if !got.Allow || !got.RequiresApproval || got.Permission != "external_directory" {
+		t.Fatalf("ordinary external read decision = %+v, want external_directory approval", got)
+	}
+}
+
+func TestRulePolicyExternalReadWithoutWorkspaceRootDoesNotGrantExternalDirectory(t *testing.T) {
+	p := RulePolicy{Default: PermissionAllow}
+	got := p.Decide(core.ToolSpec{Name: "read_file"}, core.ToolCall{Name: "read_file", Input: `{"file_path":"../outside.txt"}`})
+	if !got.Allow || got.RequiresApproval {
+		t.Fatalf("custom allow policy decision = %+v, want plain allow without approval", got)
+	}
+	if got.Permission == "external_directory" || got.Pattern != "" {
+		t.Fatalf("custom allow policy should not synthesize external read approval metadata: %+v", got)
+	}
+}
+
+func TestRulePolicyExternalDirectoryAllowCarriesReadScope(t *testing.T) {
+	home, err := os.MkdirTemp(".", "whale-ext-read-allow-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, err = filepath.Abs(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(home) })
+
+	root := filepath.Join(home, "repo")
+	external := filepath.Join(home, "external")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(external, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	rules := append(DefaultRules(), PermissionRule{Permission: "external_directory", Pattern: external, Action: PermissionAllow})
+	p := RulePolicy{Default: PermissionAllow, Rules: rules, WorkspaceRoot: root}
+	got := p.Decide(core.ToolSpec{Name: "read_file"}, core.ToolCall{Name: "read_file", Input: `{"file_path":"../external/README.md"}`})
+	if !got.Allow || got.RequiresApproval || got.Permission != "external_directory" || got.Pattern != external {
+		t.Fatalf("external_directory allow decision = %+v, want allowed external_directory metadata", got)
+	}
+}
+
+func TestRulePolicyExternalDirectoryForTempReadOnlyFileTools(t *testing.T) {
+	home, err := os.MkdirTemp(".", "whale-ext-read-tmp-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, err = filepath.Abs(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(home) })
+
+	root := filepath.Join(home, "repo")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	p := RulePolicy{Default: PermissionAllow, Rules: DefaultRules(), WorkspaceRoot: root}
+	for _, call := range []core.ToolCall{
+		{Name: "read_file", Input: `{"file_path":"/tmp/whale-external-read.txt"}`},
+		{Name: "read_file", Input: `{"file_path":"/private/tmp/whale-external-read.txt"}`},
+	} {
+		got := p.Decide(core.ToolSpec{Name: call.Name}, call)
+		if !got.Allow || !got.RequiresApproval || got.Permission != "external_directory" || got.MatchedRule != "external_directory:*=ask" {
+			t.Fatalf("%s temp external read decision = %+v, want external_directory approval", call.Input, got)
+		}
+	}
+}
+
+func TestRulePolicyExternalReadTreatsWorktreeAsProjectBoundary(t *testing.T) {
+	home, err := os.MkdirTemp(".", "whale-ext-worktree-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, err = filepath.Abs(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(home) })
+
+	worktree := filepath.Join(home, "worktree")
+	workspace := filepath.Join(worktree, "subdir")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	p := RulePolicy{Default: PermissionAllow, Rules: DefaultRules(), WorkspaceRoot: workspace, WorktreeRoot: worktree}
+	got := p.Decide(core.ToolSpec{Name: "read_file"}, core.ToolCall{Name: "read_file", Input: `{"file_path":"../README.md"}`})
+	if !got.Allow || got.RequiresApproval {
+		t.Fatalf("worktree read should not require external approval: %+v", got)
 	}
 }
 
@@ -369,7 +540,7 @@ func TestRulePolicyExternalDirectoryDenyOverridesShellApproval(t *testing.T) {
 	}
 }
 
-func TestRulePolicyExternalDirectoryDoesNotScanRedirections(t *testing.T) {
+func TestRulePolicyExternalDirectoryScansRedirections(t *testing.T) {
 	rules := append(DefaultRules(), PermissionRule{Permission: "external_directory", Pattern: "*", Action: PermissionDeny})
 	p := RulePolicy{Default: PermissionAllow, Rules: rules, WorkspaceRoot: "/repo"}
 	spec := core.ToolSpec{Name: "shell_run"}
@@ -380,16 +551,79 @@ func TestRulePolicyExternalDirectoryDoesNotScanRedirections(t *testing.T) {
 		"cat </etc/passwd",
 		"echo x 2>/etc/whale-test",
 		"cat foo>/etc/whale-test",
+		"echo x >| /etc/whale-test",
 	} {
 		got := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`})
-		if !got.Allow || got.Code == "permission_denied" {
-			t.Fatalf("redirection %q = %+v, want no external_directory deny", command, got)
+		if got.Allow || got.Code != "permission_denied" {
+			t.Fatalf("redirection %q = %+v, want external_directory deny", command, got)
 		}
 	}
 
 	inside := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"echo x >./out.txt"}`})
 	if !inside.Allow || inside.Code == "permission_denied" {
 		t.Fatalf("workspace-relative redirection should not be denied: %+v", inside)
+	}
+}
+
+func TestRulePolicyExternalDirectoryIgnoresQuotedRedirectionCharacters(t *testing.T) {
+	rules := append(DefaultRules(), PermissionRule{Permission: "external_directory", Pattern: "*", Action: PermissionDeny})
+	p := RulePolicy{Default: PermissionAllow, Rules: rules, WorkspaceRoot: "/repo"}
+	spec := core.ToolSpec{Name: "shell_run"}
+
+	for _, command := range []string{
+		`printf '%s\n' 'see > /etc/passwd'`,
+		`printf "%s\n" "see < /etc/passwd"`,
+		`echo \> /etc/passwd`,
+		`printf foo \< /etc/passwd`,
+	} {
+		got := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`})
+		if !got.Allow || got.Code == "permission_denied" {
+			t.Fatalf("quoted redirection text %q = %+v, want no external_directory deny", command, got)
+		}
+	}
+}
+
+func TestRulePolicyExternalDirectoryRedirectionRequiresApprovalByDefault(t *testing.T) {
+	home, err := os.MkdirTemp(".", "whale-ext-redir-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, err = filepath.Abs(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(home) })
+
+	root := filepath.Join(home, "repo")
+	external := filepath.Join(home, "external")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(external, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	p := RulePolicy{Default: PermissionAllow, Rules: DefaultRules(), WorkspaceRoot: root}
+	got := p.Decide(core.ToolSpec{Name: "shell_run"}, core.ToolCall{Name: "shell_run", Input: `{"command":"echo hello > ` + external + `/whale-test.txt"}`})
+	if !got.Allow || !got.RequiresApproval || got.Permission != "external_directory" {
+		t.Fatalf("external redirection = %+v, want external_directory approval", got)
+	}
+}
+
+func TestRulePolicyDynamicRedirectionRequiresApproval(t *testing.T) {
+	p := RulePolicy{Default: PermissionAllow, Rules: DefaultRules(), WorkspaceRoot: "/repo"}
+	spec := core.ToolSpec{Name: "shell_run"}
+
+	for _, command := range []string{
+		`echo hello > "$(dirname "$(pwd)")/opencode-dev/whale-test.txt"`,
+		`printf hello > "$OUT_FILE"`,
+		`printf hello > ~/whale-test.txt`,
+		"printf hello > `pwd`/out.txt",
+	} {
+		got := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`})
+		if !got.Allow || !got.RequiresApproval || got.Permission != "external_directory" || got.Pattern != dynamicShellRedirectionTarget {
+			t.Fatalf("dynamic redirection %q = %+v, want external_directory approval for dynamic target", command, got)
+		}
 	}
 }
 

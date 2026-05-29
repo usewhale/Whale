@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/usewhale/whale/internal/core"
+
 	"github.com/BurntSushi/toml"
 
 	"github.com/usewhale/whale/internal/agent"
@@ -322,7 +324,7 @@ func ApplyFileConfig(cfg *Config, file FileConfig) error {
 
 func LoadAndApplyConfig(cfg Config, workspaceRoot string) (Config, error) {
 	base := DefaultConfig()
-	base.DataDir = firstNonEmpty(strings.TrimSpace(cfg.DataDir), store.DefaultDataDir())
+	base.DataDir = core.FirstNonEmpty(strings.TrimSpace(cfg.DataDir), store.DefaultDataDir())
 
 	loaded, err := LoadConfigFiles(base.DataDir, workspaceRoot)
 	if err != nil {
@@ -338,7 +340,7 @@ func LoadAndApplyConfig(cfg Config, workspaceRoot string) (Config, error) {
 
 func overlayExplicitConfig(dst *Config, src Config) {
 	def := DefaultConfig()
-	dst.DataDir = firstNonEmpty(strings.TrimSpace(src.DataDir), dst.DataDir)
+	dst.DataDir = core.FirstNonEmpty(strings.TrimSpace(src.DataDir), dst.DataDir)
 	if src.ModelExplicit || (strings.TrimSpace(src.Model) != "" && src.Model != def.Model) {
 		dst.Model = src.Model
 		dst.ModelExplicit = src.ModelExplicit

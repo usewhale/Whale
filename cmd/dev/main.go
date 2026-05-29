@@ -197,7 +197,7 @@ func (d devEnv) testWindows() error {
 		{"go", "test", "./internal/shell", "-count=1"},
 		{"go", "test", "./internal/tools", "-run", "Test(ReadFileNormalizesCRLFContent|ReadFileDirectoryReturnsStableToolError|EditFileMatchesLFSearchAndPreservesCRLF|EditFilePreservesMixedLineEndings|ApplyPatchMatchesLFHunksAndPreservesCRLF|ApplyPatchPreservesMixedLineEndings|WindowsShellRunForegroundAndBackground|WindowsShellRunCancelKillsProcessTree|WindowsShellRunKeepsLaunchedChildOnSuccess|WindowsShellRunDecodesGBKStdout|WindowsShellRunPreservesAmbiguousValidUTF8Stdout|WindowsShellRunDecodesGBKStderrOnFailure|WindowsDecodeTextBytesDecodesGB18030WhenUTF8Invalid|WindowsReadFileDecodesGB18030Text|WindowsEditFilePreservesGB18030Bytes|WindowsEditFileMatchesVisibleGB18030Text|WindowsEditFilePreservesNonChineseLegacyBytes|WindowsGoSearchFallbackDecodesGB18030Text)$", "-count=1"},
 		{"go", "test", "./internal/agent", "-run", "TestWindowsHook", "-count=1"},
-		{"go", "test", "./internal/ui/cli", "-count=1"},
+		{"go", "test", "./internal/ui/cli/cmd", "-count=1"},
 	}
 	for _, step := range steps {
 		if err := d.runGo(step[0], step[1:]...); err != nil {

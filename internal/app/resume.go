@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/store"
 )
@@ -73,7 +74,7 @@ func ResolveResumeWorktree(cfg Config, start StartOptions, currentWorkspace stri
 	path := strings.TrimSpace(meta.WorktreePath)
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
-			workspace := firstNonEmpty(strings.TrimSpace(meta.OriginalWorkspace), currentWorkspace)
+			workspace := core.FirstNonEmpty(strings.TrimSpace(meta.OriginalWorkspace), currentWorkspace)
 			branch := strings.TrimSpace(meta.OriginalBranch)
 			if _, updateErr := session.UpdateSessionMeta(sessionsDir, sessionID, func(meta *session.SessionMeta) {
 				if workspace != "" {
@@ -227,17 +228,17 @@ func isBareResumeSessionID(v string) bool {
 }
 
 func (a *App) ListResumeChoices(limit int) ([]string, error) {
-	summaries, err := session.ListSessions(a.sessionsDir, limit)
+	filtered, err := a.listWorkspaceResumeSummaries(limit)
 	if err != nil {
 		return nil, err
 	}
-	if len(summaries) == 0 {
+	if len(filtered) == 0 {
 		return nil, nil
 	}
-	out := make([]string, 0, len(summaries)+1)
+	out := make([]string, 0, len(filtered)+1)
 	out = append(out, "recent sessions:")
 	out = append(out, "   #   Updated   Branch                    Conversation")
-	for i, s := range summaries {
+	for i, s := range filtered {
 		marker := " "
 		if s.ID == a.sessionID {
 			marker = "*"
@@ -249,6 +250,26 @@ func (a *App) ListResumeChoices(limit int) ([]string, error) {
 		out = append(out, fmt.Sprintf("%s %2d) %-9s %-24s %s", marker, i+1, humanAgo(s.ModTime), truncateRunes(branch, 24), truncateRunes(s.Conversation, 80)))
 	}
 	return out, nil
+}
+
+func (a *App) listWorkspaceResumeSummaries(limit int) ([]session.SessionSummary, error) {
+	summaries, err := session.ListSessions(a.sessionsDir, 0)
+	if err != nil {
+		return nil, err
+	}
+	// Keep sessions with missing workspace metadata for backward compatibility;
+	// exclude only sessions explicitly recorded for a different workspace.
+	filtered := make([]session.SessionSummary, 0, len(summaries))
+	for _, s := range summaries {
+		ws := strings.TrimSpace(s.Meta.Workspace)
+		if ws == "" || sameWorkspace(ws, a.workspaceRoot) {
+			filtered = append(filtered, s)
+		}
+	}
+	if limit > 0 && len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+	return filtered, nil
 }
 
 func humanAgo(ts time.Time) string {
@@ -291,7 +312,7 @@ func (a *App) ApplyResumeChoice(choice string) (ResumeApplyResult, error) {
 	if choice == "" {
 		return ResumeApplyResult{Message: "resume canceled"}, nil
 	}
-	summaries, err := session.ListSessions(a.sessionsDir, 20)
+	summaries, err := a.listWorkspaceResumeSummaries(20)
 	if err != nil {
 		return ResumeApplyResult{}, err
 	}

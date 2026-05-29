@@ -69,7 +69,7 @@ func TestRecordTurnCostWritesUsageLogWithoutSessionRuntime(t *testing.T) {
 	provider := &usageLogProvider{}
 
 	a := NewAgentWithRegistry(provider, store.NewInMemoryStore(), nil, WithUsageLogPath(usagePath))
-	if _, err := a.Run(context.Background(), "usage-log-no-runtime", "hi"); err != nil {
+	if _, err := a.RunSession(context.Background(), "usage-log-no-runtime", "hi"); err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
 	if _, err := os.Stat(usagePath); err != nil {

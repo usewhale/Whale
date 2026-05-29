@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/usewhale/whale/internal/app"
+	"github.com/usewhale/whale/internal/telemetry"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
@@ -82,6 +83,13 @@ func projectFocusMessages(messages []tuirender.UIMessage) []tuirender.UIMessage 
 		tools = focusToolSummary{}
 	}
 	for _, msg := range messages {
+		if msg.Kind == tuirender.KindSubagent {
+			// Subagent cards render standalone in focus mode, not
+			// collapsed into the generic tool summary.
+			flushTools()
+			out = append(out, msg)
+			continue
+		}
 		if isFocusHiddenToolMessage(msg) {
 			item := focusSummarizeToolMessage(msg)
 			state := focusToolState(msg)
@@ -131,7 +139,14 @@ func appendFocusToggleHint(text, action string) string {
 }
 
 func isFocusHiddenMessage(msg tuirender.UIMessage) bool {
-	return msg.Kind == tuirender.KindThinking || msg.Role == "think"
+	return msg.Kind == tuirender.KindThinking || msg.Role == "think" || isFocusHiddenApprovalAuditNotice(msg)
+}
+
+func isFocusHiddenApprovalAuditNotice(msg tuirender.UIMessage) bool {
+	if msg.Kind != tuirender.KindNotice || msg.Notice == nil || !strings.HasPrefix(strings.TrimSpace(msg.Notice.Kind), "approval_") {
+		return false
+	}
+	return telemetry.ClassifyApprovalEvent(msg.Notice.Kind) == telemetry.ApprovalEventClassReused
 }
 
 func isFocusHiddenToolMessage(msg tuirender.UIMessage) bool {
@@ -149,6 +164,7 @@ type focusToolSummary struct {
 	task   focusSummaryBucket
 	plan   focusSummaryBucket
 	todo   focusSummaryBucket
+	mode   focusSummaryBucket
 	mcp    focusSummaryBucket
 	other  focusSummaryBucket
 }
@@ -158,6 +174,9 @@ type focusSummaryBucket struct {
 	running int
 	failed  int
 	denied  int
+	blocked int
+	mode    int
+	http    int
 	details []string
 	entries []focusSummaryEntry
 }
@@ -211,6 +230,8 @@ func (s *focusToolSummary) addItemWithState(state string, item focusToolSummaryI
 		s.plan.add(state, "", "")
 	case "todo":
 		s.todo.add(state, "", "")
+	case "mode":
+		s.mode.add(state, item.Detail, "")
 	case "mcp":
 		s.mcp.add(state, item.Detail, "")
 	default:
@@ -228,7 +249,7 @@ func (s focusToolSummary) summary() *tuirender.FocusSummary {
 	recoveredShell, remainingShell := s.shell.splitRecovered()
 	recoveredShell = recoveredShell.withDisambiguatedShellCWD()
 	remainingShell = remainingShell.withDisambiguatedShellCWD()
-	for _, state := range []string{"denied", "failed", "running", "done"} {
+	for _, state := range []string{"denied", "blocked", "mode_hint", "http_error", "usage_hint", "failed", "running", "done"} {
 		add(focusStateHintSummaryPart("search", s.search, state, "Searching for", "Searched for", "Denied", "Failed", "pattern", "patterns", focusQuoteHint))
 		add(focusStateHintSummaryPart("read", s.read, state, "Reading", "Read", "Denied", "Failed", "file", "files", focusPlainHint))
 		add(focusStateHintSummaryPart("web", s.web, state, "Fetching", "Fetched", "Denied", "Failed", "URL", "URLs", focusPlainHint))
@@ -241,6 +262,7 @@ func (s focusToolSummary) summary() *tuirender.FocusSummary {
 		add(focusStateTaskSummaryPart(s.task, state))
 		add(focusStateSimpleSummaryPart("plan", s.plan, state, "Updating plan", "Updated plan", "Denied", "Failed", "plan update", "plan updates"))
 		add(focusStateSimpleSummaryPart("todo", s.todo, state, "Updating todos", "Updated todos", "Denied", "Failed", "todo update", "todo updates"))
+		add(focusStateModeSummaryPart(s.mode, state))
 		add(focusStateHintSummaryPart("mcp", s.mcp, state, "Calling", "Called", "Denied", "Failed", "MCP tool", "MCP tools", focusPlainHint))
 		add(focusStateCountSummaryPart("other", s.other, state, "Running", "Ran", "Denied", "Failed", "tool", "tools"))
 	}
@@ -256,6 +278,14 @@ func (b *focusSummaryBucket) add(state, detail, identity string) {
 		b.failed++
 	case "denied":
 		b.denied++
+	case "blocked":
+		b.blocked++
+	case "mode_hint":
+		b.mode++
+	case "http_error":
+		b.http++
+	case "usage_hint":
+		b.blocked++
 	}
 	if detail != "" {
 		b.details = append(b.details, detail)
@@ -275,7 +305,7 @@ func (b focusSummaryBucket) allDenied() bool {
 }
 
 func (b focusSummaryBucket) succeeded() int {
-	return b.count - b.running - b.failed - b.denied
+	return b.count - b.running - b.failed - b.denied - b.blocked - b.mode - b.http
 }
 
 func (b focusSummaryBucket) splitRecovered() (focusSummaryBucket, focusSummaryBucket) {
@@ -361,7 +391,16 @@ func (b focusSummaryBucket) statusSuffix() string {
 	if b.failed > 0 {
 		status = append(status, fmt.Sprintf("%d failed", b.failed))
 	}
-	if succeeded := b.succeeded(); succeeded > 0 && (b.running > 0 || b.failed > 0 || b.denied > 0) {
+	if b.blocked > 0 {
+		status = append(status, fmt.Sprintf("%d blocked", b.blocked))
+	}
+	if b.mode > 0 {
+		status = append(status, fmt.Sprintf("%d mode hint", b.mode))
+	}
+	if b.http > 0 {
+		status = append(status, fmt.Sprintf("%d HTTP error", b.http))
+	}
+	if succeeded := b.succeeded(); succeeded > 0 && (b.running > 0 || b.failed > 0 || b.denied > 0 || b.blocked > 0 || b.mode > 0 || b.http > 0) {
 		status = append(status, fmt.Sprintf("%d succeeded", succeeded))
 	}
 	if b.denied > 0 {
@@ -377,6 +416,14 @@ func focusBucketState(b focusSummaryBucket) string {
 	switch {
 	case b.denied > 0:
 		return "denied"
+	case len(b.entries) > 0 && b.entries[0].state == "blocked":
+		return "blocked"
+	case len(b.entries) > 0 && b.entries[0].state == "mode_hint":
+		return "mode_hint"
+	case len(b.entries) > 0 && b.entries[0].state == "http_error":
+		return "http_error"
+	case len(b.entries) > 0 && b.entries[0].state == "usage_hint":
+		return "usage_hint"
 	case b.failed > 0:
 		return "failed"
 	case b.running > 0:
@@ -404,6 +451,12 @@ func focusStateShellSummaryPart(b focusSummaryBucket, state string) tuirender.Fo
 	b = b.forState(state)
 	if state == "failed" {
 		return focusFailedShellSummaryPart(b)
+	}
+	if state == "blocked" || state == "mode_hint" || state == "http_error" {
+		return focusSemanticStateSummaryPart("shell", b, state, "Blocked shell")
+	}
+	if state == "usage_hint" {
+		return focusSemanticStateSummaryPart("shell", b, state, "Invalid tool input")
 	}
 	return focusShellSummaryPart(b)
 }
@@ -448,18 +501,21 @@ func focusFailedShellSummaryPart(b focusSummaryBucket) tuirender.FocusSummaryPar
 		return tuirender.FocusSummaryPart{}
 	}
 	if len(b.details) == 1 {
-		return focusSummaryPart("shell", b, "Failed shell", b.details[0])
+		return focusSummaryPart("shell", b, "Command failed", b.details[0])
 	}
 	if detail := focusSampleDetails(b.details, b.count, focusPlainHint); detail != "" {
-		return focusSummaryPart("shell", b, fmt.Sprintf("Failed %d shell commands", b.count), detail)
+		return focusSummaryPart("shell", b, fmt.Sprintf("Command failed: %d shell commands", b.count), detail)
 	}
-	return focusSummaryPart("shell", b, fmt.Sprintf("Failed %d %s", b.count, pluralize(b.count, "shell command", "shell commands")), "")
+	return focusSummaryPart("shell", b, fmt.Sprintf("Command failed: %d %s", b.count, pluralize(b.count, "shell command", "shell commands")), "")
 }
 
 func focusStateCountSummaryPart(kind string, b focusSummaryBucket, state, runningVerb, doneVerb, deniedVerb, failedVerb, singular, plural string) tuirender.FocusSummaryPart {
 	b = b.forState(state)
 	if state == "failed" {
 		return focusCountSummaryPartWithVerb(kind, b, failedVerb, singular, plural)
+	}
+	if state == "blocked" || state == "mode_hint" || state == "http_error" || state == "usage_hint" {
+		return focusSemanticStateSummaryPart(kind, b, state, focusCountAction(kind, b, "Blocked", singular, plural))
 	}
 	if state == "denied" {
 		return focusCountSummaryPartWithVerb(kind, b, deniedVerb, singular, plural)
@@ -485,6 +541,9 @@ func focusStateHintSummaryPart(kind string, b focusSummaryBucket, state, running
 	b = b.forState(state)
 	if state == "failed" {
 		return focusFailedHintSummaryPart(kind, b, failedVerb, singular, plural, formatHint)
+	}
+	if state == "blocked" || state == "mode_hint" || state == "http_error" || state == "usage_hint" {
+		return focusSemanticStateSummaryPart(kind, b, state, focusCountAction(kind, b, "Blocked", singular, plural))
 	}
 	return focusHintSummaryPart(kind, b, runningVerb, doneVerb, deniedVerb, singular, plural, formatHint)
 }
@@ -589,6 +648,8 @@ func focusStateSimpleSummaryPart(kind string, b focusSummaryBucket, state, runni
 		return focusCountSummaryPartWithVerb(kind, b, deniedVerb, singular, plural)
 	case "failed":
 		return focusCountSummaryPartWithVerb(kind, b, failedVerb, singular, plural)
+	case "blocked", "mode_hint", "http_error", "usage_hint":
+		return focusSemanticStateSummaryPart(kind, b, state, focusCountAction(kind, b, "Blocked", singular, plural))
 	default:
 		return focusSimpleSummaryPart(kind, b, runningText, doneText, singular, plural)
 	}
@@ -601,6 +662,8 @@ func focusStateTaskSummaryPart(b focusSummaryBucket, state string) tuirender.Foc
 		return focusCountSummaryPartWithVerb("task", b, "Denied", "subagent task", "subagent tasks")
 	case "failed":
 		return focusCountSummaryPartWithVerb("task", b, "Failed", "subagent task", "subagent tasks")
+	case "blocked", "mode_hint", "http_error", "usage_hint":
+		return focusSemanticStateSummaryPart("task", b, state, focusCountAction("task", b, "Blocked", "subagent task", "subagent tasks"))
 	default:
 		return focusTaskSummaryPart(b)
 	}
@@ -614,6 +677,51 @@ func focusTaskSummaryPart(b focusSummaryBucket) tuirender.FocusSummaryPart {
 		return focusSummaryPart("task", b, b.details[0], "")
 	}
 	return focusCountSummaryPart("task", b, "Running", "Ran", "subagent task", "subagent tasks")
+}
+
+func focusStateModeSummaryPart(b focusSummaryBucket, state string) tuirender.FocusSummaryPart {
+	b = b.forState(state)
+	if b.count == 0 {
+		return tuirender.FocusSummaryPart{}
+	}
+	return focusSemanticStateSummaryPart("mode", b, state, "Mode hint")
+}
+
+func focusCountAction(kind string, b focusSummaryBucket, verb, singular, plural string) string {
+	if b.count == 1 {
+		return verb + " 1 " + singular
+	}
+	return fmt.Sprintf("%s %d %s", verb, b.count, pluralize(b.count, singular, plural))
+}
+
+func focusSemanticStateSummaryPart(kind string, b focusSummaryBucket, state, fallbackAction string) tuirender.FocusSummaryPart {
+	if b.count == 0 {
+		return tuirender.FocusSummaryPart{}
+	}
+	action := fallbackAction
+	detail := focusSampleDetails(b.details, b.count, focusPlainHint)
+	if b.count == 1 && len(b.details) == 1 {
+		if a, d := splitSemanticFocusDetail(b.details[0]); a != "" {
+			action = a
+			detail = d
+		}
+	}
+	part := focusSummaryPart(kind, b, action, detail)
+	part.State = state
+	return part
+}
+
+func splitSemanticFocusDetail(detail string) (string, string) {
+	detail = strings.TrimSpace(detail)
+	for _, sep := range []string{" · ", ": "} {
+		if before, after, ok := strings.Cut(detail, sep); ok && strings.TrimSpace(before) != "" {
+			return strings.TrimSpace(before), strings.TrimSpace(after)
+		}
+	}
+	if strings.HasPrefix(detail, "HTTP ") {
+		return detail, ""
+	}
+	return "", ""
 }
 
 func pluralize(n int, singular, plural string) string {
@@ -631,6 +739,14 @@ func focusToolState(msg tuirender.UIMessage) string {
 		return "failed"
 	case "result_denied", "result_canceled", "shell_result_denied", "shell_result_canceled":
 		return "denied"
+	case "result_blocked", "shell_result_blocked":
+		return "blocked"
+	case "result_mode_hint", "shell_result_mode_hint":
+		return "mode_hint"
+	case "result_http_error", "shell_result_http_error":
+		return "http_error"
+	case "result_usage_hint", "shell_result_usage_hint":
+		return "usage_hint"
 	default:
 		return "done"
 	}

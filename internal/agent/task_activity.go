@@ -18,17 +18,17 @@ func taskStartedEvent(call core.ToolCall) (AgentEvent, bool) {
 	_ = json.Unmarshal([]byte(call.Input), &args)
 	switch call.Name {
 	case "parallel_reason":
-		info.Count = len(asAnySlice(args["prompts"]))
-		info.Model = strings.TrimSpace(asString(args["model"]))
+		info.Count = len(core.AsAnySlice(args["prompts"]))
+		info.Model = strings.TrimSpace(core.AsString(args["model"]))
 		info.Summary = fmt.Sprintf("parallel reasoning · %d prompt(s)", info.Count)
 		return AgentEvent{Type: AgentEventTypeParallelReasonStarted, Task: &info}, true
 	case "spawn_subagent":
-		info.Role = strings.TrimSpace(asString(args["role"]))
+		info.Role = strings.TrimSpace(core.AsString(args["role"]))
 		if info.Role == "" {
 			info.Role = "explore"
 		}
-		info.Model = strings.TrimSpace(asString(args["model"]))
-		info.Summary = firstLine(strings.TrimSpace(asString(args["task"])))
+		info.Model = strings.TrimSpace(core.AsString(args["model"]))
+		info.Summary = core.FirstLine(core.AsString(args["task"]))
 		return AgentEvent{Type: AgentEventTypeSubagentStarted, Task: &info}, true
 	default:
 		return AgentEvent{}, false
@@ -48,10 +48,10 @@ func taskCompletedEvent(res core.ToolResult) (AgentEvent, bool) {
 		if !env.OK || !env.Success {
 			info.Status = "failed"
 		}
-		info.Model = strings.TrimSpace(asString(env.Data["model"]))
-		info.Role = strings.TrimSpace(asString(env.Data["role"]))
-		info.Summary = strings.TrimSpace(firstNonEmptyString(
-			asString(env.Data["summary"]),
+		info.Model = strings.TrimSpace(core.AsString(env.Data["model"]))
+		info.Role = strings.TrimSpace(core.AsString(env.Data["role"]))
+		info.Summary = strings.TrimSpace(core.FirstNonEmpty(
+			core.AsString(env.Data["summary"]),
 			env.Summary,
 			env.Message,
 			env.Error,
@@ -59,12 +59,12 @@ func taskCompletedEvent(res core.ToolResult) (AgentEvent, bool) {
 		info.DurationMS = asInt64(env.Metadata["duration_ms"])
 		switch res.Name {
 		case "parallel_reason":
-			info.Count = len(asAnySlice(env.Data["results"]))
+			info.Count = len(core.AsAnySlice(env.Data["results"]))
 		case "spawn_subagent":
 			if info.Role == "" {
 				info.Role = "explore"
 			}
-			childSessionID := strings.TrimSpace(firstNonEmptyString(asString(env.Data["child_session_id"]), asString(env.Data["session_id"])))
+			childSessionID := strings.TrimSpace(core.FirstNonEmpty(core.AsString(env.Data["child_session_id"]), core.AsString(env.Data["session_id"])))
 			if childSessionID != "" {
 				info.Metadata = map[string]any{"child_session_id": childSessionID}
 			}
@@ -86,22 +86,6 @@ func taskCompletedEvent(res core.ToolResult) (AgentEvent, bool) {
 	}
 }
 
-func asString(v any) string {
-	s, _ := v.(string)
-	return s
-}
-
-func asAnySlice(v any) []any {
-	if v == nil {
-		return nil
-	}
-	arr, ok := v.([]any)
-	if ok {
-		return arr
-	}
-	return nil
-}
-
 func asInt64(v any) int64 {
 	switch n := v.(type) {
 	case int64:
@@ -113,21 +97,4 @@ func asInt64(v any) int64 {
 	default:
 		return 0
 	}
-}
-
-func firstLine(v string) string {
-	v = strings.TrimSpace(v)
-	if i := strings.IndexByte(v, '\n'); i >= 0 {
-		return strings.TrimSpace(v[:i])
-	}
-	return v
-}
-
-func firstNonEmptyString(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
 }

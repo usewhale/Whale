@@ -32,7 +32,7 @@ func TestRealDeepSeekStreamSmoke(t *testing.T) {
 	a := NewAgent(provider, store.NewInMemoryStore(), nil)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	msg, err := a.Run(ctx, "real-stream-smoke", "只回复: ok")
+	msg, err := a.RunSession(ctx, "real-stream-smoke", "只回复: ok")
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestRealDeepSeekCacheMetricsSmoke(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
-	if _, err := a.Run(ctx, "real-cache-smoke", "请用一句话介绍鲸鱼"); err != nil {
+	if _, err := a.RunSession(ctx, "real-cache-smoke", "请用一句话介绍鲸鱼"); err != nil {
 		t.Fatalf("turn1 failed: %v", err)
 	}
 	events, err := a.RunStream(ctx, "real-cache-smoke", "复述上句话，不要改写")

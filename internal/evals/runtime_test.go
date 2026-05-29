@@ -78,7 +78,7 @@ func TestRuntimeRequestUserInputRoundTrip(t *testing.T) {
 		}),
 	)
 
-	msg, err := a.Run(context.Background(), "eval-user-input", "start")
+	msg, err := a.RunSession(context.Background(), "eval-user-input", "start")
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
@@ -499,7 +499,7 @@ func TestRuntimeShellWaitReturnsRunningOnShortTimeout(t *testing.T) {
 		agent.WithToolPolicy(policy.RulePolicy{Default: policy.PermissionAllow}),
 	)
 
-	if _, err := a.Run(context.Background(), "eval-bg-running", "start"); err != nil {
+	if _, err := a.RunSession(context.Background(), "eval-bg-running", "start"); err != nil {
 		t.Fatalf("start run failed: %v", err)
 	}
 	events, err := a.RunStream(context.Background(), "eval-bg-running", "wait")
@@ -627,7 +627,7 @@ func TestRuntimeShellWaitReturnsExitedResult(t *testing.T) {
 		core.NewToolRegistry(toolset.Tools()),
 		agent.WithToolPolicy(policy.RulePolicy{Default: policy.PermissionAllow}),
 	)
-	if _, err := a.Run(context.Background(), "eval-bg-done", "start"); err != nil {
+	if _, err := a.RunSession(context.Background(), "eval-bg-done", "start"); err != nil {
 		t.Fatalf("start run failed: %v", err)
 	}
 	events, err := a.RunStream(context.Background(), "eval-bg-done", "wait")
@@ -707,7 +707,7 @@ func TestRuntimeShellWaitReturnsFailedResult(t *testing.T) {
 		core.NewToolRegistry(toolset.Tools()),
 		agent.WithToolPolicy(policy.RulePolicy{Default: policy.PermissionAllow}),
 	)
-	if _, err := a.Run(context.Background(), "eval-bg-fail", "start"); err != nil {
+	if _, err := a.RunSession(context.Background(), "eval-bg-fail", "start"); err != nil {
 		t.Fatalf("start run failed: %v", err)
 	}
 	events, err := a.RunStream(context.Background(), "eval-bg-fail", "wait")
@@ -783,10 +783,10 @@ func TestRuntimeApprovalCacheBySessionKey(t *testing.T) {
 		}),
 	)
 
-	if _, err := a.Run(context.Background(), "eval-approval-cache", "t1"); err != nil {
+	if _, err := a.RunSession(context.Background(), "eval-approval-cache", "t1"); err != nil {
 		t.Fatalf("run1 failed: %v", err)
 	}
-	if _, err := a.Run(context.Background(), "eval-approval-cache", "t2"); err != nil {
+	if _, err := a.RunSession(context.Background(), "eval-approval-cache", "t2"); err != nil {
 		t.Fatalf("run2 failed: %v", err)
 	}
 	if asked != 1 {
@@ -843,10 +843,10 @@ func TestRuntimeApprovalCacheDoesNotCrossSessions(t *testing.T) {
 		}),
 	)
 
-	if _, err := a.Run(context.Background(), "eval-approval-cache-a", "t1"); err != nil {
+	if _, err := a.RunSession(context.Background(), "eval-approval-cache-a", "t1"); err != nil {
 		t.Fatalf("run1 failed: %v", err)
 	}
-	if _, err := a.Run(context.Background(), "eval-approval-cache-b", "t2"); err != nil {
+	if _, err := a.RunSession(context.Background(), "eval-approval-cache-b", "t2"); err != nil {
 		t.Fatalf("run2 failed: %v", err)
 	}
 	if asked != 2 {
@@ -903,7 +903,7 @@ func TestRuntimeApprovalPersistsAcrossAgentInstances(t *testing.T) {
 			return policy.ApprovalAllowForSession
 		}),
 	)
-	if _, err := a1.Run(context.Background(), "eval-persisted-approval", "run1"); err != nil {
+	if _, err := a1.RunSession(context.Background(), "eval-persisted-approval", "run1"); err != nil {
 		t.Fatalf("run1 failed: %v", err)
 	}
 	if asked1 != 1 {
@@ -921,7 +921,7 @@ func TestRuntimeApprovalPersistsAcrossAgentInstances(t *testing.T) {
 			return policy.ApprovalAllowForSession
 		}),
 	)
-	if _, err := a2.Run(context.Background(), "eval-persisted-approval", "run2"); err != nil {
+	if _, err := a2.RunSession(context.Background(), "eval-persisted-approval", "run2"); err != nil {
 		t.Fatalf("run2 failed: %v", err)
 	}
 	if asked2 != 0 {

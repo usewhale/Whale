@@ -55,7 +55,7 @@ func TestApprovalPersistsAcrossAgentInstances(t *testing.T) {
 			return ApprovalAllowForSession
 		}),
 	)
-	if _, err := a1.Run(context.Background(), "s-persist", "run1"); err != nil {
+	if _, err := a1.RunSession(context.Background(), "s-persist", "run1"); err != nil {
 		t.Fatalf("run1 failed: %v", err)
 	}
 	if asked1 != 1 {
@@ -73,7 +73,7 @@ func TestApprovalPersistsAcrossAgentInstances(t *testing.T) {
 			return ApprovalAllowForSession
 		}),
 	)
-	if _, err := a2.Run(context.Background(), "s-persist", "run2"); err != nil {
+	if _, err := a2.RunSession(context.Background(), "s-persist", "run2"); err != nil {
 		t.Fatalf("run2 failed: %v", err)
 	}
 	if asked2 != 0 {
@@ -116,7 +116,7 @@ func TestApprovalPersistsApplyPatchFileKeysAcrossAgentInstances(t *testing.T) {
 			return ApprovalAllowForSession
 		}),
 	)
-	if _, err := a1.Run(context.Background(), "s-persist-patch", "run1"); err != nil {
+	if _, err := a1.RunSession(context.Background(), "s-persist-patch", "run1"); err != nil {
 		t.Fatalf("run1 failed: %v", err)
 	}
 	if asked1 != 1 {
@@ -134,7 +134,7 @@ func TestApprovalPersistsApplyPatchFileKeysAcrossAgentInstances(t *testing.T) {
 			return ApprovalAllowForSession
 		}),
 	)
-	if _, err := a2.Run(context.Background(), "s-persist-patch", "run2"); err != nil {
+	if _, err := a2.RunSession(context.Background(), "s-persist-patch", "run2"); err != nil {
 		t.Fatalf("run2 failed: %v", err)
 	}
 	if asked2 != 0 {

@@ -48,7 +48,7 @@ func TestTodoToolsPersistInSession(t *testing.T) {
 		NewToolRegistry(nil),
 		WithSessionsDir(sessionsDir),
 	)
-	if _, err := a.Run(context.Background(), "s-todo", "go"); err != nil {
+	if _, err := a.RunSession(context.Background(), "s-todo", "go"); err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
 	st, err := session.LoadTodoState(sessionsDir, "s-todo")

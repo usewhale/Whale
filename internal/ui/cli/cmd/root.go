@@ -47,7 +47,7 @@ func bindPersistentFlags(c *cobra.Command, opts *cliOptions) {
 
 func runLoop(opts *cliOptions, start app.StartOptions) error {
 	start.Worktree = opts.worktreeSession
-	return tui.Run(opts.cfg, start)
+	return tui.RunTUI(opts.cfg, start)
 }
 
 func prepareWorktree(cmd *cobra.Command, opts *cliOptions) error {

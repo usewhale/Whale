@@ -180,7 +180,7 @@ func TestHooksCaptureFeedbackAndFailuresOnly(t *testing.T) {
 	runner := agent.NewHookRunner(nil, workspace)
 	runner.AddHandlers(handlers...)
 
-	pass := runner.Run(t.Context(), agent.NewUserPromptSubmitPayload("s1", workspace, "普通请求"))
+	pass := runner.RunHook(t.Context(), agent.NewUserPromptSubmitPayload("s1", workspace, "普通请求"))
 	if len(pass.Outcomes) != 1 || pass.Outcomes[0].Decision != agent.HookDecisionPass {
 		t.Fatalf("unexpected pass hook report: %+v", pass)
 	}
@@ -190,33 +190,33 @@ func TestHooksCaptureFeedbackAndFailuresOnly(t *testing.T) {
 		t.Fatalf("ordinary prompt should not record evidence: len=%d err=%v", len(evs), err)
 	}
 
-	_ = runner.Run(t.Context(), agent.NewUserPromptSubmitPayload("s1", workspace, "what should I do next?"))
+	_ = runner.RunHook(t.Context(), agent.NewUserPromptSubmitPayload("s1", workspace, "what should I do next?"))
 	evs, err = store.ListEvidence("", 10)
 	if err != nil || len(evs) != 0 {
 		t.Fatalf("broad feedback keyword without skill should not record evidence: len=%d err=%v", len(evs), err)
 	}
 
-	_ = runner.Run(t.Context(), agent.NewUserPromptSubmitPayload("s1", workspace, "$demo run the tests"))
+	_ = runner.RunHook(t.Context(), agent.NewUserPromptSubmitPayload("s1", workspace, "$demo run the tests"))
 	evs, err = store.ListEvidence("", 10)
 	if err != nil || len(evs) != 0 {
 		t.Fatalf("ordinary skill invocation should not record evidence: len=%d err=%v", len(evs), err)
 	}
 
-	_ = runner.Run(t.Context(), agent.NewUserPromptSubmitPayload("s1", workspace, "以后 $demo 要检查测试"))
+	_ = runner.RunHook(t.Context(), agent.NewUserPromptSubmitPayload("s1", workspace, "以后 $demo 要检查测试"))
 	evs, err = store.ListEvidence("demo", 10)
 	if err != nil || len(evs) != 1 || evs[0].Kind != "user-feedback" {
 		t.Fatalf("expected feedback evidence, got %+v err=%v", evs, err)
 	}
 
 	okContent, _ := core.MarshalToolEnvelope(core.NewToolSuccessEnvelope(map[string]any{"status": "ok"}))
-	_ = runner.Run(t.Context(), agent.NewPostToolUsePayload("s1", core.ToolCall{Name: "shell_run", Input: `{"command":"go test"}`}, nil, okContent))
+	_ = runner.RunHook(t.Context(), agent.NewPostToolUsePayload("s1", core.ToolCall{Name: "shell_run", Input: `{"command":"go test"}`}, nil, okContent))
 	evs, _ = store.ListEvidence("", 10)
 	if len(evs) != 1 {
 		t.Fatalf("successful tool should not add evidence: %+v", evs)
 	}
 
 	failContent, _ := core.MarshalToolEnvelope(core.NewToolErrorEnvelope("exec_failed", "tests failed"))
-	_ = runner.Run(t.Context(), agent.NewPostToolUsePayload("s1", core.ToolCall{Name: "shell_run", Input: `{"command":"go test"}`}, map[string]any{"command": "go test"}, failContent))
+	_ = runner.RunHook(t.Context(), agent.NewPostToolUsePayload("s1", core.ToolCall{Name: "shell_run", Input: `{"command":"go test"}`}, map[string]any{"command": "go test"}, failContent))
 	evs, _ = store.ListEvidence("", 10)
 	if len(evs) != 2 || evs[0].Kind == "" {
 		t.Fatalf("expected tool failure evidence: %+v", evs)
@@ -231,8 +231,8 @@ func TestStopHookSummarizesOnlyUnsummarizedEvidence(t *testing.T) {
 	runner.AddHandlers(handlers...)
 	store := NewStore(dataDir, workspace)
 
-	_ = runner.Run(t.Context(), agent.NewUserPromptSubmitPayload("s1", workspace, "以后 $demo 要检查测试"))
-	_ = runner.Run(t.Context(), agent.NewStopPayload("s1", workspace, "first answer", 1))
+	_ = runner.RunHook(t.Context(), agent.NewUserPromptSubmitPayload("s1", workspace, "以后 $demo 要检查测试"))
+	_ = runner.RunHook(t.Context(), agent.NewStopPayload("s1", workspace, "first answer", 1))
 	evs, err := store.ListEvidence("", 10)
 	if err != nil {
 		t.Fatal(err)
@@ -255,7 +255,7 @@ func TestStopHookSummarizesOnlyUnsummarizedEvidence(t *testing.T) {
 		t.Fatalf("turn summary should preserve skill linkage, got %+v", linkedSummary)
 	}
 
-	_ = runner.Run(t.Context(), agent.NewStopPayload("s1", workspace, "unrelated later answer", 2))
+	_ = runner.RunHook(t.Context(), agent.NewStopPayload("s1", workspace, "unrelated later answer", 2))
 	evs, err = store.ListEvidence("", 10)
 	if err != nil {
 		t.Fatal(err)
@@ -264,8 +264,8 @@ func TestStopHookSummarizesOnlyUnsummarizedEvidence(t *testing.T) {
 		t.Fatalf("unrelated later stop should not append summary, got %+v", evs)
 	}
 
-	_ = runner.Run(t.Context(), agent.NewUserPromptSubmitPayload("s1", workspace, "下次 $demo 要更短"))
-	_ = runner.Run(t.Context(), agent.NewStopPayload("s1", workspace, "second answer", 3))
+	_ = runner.RunHook(t.Context(), agent.NewUserPromptSubmitPayload("s1", workspace, "下次 $demo 要更短"))
+	_ = runner.RunHook(t.Context(), agent.NewStopPayload("s1", workspace, "second answer", 3))
 	evs, err = store.ListEvidence("", 10)
 	if err != nil {
 		t.Fatal(err)

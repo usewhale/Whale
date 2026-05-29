@@ -53,400 +53,91 @@ func metadataBool(v any) bool {
 }
 
 func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
-	var eventCmd tea.Cmd
 	if ev.AutoAcceptKnown {
 		m.autoAccept = ev.AutoAccept
 	}
 	switch ev.Kind {
 	case service.EventAssistantDelta:
-		m.clearProviderRetryStatus()
-		m.append("assistant", ev.Text)
-		m.recordAssistantDelta(ev.Text)
-		m.addLog(logEntry{Kind: "assistant_delta", Source: "assistant", Summary: ev.Text, Raw: ev.Text})
-		if strings.TrimSpace(ev.Text) != "" {
-			m.sawAssistantThisTurn = true
-		}
-		m.startBusy()
+		m.handleAssistantDeltaEvent(ev)
 	case service.EventReasoningDelta:
-		m.clearProviderRetryStatus()
-		m.append("think", ev.Text)
-		m.recordModelOutputDelta(ev.Text)
-		m.addLog(logEntry{Kind: "reasoning_delta", Source: "reasoning", Summary: ev.Text, Raw: ev.Text})
-		if strings.TrimSpace(ev.Text) != "" {
-			m.sawReasoningThisTurn = true
-		}
+		m.handleReasoningDeltaEvent(ev)
 	case service.EventPlanDelta:
-		m.clearProviderRetryStatus()
-		m.appendPlanDelta(ev.Text)
-		m.recordModelOutputDelta(ev.Text)
-		m.addLog(logEntry{Kind: "plan_delta", Source: "plan", Summary: ev.Text, Raw: ev.Text})
-		if strings.TrimSpace(ev.Text) != "" {
-			m.sawPlanThisTurn = true
-		}
+		m.handlePlanDeltaEvent(ev)
 	case service.EventPlanCompleted:
-		m.clearProviderRetryStatus()
-		if strings.TrimSpace(ev.Text) != "" {
-			m.lastProposedPlan = strings.TrimSpace(ev.Text)
-			if m.assembler == nil {
-				m.assembler = tuirender.NewAssembler()
-			}
-			m.assembler.SetPlan(ev.Text)
-			m.commitLiveTranscript(false)
-			m.sawPlanThisTurn = true
-		}
-		m.addLog(logEntry{Kind: "plan_completed", Source: "plan", Summary: truncateLine(ev.Text, 120), Raw: ev.Text})
+		m.handlePlanCompletedEvent(ev)
 	case service.EventPlanUpdate:
-		m.clearProviderRetryStatus()
-		if strings.TrimSpace(ev.Text) != "" {
-			if m.assembler == nil {
-				m.assembler = tuirender.NewAssembler()
-			}
-			m.assembler.AddPlanUpdate(ev.Text)
-			m.refreshLiveViewportContent()
-		}
-		m.addLog(logEntry{Kind: "plan_update", Source: "plan", Summary: truncateLine(ev.Text, 120), Raw: ev.Text})
+		m.handlePlanUpdateEvent(ev)
 	case service.EventProviderRetry:
-		if ev.Metadata != nil && metadataBool(ev.Metadata["stream_reset"]) {
-			m.resetLiveAttemptForProviderRetry()
-		}
-		m.setProviderRetryStatus(ev)
-		m.addLog(logEntry{Kind: "api_retry", Source: "provider", Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Metadata)})
+		m.handleProviderRetryEvent(ev)
 	case service.EventInfo:
-		m.clearProviderRetryStatus()
-		if !isEnvironmentInventoryBlock(ev.Text) {
-			if ev.LocalResult != nil {
-				m.appendLocalResult(ev.LocalResult)
-			} else if notice := permissionNoticeFromInfo(ev.Text); notice != nil {
-				m.appendSystemNotice(notice)
-			} else if isSessionNotice(ev.Text) {
-				m.appendTranscript("notice", tuirender.KindNotice, ev.Text)
-			} else {
-				m.append("info", ev.Text)
-			}
-		} else {
-			m.addLog(logEntry{
-				Kind:    "env_summary",
-				Source:  "system",
-				Summary: "environment summary captured",
-				Raw:     ev.Text,
-			})
-		}
-		m.addLog(logEntry{Kind: "info", Source: "system", Summary: ev.Text, Raw: ev.Text})
-		m.status = "ready"
-		m.syncModelEffortFromInfo(ev.Text)
-		m.refreshViewportContentFollow(true)
+		m.handleInfoEvent(ev)
 	case service.EventError:
-		m.clearProviderRetryStatus()
-		m.append("error", ev.Text)
-		m.addLog(logEntry{Kind: "error", Source: "system", Summary: ev.Text, Raw: ev.Text})
-		m.status = "error"
+		m.handleErrorEvent(ev)
 	case service.EventLocalSubmitResult:
-		m.clearProviderRetryStatus()
-		role := ev.Status
-		if role == "" {
-			role = "info"
-		}
-		if !isEnvironmentInventoryBlock(ev.Text) {
-			m.appendLocalCommandEcho(m.popLocalSubmitCommand())
-			m.appendLocalSubmitResult(role, ev.Text, ev.LocalResult)
-		} else {
-			m.addLog(logEntry{
-				Kind:    "env_summary",
-				Source:  "system",
-				Summary: "environment summary captured",
-				Raw:     ev.Text,
-			})
-		}
-		m.addLog(logEntry{Kind: role, Source: "system", Summary: ev.Text, Raw: ev.Text})
-		if role == "error" {
-			m.status = "error"
-		}
-		if role == "info" {
-			m.syncModelEffortFromInfo(ev.Text)
-			m.refreshViewportContentFollow(true)
-		}
+		m.handleLocalSubmitResultEvent(ev)
 	case service.EventDiffResult:
-		m.clearProviderRetryStatus()
-		m.appendLocalCommandEcho(m.popLocalSubmitCommand())
-		m.setDiffText(ev.Text)
-		m.page = pageDiff
-		m.status = "diff"
-		m.refreshViewportContentFollow(true)
-		m.viewport.GotoTop()
+		m.handleDiffResultEvent(ev)
 	case service.EventBtwStarted:
-		m.clearProviderRetryStatus()
-		m.startBtwPanel(ev.Count, ev.Text)
-		m.refreshViewportContent()
+		m.handleBtwStartedEvent(ev)
 	case service.EventBtwDelta:
-		m.clearProviderRetryStatus()
-		m.appendBtwDelta(ev.Count, ev.Text)
-		m.refreshViewportContent()
+		m.handleBtwDeltaEvent(ev)
 	case service.EventBtwDone:
-		m.clearProviderRetryStatus()
-		m.finishBtwPanel(ev.Count, ev.Text)
-		m.refreshViewportContent()
+		m.handleBtwDoneEvent(ev)
 	case service.EventBtwError:
-		m.clearProviderRetryStatus()
-		m.failBtwPanel(ev.Count, ev.Text)
-		m.refreshViewportContent()
+		m.handleBtwErrorEvent(ev)
 	case service.EventToolCall:
-		m.clearProviderRetryStatus()
-		if ev.ToolName != "update_plan" {
-			m.appendToolCall(ev.ToolCallID, ev.ToolName, ev.Text)
-		}
-		m.addLog(logEntry{
-			Kind:    "tool_call",
-			Source:  ev.ToolName,
-			Summary: fmt.Sprintf("%s (id=%s)", ev.Text, ev.ToolCallID),
-			Raw:     fmt.Sprintf("id=%s\ninput=%s", ev.ToolCallID, ev.Text),
-		})
+		m.handleToolCallEvent(ev)
 	case service.EventToolResult:
-		m.clearProviderRetryStatus()
-		role, text := summarizeToolResultForChat(ev.ToolName, ev.Text)
-		if suppressesNoFinalAnswer(role) {
-			m.sawTerminalToolOutcomeThisTurn = true
-		}
-		if !m.updateToolCallFromResult(ev.ToolCallID, ev.ToolName, ev.Text, role, text, ev.Metadata) {
-			m.markToolCallResolved(ev.ToolCallID)
-			if shouldShowUnmatchedToolResult(ev.ToolName, role, text) {
-				m.appendLiveToolResult(text, role)
-			}
-		}
-		m.addLog(logEntry{Kind: "tool_result", Source: ev.ToolName, Summary: truncateLine(ev.Text, 120), Raw: ev.Text})
-		m.captureDiffMetadata(ev.ToolName, ev.Metadata)
-		m.captureDiff(ev.ToolName, ev.Text)
-		if !m.hasPendingToolCalls() {
-			m.commitLiveTranscript(false)
-		}
-		if toolResultMayChangeGitBranch(ev.ToolName) {
-			eventCmd = tea.Batch(eventCmd, detectGitBranchCmd(m.cwdPath))
-		}
+		return m.handleToolResultEvent(ev), false, false
 	case service.EventTaskStarted:
-		m.clearProviderRetryStatus()
-		m.status = ev.Text
-		m.addLog(logEntry{Kind: "task_started", Source: ev.ToolName, Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Metadata)})
+		m.handleTaskStartedEvent(ev)
 	case service.EventTaskProgress:
-		m.clearProviderRetryStatus()
-		m.status = ev.Text
-		m.updateTaskProgress(ev.ToolCallID, ev.ToolName, ev.Text, ev.Status, ev.Metadata)
-		m.addLog(logEntry{Kind: "task_progress", Source: ev.ToolName, Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Metadata)})
+		m.handleTaskProgressEvent(ev)
 	case service.EventTaskCompleted:
-		m.clearProviderRetryStatus()
-		m.status = ev.Text
-		m.addLog(logEntry{Kind: "task_completed", Source: ev.ToolName, Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Metadata)})
+		m.handleTaskCompletedEvent(ev)
 	case service.EventMCPStatus:
-		m.clearProviderRetryStatus()
-		m.status = ev.Text
-		m.addLog(logEntry{Kind: "mcp_status", Source: "mcp", Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Metadata)})
+		m.handleMCPStatusEvent(ev)
 	case service.EventMCPComplete:
-		m.clearProviderRetryStatus()
-		m.status = ev.Text
-		m.addLog(logEntry{Kind: "mcp_complete", Source: "mcp", Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Metadata)})
+		m.handleMCPCompleteEvent(ev)
 	case service.EventApprovalRequired:
-		m.clearProviderRetryStatus()
-		if m.stopping {
-			if ev.ToolCallID != "" {
-				m.dispatchIntent(service.Intent{Kind: service.IntentCancelToolApproval, ToolCallID: ev.ToolCallID})
-			}
-			m.addLog(logEntry{Kind: "approval_required_stale", Source: ev.ToolName, Summary: ev.Text, Raw: ev.Text})
-			break
-		}
-		m.mode = modeApproval
-		m.approval.toolCallID = ev.ToolCallID
-		m.approval.toolName = ev.ToolName
-		m.approval.reason = ev.Text
-		m.approval.metadata = ev.Metadata
-		m.approval.selected = 0
-		m.addLog(logEntry{Kind: "approval_required", Source: ev.ToolName, Summary: ev.Text, Raw: ev.Text})
-		m.status = "approval required"
+		m.handleApprovalRequiredEvent(ev)
 	case service.EventUserInputRequired:
-		m.clearProviderRetryStatus()
-		if m.stopping {
-			if ev.ToolCallID != "" {
-				m.dispatchIntent(service.Intent{Kind: service.IntentCancelUserInput, ToolCallID: ev.ToolCallID})
-			}
-			m.addLog(logEntry{Kind: "user_input_required_stale", Source: ev.ToolName, Summary: fmt.Sprintf("%d questions", len(ev.Questions)), Raw: fmt.Sprintf("%+v", ev.Questions)})
-			break
-		}
-		m.mode = modeUserInput
-		m.userInput.toolCallID = ev.ToolCallID
-		m.userInput.toolName = ev.ToolName
-		m.userInput.questions = ev.Questions
-		m.userInput.index = 0
-		m.userInput.selectedOption = 0
-		m.userInput.answers = nil
-		m.addLog(logEntry{Kind: "user_input_required", Source: ev.ToolName, Summary: fmt.Sprintf("%d questions", len(ev.Questions)), Raw: fmt.Sprintf("%+v", ev.Questions)})
-		m.status = "user input required"
+		m.handleUserInputRequiredEvent(ev)
 	case service.EventSessionsListed:
-		m.clearProviderRetryStatus()
-		m.mode = modeSessionPicker
-		m.sessionChoices = ev.Choices
-		m.sessionIndex = firstSessionChoiceIndex(ev.Choices)
-		m.addLog(logEntry{Kind: "sessions_listed", Source: "session", Summary: fmt.Sprintf("%d sessions", len(ev.Choices)), Raw: strings.Join(ev.Choices, "\n")})
-		m.status = "session picker"
+		m.handleSessionsListedEvent(ev)
 	case service.EventLocalSubmitDone:
 		m.clearProviderRetryStatus()
-		eventCmd = m.finishLocalSubmit()
+		return m.finishLocalSubmit(), false, false
 	case service.EventTurnDone:
 		m.clearProviderRetryStatus()
-		eventCmd = m.handleTurnDone(ev)
+		return m.handleTurnDone(ev), false, false
 	case service.EventModelPicker:
-		m.clearProviderRetryStatus()
-		m.stopBusy()
-		m.stopping = false
-		m.mode = modeModelPicker
-		m.modelPicker.stage = 0
-		m.modelPicker.models = ev.ModelChoices
-		m.modelPicker.efforts = ev.EffortChoices
-		m.modelPicker.thinkings = ev.ThinkingChoices
-		m.modelPicker.modelIx = indexOf(ev.ModelChoices, ev.CurrentModel)
-		m.modelPicker.effIx = indexOf(ev.EffortChoices, ev.CurrentEffort)
-		m.modelPicker.thinkIx = indexOf(ev.ThinkingChoices, ev.CurrentThinking)
+		m.handleModelPickerEvent(ev)
 	case service.EventPermissionsMenu:
-		m.clearProviderRetryStatus()
-		m.stopBusy()
-		m.stopping = false
-		m.mode = modePermissionsMenu
-		m.permissionsMenu.autoAccept = ev.AutoAccept
-		m.permissionsMenu.selected = 0
-		m.slash.matches = nil
-		m.slash.selected = 0
-		m.slash.argumentHint = ""
-		m.skills.matches = nil
-		m.skills.selected = 0
-		m.status = "permissions"
+		m.handlePermissionsMenuEvent(ev)
 	case service.EventSkillLoaded:
-		m.clearProviderRetryStatus()
-		m.addLog(logEntry{Kind: "skill_loaded", Source: "skills", Summary: ev.Text, Raw: ev.Text})
-		m.status = ev.Text
+		m.handleSkillLoadedEvent(ev)
 	case service.EventSkillsMenu:
-		m.clearProviderRetryStatus()
-		m.stopBusy()
-		m.stopping = false
-		m.mode = modeSkillsMenu
-		m.skillsMenu.selected = 0
-		m.slash.matches = nil
-		m.slash.selected = 0
-		m.slash.argumentHint = ""
-		m.skills.matches = nil
-		m.skills.selected = 0
-		m.status = "skills"
+		m.handleSkillsMenuEvent(ev)
 	case service.EventSkillsManager:
-		m.clearProviderRetryStatus()
-		m.stopBusy()
-		m.stopping = false
-		m.mode = modeSkillsManager
-		m.slash.matches = nil
-		m.slash.selected = 0
-		m.slash.argumentHint = ""
-		m.skills.matches = nil
-		m.skills.selected = 0
-		m.setSkillsManagerItems(ev.Skills)
-		m.status = "skills"
+		m.handleSkillsManagerEvent(ev)
 	case service.EventPluginsManager:
-		m.clearProviderRetryStatus()
-		m.stopBusy()
-		m.stopping = false
-		m.mode = modePluginsManager
-		m.slash.matches = nil
-		m.slash.selected = 0
-		m.slash.argumentHint = ""
-		m.skills.matches = nil
-		m.skills.selected = 0
-		m.setPluginsManagerItems(ev.Plugins)
-		m.status = "plugins"
+		m.handlePluginsManagerEvent(ev)
 	case service.EventReviewMenu:
-		m.clearProviderRetryStatus()
-		m.stopBusy()
-		m.stopping = false
-		m.mode = modeReviewMenu
-		m.reviewMenu.selected = 0
-		m.reviewTargetPicker = reviewTargetPickerState{}
-		m.slash.matches = nil
-		m.slash.selected = 0
-		m.slash.argumentHint = ""
-		m.skills.matches = nil
-		m.skills.selected = 0
-		m.status = "review"
+		m.handleReviewMenuEvent(ev)
 	case service.EventViewModeChanged:
-		m.clearProviderRetryStatus()
-		mode := strings.TrimSpace(ev.ViewMode)
-		if mode == "" {
-			mode = strings.TrimSpace(ev.Text)
-			switch mode {
-			case app.ViewModeToggleMessage(app.ViewModeFocus):
-				mode = app.ViewModeFocus
-			case app.ViewModeToggleMessage(app.ViewModeDefault):
-				mode = app.ViewModeDefault
-			default:
-				mode = strings.TrimPrefix(mode, "view:")
-				mode = strings.TrimSpace(mode)
-			}
-		}
-		if mode == "" {
-			mode = app.ViewModeDefault
-		}
-		m.viewMode = mode
-		if strings.TrimSpace(ev.Text) != "" {
-			m.setEphemeralInfo(ev.Text)
-		}
-		eventCmd = m.redrawTranscriptForFocusToggleCmd()
-		m.status = "ready"
+		return m.handleViewModeChangedEvent(ev), false, false
 	case service.EventWorktreeExitPrompt:
-		m.clearProviderRetryStatus()
-		if ev.WorktreeExit != nil {
-			m.worktreeExit.summary = *ev.WorktreeExit
-			m.worktreeExit.selected = 0
-			m.mode = modeWorktreeExit
-			m.status = "worktree exit"
-		}
+		m.handleWorktreeExitPromptEvent(ev)
 	case service.EventClearScreen:
-		m.clearProviderRetryStatus()
-		m.assembler.Reset()
-		m.clearPendingToolCalls()
-		m.ephemeralMessages = nil
-		m.resetTranscript()
-		m.resetTurnVisibility()
-		m.logs = nil
-		m.diffs = nil
-		m.status = "terminal cleared"
-		return tea.Sequence(clearScreenCmd(), m.startupHeaderPrintCmd(), waitEventCmd(m.svc)), false, true
+		return m.handleClearScreenEvent(), false, true
 	case service.EventSessionHydrated:
-		prevSessionID := m.sessionID
-		if strings.TrimSpace(ev.SessionID) != "" {
-			m.sessionID = strings.TrimSpace(ev.SessionID)
-		}
-		sessionChanged := prevSessionID != "" && m.sessionID != "" && m.sessionID != prevSessionID
-		hadStartupHeaderPrinted := m.startupHeaderPrinted || (m.startupHeaderOnce != nil && *m.startupHeaderOnce)
-		m.clearProviderRetryStatus()
-		m.assembler.Reset()
-		m.clearPendingToolCalls()
-		m.ephemeralMessages = nil
-		m.resetTranscript()
-		m.resetTurnVisibility()
-		m.logs = nil
-		m.diffs = nil
-		m.hydrateSessionMessages(ev.Messages)
-		m.commitLiveTranscript(true)
-		m.trimHydratedTranscriptForDisplay(maxHydratedTranscriptLines)
-		if sessionChanged {
-			hadStartupHeaderPrinted = false
-			eventCmd = clearScreenCmd()
-		}
-		if len(m.transcript) > 0 || hadStartupHeaderPrinted {
-			m.startupHeaderPrinted = true
-			if m.startupHeaderOnce == nil {
-				m.startupHeaderOnce = new(bool)
-			}
-			*m.startupHeaderOnce = true
-		}
-		m.status = "ready"
+		return m.handleSessionHydratedEvent(ev), false, false
 	case service.EventExitRequested:
-		m.clearProviderRetryStatus()
-		m.dispatchIntent(service.Intent{Kind: service.IntentShutdown})
+		m.handleExitRequestedEvent()
 		return nil, true, false
 	}
-	return eventCmd, false, false
+	return nil, false, false
 }
 
 func (m *model) handleServiceEvents(events []service.Event) (tea.Cmd, bool, bool) {

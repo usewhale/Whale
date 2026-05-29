@@ -26,8 +26,27 @@ type chatItem struct {
 }
 
 type chatItemRenderKey struct {
-	msg         tuirender.UIMessage
+	msgID       string
+	msgKind     tuirender.MessageKind
+	msgRole     string
+	msgText     string
+	msgToolName string
+	streaming   bool
+	fullReason  bool
 	renderWidth int
+}
+
+func makeRenderKey(msg tuirender.UIMessage, renderWidth int) chatItemRenderKey {
+	return chatItemRenderKey{
+		msgID:       msg.ID,
+		msgKind:     msg.Kind,
+		msgRole:     msg.Role,
+		msgText:     msg.Text,
+		msgToolName: msg.ToolName,
+		streaming:   msg.Streaming,
+		fullReason:  msg.FullReasoning,
+		renderWidth: renderWidth,
+	}
 }
 
 func newChatList() chatList {
@@ -45,7 +64,7 @@ func (l *chatList) SetMessages(messages []tuirender.UIMessage, renderWidth int) 
 	nextCache := make(map[chatItemRenderKey][]string, len(messages))
 	pendingWorkSeparator := false
 	for _, msg := range messages {
-		key := chatItemRenderKey{msg: msg, renderWidth: renderWidth}
+		key := makeRenderKey(msg, renderWidth)
 		baseLines, ok := l.renderCache[key]
 		if !ok {
 			baseLines = renderChatItemLines(msg, renderWidth)
@@ -82,7 +101,7 @@ func (l *chatList) SetMessages(messages []tuirender.UIMessage, renderWidth int) 
 // reusing renderCache so a subsequent SetMessages call for the same
 // (msg, renderWidth) skips re-rendering.
 func (l *chatList) measureLines(msg tuirender.UIMessage, renderWidth int) int {
-	key := chatItemRenderKey{msg: msg, renderWidth: renderWidth}
+	key := makeRenderKey(msg, renderWidth)
 	if lines, ok := l.renderCache[key]; ok {
 		return len(lines)
 	}

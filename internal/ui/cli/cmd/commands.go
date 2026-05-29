@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/usewhale/whale/internal/app"
+	"github.com/usewhale/whale/internal/core"
 )
 
 func newExecCmd(opts *cliOptions) *cobra.Command {
@@ -102,24 +103,17 @@ func prepareResumeWorktree(args []string, last bool, opts *cliOptions) error {
 		return nil
 	}
 	targetWorkspace := sess.Path
-	if workspace := strings.TrimSpace(sess.Workspace); workspace != "" && pathInside(workspace, sess.Path) {
-		targetWorkspace = workspace
+	if workspace := strings.TrimSpace(sess.Workspace); workspace != "" {
+		inside, err := core.PathInside(workspace, sess.Path)
+		if err == nil && inside {
+			targetWorkspace = workspace
+		}
 	}
 	if err := os.Chdir(targetWorkspace); err != nil {
 		return fmt.Errorf("enter resume worktree: %w", err)
 	}
 	opts.worktreeSession = sess
 	return nil
-}
-
-func pathInside(path, root string) bool {
-	path = filepath.Clean(path)
-	root = filepath.Clean(root)
-	rel, err := filepath.Rel(root, path)
-	if err != nil {
-		return false
-	}
-	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)))
 }
 
 func newDoctorCmd(opts *cliOptions) *cobra.Command {

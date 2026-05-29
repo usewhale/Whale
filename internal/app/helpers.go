@@ -10,15 +10,6 @@ func shortFingerprint(v string) string {
 	return v[:n]
 }
 
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
-}
-
 func containsString(xs []string, v string) bool {
 	for _, x := range xs {
 		if strings.EqualFold(strings.TrimSpace(x), strings.TrimSpace(v)) {
@@ -49,7 +40,7 @@ func NormalizeEffort(v string) string {
 	return normalizeEffort(v)
 }
 
-func onOff(v bool) string {
+func OnOff(v bool) string {
 	if v {
 		return "on"
 	}

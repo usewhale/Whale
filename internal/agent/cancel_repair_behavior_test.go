@@ -70,7 +70,7 @@ func TestRunCancelCurrentTurnReturnsContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(10*time.Millisecond, cancel)
 
-	_, err := a.Run(ctx, "s-cancel-run", "hi")
+	_, err := a.RunSession(ctx, "s-cancel-run", "hi")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context canceled, got %v", err)
 	}

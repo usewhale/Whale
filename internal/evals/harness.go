@@ -143,7 +143,7 @@ func RunScenario(ctx context.Context, spec ScenarioSpec) (*Run, error) {
 	}
 
 	started := time.Now()
-	finalMsg, err := a.Run(ctx, sessionID, prompt)
+	finalMsg, err := a.RunSession(ctx, sessionID, prompt)
 	if err != nil {
 		return nil, newRunFailure(FailureKindRuntimeSemantics, name, nil, fmt.Errorf("run scenario %q: %w", name, err))
 	}

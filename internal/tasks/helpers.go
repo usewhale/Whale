@@ -35,22 +35,6 @@ func addUsage(a, b llm.Usage) llm.Usage {
 	return a
 }
 
-func firstNonEmpty(a, b string) string {
-	if strings.TrimSpace(a) != "" {
-		return a
-	}
-	return b
-}
-
-func firstNonEmptyString(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
-}
-
 func quoteProgressTerm(v string) string {
 	v = compactProgressTarget(v)
 	if v == "" {
@@ -81,28 +65,12 @@ func compactURLForProgress(raw string) string {
 	return compactProgressTarget(target)
 }
 
-func asString(v any) string {
-	s, _ := v.(string)
-	return s
-}
-
 func asMap(v any) map[string]any {
 	m, _ := v.(map[string]any)
 	if m == nil {
 		return map[string]any{}
 	}
 	return m
-}
-
-func asAnySlice(v any) []any {
-	if v == nil {
-		return nil
-	}
-	arr, ok := v.([]any)
-	if ok {
-		return arr
-	}
-	return nil
 }
 
 func asInt(v any) int {

@@ -14,7 +14,7 @@ func (a *App) RunUserPromptSubmitHook(input string) (blocked bool, output string
 	if a.hookRunner.Empty() {
 		return false, "", input
 	}
-	report := a.hookRunner.Run(a.ctx, agent.NewUserPromptSubmitPayload(a.sessionID, a.workspaceRoot, input))
+	report := a.hookRunner.RunHook(a.ctx, agent.NewUserPromptSubmitPayload(a.sessionID, a.workspaceRoot, input))
 	lines := renderHookReport(report)
 	if report.Blocked {
 		lines = append(lines, "assistant> blocked by UserPromptSubmit hook")
@@ -30,7 +30,7 @@ func (a *App) RunStopHook(lastAssistantText string, turn int) string {
 	if a.hookRunner.Empty() {
 		return ""
 	}
-	report := a.hookRunner.Run(a.ctx, agent.NewStopPayload(a.sessionID, a.workspaceRoot, lastAssistantText, turn))
+	report := a.hookRunner.RunHook(a.ctx, agent.NewStopPayload(a.sessionID, a.workspaceRoot, lastAssistantText, turn))
 	return strings.Join(renderHookReport(report), "\n")
 }
 

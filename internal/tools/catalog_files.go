@@ -33,12 +33,12 @@ func (b *Toolset) fileDiscoveryTools() []core.Tool {
 	return []core.Tool{
 		toolFn{
 			name:        "read_file",
-			description: "Read file content under workspace root or discovered local skill directories. Use this before edit/write to confirm exact text. Relative paths are workspace-relative: sibling projects outside the workspace require shell_run or a Whale session started from the parent workspace. Files up to 32KB return full content by default; larger files return an outline with head lines and continuation hints. Use offset/limit to read bounded ranges.",
+			description: "Read file content. Workspace, git worktree, and discovered local skill paths are read directly; external paths request file access approval before reading. Use this before edit/write to confirm exact text. Files up to 32KB return full content by default; larger files return an outline with head lines and continuation hints. Use offset/limit to read bounded ranges.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
 				"properties": map[string]any{
-					"file_path": map[string]any{"type": "string", "description": "Path relative to workspace root, an absolute path inside workspace root, or an absolute path inside a discovered local skill directory. A sibling repo name alone is treated as a workspace child, not a parent-directory repo."},
+					"file_path": map[string]any{"type": "string", "description": "Path relative to workspace root, or an absolute/relative external path that may require file access approval."},
 					"offset":    map[string]any{"type": "integer", "minimum": 0, "description": "Start line offset (0-based)"},
 					"limit":     map[string]any{"type": "integer", "minimum": 1, "maximum": 2000, "description": "Max lines to read"},
 				},
@@ -64,12 +64,12 @@ func (b *Toolset) fileDiscoveryTools() []core.Tool {
 		},
 		toolFn{
 			name:        "list_dir",
-			description: "List directory entries under workspace root or discovered local skill directories. Omit path or pass an empty path to list the workspace root. Use for structure discovery before deeper reads. Relative paths are workspace-relative: path:\"codex\" means a codex directory inside this workspace. For sibling projects outside the workspace, use shell_run (for example ls ../codex or git -C ../codex ...), or restart Whale from the parent workspace. Not recursive; combine with grep/read_file for targeted exploration.",
+			description: "List directory entries. Workspace, git worktree, and discovered local skill paths are read directly; external paths request file access approval before listing. Omit path or pass an empty path to list the workspace root. Not recursive; combine with grep/read_file for targeted exploration.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
 				"properties": map[string]any{
-					"path":   map[string]any{"type": "string", "description": "Optional directory path. Omit or pass an empty string to list the workspace root. Otherwise use a path relative to workspace root, an absolute path inside workspace root, or an absolute path inside a discovered local skill directory. A sibling repo name alone is treated as a workspace child, not a parent-directory repo."},
+					"path":   map[string]any{"type": "string", "description": "Optional directory path. Omit or pass an empty string to list the workspace root. External paths may require file access approval."},
 					"ignore": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Deprecated compatibility field. Accepted but ignored; list_dir always returns the full directory listing."},
 				},
 			},

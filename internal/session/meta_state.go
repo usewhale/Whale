@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/usewhale/whale/internal/core"
 	"time"
 )
 
@@ -109,7 +111,7 @@ func SessionMetaPatchFromMeta(meta SessionMeta) SessionMetaPatch {
 }
 
 func metaStatePath(sessionsDir, sessionID string) string {
-	return filepath.Join(sessionsDir, sanitizeSessionID(sessionID)+".meta.json")
+	return filepath.Join(sessionsDir, core.SanitizeSessionID(sessionID)+".meta.json")
 }
 
 func LoadSessionMeta(sessionsDir, sessionID string) (SessionMeta, error) {

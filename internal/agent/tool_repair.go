@@ -231,17 +231,32 @@ func scavengeToolCalls(reasoning, content string, allowed map[string]bool, exist
 
 func parseScavengedToolCall(obj string) (name string, input string, ok bool) {
 	// shape A: {"name":"tool","arguments":{...}}
+	if name, input, ok := parseNamedScavengedToolCall(obj); ok {
+		return name, input, true
+	}
+	// shape B: {"function":{"name":"tool","arguments":{...}}}
+	if name, input, ok := parseFunctionScavengedToolCall(obj); ok {
+		return name, input, true
+	}
+	// shape C: {"function_call":{"name":"tool","arguments":"{...json...}"}}
+	if name, input, ok := parseFunctionCallScavengedToolCall(obj); ok {
+		return name, input, true
+	}
+	return "", "", false
+}
+
+func parseNamedScavengedToolCall(obj string) (name string, input string, ok bool) {
 	var a struct {
 		Name      string `json:"name"`
 		Arguments any    `json:"arguments"`
 	}
 	if err := json.Unmarshal([]byte(obj), &a); err == nil && strings.TrimSpace(a.Name) != "" {
-		b, err := marshalArgsPayload(a.Arguments)
-		if err == nil {
-			return a.Name, string(b), true
-		}
+		return marshalScavengedArgs(a.Name, a.Arguments)
 	}
-	// shape B: {"function":{"name":"tool","arguments":{...}}}
+	return "", "", false
+}
+
+func parseFunctionScavengedToolCall(obj string) (name string, input string, ok bool) {
 	var b struct {
 		Function struct {
 			Name      string `json:"name"`
@@ -249,12 +264,12 @@ func parseScavengedToolCall(obj string) (name string, input string, ok bool) {
 		} `json:"function"`
 	}
 	if err := json.Unmarshal([]byte(obj), &b); err == nil && strings.TrimSpace(b.Function.Name) != "" {
-		argb, err := marshalArgsPayload(b.Function.Arguments)
-		if err == nil {
-			return b.Function.Name, string(argb), true
-		}
+		return marshalScavengedArgs(b.Function.Name, b.Function.Arguments)
 	}
-	// shape C: {"function_call":{"name":"tool","arguments":"{...json...}"}}
+	return "", "", false
+}
+
+func parseFunctionCallScavengedToolCall(obj string) (name string, input string, ok bool) {
 	var c struct {
 		FunctionCall struct {
 			Name      string `json:"name"`
@@ -262,12 +277,17 @@ func parseScavengedToolCall(obj string) (name string, input string, ok bool) {
 		} `json:"function_call"`
 	}
 	if err := json.Unmarshal([]byte(obj), &c); err == nil && strings.TrimSpace(c.FunctionCall.Name) != "" {
-		argb, err := marshalArgsPayload(c.FunctionCall.Arguments)
-		if err == nil {
-			return c.FunctionCall.Name, string(argb), true
-		}
+		return marshalScavengedArgs(c.FunctionCall.Name, c.FunctionCall.Arguments)
 	}
 	return "", "", false
+}
+
+func marshalScavengedArgs(name string, args any) (string, string, bool) {
+	b, err := marshalArgsPayload(args)
+	if err != nil {
+		return "", "", false
+	}
+	return name, string(b), true
 }
 
 func marshalArgsPayload(v any) ([]byte, error) {

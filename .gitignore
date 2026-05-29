@@ -12,6 +12,7 @@ dist/
 # --- Caches & Temp ---
 .gocache/
 tmp/
+.worktrees/
 
 # --- Local Settings, Secrets & Session State ---
 .whale/*

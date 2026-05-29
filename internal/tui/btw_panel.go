@@ -149,7 +149,7 @@ func (m model) btwMaxBodyLines() int {
 	if m.height <= 0 {
 		return 8
 	}
-	return max(3, minInt(12, m.height/3))
+	return max(3, min(12, m.height/3))
 }
 
 func clampBtwScrollToPage(scroll int, lines []string, maxBodyLines int) int {

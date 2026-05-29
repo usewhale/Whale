@@ -37,7 +37,7 @@ func TestRunRefreshesToolsBeforeProviderRequest(t *testing.T) {
 		}),
 	)
 
-	if _, err := ag.Run(context.Background(), "s-refresh-start", "go"); err != nil {
+	if _, err := ag.RunSession(context.Background(), "s-refresh-start", "go"); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if len(provider.seen) != 1 {
@@ -76,7 +76,7 @@ func TestRunRefreshesToolsBetweenToolIterations(t *testing.T) {
 		WithToolPolicy(RulePolicy{Default: PermissionAllow}),
 	)
 
-	if _, err := ag.Run(context.Background(), "s-refresh-recursive", "go"); err != nil {
+	if _, err := ag.RunSession(context.Background(), "s-refresh-recursive", "go"); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	if len(provider.seen) != 2 {
@@ -111,7 +111,7 @@ func TestToolDispatchUsesProviderRequestSnapshot(t *testing.T) {
 		WithToolPolicy(RulePolicy{Default: PermissionAllow}),
 	)
 
-	if _, err := ag.Run(context.Background(), "s-snapshot-dispatch", "go"); err != nil {
+	if _, err := ag.RunSession(context.Background(), "s-snapshot-dispatch", "go"); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 	all, err := ag.store.List(context.Background(), "s-snapshot-dispatch")

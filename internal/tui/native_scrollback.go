@@ -12,7 +12,7 @@ func (m *model) startupHeaderPrintCmd() tea.Cmd {
 	if m.startupHeaderOnce == nil {
 		m.startupHeaderOnce = new(bool)
 	}
-	if *m.startupHeaderOnce || m.page != pageChat || m.width <= 0 || m.height <= 0 {
+	if *m.startupHeaderOnce || m.page != pageChat || m.width <= 0 || m.height <= 0 || m.resumeMenu {
 		return nil
 	}
 	header := m.startupHeaderText()

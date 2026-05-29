@@ -237,10 +237,13 @@ shell-language safety boundary. A user or project config can override them with
 later `[permissions.shell]` entries, including `"*" = "allow"`. Write explicit
 rules for the shell forms you want to prompt or block.
 
-For common file commands such as `cat`, `ls`, `cp`, `mv`, `rm`, `stat`, and
-`du`, Whale also evaluates `[permissions.external_directory]` when path operands
-point outside the workspace or temp directories. Shell redirections are not
-treated as external directory operands.
+Whale evaluates `[permissions.external_directory]` when read-only file tools
+(`read_file`, `list_dir`, `grep`, `search_files`) target paths outside the
+workspace/worktree boundary. It also evaluates the same permission for common
+shell file commands such as `cat`, `ls`, `cp`, `mv`, `rm`, `stat`, and `du`
+when path operands point outside the workspace or temp directories. Shell
+redirection targets are also checked, so a command like `echo x > ../file`
+cannot silently write outside the workspace.
 
 File edits (`edit`, `write`, `apply_patch`) inside the workspace are allowed by
 default; set `[permissions.edit]` to `"ask"` to review edits before they apply,

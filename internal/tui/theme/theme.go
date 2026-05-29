@@ -94,7 +94,7 @@ func RoleBorder(role string) lipgloss.Color {
 		return Default.Assistant
 	case "think":
 		return Default.Border
-	case "notice", "info", "result_canceled":
+	case "notice", "info", "result_canceled", "result_neutral", "shell_result_neutral":
 		return Default.Muted
 	case "status":
 		return Default.Info
@@ -110,6 +110,8 @@ func RoleBorder(role string) lipgloss.Color {
 		return Default.ResultDenied
 	case "result_failed", "shell_result_failed", "error":
 		return Default.Error
+	case "result_blocked", "shell_result_blocked", "result_mode_hint", "shell_result_mode_hint", "result_http_error", "shell_result_http_error", "result_usage_hint", "shell_result_usage_hint":
+		return Default.Warn
 	case "result_timeout", "shell_result_timeout":
 		return Default.ResultTimeout
 	case "result_error", "shell_result_error":

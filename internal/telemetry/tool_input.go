@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/usewhale/whale/internal/core"
 )
 
 const ToolInputEventsSuffix = ".tool_input_events.jsonl"
@@ -26,7 +28,7 @@ type ToolInputEvent struct {
 }
 
 func ToolInputEventsPath(sessionsDir, sessionID string) string {
-	return filepath.Join(strings.TrimSpace(sessionsDir), sanitizeSessionID(sessionID)+ToolInputEventsSuffix)
+	return filepath.Join(strings.TrimSpace(sessionsDir), core.SanitizeSessionID(sessionID)+ToolInputEventsSuffix)
 }
 
 func AppendToolInputEvent(sessionsDir string, rec ToolInputEvent, now time.Time) error {
@@ -52,14 +54,4 @@ func AppendToolInputEvent(sessionsDir string, rec ToolInputEvent, now time.Time)
 	defer f.Close()
 	_, err = f.Write(append(b, '\n'))
 	return err
-}
-
-func sanitizeSessionID(v string) string {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return "default"
-	}
-	v = strings.ReplaceAll(v, "/", "_")
-	v = strings.ReplaceAll(v, "\\", "_")
-	return v
 }

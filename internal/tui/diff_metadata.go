@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/usewhale/whale/internal/core"
 	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
 
@@ -33,10 +34,10 @@ func renderFileDiffMetadataForChat(metadata map[string]any, maxLines int) string
 }
 
 func renderFileDiffMetadataPlain(metadata map[string]any, maxLines int) string {
-	if len(metadata) == 0 || strings.TrimSpace(asString(metadata["kind"])) != "file_diff" {
+	if len(metadata) == 0 || strings.TrimSpace(core.AsString(metadata["kind"])) != "file_diff" {
 		return ""
 	}
-	if msg := strings.TrimSpace(asString(metadata["preview_error"])); msg != "" {
+	if msg := strings.TrimSpace(core.AsString(metadata["preview_error"])); msg != "" {
 		return "diff preview unavailable: " + msg
 	}
 	files := fileDiffMetadataFiles(metadata["files"])
@@ -67,10 +68,10 @@ func renderFileDiffMetadataPlain(metadata map[string]any, maxLines int) string {
 }
 
 func renderApprovalDiffMetadata(metadata map[string]any, maxLines int) string {
-	if len(metadata) == 0 || strings.TrimSpace(asString(metadata["kind"])) != "file_diff" {
+	if len(metadata) == 0 || strings.TrimSpace(core.AsString(metadata["kind"])) != "file_diff" {
 		return ""
 	}
-	if msg := strings.TrimSpace(asString(metadata["preview_error"])); msg != "" {
+	if msg := strings.TrimSpace(core.AsString(metadata["preview_error"])); msg != "" {
 		return "diff preview unavailable: " + msg
 	}
 	files := fileDiffMetadataFiles(metadata["files"])
@@ -191,8 +192,8 @@ func fileDiffMetadataFiles(value any) []fileDiffView {
 		out := make([]fileDiffView, 0, len(files))
 		for _, file := range files {
 			out = append(out, fileDiffView{
-				path:      asString(file["path"]),
-				diff:      asString(file["unified_diff"]),
+				path:      core.AsString(file["path"]),
+				diff:      core.AsString(file["unified_diff"]),
 				additions: asInt(file["additions"]),
 				deletions: asInt(file["deletions"]),
 				truncated: asBool(file["truncated"]),
@@ -207,8 +208,8 @@ func fileDiffMetadataFiles(value any) []fileDiffView {
 				continue
 			}
 			out = append(out, fileDiffView{
-				path:      asString(file["path"]),
-				diff:      asString(file["unified_diff"]),
+				path:      core.AsString(file["path"]),
+				diff:      core.AsString(file["unified_diff"]),
 				additions: asInt(file["additions"]),
 				deletions: asInt(file["deletions"]),
 				truncated: asBool(file["truncated"]),

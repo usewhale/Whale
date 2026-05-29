@@ -103,7 +103,7 @@ func TestPlanModeInjectsSystemPrompt(t *testing.T) {
 		NewToolRegistry(nil),
 		WithSessionMode(session.ModePlan),
 	)
-	if _, err := a.Run(context.Background(), "s-plan-sys", "hello"); err != nil {
+	if _, err := a.RunSession(context.Background(), "s-plan-sys", "hello"); err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
 	if len(prov.firstHistory) == 0 {

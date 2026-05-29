@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/usewhale/whale/internal/core"
 )
 
 type Mode string
@@ -36,7 +38,7 @@ func ParseMode(raw string) (Mode, error) {
 }
 
 func modeStatePath(sessionsDir, sessionID string) string {
-	return filepath.Join(sessionsDir, sanitizeSessionID(sessionID)+".state.json")
+	return filepath.Join(sessionsDir, core.SanitizeSessionID(sessionID)+".state.json")
 }
 
 func LoadModeState(sessionsDir, sessionID string) (ModeState, error) {

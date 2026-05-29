@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/usewhale/whale/internal/core"
 )
 
 type SessionSummary struct {
@@ -17,11 +19,6 @@ type SessionSummary struct {
 	Meta         SessionMeta
 	Conversation string
 }
-
-const (
-	toolInputEventsSuffix = ".tool_input_events.jsonl"
-	approvalEventsSuffix  = ".approval_events.jsonl"
-)
 
 func ListSessions(sessionsDir string, limit int) ([]SessionSummary, error) {
 	entries, err := os.ReadDir(sessionsDir)
@@ -33,7 +30,7 @@ func ListSessions(sessionsDir string, limit int) ([]SessionSummary, error) {
 	}
 	out := make([]SessionSummary, 0, len(entries))
 	for _, e := range entries {
-		if e.IsDir() || !isSessionJSONLName(e.Name()) {
+		if e.IsDir() || !core.IsSessionJSONLName(e.Name()) {
 			continue
 		}
 		info, err := e.Info()
@@ -129,27 +126,11 @@ func singleLine(text string) string {
 }
 
 func FindSessionPathByID(sessionsDir, sessionID string) string {
-	id := sanitizeSessionID(sessionID)
+	id := core.SanitizeSessionID(sessionID)
 	return filepath.Join(sessionsDir, id+".jsonl")
-}
-
-func isSessionJSONLName(name string) bool {
-	return strings.HasSuffix(name, ".jsonl") &&
-		!strings.HasSuffix(name, toolInputEventsSuffix) &&
-		!strings.HasSuffix(name, approvalEventsSuffix)
 }
 
 func isSubagentSessionID(id string) bool {
 	id = strings.TrimSpace(id)
 	return strings.Contains(id, "--subagent-") || strings.HasPrefix(id, "subagent-")
-}
-
-func sanitizeSessionID(v string) string {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return "default"
-	}
-	v = strings.ReplaceAll(v, "/", "_")
-	v = strings.ReplaceAll(v, "\\", "_")
-	return v
 }

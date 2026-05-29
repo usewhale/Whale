@@ -182,14 +182,14 @@ func toolFailureEvidence(payload agent.HookPayload) (Evidence, bool) {
 	if !ok || env.Success || env.OK {
 		return Evidence{}, false
 	}
-	msg := firstNonEmpty(env.Error, env.Message, env.Code)
+	msg := core.FirstNonEmpty(env.Error, env.Message, env.Code)
 	return Evidence{
 		Kind:              "tool-failure",
 		SessionID:         payload.SessionID,
 		Skill:             skillFromToolArgs(payload.ToolArgs),
 		ToolName:          payload.ToolName,
 		ToolArgsSummary:   summarizeJSON(payload.ToolArgs),
-		ToolResultSummary: firstNonEmpty(msg, result),
+		ToolResultSummary: core.FirstNonEmpty(msg, result),
 		Metadata: map[string]any{
 			"code": env.Code,
 		},
@@ -232,15 +232,6 @@ func summarizeJSON(v any) string {
 		return fmt.Sprint(v)
 	}
 	return string(b)
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
 }
 
 func toolResult(call core.ToolCall, data map[string]any) (core.ToolResult, error) {

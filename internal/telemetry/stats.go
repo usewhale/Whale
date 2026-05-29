@@ -109,10 +109,3 @@ func BuildTurnStats(turn int, model string, usage llm.Usage) TurnStats {
 		ReasoningReplayTok: max(usage.ReasoningReplayTokens, 0),
 	}
 }
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}

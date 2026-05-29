@@ -14,7 +14,7 @@ func TestWindowsHookRunnerRealShellPreToolBlock(t *testing.T) {
 	command := windowsExitCommand(t, 2)
 	r := NewHookRunner([]ResolvedHook{{HookConfig: HookConfig{Command: command}, Event: HookEventPreToolUse}}, ".")
 
-	report := r.Run(context.Background(), HookPayload{Event: HookEventPreToolUse, ToolName: "shell_run"})
+	report := r.RunHook(context.Background(), HookPayload{Event: HookEventPreToolUse, ToolName: "shell_run"})
 	if !report.Blocked {
 		t.Fatal("expected blocked report")
 	}

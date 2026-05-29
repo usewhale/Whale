@@ -17,7 +17,7 @@ func TestHookRunnerPreToolBlockByExitCode2(t *testing.T) {
 	r.spawner = func(_ context.Context, _ HookSpawnInput) HookSpawnResult {
 		return HookSpawnResult{ExitCode: 2, Stderr: "denied"}
 	}
-	report := r.Run(context.Background(), HookPayload{Event: HookEventPreToolUse, ToolName: "bash"})
+	report := r.RunHook(context.Background(), HookPayload{Event: HookEventPreToolUse, ToolName: "bash"})
 	if !report.Blocked {
 		t.Fatal("expected blocked report")
 	}
@@ -31,7 +31,7 @@ func TestHookRunnerPostToolWarnByExitCode2(t *testing.T) {
 	r.spawner = func(_ context.Context, _ HookSpawnInput) HookSpawnResult {
 		return HookSpawnResult{ExitCode: 2, Stderr: "warn"}
 	}
-	report := r.Run(context.Background(), HookPayload{Event: HookEventPostToolUse, ToolName: "echo"})
+	report := r.RunHook(context.Background(), HookPayload{Event: HookEventPostToolUse, ToolName: "echo"})
 	if report.Blocked {
 		t.Fatal("post hook should not block on exit 2")
 	}
@@ -66,7 +66,7 @@ func TestAgentPreToolHookBlockSkipsDispatch(t *testing.T) {
 	a.hooks.spawner = func(_ context.Context, _ HookSpawnInput) HookSpawnResult {
 		return HookSpawnResult{ExitCode: 2, Stderr: "nope"}
 	}
-	_, err := a.Run(context.Background(), "s-pre-block", "hi")
+	_, err := a.RunSession(context.Background(), "s-pre-block", "hi")
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestHookRunnerBlockShortCircuitsFollowingHooks(t *testing.T) {
 		}
 		return HookSpawnResult{ExitCode: 0}
 	}
-	report := r.Run(context.Background(), HookPayload{Event: HookEventPreToolUse, ToolName: "bash"})
+	report := r.RunHook(context.Background(), HookPayload{Event: HookEventPreToolUse, ToolName: "bash"})
 	if !report.Blocked {
 		t.Fatal("expected blocked")
 	}
@@ -174,7 +174,7 @@ func TestHookRunnerParsesStructuredJSONOutput(t *testing.T) {
 	r.spawner = func(_ context.Context, _ HookSpawnInput) HookSpawnResult {
 		return HookSpawnResult{ExitCode: 0, Stdout: `{"decision":"block","reason":"nope","additional_context":"ctx","updated_input":{"x":2},"metadata":{"k":"v"}}`}
 	}
-	report := r.Run(context.Background(), HookPayload{Event: HookEventPreToolUse, ToolName: "echo"})
+	report := r.RunHook(context.Background(), HookPayload{Event: HookEventPreToolUse, ToolName: "echo"})
 	if !report.Blocked {
 		t.Fatal("expected structured hook to block")
 	}
@@ -197,7 +197,7 @@ func TestHookRunnerStructuredJSONPassOverridesExitCode(t *testing.T) {
 	r.spawner = func(_ context.Context, _ HookSpawnInput) HookSpawnResult {
 		return HookSpawnResult{ExitCode: 2, Stdout: `{"decision":"pass","reason":"allowed"}`, Stderr: "legacy block"}
 	}
-	report := r.Run(context.Background(), HookPayload{Event: HookEventPreToolUse, ToolName: "echo"})
+	report := r.RunHook(context.Background(), HookPayload{Event: HookEventPreToolUse, ToolName: "echo"})
 	if report.Blocked {
 		t.Fatalf("structured JSON pass should override blocking exit code: %+v", report)
 	}
@@ -214,7 +214,7 @@ func TestHookRunnerStructuredJSONPassDoesNotOverrideTimeout(t *testing.T) {
 	r.spawner = func(_ context.Context, _ HookSpawnInput) HookSpawnResult {
 		return HookSpawnResult{ExitCode: 0, TimedOut: true, Stdout: `{"decision":"pass","reason":"partial allow"}`}
 	}
-	report := r.Run(context.Background(), HookPayload{Event: HookEventPreToolUse, ToolName: "echo"})
+	report := r.RunHook(context.Background(), HookPayload{Event: HookEventPreToolUse, ToolName: "echo"})
 	if !report.Blocked {
 		t.Fatalf("timeout should fail closed even with partial JSON pass: %+v", report)
 	}
@@ -240,7 +240,7 @@ func TestHookRunnerRefreshesShellHookPayloadAfterRewrite(t *testing.T) {
 		secondStdin = in.Stdin
 		return HookSpawnResult{ExitCode: 0}
 	}
-	report := r.Run(context.Background(), HookPayload{Event: HookEventPreToolUse, ToolName: "echo", ToolArgs: map[string]any{"x": float64(1)}, ToolCall: &ToolCall{ID: "tc-1", Name: "echo", Input: `{"x":1}`}})
+	report := r.RunHook(context.Background(), HookPayload{Event: HookEventPreToolUse, ToolName: "echo", ToolArgs: map[string]any{"x": float64(1)}, ToolCall: &ToolCall{ID: "tc-1", Name: "echo", Input: `{"x":1}`}})
 	if report.Blocked {
 		t.Fatalf("unexpected block: %+v", report)
 	}
@@ -263,7 +263,7 @@ func TestHookRunnerRefreshesPromptPayloadAfterRewrite(t *testing.T) {
 		secondStdin = in.Stdin
 		return HookSpawnResult{ExitCode: 0}
 	}
-	report := r.Run(context.Background(), NewUserPromptSubmitPayload("s1", ".", "original prompt"))
+	report := r.RunHook(context.Background(), NewUserPromptSubmitPayload("s1", ".", "original prompt"))
 	if report.Blocked {
 		t.Fatalf("unexpected block: %+v", report)
 	}
@@ -298,7 +298,7 @@ func TestAgentPreToolHookHandlerCanRewriteInputAndAddContext(t *testing.T) {
 			},
 		}),
 	)
-	if _, err := a.Run(context.Background(), "s-rewrite", "hi"); err != nil {
+	if _, err := a.RunSession(context.Background(), "s-rewrite", "hi"); err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
 	msgs, err := store.List(context.Background(), "s-rewrite")
@@ -338,7 +338,7 @@ func TestHookRunnerPluginHandlerTimeoutDoesNotWaitForReturn(t *testing.T) {
 		},
 	})
 	start := time.Now()
-	report := r.Run(context.Background(), HookPayload{Event: HookEventPreToolUse, ToolName: "echo"})
+	report := r.RunHook(context.Background(), HookPayload{Event: HookEventPreToolUse, ToolName: "echo"})
 	elapsed := time.Since(start)
 	close(release)
 	<-entered
@@ -367,7 +367,7 @@ func TestAgentPreToolShellHookJSONCanRewriteInput(t *testing.T) {
 	a.hooks.spawner = func(_ context.Context, _ HookSpawnInput) HookSpawnResult {
 		return HookSpawnResult{ExitCode: 0, Stdout: `{"updated_input":{"x":2},"additional_context":"shell ctx"}`}
 	}
-	if _, err := a.Run(context.Background(), "s-shell-rewrite", "hi"); err != nil {
+	if _, err := a.RunSession(context.Background(), "s-shell-rewrite", "hi"); err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
 	msgs, err := store.List(context.Background(), "s-shell-rewrite")
@@ -400,7 +400,7 @@ func TestAgentPostToolShellHookWarnDoesNotFailTurn(t *testing.T) {
 	a.hooks.spawner = func(_ context.Context, _ HookSpawnInput) HookSpawnResult {
 		return HookSpawnResult{ExitCode: 2, Stderr: "post warning"}
 	}
-	final, err := a.Run(context.Background(), "s-post-warn", "hi")
+	final, err := a.RunSession(context.Background(), "s-post-warn", "hi")
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
@@ -425,7 +425,7 @@ func TestAgentDoesNotTriggerUserPromptOrStopHooks(t *testing.T) {
 		calls++
 		return HookSpawnResult{ExitCode: 2}
 	}
-	_, err := a.Run(context.Background(), "s-no-app-hooks", "hello")
+	_, err := a.RunSession(context.Background(), "s-no-app-hooks", "hello")
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
@@ -445,7 +445,7 @@ func (p *noToolProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool
 
 func TestHookRunnerRealShellPreToolBlock(t *testing.T) {
 	r := NewHookRunner([]ResolvedHook{{HookConfig: HookConfig{Command: "echo blocked >&2; exit 2"}, Event: HookEventPreToolUse}}, ".")
-	report := r.Run(context.Background(), HookPayload{Event: HookEventPreToolUse, ToolName: "bash"})
+	report := r.RunHook(context.Background(), HookPayload{Event: HookEventPreToolUse, ToolName: "bash"})
 	if !report.Blocked {
 		t.Fatal("expected blocked")
 	}
@@ -456,7 +456,7 @@ func TestHookRunnerRealShellPreToolBlock(t *testing.T) {
 
 func TestHookRunnerRealShellPostToolWarn(t *testing.T) {
 	r := NewHookRunner([]ResolvedHook{{HookConfig: HookConfig{Command: "echo post-warn >&2; exit 5"}, Event: HookEventPostToolUse}}, ".")
-	report := r.Run(context.Background(), HookPayload{Event: HookEventPostToolUse, ToolName: "echo"})
+	report := r.RunHook(context.Background(), HookPayload{Event: HookEventPostToolUse, ToolName: "echo"})
 	if report.Blocked {
 		t.Fatal("post tool should not block")
 	}
@@ -471,7 +471,7 @@ func TestHookRunnerStopPayloadCarriesAssistantTextAndTurn(t *testing.T) {
 	cmd := "cat > " + capture + "; exit 0"
 	r := NewHookRunner([]ResolvedHook{{HookConfig: HookConfig{Command: cmd}, Event: HookEventStop}}, ".")
 	payload := NewStopPayload("s1", tmp, "final answer", 3)
-	report := r.Run(context.Background(), payload)
+	report := r.RunHook(context.Background(), payload)
 	if report.Blocked {
 		t.Fatal("stop should not block")
 	}

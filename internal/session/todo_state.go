@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/usewhale/whale/internal/core"
 )
 
 type TodoItem struct {
@@ -25,7 +27,7 @@ type TodoState struct {
 }
 
 func todoStatePath(sessionsDir, sessionID string) string {
-	return filepath.Join(sessionsDir, sanitizeSessionID(sessionID)+".todo.json")
+	return filepath.Join(sessionsDir, core.SanitizeSessionID(sessionID)+".todo.json")
 }
 
 func LoadTodoState(sessionsDir, sessionID string) (TodoState, error) {

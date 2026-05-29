@@ -6,34 +6,19 @@ import (
 	"time"
 
 	"github.com/usewhale/whale/internal/core"
+	toolctx "github.com/usewhale/whale/internal/tools"
 )
 
-func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMessageID, model string, call core.ToolCall, events chan<- AgentEvent, tools *core.ToolRegistry) (core.ToolResult, bool, bool) {
+func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMessageID, model string, call core.ToolCall, externalReadRoots []string, events chan<- AgentEvent, tools *core.ToolRegistry) (core.ToolResult, bool, bool) {
 	attempt := 0
 	dispatchCtx := core.WithToolResultArchive(ctx, a.toolResultArchiveDir, sessionID)
+	dispatchCtx = toolctx.WithApprovedExternalReadRoots(dispatchCtx, externalReadRoots)
 	emit := func(ev AgentEvent) bool {
 		return sendAgentEvent(ctx, events, ev)
 	}
 	for {
 		attempt++
-		res, err := tools.DispatchWithProgress(dispatchCtx, call, func(progress core.ToolProgress) {
-			// Progress events are emitted directly from tool goroutines, so
-			// different ToolCallIDs may interleave in parallel subagent batches.
-			// The stable contract is attribution plus each call's own
-			// progress-before-completion/result ordering.
-			info := TaskActivityInfo{
-				ToolCallID: firstNonEmptyString(progress.ToolCallID, call.ID),
-				ToolName:   firstNonEmptyString(progress.ToolName, call.Name),
-				Role:       progress.Role,
-				Model:      progress.Model,
-				Count:      progress.Count,
-				Summary:    progress.Summary,
-				Status:     progress.Status,
-				DurationMS: progress.DurationMS,
-				Metadata:   progress.Metadata,
-			}
-			_ = emit(AgentEvent{Type: AgentEventTypeTaskProgress, Task: &info})
-		})
+		res, err := dispatchRecoveryAttempt(dispatchCtx, call, tools, recoveryProgressEmitter(call, emit))
 		if ctx.Err() != nil {
 			return res, true, false
 		}
@@ -48,136 +33,162 @@ func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMe
 			return res, true, !res.IsError
 		}
 		rule, exists := a.recovery.Rules[class]
-		if !a.recovery.Enabled || !exists {
-			if !emit(AgentEvent{
-				Type: AgentEventTypeToolRecoveryExhausted,
-				Recovery: &ToolRecoveryInfo{
-					ToolCallID:   call.ID,
-					ToolName:     call.Name,
-					FailureClass: string(class),
-					Action:       string(RecoveryActionRequestReplan),
-					Attempt:      attempt,
-					MaxAttempts:  0,
-					Reason:       "no recovery rule",
-				},
-			}) {
-				return res, true, false
-			}
-			return res, true, false
+		next, done, primarySucceeded := a.handleRecoveryRule(ctx, dispatchCtx, tools, call, res, class, rule, exists, attempt, emit)
+		if done {
+			return next, true, primarySucceeded
 		}
-		if rule.Action == RecoveryActionFallbackReadOnly {
-			fallbackRes, ok := a.executeFallbackReadonly(dispatchCtx, tools, call, res)
-			if ok {
-				if !emit(AgentEvent{
-					Type: AgentEventTypeToolRecoveryExhausted,
-					Recovery: &ToolRecoveryInfo{
-						ToolCallID:   call.ID,
-						ToolName:     call.Name,
-						FailureClass: string(class),
-						Action:       string(rule.Action),
-						Attempt:      attempt,
-						MaxAttempts:  rule.MaxAttempts,
-						Reason:       res.Content,
-						Executed:     true,
-					},
-				}) {
-					return res, true, false
-				}
-				return fallbackRes, true, false
-			}
+		if delayed, canceled := waitRecoveryBackoff(ctx, call, rule); canceled {
+			return delayed, true, false
 		}
-		if rule.Action == RecoveryActionRequestReplan {
-			replanRes := buildRequestReplanResult(call, class, attempt, res.Content)
-			if !emit(AgentEvent{
-				Type: AgentEventTypeReplanRequiredSet,
-				Recovery: &ToolRecoveryInfo{
-					ToolCallID:     call.ID,
-					ToolName:       call.Name,
-					FailureClass:   string(class),
-					Action:         string(rule.Action),
-					Attempt:        attempt,
-					MaxAttempts:    rule.MaxAttempts,
-					Reason:         res.Content,
-					ReplanInjected: true,
-				},
-			}) {
-				return res, true, false
-			}
-			if !emit(AgentEvent{
-				Type: AgentEventTypeToolRecoveryExhausted,
-				Recovery: &ToolRecoveryInfo{
-					ToolCallID:     call.ID,
-					ToolName:       call.Name,
-					FailureClass:   string(class),
-					Action:         string(rule.Action),
-					Attempt:        attempt,
-					MaxAttempts:    rule.MaxAttempts,
-					Reason:         res.Content,
-					Executed:       true,
-					ReplanInjected: true,
-				},
-			}) {
-				return res, true, false
-			}
-			return replanRes, true, false
-		}
-		if rule.Action == RecoveryActionPassThrough {
-			return res, true, false
-		}
-		if attempt > rule.MaxAttempts || rule.Action == RecoveryActionHardBlock {
-			if !emit(AgentEvent{
-				Type: AgentEventTypeToolRecoveryExhausted,
-				Recovery: &ToolRecoveryInfo{
-					ToolCallID:   call.ID,
-					ToolName:     call.Name,
-					FailureClass: string(class),
-					Action:       string(rule.Action),
-					Attempt:      attempt,
-					MaxAttempts:  rule.MaxAttempts,
-					Reason:       res.Content,
-				},
-			}) {
-				return res, true, false
-			}
-			return res, true, false
-		}
-		if !emit(AgentEvent{
-			Type: AgentEventTypeToolRecoveryScheduled,
-			Recovery: &ToolRecoveryInfo{
-				ToolCallID:   call.ID,
-				ToolName:     call.Name,
-				FailureClass: string(class),
-				Action:       string(rule.Action),
-				Attempt:      attempt,
-				MaxAttempts:  rule.MaxAttempts,
-				Reason:       res.Content,
-			},
-		}) {
-			return res, true, false
-		}
-		if rule.Action == RecoveryActionRetryWithBackoff && rule.BackoffMS > 0 {
-			timer := time.NewTimer(time.Duration(rule.BackoffMS) * time.Millisecond)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: ctx.Err().Error(), IsError: true}, true, false
-			case <-timer.C:
-			}
-		}
-		if !emit(AgentEvent{
-			Type: AgentEventTypeToolRecoveryAttempt,
-			Recovery: &ToolRecoveryInfo{
-				ToolCallID:   call.ID,
-				ToolName:     call.Name,
-				FailureClass: string(class),
-				Action:       string(rule.Action),
-				Attempt:      attempt + 1,
-				MaxAttempts:  rule.MaxAttempts,
-			},
-		}) {
+		if !emitRecoveryAttempt(call, class, rule, attempt+1, emit) {
 			return res, true, false
 		}
 	}
+}
+
+func recoveryProgressEmitter(call core.ToolCall, emit func(AgentEvent) bool) func(core.ToolProgress) {
+	return func(progress core.ToolProgress) {
+		// Progress events are emitted directly from tool goroutines, so
+		// different ToolCallIDs may interleave in parallel subagent batches.
+		// The stable contract is attribution plus each call's own
+		// progress-before-completion/result ordering.
+		info := TaskActivityInfo{
+			ToolCallID: core.FirstNonEmpty(progress.ToolCallID, call.ID),
+			ToolName:   core.FirstNonEmpty(progress.ToolName, call.Name),
+			Role:       progress.Role,
+			Model:      progress.Model,
+			Count:      progress.Count,
+			Summary:    progress.Summary,
+			Status:     progress.Status,
+			DurationMS: progress.DurationMS,
+			Metadata:   progress.Metadata,
+		}
+		if len(progress.ProgressMessages) > 0 {
+			info.ProgressMessages = progress.ProgressMessages
+		}
+		_ = emit(AgentEvent{Type: AgentEventTypeTaskProgress, Task: &info})
+	}
+}
+
+func dispatchRecoveryAttempt(ctx context.Context, call core.ToolCall, tools *core.ToolRegistry, progress func(core.ToolProgress)) (core.ToolResult, error) {
+	return tools.DispatchWithProgress(ctx, call, progress)
+}
+
+func (a *Agent) handleRecoveryRule(ctx context.Context, dispatchCtx context.Context, tools *core.ToolRegistry, call core.ToolCall, res core.ToolResult, class FailureClass, rule RecoveryRule, exists bool, attempt int, emit func(AgentEvent) bool) (core.ToolResult, bool, bool) {
+	if !a.recovery.Enabled || !exists {
+		if !emitRecoveryExhausted(call, class, RecoveryRule{Action: RecoveryActionRequestReplan}, attempt, "no recovery rule", false, false, emit) {
+			return res, true, false
+		}
+		return res, true, false
+	}
+	if rule.Action == RecoveryActionFallbackReadOnly {
+		fallbackRes, ok := a.executeFallbackReadonly(dispatchCtx, tools, call, res)
+		if ok {
+			if !emitRecoveryExhausted(call, class, rule, attempt, res.Content, true, false, emit) {
+				return res, true, false
+			}
+			return fallbackRes, true, false
+		}
+	}
+	if rule.Action == RecoveryActionRequestReplan {
+		replanRes := buildRequestReplanResult(call, class, attempt, res.Content)
+		if !emitRecoveryReplanRequired(call, class, rule, attempt, res.Content, emit) {
+			return res, true, false
+		}
+		if !emitRecoveryExhausted(call, class, rule, attempt, res.Content, true, true, emit) {
+			return res, true, false
+		}
+		return replanRes, true, false
+	}
+	if rule.Action == RecoveryActionPassThrough {
+		return res, true, false
+	}
+	if attempt > rule.MaxAttempts || rule.Action == RecoveryActionHardBlock {
+		if !emitRecoveryExhausted(call, class, rule, attempt, res.Content, false, false, emit) {
+			return res, true, false
+		}
+		return res, true, false
+	}
+	if !emitRecoveryScheduled(call, class, rule, attempt, res.Content, emit) {
+		return res, true, false
+	}
+	return res, false, false
+}
+
+func emitRecoveryExhausted(call core.ToolCall, class FailureClass, rule RecoveryRule, attempt int, reason string, executed, replanInjected bool, emit func(AgentEvent) bool) bool {
+	return emit(AgentEvent{
+		Type: AgentEventTypeToolRecoveryExhausted,
+		Recovery: &ToolRecoveryInfo{
+			ToolCallID:     call.ID,
+			ToolName:       call.Name,
+			FailureClass:   string(class),
+			Action:         string(rule.Action),
+			Attempt:        attempt,
+			MaxAttempts:    rule.MaxAttempts,
+			Reason:         reason,
+			Executed:       executed,
+			ReplanInjected: replanInjected,
+		},
+	})
+}
+
+func emitRecoveryReplanRequired(call core.ToolCall, class FailureClass, rule RecoveryRule, attempt int, reason string, emit func(AgentEvent) bool) bool {
+	return emit(AgentEvent{
+		Type: AgentEventTypeReplanRequiredSet,
+		Recovery: &ToolRecoveryInfo{
+			ToolCallID:     call.ID,
+			ToolName:       call.Name,
+			FailureClass:   string(class),
+			Action:         string(rule.Action),
+			Attempt:        attempt,
+			MaxAttempts:    rule.MaxAttempts,
+			Reason:         reason,
+			ReplanInjected: true,
+		},
+	})
+}
+
+func emitRecoveryScheduled(call core.ToolCall, class FailureClass, rule RecoveryRule, attempt int, reason string, emit func(AgentEvent) bool) bool {
+	return emit(AgentEvent{
+		Type: AgentEventTypeToolRecoveryScheduled,
+		Recovery: &ToolRecoveryInfo{
+			ToolCallID:   call.ID,
+			ToolName:     call.Name,
+			FailureClass: string(class),
+			Action:       string(rule.Action),
+			Attempt:      attempt,
+			MaxAttempts:  rule.MaxAttempts,
+			Reason:       reason,
+		},
+	})
+}
+
+func waitRecoveryBackoff(ctx context.Context, call core.ToolCall, rule RecoveryRule) (core.ToolResult, bool) {
+	if rule.Action != RecoveryActionRetryWithBackoff || rule.BackoffMS <= 0 {
+		return core.ToolResult{}, false
+	}
+	timer := time.NewTimer(time.Duration(rule.BackoffMS) * time.Millisecond)
+	select {
+	case <-ctx.Done():
+		timer.Stop()
+		return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: ctx.Err().Error(), IsError: true}, true
+	case <-timer.C:
+		return core.ToolResult{}, false
+	}
+}
+
+func emitRecoveryAttempt(call core.ToolCall, class FailureClass, rule RecoveryRule, attempt int, emit func(AgentEvent) bool) bool {
+	return emit(AgentEvent{
+		Type: AgentEventTypeToolRecoveryAttempt,
+		Recovery: &ToolRecoveryInfo{
+			ToolCallID:   call.ID,
+			ToolName:     call.Name,
+			FailureClass: string(class),
+			Action:       string(rule.Action),
+			Attempt:      attempt,
+			MaxAttempts:  rule.MaxAttempts,
+		},
+	})
 }
 
 func (a *Agent) executeFallbackReadonly(ctx context.Context, tools *core.ToolRegistry, call core.ToolCall, cause core.ToolResult) (core.ToolResult, bool) {

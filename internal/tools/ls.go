@@ -8,14 +8,14 @@ import (
 	"github.com/usewhale/whale/internal/core"
 )
 
-func (b *Toolset) listDir(_ context.Context, call core.ToolCall) (core.ToolResult, error) {
+func (b *Toolset) listDir(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
 	var in struct {
 		Path string `json:"path"`
 	}
 	if err := decodeInput(call.Input, &in); err != nil {
 		return marshalToolError(call, "invalid_args", err.Error()), nil
 	}
-	abs, err := b.safeReadPath(in.Path)
+	abs, err := b.safeReadPath(ctx, in.Path)
 	if err != nil {
 		return b.marshalReadPathError(call, in.Path, err), nil
 	}

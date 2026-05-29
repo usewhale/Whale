@@ -69,7 +69,7 @@ func TestAgentExecutesToolsetToolsInLoop(t *testing.T) {
 		agent.WithToolPolicy(agent.RulePolicy{Default: agent.PermissionAllow}),
 	)
 
-	msg, err := a.Run(context.Background(), "s-tools", "run tools")
+	msg, err := a.RunSession(context.Background(), "s-tools", "run tools")
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}

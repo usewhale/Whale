@@ -2,9 +2,12 @@ package tui
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 
 	xansi "github.com/charmbracelet/x/ansi"
+
+	"github.com/usewhale/whale/internal/core"
 )
 
 const shellOutputPreviewLines = 6
@@ -72,9 +75,9 @@ func summarizeTaskResult(toolName string, env toolResultEnvelope, successBySigna
 		}
 		return "result_ok", strings.Join(parts, " · ")
 	case "spawn_subagent":
-		role := firstNonEmpty(asString(env.data["role"]), "explore")
+		role := core.FirstNonEmpty(core.AsString(env.data["role"]), "explore")
 		parts = append(parts, role)
-		if summary := firstLine(firstNonEmpty(asString(env.data["summary"]), env.summary)); summary != "" {
+		if summary := firstNonEmptyLine(core.FirstNonEmpty(core.AsString(env.data["summary"]), env.summary)); summary != "" {
 			return "result_ok", strings.Join(parts, " · ") + "\n" + summary
 		}
 		return "result_ok", strings.Join(parts, " · ")
@@ -111,8 +114,8 @@ func summarizeShellResult(env toolResultEnvelope, successBySignal bool) (string,
 	hasExitCode := hasInt(env.metrics["exit_code"])
 	duration := formatDurationMS(asInt64(env.metrics["duration_ms"]))
 	if env.status == "running" {
-		taskID := asString(env.payload["task_id"])
-		reason := shellDiagnosisLabel(asString(env.diagnosis["reason"]))
+		taskID := core.AsString(env.payload["task_id"])
+		reason := shellDiagnosisLabel(core.AsString(env.diagnosis["reason"]))
 		if taskID != "" {
 			if reason != "" && duration != "" {
 				return "result_running", reason + " · " + duration + " · " + taskID
@@ -152,6 +155,20 @@ func summarizeShellResult(env toolResultEnvelope, successBySignal bool) (string,
 }
 
 func summarizeFailedShellResult(env toolResultEnvelope) (string, string) {
+	if shellFailureIsNoMatches(env) {
+		duration := formatDurationMS(asInt64(env.metrics["duration_ms"]))
+		output := summarizeShellOutput(core.AsString(env.payload["stdout"]))
+		if duration != "" {
+			if output != "" {
+				return "result_neutral", "No matches · " + duration + "\n" + output
+			}
+			return "result_neutral", "No matches · " + duration
+		}
+		if output != "" {
+			return "result_neutral", "No matches\n" + output
+		}
+		return "result_neutral", "No matches"
+	}
 	if shellFailureUsesGenericSummary(env) {
 		return summarizeFailedResult(env, "command failed")
 	}
@@ -159,21 +176,101 @@ func summarizeFailedShellResult(env toolResultEnvelope) (string, string) {
 	if output == "" {
 		return summarizeFailedResult(env, "command failed")
 	}
-	exitCode := asInt(env.metrics["exit_code"])
-	hasExitCode := hasInt(env.metrics["exit_code"])
 	duration := formatDurationMS(asInt64(env.metrics["duration_ms"]))
-	prefix := "✗"
-	if hasExitCode && exitCode > 0 {
-		prefix = fmt.Sprintf("✗ (exit %d)", exitCode)
-	}
-	parts := []string{prefix}
+	parts := []string{shellFailureLabel(env)}
 	if duration != "" {
 		parts = append(parts, duration)
 	}
-	if reason := shellDiagnosisLabel(asString(env.diagnosis["reason"])); reason != "" {
+	if reason := shellDiagnosisLabel(core.AsString(env.diagnosis["reason"])); reason != "" {
 		parts = append(parts, reason)
 	}
 	return "result_failed", strings.Join(parts, " · ") + "\n" + output
+}
+
+func shellFailureLabel(env toolResultEnvelope) string {
+	exitCode := asInt(env.metrics["exit_code"])
+	if hasInt(env.metrics["exit_code"]) && exitCode > 0 {
+		return fmt.Sprintf("Command failed (exit %d)", exitCode)
+	}
+	return "Command failed"
+}
+
+func shellFailureIsNoMatches(env toolResultEnvelope) bool {
+	if env.code != "exec_failed" || !hasInt(env.metrics["exit_code"]) || asInt(env.metrics["exit_code"]) != 1 {
+		return false
+	}
+	if strings.TrimSpace(core.AsString(env.payload["stderr"])) != "" {
+		return false
+	}
+	return shellCommandUsesSearchExitOne(core.AsString(env.payload["command"]))
+}
+
+func shellCommandUsesSearchExitOne(command string) bool {
+	base := shellSegmentBaseCommand(lastShellCommandSegment(command))
+	return base == "grep" || base == "rg" || base == "git grep"
+}
+
+func lastShellCommandSegment(command string) string {
+	command = strings.TrimSpace(command)
+	start := 0
+	last := command
+	var quote rune
+	escaped := false
+	runes := []rune(command)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if r == '\\' && quote != '\'' {
+			escaped = true
+			continue
+		}
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+			}
+			continue
+		}
+		if r == '\'' || r == '"' {
+			quote = r
+			continue
+		}
+		switch runes[i] {
+		case '|', ';':
+			if segment := strings.TrimSpace(string(runes[start:i])); segment != "" {
+				last = segment
+			}
+			if runes[i] == '|' && i+1 < len(runes) && runes[i+1] == '|' {
+				i++
+			}
+			start = i + 1
+		case '&':
+			if i+1 < len(runes) && runes[i+1] == '&' {
+				if segment := strings.TrimSpace(string(runes[start:i])); segment != "" {
+					last = segment
+				}
+				i++
+				start = i + 1
+			}
+		}
+	}
+	if segment := strings.TrimSpace(string(runes[start:])); segment != "" {
+		last = segment
+	}
+	return last
+}
+
+func shellSegmentBaseCommand(segment string) string {
+	fields := strings.Fields(strings.TrimSpace(segment))
+	if len(fields) == 0 {
+		return ""
+	}
+	if fields[0] == "git" && len(fields) > 1 && fields[1] == "grep" {
+		return "git grep"
+	}
+	return fields[0]
 }
 
 func shellFailureUsesGenericSummary(env toolResultEnvelope) bool {
@@ -186,8 +283,8 @@ func shellFailureUsesGenericSummary(env toolResultEnvelope) bool {
 }
 
 func shellPayloadOutput(env toolResultEnvelope, preferStderr bool) string {
-	stdout := strings.TrimRight(asString(env.payload["stdout"]), "\n")
-	stderr := strings.TrimRight(asString(env.payload["stderr"]), "\n")
+	stdout := strings.TrimRight(core.AsString(env.payload["stdout"]), "\n")
+	stderr := strings.TrimRight(core.AsString(env.payload["stderr"]), "\n")
 	if preferStderr {
 		return joinShellOutput(stderr, stdout)
 	}
@@ -217,8 +314,8 @@ func summarizeShellOutput(text string) string {
 	if len(lines) <= shellOutputPreviewLines {
 		return strings.Join(lines, "\n")
 	}
-	head := minInt(shellOutputHeadLines, len(lines))
-	tail := minInt(shellOutputTailLines, len(lines)-head)
+	head := min(shellOutputHeadLines, len(lines))
+	tail := min(shellOutputTailLines, len(lines)-head)
 	omitted := len(lines) - head - tail
 	out := make([]string, 0, head+1+tail)
 	out = append(out, lines[:head]...)
@@ -234,33 +331,46 @@ func truncateShellOutputLine(line string) string {
 	return xansi.Truncate(line, shellOutputLineRunes, "...")
 }
 
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 func summarizeFailedResult(env toolResultEnvelope, fallback string) (string, string) {
 	exitCode := asInt(env.metrics["exit_code"])
 	hasExitCode := hasInt(env.metrics["exit_code"])
 	duration := formatDurationMS(asInt64(env.metrics["duration_ms"]))
-	detail := firstLine(firstNonEmpty(
+	detail := firstNonEmptyLine(core.FirstNonEmpty(
 		env.summary,
-		asString(env.payload["stderr"]),
-		asString(env.payload["stdout"]),
+		core.AsString(env.payload["stderr"]),
+		core.AsString(env.payload["stdout"]),
 		env.message,
-		asString(env.data["summary"]),
+		core.AsString(env.data["summary"]),
 		fallback,
 	))
 
 	switch env.code {
 	case "request_replan":
 		return "result_failed", summarizeReplanRequired(env)
-	case "approval_denied", "policy_denied", "permission_denied", "mcp_allowed_dirs_denied":
+	case "ask_mode_blocked", "plan_mode_blocked", "mode_blocked":
+		return "result_mode_hint", summarizeModeBlocked(env)
+	case "fetch_failed", "web_fetch_failed":
+		if status := httpStatusSummary(env); status != "" {
+			return "result_http_error", status
+		}
+	case "invalid_args":
+		return "result_usage_hint", summarizeInvalidArgs(detail)
+	case "not_file":
+		return "result_blocked", summarizePathIsDirectory(env, detail)
+	case "approval_denied", "policy_denied":
+		return "result_denied", "DENIED · " + detail
+	case "permission_denied":
+		if isOutsideWorkspaceDetail(detail) {
+			return "result_blocked", core.FirstNonEmpty(accessBlockedSummary(env, detail), "Access blocked")
+		}
+		return "result_denied", "DENIED · " + detail
+	case "mcp_allowed_dirs_denied":
+		if isOutsideWorkspaceDetail(detail) {
+			return "result_blocked", core.FirstNonEmpty(accessBlockedSummary(env, detail), "Access blocked")
+		}
 		return "result_denied", "DENIED · " + detail
 	case "timeout":
-		if reason := shellDiagnosisLabel(asString(env.diagnosis["reason"])); reason != "" {
+		if reason := shellDiagnosisLabel(core.AsString(env.diagnosis["reason"])); reason != "" {
 			if duration != "" {
 				return "result_timeout", "TIMEOUT · " + duration + " · " + reason
 			}
@@ -275,6 +385,12 @@ func summarizeFailedResult(env toolResultEnvelope, fallback string) (string, str
 	}
 
 	lower := strings.ToLower(detail + " " + env.code)
+	if strings.Contains(lower, "outside") && (strings.Contains(lower, "workspace") || strings.Contains(lower, "allowed directories")) {
+		return "result_blocked", core.FirstNonEmpty(accessBlockedSummary(env, detail), "Access blocked")
+	}
+	if strings.Contains(lower, " is a directory") || strings.Contains(lower, "use list_dir") || strings.Contains(lower, "use list_directory") {
+		return "result_blocked", summarizePathIsDirectory(env, detail)
+	}
 	if strings.Contains(lower, "denied") || strings.Contains(lower, "approval") || strings.Contains(lower, "policy") {
 		return "result_denied", "DENIED · " + detail
 	}
@@ -296,6 +412,145 @@ func summarizeFailedResult(env toolResultEnvelope, fallback string) (string, str
 		return "result_failed", fmt.Sprintf("%s · %s · %s", prefix, duration, detail)
 	}
 	return "result_failed", fmt.Sprintf("%s · %s", prefix, detail)
+}
+
+func summarizeModeBlocked(env toolResultEnvelope) string {
+	mode := "Current mode"
+	switch env.code {
+	case "ask_mode_blocked":
+		mode = "Ask mode"
+	case "plan_mode_blocked":
+		mode = "Plan mode"
+	}
+	summary := firstNonEmptyLine(core.FirstNonEmpty(env.summary, env.message, core.AsString(env.data["summary"])))
+	if strings.Contains(summary, "/agent") {
+		return mode + " · switch to /agent to edit"
+	}
+	if summary != "" {
+		return mode + " · " + summary
+	}
+	return mode + " · tool unavailable"
+}
+
+func summarizeInvalidArgs(detail string) string {
+	detail = firstNonEmptyLine(strings.TrimSpace(detail))
+	if detail == "" {
+		return "Invalid tool input"
+	}
+	if field, typ, ok := parseJSONUnmarshalFieldType(detail); ok {
+		return "Invalid tool input · " + field + " must be " + typ
+	}
+	return "Invalid tool input · " + detail
+}
+
+func parseJSONUnmarshalFieldType(detail string) (string, string, bool) {
+	const fieldMarker = " into Go struct field ."
+	fieldStart := strings.Index(detail, fieldMarker)
+	if fieldStart < 0 {
+		return "", "", false
+	}
+	fieldStart += len(fieldMarker)
+	fieldEnd := strings.Index(detail[fieldStart:], " ")
+	if fieldEnd < 0 {
+		return "", "", false
+	}
+	field := strings.TrimSpace(detail[fieldStart : fieldStart+fieldEnd])
+	const typeMarker = " of type "
+	typeStart := strings.LastIndex(detail, typeMarker)
+	if typeStart < 0 {
+		return "", "", false
+	}
+	typ := strings.TrimSpace(detail[typeStart+len(typeMarker):])
+	if field == "" || typ == "" {
+		return "", "", false
+	}
+	return field, typ, true
+}
+
+func httpStatusSummary(env toolResultEnvelope) string {
+	message := strings.ToLower(strings.TrimSpace(core.FirstNonEmpty(env.message, env.summary, core.AsString(env.data["summary"]))))
+	fields := strings.Fields(message)
+	for i, field := range fields {
+		if strings.Trim(field, ":") != "http" || i+1 >= len(fields) {
+			continue
+		}
+		codeText := strings.Trim(fields[i+1], ".,:;")
+		code := 0
+		for _, r := range codeText {
+			if r < '0' || r > '9' {
+				code = 0
+				break
+			}
+			code = code*10 + int(r-'0')
+		}
+		if code > 0 {
+			if text := http.StatusText(code); text != "" {
+				return fmt.Sprintf("HTTP %d %s", code, text)
+			}
+			return fmt.Sprintf("HTTP %d", code)
+		}
+	}
+	return ""
+}
+
+func summarizePathIsDirectory(env toolResultEnvelope, detail string) string {
+	path := core.FirstNonEmpty(core.AsString(env.payload["file_path"]), core.AsString(env.payload["path"]), core.AsString(env.data["file_path"]), core.AsString(env.data["path"]))
+	if path == "" {
+		path = pathFromDirectoryMessage(detail)
+	}
+	if path != "" {
+		return "Path is a directory · " + path
+	}
+	return "Path is a directory"
+}
+
+func pathFromDirectoryMessage(detail string) string {
+	before, _, ok := strings.Cut(detail, " is a directory")
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(before)
+}
+
+func accessBlockedSummary(env toolResultEnvelope, detail string) string {
+	path := core.FirstNonEmpty(core.AsString(env.payload["file_path"]), core.AsString(env.payload["path"]), core.AsString(env.data["file_path"]), core.AsString(env.data["path"]))
+	if path == "" {
+		path = outsideWorkspacePath(detail)
+	}
+	if path != "" {
+		return "Access blocked · " + path
+	}
+	if detail != "" && isOutsideWorkspaceDetail(detail) {
+		return "Access blocked · " + detail
+	}
+	return ""
+}
+
+func isOutsideWorkspaceDetail(detail string) bool {
+	lower := strings.ToLower(detail)
+	return strings.Contains(lower, "outside") && (strings.Contains(lower, "workspace") || strings.Contains(lower, "allowed directories")) ||
+		strings.Contains(lower, "path outside") ||
+		strings.Contains(lower, "outside allowed directories") ||
+		strings.Contains(lower, "cannot access") && strings.Contains(lower, "allowed directories")
+}
+
+func outsideWorkspacePath(detail string) string {
+	for _, marker := range []string{"outside workspace:", "outside workspace", "cannot access", "allowed directories:"} {
+		lower := strings.ToLower(detail)
+		idx := strings.Index(lower, marker)
+		if idx < 0 {
+			continue
+		}
+		rest := strings.TrimSpace(detail[idx+len(marker):])
+		if rest == "" {
+			continue
+		}
+		fields := strings.Fields(strings.Trim(rest, " .;:,"))
+		if len(fields) > 0 {
+			return strings.Trim(fields[0], " .;:,")
+		}
+	}
+	return ""
 }
 
 func shellDiagnosisLabel(reason string) string {
@@ -332,7 +587,7 @@ func shellDiagnosisLabel(reason string) string {
 }
 
 func summarizeReplanRequired(env toolResultEnvelope) string {
-	last := strings.TrimSpace(asString(env.data["last_error"]))
+	last := strings.TrimSpace(core.AsString(env.data["last_error"]))
 	if last != "" {
 		if inner, ok := parseToolEnvelopeOK(last); ok {
 			_, text := summarizeFailedResult(inner, "tool failed")
@@ -340,9 +595,9 @@ func summarizeReplanRequired(env toolResultEnvelope) string {
 				return text
 			}
 		}
-		return "✗ · " + firstLine(last)
+		return "✗ · " + firstNonEmptyLine(last)
 	}
-	if tool := strings.TrimSpace(asString(env.data["tool_name"])); tool != "" {
+	if tool := strings.TrimSpace(core.AsString(env.data["tool_name"])); tool != "" {
 		return "✗ · " + tool + " failed; choose a different approach"
 	}
 	return "✗ · tool failed; choose a different approach"
@@ -378,7 +633,7 @@ func summarizeExploreResult(toolName string, env toolResultEnvelope, successBySi
 		return "result_ok", fmt.Sprintf("✓ · %d matches", total)
 	case "fetch", "web_fetch":
 		status := asInt(firstNonEmptyAny(env.payload["status_code"], env.data["status_code"]))
-		format := firstNonEmpty(asString(env.payload["format"]), asString(env.data["format"]))
+		format := core.FirstNonEmpty(core.AsString(env.payload["format"]), core.AsString(env.data["format"]))
 		if status > 0 && format != "" {
 			return "result_ok", fmt.Sprintf("✓ · HTTP %d · %s", status, format)
 		}

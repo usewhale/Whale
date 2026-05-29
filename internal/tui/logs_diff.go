@@ -112,13 +112,6 @@ func tail(items []string, n int) []string {
 	return items[len(items)-n:]
 }
 
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 func clampInt(v, low, high int) int {
 	if v < low {
 		return low

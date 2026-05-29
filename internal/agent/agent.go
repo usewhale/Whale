@@ -164,15 +164,16 @@ type PlanUpdateInfo struct {
 }
 
 type TaskActivityInfo struct {
-	ToolCallID string
-	ToolName   string
-	Role       string
-	Model      string
-	Count      int
-	Summary    string
-	Status     string
-	DurationMS int64
-	Metadata   map[string]any
+	ToolCallID       string
+	ToolName         string
+	Role             string
+	Model            string
+	Count            int
+	Summary          string
+	Status           string
+	DurationMS       int64
+	Metadata         map[string]any
+	ProgressMessages []core.SubagentStep
 }
 
 type BudgetWarningInfo struct {
@@ -506,7 +507,7 @@ func WithMaxParallelSubagents(maxParallel int) AgentOption {
 	}
 }
 
-func (a *Agent) Run(ctx context.Context, sessionID, input string) (core.Message, error) {
+func (a *Agent) RunSession(ctx context.Context, sessionID, input string) (core.Message, error) {
 	events, err := a.RunStream(ctx, sessionID, input)
 	if err != nil {
 		return core.Message{}, err

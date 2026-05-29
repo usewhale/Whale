@@ -70,6 +70,39 @@ func TestAppendApprovalEventNoopsWithoutSessionOrEvent(t *testing.T) {
 	}
 }
 
+func TestClassifyApprovalEventSeparatesPromptsFromAuditRows(t *testing.T) {
+	tests := []struct {
+		event       string
+		wantClass   ApprovalEventClass
+		wantPrompt  bool
+		wantVisible bool
+	}{
+		{event: "approval_required", wantClass: ApprovalEventClassPromptShown, wantPrompt: true, wantVisible: true},
+		{event: "approval_prompt_shown", wantClass: ApprovalEventClassPromptShown, wantPrompt: true, wantVisible: true},
+		{event: "approval_allowed_for_session", wantClass: ApprovalEventClassDecision, wantVisible: true},
+		{event: "approval_prompt_denied", wantClass: ApprovalEventClassDecision, wantVisible: true},
+		{event: "approval_cached_allowed", wantClass: ApprovalEventClassReused},
+		{event: "approval_prompt_cached_allowed", wantClass: ApprovalEventClassReused},
+		{event: "approval_grant_persisted", wantClass: ApprovalEventClassAudit},
+		{event: "approval_policy_denied", wantClass: ApprovalEventClassPolicyBlock, wantVisible: true},
+		{event: "approval_mode_blocked", wantClass: ApprovalEventClassModeBlock, wantVisible: true},
+		{event: "approval_unrecognized", wantClass: ApprovalEventClassUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.event, func(t *testing.T) {
+			if got := ClassifyApprovalEvent(tt.event); got != tt.wantClass {
+				t.Fatalf("class = %q, want %q", got, tt.wantClass)
+			}
+			if got := ApprovalEventCountsAsPrompt(tt.event); got != tt.wantPrompt {
+				t.Fatalf("counts as prompt = %v, want %v", got, tt.wantPrompt)
+			}
+			if got := ApprovalEventIsUserVisible(tt.event); got != tt.wantVisible {
+				t.Fatalf("user visible = %v, want %v", got, tt.wantVisible)
+			}
+		})
+	}
+}
+
 func TestAppendApprovalEventRedactsShellExactCommandKeys(t *testing.T) {
 	dir := t.TempDir()
 	secretCommand := `curl -H "Authorization: Bearer sk-secret" "https://example.test?token=abc"`

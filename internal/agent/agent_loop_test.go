@@ -26,7 +26,7 @@ func TestAgentLoopWithToolRoundTrip(t *testing.T) {
 	prov := &mockProvider{}
 	a := NewAgent(prov, store, []Tool{echoTool{}})
 
-	msg, err := a.Run(context.Background(), "s1", "hello")
+	msg, err := a.RunSession(context.Background(), "s1", "hello")
 	if err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
@@ -282,13 +282,13 @@ func TestResumeSessionHistoryAfterSwitchingSessions(t *testing.T) {
 	prov := &historyCaptureProvider{}
 	a := NewAgent(prov, store, nil)
 
-	if _, err := a.Run(context.Background(), "s1", "first-s1"); err != nil {
+	if _, err := a.RunSession(context.Background(), "s1", "first-s1"); err != nil {
 		t.Fatalf("run s1 first turn failed: %v", err)
 	}
-	if _, err := a.Run(context.Background(), "s2", "first-s2"); err != nil {
+	if _, err := a.RunSession(context.Background(), "s2", "first-s2"); err != nil {
 		t.Fatalf("run s2 first turn failed: %v", err)
 	}
-	if _, err := a.Run(context.Background(), "s1", "second-s1"); err != nil {
+	if _, err := a.RunSession(context.Background(), "s1", "second-s1"); err != nil {
 		t.Fatalf("run s1 second turn failed: %v", err)
 	}
 

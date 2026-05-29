@@ -9,6 +9,7 @@ import (
 
 	"github.com/usewhale/whale/internal/app"
 	"github.com/usewhale/whale/internal/app/service"
+	"github.com/usewhale/whale/internal/core"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
@@ -28,6 +29,25 @@ func TestProjectFocusMessagesHidesThinkingAndToolDetails(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"inspect this", "Read 1 file: internal/tui/model.go, Ran shell: go test", "(ctrl+o to expand)", "done"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("focus view missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
+func TestProjectFocusMessagesHidesApprovalAuditNotices(t *testing.T) {
+	messages := []tuirender.UIMessage{
+		{Role: "you", Kind: tuirender.KindText, Text: "run it"},
+		{Role: "notice", Kind: tuirender.KindNotice, Text: "Cached approval", Notice: &tuirender.SystemNotice{Kind: "approval_cached_allowed", Action: "Cached", Subject: "approval"}},
+		{Role: "notice", Kind: tuirender.KindNotice, Text: "Approved to run git status", Notice: &tuirender.SystemNotice{Kind: "approval_allowed_for_session", Action: "Approved", Detail: "to run", Command: "git status", Scope: "for this session"}},
+		{Role: "assistant", Kind: tuirender.KindText, Text: "done"},
+	}
+
+	rendered := strings.Join(tuirender.ChatLines(projectFocusMessages(messages), 100), "\n")
+	if strings.Contains(rendered, "Cached approval") {
+		t.Fatalf("focus view leaked cached approval audit notice:\n%s", rendered)
+	}
+	for _, want := range []string{"run it", "Approved to run git status", "done"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("focus view missing %q:\n%s", want, rendered)
 		}
@@ -128,7 +148,7 @@ func TestProjectFocusMessagesKeepsFailureAfterRecoveredShellRetry(t *testing.T) 
 		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
 	}
 	for _, want := range []string{
-		"Failed shell: make test",
+		"Command failed: make test",
 		"Retried shell: make test (1 failed, 1 succeeded)",
 	} {
 		if !strings.Contains(projected[0].Text, want) {
@@ -148,7 +168,7 @@ func TestProjectFocusMessagesKeepsUnrelatedShellFailureVisible(t *testing.T) {
 		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
 	}
 	for _, want := range []string{
-		"Failed shell: go test ./internal/tui",
+		"Command failed: go test ./internal/tui",
 		"Ran shell: git status",
 		"(1 failed)",
 	} {
@@ -174,13 +194,13 @@ func TestProjectFocusMessagesKeepsUnrecoveredShellFailureVisible(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Retried shell: gh pr create (1 failed, 1 succeeded)",
-		"Failed shell: go test ./internal/tui",
+		"Command failed: go test ./internal/tui",
 	} {
 		if !strings.Contains(projected[0].Text, want) {
 			t.Fatalf("focus summary missing %q:\n%s", want, projected[0].Text)
 		}
 	}
-	if strings.Contains(projected[0].Text, "Failed 2 shell commands") {
+	if strings.Contains(projected[0].Text, "Command failed: 2 shell commands") {
 		t.Fatalf("recovered retry should be split from unresolved shell failure:\n%s", projected[0].Text)
 	}
 }
@@ -219,7 +239,7 @@ func TestProjectFocusMessagesDoesNotRecoverShellByTruncatedPrefix(t *testing.T) 
 	if len(projected) != 1 {
 		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
 	}
-	for _, want := range []string{"Failed shell:", "Ran shell:"} {
+	for _, want := range []string{"Command failed:", "Ran shell:"} {
 		if !strings.Contains(projected[0].Text, want) {
 			t.Fatalf("focus summary missing %q:\n%s", want, projected[0].Text)
 		}
@@ -239,7 +259,7 @@ func TestProjectFocusMessagesDoesNotRecoverShellBySignificantWhitespace(t *testi
 	if len(projected) != 1 {
 		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
 	}
-	for _, want := range []string{"Failed shell: printf 'a b'", "Ran shell: printf 'a b'"} {
+	for _, want := range []string{"Command failed: printf 'a b'", "Ran shell: printf 'a b'"} {
 		if !strings.Contains(projected[0].Text, want) {
 			t.Fatalf("focus summary missing %q:\n%s", want, projected[0].Text)
 		}
@@ -259,7 +279,7 @@ func TestProjectFocusMessagesDoesNotRecoverShellByFirstLineOnly(t *testing.T) {
 	if len(projected) != 1 {
 		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
 	}
-	for _, want := range []string{"Failed shell: printf setup", "Ran shell: printf setup"} {
+	for _, want := range []string{"Command failed: printf setup", "Ran shell: printf setup"} {
 		if !strings.Contains(projected[0].Text, want) {
 			t.Fatalf("focus summary missing %q:\n%s", want, projected[0].Text)
 		}
@@ -279,7 +299,7 @@ func TestProjectFocusMessagesDoesNotRecoverShellAcrossCWD(t *testing.T) {
 	if len(projected) != 1 {
 		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
 	}
-	for _, want := range []string{"Failed shell: make test", "Ran shell: make test"} {
+	for _, want := range []string{"Command failed: make test", "Ran shell: make test"} {
 		if !strings.Contains(projected[0].Text, want) {
 			t.Fatalf("focus summary missing %q:\n%s", want, projected[0].Text)
 		}
@@ -318,20 +338,28 @@ func TestProjectFocusMessagesKeepsDeniedBeforeRecoveredShellRetry(t *testing.T) 
 func TestProjectFocusMessagesCollapsesSubagentCells(t *testing.T) {
 	messages := []tuirender.UIMessage{
 		{Role: "you", Kind: tuirender.KindText, Text: "inspect this"},
-		{Role: "result_running", Kind: tuirender.KindSubagent, ToolName: "spawn_subagent", Text: "Subagent review running\nsession: child-123\ncurrent: read_file\ndetail: reading internal/tasks/runner.go"},
+		{
+			Role:     "result_running",
+			Kind:     tuirender.KindSubagent,
+			ToolName: "spawn_subagent",
+			Text:     "Subagent review running\nsession: child-123\ncurrent: read_file\ndetail: reading internal/tasks/runner.go",
+			SubagentSteps: []core.SubagentStep{
+				{ToolName: "read_file", Status: "running", Summary: "reading internal/tasks/runner.go"},
+			},
+		},
 		{Role: "assistant", Kind: tuirender.KindText, Text: "done"},
 	}
 
 	rendered := strings.Join(tuirender.ChatLines(projectFocusMessages(messages), 100), "\n")
-	for _, hidden := range []string{"child-123", "read_file", "reading internal/tasks/runner.go"} {
-		if strings.Contains(rendered, hidden) {
-			t.Fatalf("focus view leaked subagent detail %q:\n%s", hidden, rendered)
+	// Subagent cards pass through focus unchanged; they are not collapsed
+	// into the generic tool summary.
+	for _, want := range []string{"inspect this", "Subagent review", "read_file: reading internal/tasks/runner.go", "done"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("focus view missing subagent card %q:\n%s", want, rendered)
 		}
 	}
-	for _, want := range []string{"inspect this", "Subagent review running (1 running)", "(ctrl+o to expand)", "done"} {
-		if !strings.Contains(rendered, want) {
-			t.Fatalf("focus view missing %q:\n%s", want, rendered)
-		}
+	if strings.Contains(rendered, "Subagent explore") {
+		t.Fatalf("focus view mislabeled review subagent as explore:\n%s", rendered)
 	}
 }
 
@@ -678,7 +706,7 @@ func TestProjectFocusMessagesSeparatesExplorationAndEditSummaries(t *testing.T) 
 
 func TestProjectFocusMessagesUsesURLLanguageForFetch(t *testing.T) {
 	messages := []tuirender.UIMessage{
-		{Role: "result_failed", Kind: tuirender.KindToolCall, ToolName: "fetch", Text: "Explored\nFetch https://7a65d37d.whale-site.pages.dev"},
+		{Role: "result_http_error", Kind: tuirender.KindToolCall, ToolName: "fetch", Text: "Explored\nFetch https://7a65d37d.whale-site.pages.dev\nHTTP 403 Forbidden"},
 		{Role: "result_ok", Kind: tuirender.KindToolCall, ToolName: "web_fetch", Text: "Explored\nFetch https://whale-site.pages.dev"},
 	}
 
@@ -686,12 +714,126 @@ func TestProjectFocusMessagesUsesURLLanguageForFetch(t *testing.T) {
 	if len(projected) != 1 {
 		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
 	}
-	want := "Failed 1 URL: https://7a65d37d.whale-site.pages.dev (1 failed), Fetched 1 URL: https://whale-site.pages.dev (ctrl+o to expand)"
+	want := "HTTP 403 Forbidden: https://7a65d37d.whale-site.pages.dev (1 HTTP error), Fetched 1 URL: https://whale-site.pages.dev (ctrl+o to expand)"
 	if got := projected[0].Text; got != want {
 		t.Fatalf("unexpected web fetch summary:\nwant: %q\n got: %q", want, got)
 	}
 	if strings.Contains(projected[0].Text, "file") {
 		t.Fatalf("web fetch summary should not use file wording:\n%s", projected[0].Text)
+	}
+}
+
+func TestProjectFocusMessagesUsesAccessBlockedLanguageForExternalAccess(t *testing.T) {
+	messages := []tuirender.UIMessage{
+		{Role: "result_blocked", Kind: tuirender.KindToolCall, ToolName: "read_file", Text: "Explored\nRead ../src/Tool.ts\nAccess blocked · ../src/Tool.ts"},
+	}
+
+	projected := projectFocusMessages(messages)
+	if len(projected) != 1 {
+		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+	}
+	want := "Access blocked: ../src/Tool.ts (1 blocked) (ctrl+o to expand)"
+	if got := projected[0].Text; got != want {
+		t.Fatalf("unexpected blocked summary:\nwant: %q\n got: %q", want, got)
+	}
+	if strings.Contains(projected[0].Text, "Failed") || strings.Contains(projected[0].Text, "Denied") {
+		t.Fatalf("access block should not use failed/denied language:\n%s", projected[0].Text)
+	}
+}
+
+func TestProjectFocusMessagesPreservesLegacyOutsideWorkspaceDetail(t *testing.T) {
+	messages := []tuirender.UIMessage{
+		{Role: "result_blocked", Kind: tuirender.KindToolCall, ToolName: "read_file", Text: "Explored\nRead ../src/Tool.ts\nOutside workspace · ../src/Tool.ts"},
+	}
+
+	projected := projectFocusMessages(messages)
+	if len(projected) != 1 {
+		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+	}
+	want := "Outside workspace: ../src/Tool.ts (1 blocked) (ctrl+o to expand)"
+	if got := projected[0].Text; got != want {
+		t.Fatalf("unexpected legacy blocked summary:\nwant: %q\n got: %q", want, got)
+	}
+}
+
+func TestProjectFocusMessagesUsesModeHintLanguage(t *testing.T) {
+	messages := []tuirender.UIMessage{
+		{Role: "result_mode_hint", Kind: tuirender.KindToolCall, ToolName: "update_plan", Text: "Updated plan\nPlan mode · switch to /agent to edit"},
+	}
+
+	projected := projectFocusMessages(messages)
+	if len(projected) != 1 {
+		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+	}
+	want := "Plan mode: switch to /agent to edit (1 mode hint) (ctrl+o to expand)"
+	if got := projected[0].Text; got != want {
+		t.Fatalf("unexpected mode hint summary:\nwant: %q\n got: %q", want, got)
+	}
+}
+
+func TestProjectFocusMessagesUsesModeHintLanguageForShell(t *testing.T) {
+	messages := []tuirender.UIMessage{
+		{Role: "shell_result_mode_hint", Kind: tuirender.KindToolCall, ToolName: "shell_run", Text: "Ran rm -rf tmp\nAsk mode · switch to /agent to edit"},
+	}
+
+	projected := projectFocusMessages(messages)
+	if len(projected) != 1 {
+		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+	}
+	want := "Ask mode: switch to /agent to edit (1 mode hint) (ctrl+o to expand)"
+	if got := projected[0].Text; got != want {
+		t.Fatalf("unexpected shell mode hint summary:\nwant: %q\n got: %q", want, got)
+	}
+	if strings.Contains(projected[0].Text, "Blocked shell") || strings.Contains(projected[0].Text, "rm -rf") {
+		t.Fatalf("shell mode hint should surface the mode guidance, not the command:\n%s", projected[0].Text)
+	}
+}
+
+func TestProjectFocusMessagesKeepsStandaloneSemanticResultDetail(t *testing.T) {
+	messages := []tuirender.UIMessage{
+		{Role: "result_blocked", Kind: tuirender.KindToolResult, ToolName: "read_file", Text: "Access blocked · ../src/Tool.ts"},
+		{Role: "result_mode_hint", Kind: tuirender.KindToolResult, ToolName: "shell_run", Text: "Ask mode · switch to /agent to edit"},
+	}
+
+	projected := projectFocusMessages(messages)
+	if len(projected) != 1 {
+		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+	}
+	for _, want := range []string{
+		"Access blocked: ../src/Tool.ts",
+		"Ask mode: switch to /agent to edit",
+	} {
+		if !strings.Contains(projected[0].Text, want) {
+			t.Fatalf("standalone semantic result missing %q:\n%s", want, projected[0].Text)
+		}
+	}
+	if strings.Contains(projected[0].Text, "Blocked 1 tool") || strings.Contains(projected[0].Text, "Mode hint (") {
+		t.Fatalf("standalone semantic result collapsed to generic text:\n%s", projected[0].Text)
+	}
+}
+
+func TestProjectFocusMessagesUsesUsageHintForInvalidSearchInput(t *testing.T) {
+	messages := []tuirender.UIMessage{
+		{
+			Role:     "result_usage_hint",
+			Kind:     tuirender.KindToolCall,
+			ToolName: "grep",
+			Text: `Explored
+Search {"include": "*.go", "literal_text": func asString(v any) string, "limit": 10}
+Invalid tool input · literal_text must be bool`,
+		},
+	}
+
+	projected := projectFocusMessages(messages)
+	if len(projected) != 1 {
+		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+	}
+	want := "Invalid tool input: literal_text must be bool (1 blocked) (ctrl+o to expand)"
+	if got := projected[0].Text; got != want {
+		t.Fatalf("unexpected usage hint summary:\nwant: %q\n got: %q", want, got)
+	}
+	if strings.Contains(projected[0].Text, "Failed") || strings.Contains(projected[0].Text, "patterns") {
+		t.Fatalf("invalid search input should not render as failed patterns:\n%s", projected[0].Text)
 	}
 }
 
@@ -941,12 +1083,12 @@ func TestProjectFocusMessagesKeepsStatusAndTruncatesLongShellDetail(t *testing.T
 		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
 	}
 	rendered := projected[0].Text
-	for _, want := range []string{"Denied 1 file", "Failed shell: go test ./internal/tui -run", "...", "(1 failed)", "(1 denied/canceled)"} {
+	for _, want := range []string{"Denied 1 file", "Command failed: go test ./internal/tui -run", "...", "(1 failed)", "(1 denied/canceled)"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("focus view missing %q:\n%s", want, rendered)
 		}
 	}
-	if strings.Index(rendered, "Denied 1 file") > strings.Index(rendered, "Failed shell") {
+	if strings.Index(rendered, "Denied 1 file") > strings.Index(rendered, "Command failed") {
 		t.Fatalf("denied summary should be prioritized before failed work:\n%s", rendered)
 	}
 	if strings.Contains(rendered, " -count=1 -v") {
@@ -1024,10 +1166,10 @@ func TestProjectFocusMessagesFallsBackWhenTaskHasNoDetail(t *testing.T) {
 
 	projected := projectFocusMessages(messages)
 	if len(projected) != 1 {
-		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+		t.Fatalf("expected one subagent card, got %d: %+v", len(projected), projected)
 	}
-	if got := projected[0].Text; got != "Running 1 subagent task (1 running) (ctrl+o to expand)" {
-		t.Fatalf("unexpected task fallback summary: %q", got)
+	if projected[0].Kind != tuirender.KindSubagent {
+		t.Fatalf("expected subagent card to pass through focus unchanged, got kind: %s", projected[0].Kind)
 	}
 }
 

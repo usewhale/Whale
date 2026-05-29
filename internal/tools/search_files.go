@@ -20,7 +20,7 @@ var defaultIgnoredDirs = map[string]bool{
 	"target":       true,
 }
 
-func (b *Toolset) searchFiles(_ context.Context, call core.ToolCall) (core.ToolResult, error) {
+func (b *Toolset) searchFiles(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
 	var in struct {
 		Path    string `json:"path"`
 		Pattern string `json:"pattern"`
@@ -38,12 +38,12 @@ func (b *Toolset) searchFiles(_ context.Context, call core.ToolCall) (core.ToolR
 	if in.Limit > 2000 {
 		in.Limit = 2000
 	}
-	abs, err := b.safeReadPath(in.Path)
+	abs, err := b.safeReadPath(ctx, in.Path)
 	if err != nil {
 		return b.marshalReadPathError(call, in.Path, err), nil
 	}
 
-	matches := make([]string, 0, minInt(in.Limit, 128))
+	matches := make([]string, 0, min(in.Limit, 128))
 	total := 0
 	pat := strings.ToLower(strings.TrimSpace(in.Pattern))
 	_ = filepath.WalkDir(abs, func(path string, d fs.DirEntry, walkErr error) error {
@@ -77,11 +77,4 @@ func (b *Toolset) searchFiles(_ context.Context, call core.ToolCall) (core.ToolR
 			"items": matches,
 		},
 	})
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

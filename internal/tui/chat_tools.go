@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/usewhale/whale/internal/core"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
@@ -58,11 +59,11 @@ func (m *model) updateToolCallFromResult(toolCallID, toolName, result, role, sum
 
 func shellCommandIdentityFromResult(raw string) string {
 	env := parseToolEnvelope(raw)
-	command := strings.TrimSpace(asString(env.payload["command"]))
+	command := strings.TrimSpace(core.AsString(env.payload["command"]))
 	if command == "" {
 		return ""
 	}
-	cwd := strings.TrimSpace(asString(env.payload["cwd"]))
+	cwd := strings.TrimSpace(core.AsString(env.payload["cwd"]))
 	if cwd == "" {
 		return command
 	}
@@ -70,6 +71,10 @@ func shellCommandIdentityFromResult(raw string) string {
 }
 
 func (m *model) updateTaskProgress(toolCallID, toolName, text, status string, metadata map[string]any) bool {
+	return m.updateTaskProgressWithSteps(toolCallID, toolName, text, status, metadata, nil)
+}
+
+func (m *model) updateTaskProgressWithSteps(toolCallID, toolName, text, status string, metadata map[string]any, steps []core.SubagentStep) bool {
 	if toolCallID == "" || m.assembler == nil {
 		return false
 	}
@@ -79,12 +84,12 @@ func (m *model) updateTaskProgress(toolCallID, toolName, text, status string, me
 		previous := m.assembler.ToolCallText(toolCallID)
 		title = subagentProgressText(text, status, metadata, previous)
 		role = subagentProgressRole(status, text)
+		m.assembler.UpdateSubagentProgress(toolCallID, title, role, steps)
+	} else {
+		m.assembler.UpdateToolCall(toolCallID, title, role)
 	}
-	ok := m.assembler.UpdateToolCall(toolCallID, title, role)
-	if ok {
-		m.refreshLiveViewportContent()
-	}
-	return ok
+	m.refreshLiveViewportContent()
+	return true
 }
 
 func (m *model) markToolCallPending(toolCallID string) {
@@ -132,10 +137,10 @@ func summarizeToolCallForChat(toolName, text string) string {
 		return line
 	case "task":
 		if strings.TrimSpace(toolName) == "parallel_reason" {
-			return "Parallel reasoning\n" + firstNonEmpty(detail, "working")
+			return "Parallel reasoning\n" + core.FirstNonEmpty(detail, "working")
 		}
 		role := taskRoleFromText(text)
-		return "Subagent " + role + "\n" + firstNonEmpty(detail, "starting")
+		return "Subagent " + role + "\n" + core.FirstNonEmpty(detail, "starting")
 	case "plan":
 		return "Updating plan"
 	case "todo":
@@ -153,13 +158,13 @@ func summarizeToolCallForChat(toolName, text string) string {
 func summarizeTaskProgressForChat(toolName, text string) string {
 	detail := taskProgressDetail(text)
 	if strings.TrimSpace(toolName) == "parallel_reason" {
-		return "Parallel reasoning\n" + firstNonEmpty(detail, "running")
+		return "Parallel reasoning\n" + core.FirstNonEmpty(detail, "running")
 	}
 	role := taskRoleFromText(text)
 	if taskProgressFailed(text) {
-		return "Subagent " + role + "\nFailed: " + firstNonEmpty(detail, "subagent failed")
+		return "Subagent " + role + "\nFailed: " + core.FirstNonEmpty(detail, "subagent failed")
 	}
-	return "Subagent " + role + "\n" + firstNonEmpty(detail, "running")
+	return "Subagent " + role + "\n" + core.FirstNonEmpty(detail, "running")
 }
 
 func taskProgressDetail(text string) string {
@@ -202,22 +207,22 @@ func taskProgressFailed(text string) bool {
 
 func subagentStartedText(text string) string {
 	role := taskRoleFromText(text)
-	detail := firstNonEmpty(taskProgressDetail(text), toolCallDetail(text), "starting")
+	detail := core.FirstNonEmpty(taskProgressDetail(text), toolCallDetail(text), "starting")
 	return subagentText(role, "running", "pending", "starting", detail, "", "")
 }
 
 func subagentProgressText(text, eventStatus string, metadata map[string]any, previous string) string {
-	role := firstNonEmpty(asString(metadata["role"]), taskRoleFromText(text), previousSubagentField(previous, "role"), "explore")
-	status := firstNonEmpty(eventStatus, asString(metadata["status"]))
+	role := core.FirstNonEmpty(core.AsString(metadata["role"]), taskRoleFromText(text), previousSubagentField(previous, "role"), "explore")
+	status := core.FirstNonEmpty(eventStatus, core.AsString(metadata["status"]))
 	if status == "" {
 		status = "running"
 	}
 	if taskProgressFailed(text) {
 		status = "failed"
 	}
-	sessionID := firstNonEmpty(asString(metadata["child_session_id"]), previousSubagentField(previous, "session"), "pending")
-	current := firstNonEmpty(asString(metadata["child_tool"]), previousSubagentField(previous, "current"), "starting")
-	detail := firstNonEmpty(taskProgressDetail(text), previousSubagentField(previous, "detail"), "running")
+	sessionID := core.FirstNonEmpty(core.AsString(metadata["child_session_id"]), previousSubagentField(previous, "session"), "pending")
+	current := core.FirstNonEmpty(core.AsString(metadata["child_tool"]), previousSubagentField(previous, "current"), "starting")
+	detail := core.FirstNonEmpty(taskProgressDetail(text), previousSubagentField(previous, "detail"), "running")
 	return subagentText(role, status, sessionID, current, detail, "", "")
 }
 
@@ -244,21 +249,21 @@ func subagentCompletedText(raw, previous string) string {
 			previousSubagentField(previous, "role"),
 			"failed",
 			previousSubagentField(previous, "session"),
-			firstNonEmpty(previousSubagentField(previous, "current"), "done"),
+			core.FirstNonEmpty(previousSubagentField(previous, "current"), "done"),
 			"",
 			"",
 			"malformed tool result",
 		)
 	}
-	role := firstNonEmpty(asString(env.data["role"]), previousSubagentField(previous, "role"), "explore")
+	role := core.FirstNonEmpty(core.AsString(env.data["role"]), previousSubagentField(previous, "role"), "explore")
 	status := "completed"
 	if !toolEnvelopeSucceeded(env) {
 		status = "failed"
 	}
-	sessionID := firstNonEmpty(asString(env.data["child_session_id"]), asString(env.data["session_id"]), previousSubagentField(previous, "session"), "pending")
-	current := firstNonEmpty(previousSubagentField(previous, "current"), "done")
+	sessionID := core.FirstNonEmpty(core.AsString(env.data["child_session_id"]), core.AsString(env.data["session_id"]), previousSubagentField(previous, "session"), "pending")
+	current := core.FirstNonEmpty(previousSubagentField(previous, "current"), "done")
 	duration := formatDurationMS(firstNonZeroInt64(asInt64(env.metadata["duration_ms"]), asInt64(env.data["duration_ms"])))
-	summary := firstNonEmpty(asString(env.data["summary"]), env.summary, env.message)
+	summary := core.FirstNonEmpty(core.AsString(env.data["summary"]), env.summary, env.message)
 	if summary == "" {
 		if status == "failed" {
 			summary = "subagent failed"
@@ -266,14 +271,14 @@ func subagentCompletedText(raw, previous string) string {
 			summary = "subagent completed"
 		}
 	}
-	return subagentText(role, status, sessionID, current, "", duration, firstLine(summary))
+	return subagentText(role, status, sessionID, current, "", duration, firstNonEmptyLine(summary))
 }
 
 func subagentText(role, status, sessionID, current, detail, duration, summary string) string {
-	role = firstNonEmpty(strings.TrimSpace(role), "explore")
-	status = firstNonEmpty(strings.TrimSpace(status), "running")
+	role = core.FirstNonEmpty(strings.TrimSpace(role), "explore")
+	status = core.FirstNonEmpty(strings.TrimSpace(status), "running")
 	lines := []string{"Subagent " + role + " " + status}
-	lines = append(lines, "session: "+firstNonEmpty(strings.TrimSpace(sessionID), "pending"))
+	lines = append(lines, "session: "+core.FirstNonEmpty(strings.TrimSpace(sessionID), "pending"))
 	if current != "" {
 		lines = append(lines, "current: "+strings.TrimSpace(current))
 	}
@@ -334,12 +339,15 @@ func completedToolTitle(toolName, raw, previous string) string {
 	env := parseToolEnvelope(raw)
 	switch toolDisplayKind(toolName) {
 	case "shell":
-		cmd := strings.TrimSpace(asString(env.payload["command"]))
+		cmd := strings.TrimSpace(core.AsString(env.payload["command"]))
 		if cmd == "" {
 			cmd = focusShellRawCommand(previous)
 		}
 		if cmd == "" {
 			cmd = "shell command"
+		}
+		if !toolEnvelopeSucceeded(env) && env.code == "exec_failed" && !shellFailureIsNoMatches(env) {
+			return shellFailureLabel(env) + ": " + cmd
 		}
 		return "Ran " + cmd
 	case "explore":
@@ -350,12 +358,12 @@ func completedToolTitle(toolName, raw, previous string) string {
 		if toolName == "parallel_reason" {
 			return "Parallel reasoning"
 		}
-		role := firstNonEmpty(asString(env.data["role"]), "explore")
+		role := core.FirstNonEmpty(core.AsString(env.data["role"]), "explore")
 		return "Subagent " + role
 	case "plan":
 		return "Updated plan"
 	case "todo":
-		return todoToolTitle(toolName, firstNonEmpty(previousToolActionLine(previous), raw), "done")
+		return todoToolTitle(toolName, core.FirstNonEmpty(previousToolActionLine(previous), raw), "done")
 	case "mcp":
 		return mcpCompletedTitle(toolName, raw, previous)
 	default:
@@ -371,6 +379,8 @@ func shellResultRole(role string) string {
 	switch strings.TrimSpace(role) {
 	case "result_ok":
 		return "shell_result_ok"
+	case "result_neutral":
+		return "shell_result_neutral"
 	case "result_failed":
 		return "shell_result_failed"
 	case "result_timeout":
@@ -383,6 +393,14 @@ func shellResultRole(role string) string {
 		return "shell_result_error"
 	case "result_running":
 		return "shell_result_running"
+	case "result_blocked":
+		return "shell_result_blocked"
+	case "result_mode_hint":
+		return "shell_result_mode_hint"
+	case "result_http_error":
+		return "shell_result_http_error"
+	case "result_usage_hint":
+		return "shell_result_usage_hint"
 	default:
 		return role
 	}
@@ -449,23 +467,23 @@ func toolCallDetail(text string) string {
 	if strings.HasPrefix(t, "{") {
 		var body map[string]any
 		if err := json.Unmarshal([]byte(t), &body); err == nil {
-			detail := firstNonEmpty(
-				asString(body["command"]),
-				asString(body["file_path"]),
-				asString(body["path"]),
-				asString(body["pattern"]),
-				asString(body["query"]),
-				asString(body["url"]),
-				asString(body["task_id"]),
-				asString(body["text"]),
-				asString(body["id"]),
+			detail := core.FirstNonEmpty(
+				core.AsString(body["command"]),
+				core.AsString(body["file_path"]),
+				core.AsString(body["path"]),
+				core.AsString(body["pattern"]),
+				core.AsString(body["query"]),
+				core.AsString(body["url"]),
+				core.AsString(body["task_id"]),
+				core.AsString(body["text"]),
+				core.AsString(body["id"]),
 			)
 			if detail != "" {
 				return detail
 			}
 			// Fall back to showing what we can: first non-empty value
 			for _, v := range body {
-				if s := asString(v); strings.TrimSpace(s) != "" {
+				if s := core.AsString(v); strings.TrimSpace(s) != "" {
 					return truncateDisplayText(s, 80)
 				}
 			}
@@ -480,19 +498,19 @@ func explorationLine(toolName, fallback string, env toolResultEnvelope) string {
 	data := env.data
 	switch toolName {
 	case "read_file":
-		path := firstNonEmpty(asString(payload["file_path"]), asString(data["file_path"]), actionDetailFallback(fallback, "Read"), "file")
+		path := core.FirstNonEmpty(core.AsString(payload["file_path"]), core.AsString(data["file_path"]), actionDetailFallback(fallback, "Read"), "file")
 		return "Read " + path
 	case "list_dir":
-		path := firstNonEmpty(asString(payload["path"]), asString(data["path"]), actionDetailFallback(fallback, "List"), ".")
+		path := core.FirstNonEmpty(core.AsString(payload["path"]), core.AsString(data["path"]), actionDetailFallback(fallback, "List"), ".")
 		return "List " + path
 	case "search_files":
-		return formatSearchActionLine(firstNonEmpty(searchDetailFromPayload(payload, data, ""), actionDetailFallback(fallback, "Search")), "files")
+		return formatSearchActionLine(core.FirstNonEmpty(searchDetailFromPayload(payload, data, ""), actionDetailFallback(fallback, "Search")), "files")
 	case "grep", "search_content":
-		return formatSearchActionLine(firstNonEmpty(searchDetailFromPayload(payload, data, asString(payload["include"])), actionDetailFallback(fallback, "Search")), "content")
+		return formatSearchActionLine(core.FirstNonEmpty(searchDetailFromPayload(payload, data, core.AsString(payload["include"])), actionDetailFallback(fallback, "Search")), "content")
 	case "fetch", "web_fetch":
-		return "Fetch " + firstNonEmpty(asString(payload["url"]), asString(data["url"]), actionDetailFallback(fallback, "Fetch"), "url")
+		return "Fetch " + core.FirstNonEmpty(core.AsString(payload["url"]), core.AsString(data["url"]), actionDetailFallback(fallback, "Fetch"), "url")
 	case "web_search":
-		query := firstNonEmpty(webSearchQueryFromMaps(payload, data), actionDetailFallback(fallback, "Search web for"), actionDetailFallback(fallback, "Search"))
+		query := core.FirstNonEmpty(webSearchQueryFromMaps(payload, data), actionDetailFallback(fallback, "Search web for"), actionDetailFallback(fallback, "Search"))
 		if query != "" {
 			return "Search web for " + query
 		}
@@ -500,15 +518,15 @@ func explorationLine(toolName, fallback string, env toolResultEnvelope) string {
 	default:
 		switch mcpExplorationKind(toolName) {
 		case "read":
-			path := firstNonEmpty(asString(payload["file_path"]), asString(payload["path"]), asString(data["file_path"]), asString(data["path"]), actionDetailFallback(fallback, "Read"), "file")
+			path := core.FirstNonEmpty(core.AsString(payload["file_path"]), core.AsString(payload["path"]), core.AsString(data["file_path"]), core.AsString(data["path"]), actionDetailFallback(fallback, "Read"), "file")
 			return "Read " + path
 		case "list":
-			path := firstNonEmpty(asString(payload["path"]), asString(data["path"]), actionDetailFallback(fallback, "List"), ".")
+			path := core.FirstNonEmpty(core.AsString(payload["path"]), core.AsString(data["path"]), actionDetailFallback(fallback, "List"), ".")
 			return "List " + path
 		case "search":
-			return formatSearchActionLine(firstNonEmpty(searchDetailFromPayload(payload, data, ""), actionDetailFallback(fallback, "Search")), "content")
+			return formatSearchActionLine(core.FirstNonEmpty(searchDetailFromPayload(payload, data, ""), actionDetailFallback(fallback, "Search")), "content")
 		}
-		return "Run " + firstNonEmpty(fallback, toolName)
+		return "Run " + core.FirstNonEmpty(fallback, toolName)
 	}
 }
 
@@ -525,14 +543,14 @@ func actionDetailFallback(fallback, action string) string {
 }
 
 func searchDetailFromPayload(payload, data map[string]any, includeFallback string) string {
-	pattern := firstNonEmpty(asString(payload["pattern"]), asString(data["pattern"]))
-	path := firstNonEmpty(asString(payload["path"]), asString(data["path"]))
-	include := firstNonEmpty(asString(payload["include"]), asString(data["include"]), includeFallback)
+	pattern := core.FirstNonEmpty(core.AsString(payload["pattern"]), core.AsString(data["pattern"]))
+	path := core.FirstNonEmpty(core.AsString(payload["path"]), core.AsString(data["path"]))
+	include := core.FirstNonEmpty(core.AsString(payload["include"]), core.AsString(data["include"]), includeFallback)
 	return appendSearchDetail(pattern, path, include)
 }
 
 func webSearchQueryFromMaps(payload, data map[string]any) string {
-	return firstNonEmpty(asString(payload["query"]), asString(data["query"]))
+	return core.FirstNonEmpty(core.AsString(payload["query"]), core.AsString(data["query"]))
 }
 
 func formatSearchActionLine(detail, fallback string) string {
@@ -626,13 +644,13 @@ func todoToolDetail(text string) string {
 		t = strings.TrimSpace(t[idx+1:])
 	}
 	if !strings.HasPrefix(t, "{") {
-		return firstLine(t)
+		return firstNonEmptyLine(t)
 	}
 	var body map[string]any
 	if err := json.Unmarshal([]byte(t), &body); err != nil {
 		return ""
 	}
-	return firstNonEmpty(asString(body["text"]), asString(body["id"]))
+	return core.FirstNonEmpty(core.AsString(body["text"]), core.AsString(body["id"]))
 }
 
 func editLine(toolName, fallback string, env toolResultEnvelope) string {
@@ -640,9 +658,9 @@ func editLine(toolName, fallback string, env toolResultEnvelope) string {
 	data := env.data
 	switch toolName {
 	case "write_file", "write":
-		return "Edited " + firstNonEmpty(asString(payload["file_path"]), asString(data["file_path"]), fallback, "file")
+		return "Edited " + core.FirstNonEmpty(core.AsString(payload["file_path"]), core.AsString(data["file_path"]), fallback, "file")
 	case "edit_file", "edit":
-		return "Edited " + firstNonEmpty(asString(payload["file_path"]), asString(data["file_path"]), fallback, "file")
+		return "Edited " + core.FirstNonEmpty(core.AsString(payload["file_path"]), core.AsString(data["file_path"]), fallback, "file")
 	case "apply_patch":
 		files := stringSlice(firstNonEmptyAny(payload["files_changed"], data["files_changed"]))
 		if len(files) == 1 {
@@ -653,6 +671,6 @@ func editLine(toolName, fallback string, env toolResultEnvelope) string {
 		}
 		return "Edited files"
 	default:
-		return "Edited " + firstNonEmpty(fallback, "files")
+		return "Edited " + core.FirstNonEmpty(fallback, "files")
 	}
 }

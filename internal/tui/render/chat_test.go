@@ -146,11 +146,14 @@ func TestChatLines_FocusSummaryStylesFromState(t *testing.T) {
 	entries := []UIMessage{{
 		Role: "tool_summary",
 		Kind: KindToolSummary,
-		Text: "Denied 1 shell command, Failed shell: go test ./..., Reading 1 file: internal/tui/focus_view.go, Searched for 1 pattern",
+		Text: "Denied 1 shell command, Command failed: go test ./..., Access blocked: ../src, Mode hint: switch to /agent, HTTP 403 Forbidden: https://example.test, Reading 1 file: internal/tui/focus_view.go, Searched for 1 pattern",
 		FocusSummary: &FocusSummary{
 			Parts: []FocusSummaryPart{
 				{Kind: "shell", State: "denied", Count: 1, Action: "Denied 1 shell command"},
-				{Kind: "shell", State: "failed", Count: 1, Action: "Failed shell", Detail: "go test ./..."},
+				{Kind: "shell", State: "failed", Count: 1, Action: "Command failed", Detail: "go test ./..."},
+				{Kind: "read", State: "blocked", Count: 1, Action: "Access blocked", Detail: "../src"},
+				{Kind: "mode", State: "mode_hint", Count: 1, Action: "Mode hint", Detail: "switch to /agent"},
+				{Kind: "web", State: "http_error", Count: 1, Action: "HTTP 403 Forbidden", Detail: "https://example.test"},
 				{Kind: "read", State: "running", Count: 1, Action: "Reading 1 file", Detail: "internal/tui/focus_view.go"},
 				{Kind: "search", State: "done", Count: 1, Action: "Searched for 1 pattern"},
 			},
@@ -158,7 +161,7 @@ func TestChatLines_FocusSummaryStylesFromState(t *testing.T) {
 	}}
 
 	raw := strings.Join(ChatLines(entries, 100), "\n")
-	for _, color := range []string{"214", "203", "117", "212"} {
+	for _, color := range []string{"214", "203", "220", "117", "212"} {
 		if !containsANSIColor(raw, color) {
 			t.Fatalf("expected state-driven focus summary color %s in %q", color, raw)
 		}
@@ -877,9 +880,21 @@ func TestChatLines_ToolEventStatusWordsUseSemanticColors(t *testing.T) {
 			ansi: "\x1b[38;5;220m",
 		},
 		{
-			name: "error",
+			name: "http error",
+			role: "result_http_error",
+			text: "Explored\nFetch https://httpbin.org/status/404\nHTTP 404 Not Found",
+			ansi: "\x1b[38;5;220m",
+		},
+		{
+			name: "legacy error token",
 			role: "shell_result_failed",
 			text: "Ran make test\n✗ · command failed",
+			ansi: "\x1b[38;5;203m",
+		},
+		{
+			name: "command failed label",
+			role: "shell_result_failed",
+			text: "Command failed (exit 2): make test\nCommand failed (exit 2) · 1.2s",
 			ansi: "\x1b[38;5;203m",
 		},
 		{

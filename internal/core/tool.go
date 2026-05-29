@@ -10,16 +10,23 @@ type Tool interface {
 	Run(ctx context.Context, call ToolCall) (ToolResult, error)
 }
 
+type SubagentStep struct {
+	ToolName string `json:"tool_name,omitempty"`
+	Status   string `json:"status,omitempty"`
+	Summary  string `json:"summary,omitempty"`
+}
+
 type ToolProgress struct {
-	ToolCallID string
-	ToolName   string
-	Status     string
-	Summary    string
-	Role       string
-	Model      string
-	Count      int
-	DurationMS int64
-	Metadata   map[string]any
+	ToolCallID       string
+	ToolName         string
+	Status           string
+	Summary          string
+	Role             string
+	Model            string
+	Count            int
+	DurationMS       int64
+	Metadata         map[string]any
+	ProgressMessages []SubagentStep
 }
 
 type ToolProgressRunner interface {

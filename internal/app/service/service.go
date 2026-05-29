@@ -110,33 +110,34 @@ const (
 )
 
 type Event struct {
-	Kind            EventKind
-	Text            string
-	ToolCallID      string
-	ToolName        string
-	Metadata        map[string]any
-	Status          string
-	Count           int
-	DurationMS      int64
-	Questions       []core.UserInputQuestion
-	Choices         []string
-	Approval        *policy.ApprovalRequest
-	LastResponse    string
-	ModelChoices    []string
-	EffortChoices   []string
-	CurrentModel    string
-	CurrentEffort   string
-	ThinkingChoices []string
-	CurrentThinking string
-	AutoAccept      bool
-	AutoAcceptKnown bool
-	ViewMode        string
-	LocalResult     *app.LocalResult
-	Skills          []skills.SkillView
-	Plugins         []plugins.PluginStatus
-	WorktreeExit    *app.WorktreeExitSummary
-	SessionID       string
-	Messages        []core.Message
+	Kind             EventKind
+	Text             string
+	ToolCallID       string
+	ToolName         string
+	Metadata         map[string]any
+	Status           string
+	Count            int
+	DurationMS       int64
+	ProgressMessages []core.SubagentStep
+	Questions        []core.UserInputQuestion
+	Choices          []string
+	Approval         *policy.ApprovalRequest
+	LastResponse     string
+	ModelChoices     []string
+	EffortChoices    []string
+	CurrentModel     string
+	CurrentEffort    string
+	ThinkingChoices  []string
+	CurrentThinking  string
+	AutoAccept       bool
+	AutoAcceptKnown  bool
+	ViewMode         string
+	LocalResult      *app.LocalResult
+	Skills           []skills.SkillView
+	Plugins          []plugins.PluginStatus
+	WorktreeExit     *app.WorktreeExitSummary
+	SessionID        string
+	Messages         []core.Message
 }
 
 type Service struct {
@@ -188,14 +189,14 @@ func New(ctx context.Context, cfg app.Config, start app.StartOptions) (*Service,
 	a.SetApprovalFunc(s.awaitApproval)
 	a.SetUserInputFunc(s.awaitUserInput)
 	s.goTracked(s.runLocalSubmitWorker)
-	for _, line := range a.StartupLines() {
-		s.emit(Event{Kind: EventInfo, Text: line})
-	}
 	if start.ResumeMenu {
 		if !s.emitSessionChoices() {
 			s.emitSessionHydrated()
 		}
 	} else {
+		for _, line := range a.StartupLines() {
+			s.emit(Event{Kind: EventInfo, Text: line})
+		}
 		s.emitSessionHydrated()
 	}
 	s.startMCPStartup()

@@ -109,7 +109,7 @@ func (t spawnSubagentTool) RunWithProgress(ctx context.Context, call core.ToolCa
 	if err != nil {
 		var subErr *SpawnSubagentError
 		if errors.As(err, &subErr) {
-			code := firstNonEmptyString(subErr.Code, "spawn_subagent_failed")
+			code := core.FirstNonEmpty(subErr.Code, "spawn_subagent_failed")
 			return marshalErrorWithData(call, code, subErr.Error(), map[string]any{
 				"session_id":         subErr.SessionID,
 				"child_session_id":   subErr.SessionID,

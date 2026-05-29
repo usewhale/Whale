@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/usewhale/whale/internal/core"
 )
 
 const (
@@ -109,7 +111,7 @@ func Start(cwd, name string) (Session, error) {
 	if branchExists(repoRoot, branch) {
 		addArgs = append(addArgs, path, branch)
 	} else {
-		base := firstNonEmpty(sess.OriginalHeadCommit, "HEAD")
+		base := core.FirstNonEmpty(sess.OriginalHeadCommit, "HEAD")
 		addArgs = append(addArgs, "-b", branch, path, base)
 	}
 	if err := runGit(repoRoot, addArgs...); err != nil {
@@ -191,7 +193,7 @@ func List(cwd string) ([]Entry, error) {
 			seen[name] = true
 			continue
 		}
-		item.Branch = firstNonEmpty(gitOutput(path, "branch", "--show-current"), item.Branch)
+		item.Branch = core.FirstNonEmpty(gitOutput(path, "branch", "--show-current"), item.Branch)
 		item.Head = gitOutput(path, "rev-parse", "--short", "HEAD")
 		item.Dirty = strings.TrimSpace(gitOutput(path, "status", "--porcelain")) != ""
 		out = append(out, item)
@@ -223,7 +225,7 @@ func Status(cwd, name string) (Entry, error) {
 		entry.Missing = true
 		return entry, nil
 	}
-	entry.Branch = firstNonEmpty(gitOutput(path, "branch", "--show-current"), entry.Branch)
+	entry.Branch = core.FirstNonEmpty(gitOutput(path, "branch", "--show-current"), entry.Branch)
 	entry.Head = gitOutput(path, "rev-parse", "--short", "HEAD")
 	entry.Dirty = strings.TrimSpace(gitOutput(path, "status", "--porcelain")) != ""
 	return entry, nil
@@ -391,15 +393,6 @@ func CheckoutRoot(cwd string) (string, error) {
 		return "", fmt.Errorf("resolve git root: empty result")
 	}
 	return root, nil
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
 }
 
 func insidePath(path, root string) bool {
