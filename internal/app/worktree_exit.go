@@ -135,15 +135,11 @@ func worktreeRemovalCwdState(worktreePath string) (string, bool, error) {
 	if err != nil {
 		return "", false, fmt.Errorf("resolve current directory before worktree removal: %w", err)
 	}
-	inside, err := pathInside(previousCwd, worktreePath)
+	inside, err := core.PathInside(previousCwd, worktreePath)
 	if err != nil {
 		return "", false, fmt.Errorf("check current directory before worktree removal: %w", err)
 	}
 	return previousCwd, inside, nil
-}
-
-func pathInside(path, parent string) (bool, error) {
-	return core.PathInside(path, parent)
 }
 
 func (a *App) markWorktreeExited() error {

@@ -792,7 +792,7 @@ func (p RulePolicy) isDiscoveredSkillReadPath(target string) bool {
 			continue
 		}
 		dirReal := canonicalAccessPath(skill.Path)
-		if dirReal != "" && pathInside(targetReal, dirReal) {
+		if dirReal != "" && pathInsideOrFalse(targetReal, dirReal) {
 			return true
 		}
 	}
@@ -874,7 +874,7 @@ func pathInsideAnyCanonical(path string, roots []string) bool {
 	path = canonicalAccessPath(path)
 	for _, root := range roots {
 		root = canonicalAccessPath(root)
-		if pathInside(path, root) {
+		if pathInsideOrFalse(path, root) {
 			return true
 		}
 	}
@@ -1074,7 +1074,7 @@ func pathInsideTrustedTemp(clean string) bool {
 	if clean == "" {
 		return false
 	}
-	if temp := cleanAbs(os.TempDir()); temp != "" && pathInside(clean, temp) {
+	if temp := cleanAbs(os.TempDir()); temp != "" && pathInsideOrFalse(clean, temp) {
 		return true
 	}
 	return clean == "/tmp" || strings.HasPrefix(clean, "/tmp/") ||
@@ -1432,7 +1432,7 @@ func cleanAbs(path string) string {
 	return filepath.Clean(abs)
 }
 
-func pathInside(path, root string) bool {
+func pathInsideOrFalse(path, root string) bool {
 	ok, err := core.PathInside(path, root)
 	if err != nil {
 		return false
@@ -1442,7 +1442,7 @@ func pathInside(path, root string) bool {
 
 func pathInsideAny(path string, roots []string) bool {
 	for _, root := range roots {
-		if pathInside(path, root) {
+		if pathInsideOrFalse(path, root) {
 			return true
 		}
 	}
