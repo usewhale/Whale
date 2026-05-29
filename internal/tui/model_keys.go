@@ -235,9 +235,6 @@ func (m model) shouldSkipFileSuggestionRefreshForKey(msg tea.KeyMsg) bool {
 func (m *model) handleChatModeKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	switch msg.String() {
 	case "ctrl+o":
-		if m.toggleSubagentCard() {
-			return nil, true
-		}
 		if m.toggleFocusView() {
 			return m.redrawTranscriptForFocusToggleCmd(), true
 		}

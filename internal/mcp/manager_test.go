@@ -269,7 +269,7 @@ func TestManagerKeepsAllServersVisibleWhileServersStart(t *testing.T) {
 
 func TestManagerStartsServersConcurrently(t *testing.T) {
 	slowServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(1 * time.Second)
+		time.Sleep(2 * time.Second)
 		http.Error(w, "slow failure", http.StatusInternalServerError)
 	}))
 	t.Cleanup(slowServer.Close)

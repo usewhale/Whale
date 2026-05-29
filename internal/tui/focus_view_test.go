@@ -9,6 +9,7 @@ import (
 
 	"github.com/usewhale/whale/internal/app"
 	"github.com/usewhale/whale/internal/app/service"
+	"github.com/usewhale/whale/internal/core"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
@@ -318,20 +319,28 @@ func TestProjectFocusMessagesKeepsDeniedBeforeRecoveredShellRetry(t *testing.T) 
 func TestProjectFocusMessagesCollapsesSubagentCells(t *testing.T) {
 	messages := []tuirender.UIMessage{
 		{Role: "you", Kind: tuirender.KindText, Text: "inspect this"},
-		{Role: "result_running", Kind: tuirender.KindSubagent, ToolName: "spawn_subagent", Text: "Subagent review running\nsession: child-123\ncurrent: read_file\ndetail: reading internal/tasks/runner.go"},
+		{
+			Role:     "result_running",
+			Kind:     tuirender.KindSubagent,
+			ToolName: "spawn_subagent",
+			Text:     "Subagent review running\nsession: child-123\ncurrent: read_file\ndetail: reading internal/tasks/runner.go",
+			SubagentSteps: []core.SubagentStep{
+				{ToolName: "read_file", Status: "running", Summary: "reading internal/tasks/runner.go"},
+			},
+		},
 		{Role: "assistant", Kind: tuirender.KindText, Text: "done"},
 	}
 
 	rendered := strings.Join(tuirender.ChatLines(projectFocusMessages(messages), 100), "\n")
-	for _, hidden := range []string{"child-123", "read_file", "reading internal/tasks/runner.go"} {
-		if strings.Contains(rendered, hidden) {
-			t.Fatalf("focus view leaked subagent detail %q:\n%s", hidden, rendered)
+	// Subagent cards pass through focus unchanged; they are not collapsed
+	// into the generic tool summary.
+	for _, want := range []string{"inspect this", "Subagent review", "read_file: reading internal/tasks/runner.go", "done"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("focus view missing subagent card %q:\n%s", want, rendered)
 		}
 	}
-	for _, want := range []string{"inspect this", "Subagent review running (1 running)", "(ctrl+o to expand)", "done"} {
-		if !strings.Contains(rendered, want) {
-			t.Fatalf("focus view missing %q:\n%s", want, rendered)
-		}
+	if strings.Contains(rendered, "Subagent explore") {
+		t.Fatalf("focus view mislabeled review subagent as explore:\n%s", rendered)
 	}
 }
 
@@ -1024,10 +1033,10 @@ func TestProjectFocusMessagesFallsBackWhenTaskHasNoDetail(t *testing.T) {
 
 	projected := projectFocusMessages(messages)
 	if len(projected) != 1 {
-		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+		t.Fatalf("expected one subagent card, got %d: %+v", len(projected), projected)
 	}
-	if got := projected[0].Text; got != "Running 1 subagent task (1 running) (ctrl+o to expand)" {
-		t.Fatalf("unexpected task fallback summary: %q", got)
+	if projected[0].Kind != tuirender.KindSubagent {
+		t.Fatalf("expected subagent card to pass through focus unchanged, got kind: %s", projected[0].Kind)
 	}
 }
 

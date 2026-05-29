@@ -33,7 +33,6 @@ type chatItemRenderKey struct {
 	msgToolName string
 	streaming   bool
 	fullReason  bool
-	expanded    bool
 	renderWidth int
 }
 
@@ -46,7 +45,6 @@ func makeRenderKey(msg tuirender.UIMessage, renderWidth int) chatItemRenderKey {
 		msgToolName: msg.ToolName,
 		streaming:   msg.Streaming,
 		fullReason:  msg.FullReasoning,
-		expanded:    msg.SubagentExpanded,
 		renderWidth: renderWidth,
 	}
 }

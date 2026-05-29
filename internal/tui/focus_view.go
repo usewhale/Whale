@@ -82,6 +82,13 @@ func projectFocusMessages(messages []tuirender.UIMessage) []tuirender.UIMessage 
 		tools = focusToolSummary{}
 	}
 	for _, msg := range messages {
+		if msg.Kind == tuirender.KindSubagent {
+			// Subagent cards render standalone in focus mode, not
+			// collapsed into the generic tool summary.
+			flushTools()
+			out = append(out, msg)
+			continue
+		}
 		if isFocusHiddenToolMessage(msg) {
 			item := focusSummarizeToolMessage(msg)
 			state := focusToolState(msg)

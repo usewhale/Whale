@@ -25,19 +25,18 @@ const (
 )
 
 type UIMessage struct {
-	ID               string
-	Role             string
-	Kind             MessageKind
-	Text             string
-	ToolName         string
-	ToolIdentity     string
-	Streaming        bool
-	Local            *app.LocalResult
-	FocusSummary     *FocusSummary
-	Notice           *SystemNotice
-	FullReasoning    bool
-	SubagentSteps    []core.SubagentStep
-	SubagentExpanded bool
+	ID            string
+	Role          string
+	Kind          MessageKind
+	Text          string
+	ToolName      string
+	ToolIdentity  string
+	Streaming     bool
+	Local         *app.LocalResult
+	FocusSummary  *FocusSummary
+	Notice        *SystemNotice
+	FullReasoning bool
+	SubagentSteps []core.SubagentStep
 }
 
 type SystemNotice struct {
@@ -263,21 +262,6 @@ func (a *Assembler) UpdateSubagentProgress(toolCallID, text string, role string,
 	if len(steps) > 0 {
 		a.messages[idx].SubagentSteps = steps
 	}
-}
-
-func (a *Assembler) Messages() []UIMessage {
-	return a.messages
-}
-
-func (a *Assembler) ToggleSubagentExpanded(toolCallID string) {
-	if toolCallID == "" {
-		return
-	}
-	idx, ok := a.toolEntryByID[toolCallID]
-	if !ok || idx < 0 || idx >= len(a.messages) {
-		return
-	}
-	a.messages[idx].SubagentExpanded = !a.messages[idx].SubagentExpanded
 }
 
 func (a *Assembler) AddNotice(text string) {

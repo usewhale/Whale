@@ -10318,6 +10318,9 @@ func TestTaskProgressUpdatesTaskToolRow(t *testing.T) {
 	}))
 	m = next.(model)
 	snap = m.assembler.Snapshot()
+	if snap[0].Kind != tuirender.KindSubagent || snap[0].Role != "result_running" {
+		t.Fatalf("expected running subagent row to persist: %+v", snap[0])
+	}
 	if !strings.Contains(snap[0].Text, "current: grep") || !strings.Contains(snap[0].Text, `detail: Searched "TaskProgress" in internal/tui (*.go) · 7 matches in 3 files`) {
 		t.Fatalf("expected child tool and progress metric to be preserved: %+v", snap[0])
 	}
@@ -10335,7 +10338,7 @@ func TestTaskProgressUpdatesTaskToolRow(t *testing.T) {
 	}))
 	m = next.(model)
 	snap = m.assembler.Snapshot()
-	if snap[0].Role != "result_running" || !strings.Contains(snap[0].Text, "Subagent review compacted") || !strings.Contains(snap[0].Text, "current: grep") {
+	if snap[0].Kind != tuirender.KindSubagent || snap[0].Role != "result_running" || !strings.Contains(snap[0].Text, "Subagent review compacted") || !strings.Contains(snap[0].Text, "current: grep") {
 		t.Fatalf("expected non-running progress status to update subagent row without losing current tool: %+v", snap[0])
 	}
 
@@ -10352,7 +10355,7 @@ func TestTaskProgressUpdatesTaskToolRow(t *testing.T) {
 	}))
 	m = next.(model)
 	snap = m.assembler.Snapshot()
-	if snap[0].Role != "result_ok" || !strings.Contains(snap[0].Text, "Subagent review completed") {
+	if snap[0].Kind != tuirender.KindSubagent || snap[0].Role != "result_ok" || !strings.Contains(snap[0].Text, "Subagent review completed") {
 		t.Fatalf("expected completed progress status to update subagent row: %+v", snap[0])
 	}
 
@@ -10368,6 +10371,9 @@ func TestTaskProgressUpdatesTaskToolRow(t *testing.T) {
 		t.Fatalf("expected completed subagent row in transcript")
 	}
 	completed := m.transcript[len(m.transcript)-1]
+	if completed.Kind != tuirender.KindSubagent {
+		t.Fatalf("expected completed subagent row in transcript, got: %+v", completed)
+	}
 	for _, want := range []string{"Subagent review completed", "session: parent--subagent-tc-task", "current: grep", "duration: 1.5s", "summary: no permission bypass found"} {
 		if !strings.Contains(completed.Text, want) {
 			t.Fatalf("expected %q in completed row: %+v", want, completed)

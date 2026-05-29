@@ -9,22 +9,6 @@ import (
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
-func (m *model) toggleSubagentCard() bool {
-	if m.assembler == nil {
-		return false
-	}
-	// Find the most recent subagent card that has steps
-	for i := len(m.assembler.Messages()) - 1; i >= 0; i-- {
-		msg := m.assembler.Messages()[i]
-		if msg.Kind == tuirender.KindSubagent && len(msg.SubagentSteps) > 0 {
-			m.assembler.ToggleSubagentExpanded(msg.ID)
-			m.refreshLiveViewportContent()
-			return true
-		}
-	}
-	return false
-}
-
 func (m *model) appendToolCall(toolCallID, toolName, text string) {
 	if m.assembler == nil {
 		m.assembler = tuirender.NewAssembler()
