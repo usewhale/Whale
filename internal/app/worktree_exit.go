@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/session"
 	whaleworktree "github.com/usewhale/whale/internal/worktree"
 )
@@ -174,7 +175,7 @@ func (a *App) markWorktreeExited() error {
 		a.worktree = WorktreeSession{}
 		return nil
 	}
-	workspace := firstNonEmpty(strings.TrimSpace(a.worktree.OriginalWorkspace), strings.TrimSpace(a.workspaceRoot))
+	workspace := core.FirstNonEmpty(strings.TrimSpace(a.worktree.OriginalWorkspace), strings.TrimSpace(a.workspaceRoot))
 	branch := strings.TrimSpace(a.worktree.OriginalBranch)
 	if _, err := session.UpdateSessionMeta(a.sessionsDir, a.sessionID, func(meta *session.SessionMeta) {
 		if workspace != "" {

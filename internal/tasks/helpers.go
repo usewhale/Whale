@@ -35,22 +35,6 @@ func addUsage(a, b llm.Usage) llm.Usage {
 	return a
 }
 
-func firstNonEmpty(a, b string) string {
-	if strings.TrimSpace(a) != "" {
-		return a
-	}
-	return b
-}
-
-func firstNonEmptyString(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
-}
-
 func quoteProgressTerm(v string) string {
 	v = compactProgressTarget(v)
 	if v == "" {

@@ -241,8 +241,8 @@ func (r *HookRunner) Run(ctx context.Context, payload HookPayload) HookReport {
 		parsed := shellHookResult(payload.Event, res)
 		oc := HookOutcome{
 			Hook:       h,
-			Name:       firstNonEmptyString(strings.TrimSpace(h.Description), strings.TrimSpace(h.Command)),
-			Source:     firstNonEmptyString(strings.TrimSpace(h.Source), "config"),
+			Name:       core.FirstNonEmpty(strings.TrimSpace(h.Description), strings.TrimSpace(h.Command)),
+			Source:     core.FirstNonEmpty(strings.TrimSpace(h.Source), "config"),
 			Decision:   parsed.Decision,
 			ExitCode:   res.ExitCode,
 			Stdout:     strings.TrimSpace(res.Stdout),
@@ -501,8 +501,8 @@ func parseHookJSONOutput(event HookEvent, stdout string) (HookResult, bool) {
 		return HookResult{}, false
 	}
 	out := HookResult{
-		Message:           firstNonEmptyString(stringField(body, "reason"), stringField(body, "message"), stringField(body, "systemMessage")),
-		AdditionalContext: firstNonEmptyString(stringField(body, "additional_context"), stringField(body, "additionalContext"), stringField(body, "context")),
+		Message:           core.FirstNonEmpty(stringField(body, "reason"), stringField(body, "message"), stringField(body, "systemMessage")),
+		AdditionalContext: core.FirstNonEmpty(stringField(body, "additional_context"), stringField(body, "additionalContext"), stringField(body, "context")),
 		Metadata:          mapField(body, "metadata"),
 	}
 	if decision, ok := hookDecisionField(event, body, "decision"); ok {

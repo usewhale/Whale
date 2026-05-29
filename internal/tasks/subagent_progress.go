@@ -52,7 +52,7 @@ func summarizeChildAgentEvent(ev agent.AgentEvent) (status, summary string, meta
 		if ev.Recovery == nil {
 			return "", "", nil, false
 		}
-		target := firstNonEmptyString(ev.Recovery.ToolName, "tool")
+		target := core.FirstNonEmpty(ev.Recovery.ToolName, "tool")
 		action := strings.TrimSpace(ev.Recovery.Action)
 		reason := strings.TrimSpace(ev.Recovery.Reason)
 		if reason == "" {
@@ -110,22 +110,22 @@ func summarizeChildToolCall(call core.ToolCall) childToolAction {
 	_ = json.Unmarshal([]byte(call.Input), &args)
 	switch call.Name {
 	case "read_file":
-		target := compactProgressTarget(firstNonEmptyString(core.AsString(args["file_path"]), core.AsString(args["path"]), "file"))
+		target := compactProgressTarget(core.FirstNonEmpty(core.AsString(args["file_path"]), core.AsString(args["path"]), "file"))
 		return childToolAction{ToolName: call.Name, Target: target, Running: "Reading " + target, DoneVerb: "Read"}
 	case "list_dir":
-		target := compactProgressTarget(firstNonEmptyString(core.AsString(args["path"]), "."))
+		target := compactProgressTarget(core.FirstNonEmpty(core.AsString(args["path"]), "."))
 		return childToolAction{ToolName: call.Name, Target: target, Running: "Listing " + target, DoneVerb: "Listed"}
 	case "grep", "search_content":
 		target := summarizeSearchTarget(args)
 		return childToolAction{ToolName: call.Name, Target: target, Running: "Searching " + target, DoneVerb: "Searched"}
 	case "search_files":
-		pattern := quoteProgressTerm(firstNonEmptyString(core.AsString(args["pattern"]), core.AsString(args["query"]), "files"))
+		pattern := quoteProgressTerm(core.FirstNonEmpty(core.AsString(args["pattern"]), core.AsString(args["query"]), "files"))
 		return childToolAction{ToolName: call.Name, Target: pattern, Running: "Searching files " + pattern, DoneVerb: "Searched files"}
 	case "web_search":
-		target := quoteProgressTerm(firstNonEmptyString(core.AsString(args["query"]), "query"))
+		target := quoteProgressTerm(core.FirstNonEmpty(core.AsString(args["query"]), "query"))
 		return childToolAction{ToolName: call.Name, Target: target, Running: "Searching web " + target, DoneVerb: "Searched web"}
 	case "fetch", "web_fetch":
-		target := compactURLForProgress(firstNonEmptyString(core.AsString(args["url"]), "url"))
+		target := compactURLForProgress(core.FirstNonEmpty(core.AsString(args["url"]), "url"))
 		return childToolAction{ToolName: call.Name, Target: target, Running: "Fetching " + target, DoneVerb: "Fetched"}
 	default:
 		if call.Name != "" {
@@ -136,9 +136,9 @@ func summarizeChildToolCall(call core.ToolCall) childToolAction {
 }
 
 func summarizeSearchTarget(args map[string]any) string {
-	pattern := quoteProgressTerm(firstNonEmptyString(core.AsString(args["pattern"]), core.AsString(args["query"]), "content"))
-	path := compactProgressTarget(firstNonEmptyString(core.AsString(args["path"]), core.AsString(args["directory"]), ""))
-	include := compactProgressTarget(firstNonEmptyString(core.AsString(args["include"]), ""))
+	pattern := quoteProgressTerm(core.FirstNonEmpty(core.AsString(args["pattern"]), core.AsString(args["query"]), "content"))
+	path := compactProgressTarget(core.FirstNonEmpty(core.AsString(args["path"]), core.AsString(args["directory"]), ""))
+	include := compactProgressTarget(core.FirstNonEmpty(core.AsString(args["include"]), ""))
 	if path != "" && include != "" {
 		return fmt.Sprintf("%s in %s (%s)", pattern, path, include)
 	}

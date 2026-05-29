@@ -74,9 +74,9 @@ func summarizeTaskResult(toolName string, env toolResultEnvelope, successBySigna
 		}
 		return "result_ok", strings.Join(parts, " · ")
 	case "spawn_subagent":
-		role := firstNonEmpty(core.AsString(env.data["role"]), "explore")
+		role := core.FirstNonEmpty(core.AsString(env.data["role"]), "explore")
 		parts = append(parts, role)
-		if summary := firstLine(firstNonEmpty(core.AsString(env.data["summary"]), env.summary)); summary != "" {
+		if summary := firstLine(core.FirstNonEmpty(core.AsString(env.data["summary"]), env.summary)); summary != "" {
 			return "result_ok", strings.Join(parts, " · ") + "\n" + summary
 		}
 		return "result_ok", strings.Join(parts, " · ")
@@ -247,7 +247,7 @@ func summarizeFailedResult(env toolResultEnvelope, fallback string) (string, str
 	exitCode := asInt(env.metrics["exit_code"])
 	hasExitCode := hasInt(env.metrics["exit_code"])
 	duration := formatDurationMS(asInt64(env.metrics["duration_ms"]))
-	detail := firstLine(firstNonEmpty(
+	detail := firstLine(core.FirstNonEmpty(
 		env.summary,
 		core.AsString(env.payload["stderr"]),
 		core.AsString(env.payload["stdout"]),
@@ -380,7 +380,7 @@ func summarizeExploreResult(toolName string, env toolResultEnvelope, successBySi
 		return "result_ok", fmt.Sprintf("✓ · %d matches", total)
 	case "fetch", "web_fetch":
 		status := asInt(firstNonEmptyAny(env.payload["status_code"], env.data["status_code"]))
-		format := firstNonEmpty(core.AsString(env.payload["format"]), core.AsString(env.data["format"]))
+		format := core.FirstNonEmpty(core.AsString(env.payload["format"]), core.AsString(env.data["format"]))
 		if status > 0 && format != "" {
 			return "result_ok", fmt.Sprintf("✓ · HTTP %d · %s", status, format)
 		}

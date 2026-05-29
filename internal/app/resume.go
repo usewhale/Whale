@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/usewhale/whale/internal/core"
 	"time"
 
 	"github.com/usewhale/whale/internal/session"
@@ -73,7 +75,7 @@ func ResolveResumeWorktree(cfg Config, start StartOptions, currentWorkspace stri
 	path := strings.TrimSpace(meta.WorktreePath)
 	if _, err := os.Stat(path); err != nil {
 		if os.IsNotExist(err) {
-			workspace := firstNonEmpty(strings.TrimSpace(meta.OriginalWorkspace), currentWorkspace)
+			workspace := core.FirstNonEmpty(strings.TrimSpace(meta.OriginalWorkspace), currentWorkspace)
 			branch := strings.TrimSpace(meta.OriginalBranch)
 			if _, updateErr := session.UpdateSessionMeta(sessionsDir, sessionID, func(meta *session.SessionMeta) {
 				if workspace != "" {

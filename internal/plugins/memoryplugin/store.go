@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/securefs"
 )
 
@@ -160,8 +161,8 @@ func (s *Store) Read(scope, rawName string) (Entry, error) {
 		return Entry{}, fmt.Errorf("read memory: %w", err)
 	}
 	entry := parseEntry(string(b))
-	entry.Name = firstNonEmpty(entry.Name, name)
-	entry.Scope = firstNonEmpty(entry.Scope, scope)
+	entry.Name = core.FirstNonEmpty(entry.Name, name)
+	entry.Scope = core.FirstNonEmpty(entry.Scope, scope)
 	entry.Path = path
 	return entry, nil
 }
@@ -368,13 +369,4 @@ func parseEntry(raw string) Entry {
 	}
 	entry.Content = strings.TrimSpace(strings.Join(lines[bodyStart:], "\n"))
 	return entry
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
 }

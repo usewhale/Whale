@@ -22,8 +22,8 @@ func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMe
 			// The stable contract is attribution plus each call's own
 			// progress-before-completion/result ordering.
 			info := TaskActivityInfo{
-				ToolCallID: firstNonEmptyString(progress.ToolCallID, call.ID),
-				ToolName:   firstNonEmptyString(progress.ToolName, call.Name),
+				ToolCallID: core.FirstNonEmpty(progress.ToolCallID, call.ID),
+				ToolName:   core.FirstNonEmpty(progress.ToolName, call.Name),
 				Role:       progress.Role,
 				Model:      progress.Model,
 				Count:      progress.Count,

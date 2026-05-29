@@ -28,7 +28,7 @@ func taskStartedEvent(call core.ToolCall) (AgentEvent, bool) {
 			info.Role = "explore"
 		}
 		info.Model = strings.TrimSpace(core.AsString(args["model"]))
-		info.Summary = firstLine(strings.TrimSpace(core.AsString(args["task"])))
+		info.Summary = core.FirstLine(core.AsString(args["task"]))
 		return AgentEvent{Type: AgentEventTypeSubagentStarted, Task: &info}, true
 	default:
 		return AgentEvent{}, false
@@ -50,7 +50,7 @@ func taskCompletedEvent(res core.ToolResult) (AgentEvent, bool) {
 		}
 		info.Model = strings.TrimSpace(core.AsString(env.Data["model"]))
 		info.Role = strings.TrimSpace(core.AsString(env.Data["role"]))
-		info.Summary = strings.TrimSpace(firstNonEmptyString(
+		info.Summary = strings.TrimSpace(core.FirstNonEmpty(
 			core.AsString(env.Data["summary"]),
 			env.Summary,
 			env.Message,
@@ -64,7 +64,7 @@ func taskCompletedEvent(res core.ToolResult) (AgentEvent, bool) {
 			if info.Role == "" {
 				info.Role = "explore"
 			}
-			childSessionID := strings.TrimSpace(firstNonEmptyString(core.AsString(env.Data["child_session_id"]), core.AsString(env.Data["session_id"])))
+			childSessionID := strings.TrimSpace(core.FirstNonEmpty(core.AsString(env.Data["child_session_id"]), core.AsString(env.Data["session_id"])))
 			if childSessionID != "" {
 				info.Metadata = map[string]any{"child_session_id": childSessionID}
 			}
@@ -97,21 +97,4 @@ func asInt64(v any) int64 {
 	default:
 		return 0
 	}
-}
-
-func firstLine(v string) string {
-	v = strings.TrimSpace(v)
-	if i := strings.IndexByte(v, '\n'); i >= 0 {
-		return strings.TrimSpace(v[:i])
-	}
-	return v
-}
-
-func firstNonEmptyString(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
 }

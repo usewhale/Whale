@@ -97,10 +97,10 @@ func (r *Runner) runOneReasoningQuery(ctx context.Context, model string, maxToke
 			}
 		case llm.EventError:
 			if ev.Err != nil {
-				return strings.TrimSpace(firstNonEmpty(final, b.String())), usage, ev.Err
+				return strings.TrimSpace(core.FirstNonEmpty(final, b.String())), usage, ev.Err
 			}
-			return strings.TrimSpace(firstNonEmpty(final, b.String())), usage, errors.New("provider error")
+			return strings.TrimSpace(core.FirstNonEmpty(final, b.String())), usage, errors.New("provider error")
 		}
 	}
-	return strings.TrimSpace(firstNonEmpty(final, b.String())), usage, ctx.Err()
+	return strings.TrimSpace(core.FirstNonEmpty(final, b.String())), usage, ctx.Err()
 }

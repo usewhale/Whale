@@ -258,8 +258,8 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 		}
 	}
 
-	model := firstNonEmpty(strings.TrimSpace(cfg.Model), defaults.DefaultModel)
-	effort := normalizeEffort(firstNonEmpty(strings.TrimSpace(cfg.ReasoningEffort), defaults.DefaultReasoningEffort))
+	model := core.FirstNonEmpty(strings.TrimSpace(cfg.Model), defaults.DefaultModel)
+	effort := normalizeEffort(core.FirstNonEmpty(strings.TrimSpace(cfg.ReasoningEffort), defaults.DefaultReasoningEffort))
 	viewMode, err := NormalizeViewMode(cfg.ViewMode)
 	if err != nil {
 		return nil, err

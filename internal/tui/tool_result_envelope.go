@@ -30,7 +30,7 @@ func parseToolEnvelopeOK(raw string) (toolResultEnvelope, bool) {
 		ok:         body.OK,
 		hasOK:      strings.Contains(raw, `"ok"`),
 		code:       strings.TrimSpace(body.Code),
-		message:    firstNonEmpty(body.Message, body.Error),
+		message:    core.FirstNonEmpty(body.Message, body.Error),
 		summary:    strings.TrimSpace(body.Summary),
 		status:     status,
 		data:       data,

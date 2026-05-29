@@ -307,7 +307,7 @@ func summarizeToolCall(call core.ToolCall) string {
 		if role == "" {
 			role = "explore"
 		}
-		task := firstLine(strings.TrimSpace(core.AsString(body["task"])))
+		task := core.FirstLine(core.AsString(body["task"]))
 		if task != "" {
 			return fmt.Sprintf("spawn_subagent: %s · %s", role, task)
 		}
@@ -435,12 +435,4 @@ func appendSearchScope(subject, path, include string) string {
 		detail += " (" + strings.TrimSpace(include) + ")"
 	}
 	return detail
-}
-
-func firstLine(v string) string {
-	v = strings.TrimSpace(v)
-	if i := strings.IndexByte(v, '\n'); i >= 0 {
-		return strings.TrimSpace(v[:i])
-	}
-	return v
 }
