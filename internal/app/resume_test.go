@@ -54,7 +54,7 @@ func TestListResumeChoicesShowsReadableConversationTable(t *testing.T) {
 	}
 }
 
-func TestApplyResumeChoiceBlocksCrossWorkspace(t *testing.T) {
+func TestApplyResumeChoiceBlocksCrossWorkspaceID(t *testing.T) {
 	current := t.TempDir()
 	other := t.TempDir()
 	sessionsDir := filepath.Join(t.TempDir(), "sessions")
@@ -68,7 +68,7 @@ func TestApplyResumeChoiceBlocksCrossWorkspace(t *testing.T) {
 		workspaceRoot: current,
 		sessionID:     "current",
 	}
-	out, err := app.ApplyResumeChoice("1")
+	out, err := app.ApplyResumeChoice("s1")
 	if err != nil {
 		t.Fatalf("ApplyResumeChoice: %v", err)
 	}
@@ -90,6 +90,51 @@ func TestApplyResumeChoiceBlocksCrossWorkspace(t *testing.T) {
 	}
 	if meta.Workspace != other {
 		t.Fatalf("workspace was mutated to %q, want %q", meta.Workspace, other)
+	}
+}
+
+func TestApplyResumeChoiceUsesWorkspaceFilteredNumbering(t *testing.T) {
+	current := t.TempDir()
+	other := t.TempDir()
+	sessionsDir := filepath.Join(t.TempDir(), "sessions")
+	writeResumeTestSession(t, sessionsDir, "hidden-newer", "other workspace")
+	writeResumeTestSession(t, sessionsDir, "visible-older", "current workspace")
+	if err := session.SaveSessionMeta(sessionsDir, "hidden-newer", session.SessionMeta{Workspace: other, Branch: "other"}); err != nil {
+		t.Fatalf("save hidden meta: %v", err)
+	}
+	if err := session.SaveSessionMeta(sessionsDir, "visible-older", session.SessionMeta{Workspace: current, Branch: "current"}); err != nil {
+		t.Fatalf("save visible meta: %v", err)
+	}
+	now := time.Now()
+	_ = os.Chtimes(filepath.Join(sessionsDir, "hidden-newer.jsonl"), now.Add(-time.Minute), now.Add(-time.Minute))
+	_ = os.Chtimes(filepath.Join(sessionsDir, "visible-older.jsonl"), now.Add(-2*time.Minute), now.Add(-2*time.Minute))
+
+	app := &App{
+		sessionsDir:   sessionsDir,
+		workspaceRoot: current,
+		sessionID:     "current",
+	}
+	choices, err := app.ListResumeChoices(20)
+	if err != nil {
+		t.Fatalf("ListResumeChoices: %v", err)
+	}
+	rendered := strings.Join(choices, "\n")
+	if strings.Contains(rendered, "other workspace") || strings.Contains(rendered, "other") {
+		t.Fatalf("hidden workspace session should not be rendered:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "1)") || !strings.Contains(rendered, "current workspace") {
+		t.Fatalf("visible session should be numbered as first choice:\n%s", rendered)
+	}
+
+	out, err := app.ApplyResumeChoice("1")
+	if err != nil {
+		t.Fatalf("ApplyResumeChoice: %v", err)
+	}
+	if !out.Resumed {
+		t.Fatalf("expected filtered visible session to resume, got:\n%s", out.Message)
+	}
+	if app.SessionID() != "visible-older" {
+		t.Fatalf("session = %q, want visible-older", app.SessionID())
 	}
 }
 

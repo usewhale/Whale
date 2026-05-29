@@ -45,6 +45,8 @@ func (s *Service) Dispatch(in Intent) {
 		s.emit(Event{Kind: EventInfo, Text: res.Message})
 		if res.Resumed {
 			s.emitSessionHydrated()
+		} else {
+			s.emitSessionChoices()
 		}
 	case IntentShutdown:
 		s.cancelMu.Lock()

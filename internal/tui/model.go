@@ -109,6 +109,7 @@ type model struct {
 		metadata   map[string]any
 		selected   int
 	}
+	resumeMenu     bool
 	sessionChoices []string
 	sessionIndex   int
 	userInput      struct {

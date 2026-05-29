@@ -2420,8 +2420,27 @@ func TestSessionPickerEnterDispatchesSelectedSession(t *testing.T) {
 	if got.Kind != service.IntentSelectSession || got.SessionInput != "2" {
 		t.Fatalf("unexpected intent: %+v", got)
 	}
+	if m.mode != modeSessionPicker {
+		t.Fatalf("expected session picker mode until async result, got %v", m.mode)
+	}
+}
+
+func TestStartupResumeMenuClearsAfterSessionHydration(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.resumeMenu = true
+	m.mode = modeSessionPicker
+
+	next, _ := m.Update(svcMsg(service.Event{
+		Kind:      service.EventSessionHydrated,
+		SessionID: "s1",
+	}))
+	m = next.(model)
+
+	if m.resumeMenu {
+		t.Fatal("startup resume flag should clear after session hydration")
+	}
 	if m.mode != modeChat {
-		t.Fatalf("expected chat mode after selection, got %v", m.mode)
+		t.Fatalf("mode = %v, want chat", m.mode)
 	}
 }
 

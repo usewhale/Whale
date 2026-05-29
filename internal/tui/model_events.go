@@ -412,6 +412,8 @@ func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
 		m.status = "terminal cleared"
 		return tea.Sequence(clearScreenCmd(), m.startupHeaderPrintCmd(), waitEventCmd(m.svc)), false, true
 	case service.EventSessionHydrated:
+		m.mode = modeChat
+		m.resumeMenu = false
 		prevSessionID := m.sessionID
 		if strings.TrimSpace(ev.SessionID) != "" {
 			m.sessionID = strings.TrimSpace(ev.SessionID)

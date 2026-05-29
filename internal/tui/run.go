@@ -49,6 +49,7 @@ func Run(cfg app.Config, start app.StartOptions) error {
 		thinking = "off"
 	}
 	m := newModel(svc, modelName, effort, thinking)
+	m.resumeMenu = start.ResumeMenu
 	if runtime.GOOS == "windows" {
 		m.windowsPaste.enabled = true
 	}

@@ -417,6 +417,9 @@ func (m *model) removePendingApprovalToolCall(toolCallID string) {
 func (m *model) handleSessionPickerKey(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc":
+		if m.resumeMenu {
+			return tea.Quit
+		}
 		m.mode = modeChat
 	case "up", "k":
 		m.sessionIndex = prevSessionChoiceIndex(m.sessionChoices, m.sessionIndex)
@@ -427,7 +430,6 @@ func (m *model) handleSessionPickerKey(msg tea.KeyMsg) tea.Cmd {
 		if selected > 0 {
 			m.dispatchIntent(service.Intent{Kind: service.IntentSelectSession, SessionInput: strconv.Itoa(selected)})
 		}
-		m.mode = modeChat
 	}
 	return nil
 }

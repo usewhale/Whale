@@ -189,14 +189,14 @@ func New(ctx context.Context, cfg app.Config, start app.StartOptions) (*Service,
 	a.SetApprovalFunc(s.awaitApproval)
 	a.SetUserInputFunc(s.awaitUserInput)
 	s.goTracked(s.runLocalSubmitWorker)
-	for _, line := range a.StartupLines() {
-		s.emit(Event{Kind: EventInfo, Text: line})
-	}
 	if start.ResumeMenu {
 		if !s.emitSessionChoices() {
 			s.emitSessionHydrated()
 		}
 	} else {
+		for _, line := range a.StartupLines() {
+			s.emit(Event{Kind: EventInfo, Text: line})
+		}
 		s.emitSessionHydrated()
 	}
 	s.startMCPStartup()

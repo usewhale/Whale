@@ -30,8 +30,10 @@ func Run(cfg app.Config, start app.StartOptions) error {
 	}
 	defer coreApp.Close()
 	coreApp.InitializeMCP(ctx, nil)
-	for _, line := range coreApp.StartupLines() {
-		fmt.Println(line)
+	if !start.ResumeMenu {
+		for _, line := range coreApp.StartupLines() {
+			fmt.Println(line)
+		}
 	}
 
 	scanner := bufio.NewScanner(os.Stdin)

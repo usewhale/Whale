@@ -405,11 +405,19 @@ func TestResumeMenuStartupWithNoSessionsHydratesFallbackSession(t *testing.T) {
 	}
 }
 
-func TestResumeMenuCrossWorkspaceSelectionDoesNotHydrate(t *testing.T) {
+func TestResumeMenuHidesCrossWorkspaceSessions(t *testing.T) {
 	dir := t.TempDir()
 	other := t.TempDir()
-	writeSessionFile(t, dir, "sess-1", "hello from elsewhere")
-	if err := session.SaveSessionMeta(filepath.Join(dir, "sessions"), "sess-1", session.SessionMeta{Workspace: other}); err != nil {
+	// The app resolves workspace from os.Getwd(), so chdir to match.
+	t.Chdir(dir)
+
+	writeSessionFile(t, dir, "sess-other", "hello from elsewhere")
+	if err := session.SaveSessionMeta(filepath.Join(dir, "sessions"), "sess-other", session.SessionMeta{Workspace: other}); err != nil {
+		t.Fatalf("save session meta: %v", err)
+	}
+	// Also add a session from the current workspace — it should still appear.
+	writeSessionFile(t, dir, "sess-local", "hello from here")
+	if err := session.SaveSessionMeta(filepath.Join(dir, "sessions"), "sess-local", session.SessionMeta{Workspace: dir}); err != nil {
 		t.Fatalf("save session meta: %v", err)
 	}
 	cfg := app.DefaultConfig()
@@ -425,22 +433,16 @@ func TestResumeMenuCrossWorkspaceSelectionDoesNotHydrate(t *testing.T) {
 		ev := nextServiceEvent(t, svc)
 		switch ev.Kind {
 		case EventSessionHydrated:
-			t.Fatal("session hydrated before cross-workspace selection")
+			t.Fatal("session hydrated before resume picker was shown")
 		case EventSessionsListed:
-			svc.Dispatch(Intent{Kind: IntentSelectSession, SessionInput: "1"})
-		case EventInfo:
-			if strings.Contains(ev.Text, "This conversation is from a different directory.") {
-				for {
-					select {
-					case queued := <-svc.Events():
-						if queued.Kind == EventSessionHydrated {
-							t.Fatalf("did not expect hydration after cross-workspace message: %+v", queued)
-						}
-					default:
-						return
-					}
-				}
+			joined := strings.Join(ev.Choices, "\n")
+			if strings.Contains(joined, "hello from elsewhere") {
+				t.Fatal("cross-workspace session should not appear in resume picker")
 			}
+			if !strings.Contains(joined, "hello from here") {
+				t.Fatalf("expected local workspace session in picker, got:\n%s", joined)
+			}
+			return
 		}
 	}
 }
