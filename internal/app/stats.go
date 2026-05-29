@@ -127,6 +127,15 @@ type profileStats struct {
 	PrefixFingerprints             map[string]bool
 	ToolCalls                      int
 	ToolResultChars                int
+	ApprovalPrompts                int
+	ApprovalAllowedOnce            int
+	ApprovalAllowedForSession      int
+	ApprovalDenied                 int
+	ApprovalCanceled               int
+	ApprovalReused                 int
+	ApprovalPolicyBlocks           int
+	ApprovalModeBlocks             int
+	ApprovalAuditEvents            int
 	ReasoningChars                 int
 	VisibleTextChars               int
 	ByTool                         map[string]*profileToolStats
@@ -150,6 +159,15 @@ type profileSessionStats struct {
 	ToolMessages                   int
 	ToolCalls                      int
 	ToolResultChars                int
+	ApprovalPrompts                int
+	ApprovalAllowedOnce            int
+	ApprovalAllowedForSession      int
+	ApprovalDenied                 int
+	ApprovalCanceled               int
+	ApprovalReused                 int
+	ApprovalPolicyBlocks           int
+	ApprovalModeBlocks             int
+	ApprovalAuditEvents            int
 	ReasoningChars                 int
 	VisibleTextChars               int
 	FirstUserText                  string
@@ -184,6 +202,8 @@ type profileSessionStats struct {
 	SubagentMaxPromptTokens        int
 	PrefixFingerprints             map[string]bool
 	ByTool                         map[string]*profileToolStats
+	approvalPromptKeys             map[string]bool
+	approvalDecisionKeys           map[string]bool
 }
 
 type profileToolStats struct {
@@ -472,6 +492,7 @@ func readProfileStats(sessionsDir, usagePath string, limit int) profileStats {
 	for _, path := range profileUsagePaths(usagePath) {
 		readProfileUsage(path, sessionIndex, childSessionIndex, &stats)
 	}
+	readProfileApprovalEvents(sessionsDir, sessionIndex, childSessionIndex, &stats)
 	for _, sp := range stats.Sessions {
 		for fp := range sp.PrefixFingerprints {
 			stats.PrefixFingerprints[fp] = true
@@ -495,6 +516,15 @@ func readProfileStats(sessionsDir, usagePath string, limit int) profileStats {
 		stats.SubagentCacheHit += sp.SubagentCacheHit
 		stats.SubagentCacheMiss += sp.SubagentCacheMiss
 		stats.SubagentCostUSD += sp.SubagentCostUSD
+		stats.ApprovalPrompts += sp.ApprovalPrompts
+		stats.ApprovalAllowedOnce += sp.ApprovalAllowedOnce
+		stats.ApprovalAllowedForSession += sp.ApprovalAllowedForSession
+		stats.ApprovalDenied += sp.ApprovalDenied
+		stats.ApprovalCanceled += sp.ApprovalCanceled
+		stats.ApprovalReused += sp.ApprovalReused
+		stats.ApprovalPolicyBlocks += sp.ApprovalPolicyBlocks
+		stats.ApprovalModeBlocks += sp.ApprovalModeBlocks
+		stats.ApprovalAuditEvents += sp.ApprovalAuditEvents
 	}
 	stats.MainWorkSessions = len(stats.Sessions) - stats.TrivialSessions
 	stats.TopSessions = topProfileSessions(stats.Sessions, statsRecentLimit, false)
@@ -704,6 +734,101 @@ func readProfileUsage(path string, sessionIndex map[string]int, childSessionInde
 			addProfileSubagentUsage(&stats.Sessions[idx], stats, rec)
 		}
 	}
+}
+
+func readProfileApprovalEvents(sessionsDir string, sessionIndex map[string]int, childSessionIndex map[string]int, stats *profileStats) {
+	entries, err := os.ReadDir(strings.TrimSpace(sessionsDir))
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), telemetry.ApprovalEventsSuffix) {
+			continue
+		}
+		id := strings.TrimSuffix(entry.Name(), telemetry.ApprovalEventsSuffix)
+		idx, ok := sessionIndex[id]
+		if !ok {
+			idx, ok = childSessionIndex[id]
+		}
+		if !ok {
+			continue
+		}
+		readProfileApprovalEventFile(filepath.Join(sessionsDir, entry.Name()), &stats.Sessions[idx])
+	}
+}
+
+func readProfileApprovalEventFile(path string, stats *profileSessionStats) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		var rec telemetry.ApprovalEvent
+		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
+			continue
+		}
+		addProfileApprovalEvent(stats, rec)
+	}
+}
+
+func addProfileApprovalEvent(stats *profileSessionStats, rec telemetry.ApprovalEvent) {
+	if stats == nil {
+		return
+	}
+	event := strings.TrimSpace(rec.Event)
+	stats.ApprovalAuditEvents++
+	switch telemetry.ClassifyApprovalEvent(event) {
+	case telemetry.ApprovalEventClassPromptShown:
+		if alreadyCountedApproval(&stats.approvalPromptKeys, rec, "prompt") {
+			return
+		}
+		stats.ApprovalPrompts++
+	case telemetry.ApprovalEventClassDecision:
+		if alreadyCountedApproval(&stats.approvalDecisionKeys, rec, "decision") {
+			return
+		}
+		switch strings.TrimSpace(event) {
+		case "approval_allowed_once", "approval_prompt_allowed_once":
+			stats.ApprovalAllowedOnce++
+		case "approval_allowed_for_session", "approval_prompt_allowed_for_session":
+			stats.ApprovalAllowedForSession++
+		case "approval_canceled", "approval_prompt_canceled":
+			stats.ApprovalCanceled++
+		default:
+			stats.ApprovalDenied++
+		}
+	case telemetry.ApprovalEventClassReused:
+		stats.ApprovalReused++
+	case telemetry.ApprovalEventClassPolicyBlock:
+		stats.ApprovalPolicyBlocks++
+	case telemetry.ApprovalEventClassModeBlock:
+		stats.ApprovalModeBlocks++
+	}
+}
+
+func alreadyCountedApproval(seen *map[string]bool, rec telemetry.ApprovalEvent, class string) bool {
+	key := approvalCounterKey(rec, class)
+	if key == "" {
+		return false
+	}
+	if *seen == nil {
+		*seen = map[string]bool{}
+	}
+	if (*seen)[key] {
+		return true
+	}
+	(*seen)[key] = true
+	return false
+}
+
+func approvalCounterKey(rec telemetry.ApprovalEvent, class string) string {
+	toolCallID := strings.TrimSpace(rec.ToolCallID)
+	if toolCallID == "" {
+		return ""
+	}
+	return class + ":" + toolCallID
 }
 
 func addProfileSubagentUsage(sp *profileSessionStats, stats *profileStats, rec telemetry.UsageRecord) {
@@ -966,6 +1091,18 @@ func formatProfileStats(stats profileStats) []string {
 	allInToolCompacted := stats.ToolResultsCompacted + stats.SubagentToolResultsCompacted
 	if allInToolReplayTokens > 0 || allInToolRawTokens > 0 || allInToolSavedTokens > 0 || allInToolCompacted > 0 {
 		lines = append(lines, fmt.Sprintf("- tool replay: %s sent · %s raw · %s saved · %d compacted", formatCount(allInToolReplayTokens), formatCount(allInToolRawTokens), formatCount(allInToolSavedTokens), allInToolCompacted))
+	}
+	if stats.ApprovalAuditEvents > 0 {
+		lines = append(lines, fmt.Sprintf("- approvals: %d prompts · %d allow-once · %d allow-session · %d denied · %d canceled · %d reused/cached · %d policy/mode blocks · %d audit events",
+			stats.ApprovalPrompts,
+			stats.ApprovalAllowedOnce,
+			stats.ApprovalAllowedForSession,
+			stats.ApprovalDenied,
+			stats.ApprovalCanceled,
+			stats.ApprovalReused,
+			stats.ApprovalPolicyBlocks+stats.ApprovalModeBlocks,
+			stats.ApprovalAuditEvents,
+		))
 	}
 	if len(stats.Insights) > 0 {
 		lines = append(lines, "", "Insights")

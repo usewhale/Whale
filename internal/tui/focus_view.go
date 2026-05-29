@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/usewhale/whale/internal/app"
+	"github.com/usewhale/whale/internal/telemetry"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
@@ -138,7 +139,14 @@ func appendFocusToggleHint(text, action string) string {
 }
 
 func isFocusHiddenMessage(msg tuirender.UIMessage) bool {
-	return msg.Kind == tuirender.KindThinking || msg.Role == "think"
+	return msg.Kind == tuirender.KindThinking || msg.Role == "think" || isFocusHiddenApprovalAuditNotice(msg)
+}
+
+func isFocusHiddenApprovalAuditNotice(msg tuirender.UIMessage) bool {
+	if msg.Kind != tuirender.KindNotice || msg.Notice == nil || !strings.HasPrefix(strings.TrimSpace(msg.Notice.Kind), "approval_") {
+		return false
+	}
+	return telemetry.ClassifyApprovalEvent(msg.Notice.Kind) == telemetry.ApprovalEventClassReused
 }
 
 func isFocusHiddenToolMessage(msg tuirender.UIMessage) bool {

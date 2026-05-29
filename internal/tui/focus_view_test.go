@@ -35,6 +35,25 @@ func TestProjectFocusMessagesHidesThinkingAndToolDetails(t *testing.T) {
 	}
 }
 
+func TestProjectFocusMessagesHidesApprovalAuditNotices(t *testing.T) {
+	messages := []tuirender.UIMessage{
+		{Role: "you", Kind: tuirender.KindText, Text: "run it"},
+		{Role: "notice", Kind: tuirender.KindNotice, Text: "Cached approval", Notice: &tuirender.SystemNotice{Kind: "approval_cached_allowed", Action: "Cached", Subject: "approval"}},
+		{Role: "notice", Kind: tuirender.KindNotice, Text: "Approved to run git status", Notice: &tuirender.SystemNotice{Kind: "approval_allowed_for_session", Action: "Approved", Detail: "to run", Command: "git status", Scope: "for this session"}},
+		{Role: "assistant", Kind: tuirender.KindText, Text: "done"},
+	}
+
+	rendered := strings.Join(tuirender.ChatLines(projectFocusMessages(messages), 100), "\n")
+	if strings.Contains(rendered, "Cached approval") {
+		t.Fatalf("focus view leaked cached approval audit notice:\n%s", rendered)
+	}
+	for _, want := range []string{"run it", "Approved to run git status", "done"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("focus view missing %q:\n%s", want, rendered)
+		}
+	}
+}
+
 func TestProjectFocusMessagesKeepsSingleShellCommandVisible(t *testing.T) {
 	messages := []tuirender.UIMessage{
 		{Role: "shell_result_ok", Kind: tuirender.KindToolCall, ToolName: "shell_run", Text: "Ran git status\nOn branch main"},

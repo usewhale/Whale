@@ -1,7 +1,9 @@
 package service
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,6 +22,7 @@ import (
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/skills"
 	"github.com/usewhale/whale/internal/store"
+	"github.com/usewhale/whale/internal/telemetry"
 )
 
 func TestCriticalEventsDeliverAfterDeltaBackpressure(t *testing.T) {
@@ -944,6 +947,46 @@ func TestAwaitApprovalEmitsFileReviewMetadataAndDefersFileCache(t *testing.T) {
 	}
 }
 
+func TestAwaitApprovalCachedDecisionIsAuditOnly(t *testing.T) {
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+
+	svc.approveMu.Lock()
+	svc.grantSessionAllLocked("session-1", []string{"shell:bounded:git:status"})
+	svc.approveMu.Unlock()
+
+	got := svc.awaitApproval(policy.ApprovalRequest{
+		SessionID: "session-1",
+		ToolCall:  core.ToolCall{ID: "approval-cached", Name: "shell_run", Input: `{"command":"git status"}`},
+		Key:       "shell:bounded:git:status",
+		Keys:      []string{"shell:bounded:git:status"},
+	})
+	if got != policy.ApprovalAllowForSession {
+		t.Fatalf("cached approval decision = %v, want allow for session", got)
+	}
+	select {
+	case ev := <-svc.events:
+		if ev.Kind == EventApprovalRequired {
+			t.Fatalf("cached approval emitted user prompt: %+v", ev)
+		}
+	default:
+	}
+
+	events := readApprovalEvents(t, svc.app.SessionsDir(), "session-1")
+	if len(events) != 1 {
+		t.Fatalf("expected one audit event, got %+v", events)
+	}
+	if events[0].Event != "approval_prompt_cached_allowed" || telemetry.ApprovalEventIsUserVisible(events[0].Event) {
+		t.Fatalf("cached approval should be audit-only, got %+v", events[0])
+	}
+}
+
 func TestLocalSubmitEmitsDone(t *testing.T) {
 	cfg := app.DefaultConfig()
 	cfg.DataDir = t.TempDir()
@@ -1367,6 +1410,28 @@ func waitForServiceEvent(t *testing.T, s *Service, kind EventKind) Event {
 			return Event{}
 		}
 	}
+}
+
+func readApprovalEvents(t *testing.T, sessionsDir, sessionID string) []telemetry.ApprovalEvent {
+	t.Helper()
+	f, err := os.Open(telemetry.ApprovalEventsPath(sessionsDir, sessionID))
+	if err != nil {
+		t.Fatalf("open approval events: %v", err)
+	}
+	defer f.Close()
+	var out []telemetry.ApprovalEvent
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		var rec telemetry.ApprovalEvent
+		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
+			t.Fatalf("unmarshal approval event: %v", err)
+		}
+		out = append(out, rec)
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan approval events: %v", err)
+	}
+	return out
 }
 
 func assertSessionSelectedAndHydrated(t *testing.T, s *Service) {
