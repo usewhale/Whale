@@ -12,7 +12,7 @@ func approvalDeniedMarkerText(toolName string) string {
 	if toolName == "" {
 		toolName = "unknown"
 	}
-	return "<approval_denied>\nThe user denied a requested tool/action (tool: " + toolName + "). Treat the related task path as canceled. Do not retry or continue the denied action or its parent task unless the user explicitly asks.\n</approval_denied>"
+	return "<approval_denied>\nThe user denied a requested tool/action (tool: " + toolName + "). Treat the related task path as canceled. Do not retry, continue, or switch to another tool to bypass the denied action unless the user explicitly asks. If the user asks again, use the normal approval flow for the same capability instead of probing alternative tools that are known to be out of scope.\n</approval_denied>"
 }
 
 func (a *Agent) persistInterruptedTurnMarker(sessionID string) {

@@ -342,10 +342,9 @@ func (m model) renderApprovalPrompt() string {
 		}
 	}
 
-	scope := approvalOptionScopeDescription(approvalSessionScope(m.approval.metadata))
 	opts := []string{
 		renderApprovalOption("Allow once", "a", "", m.approval.selected == 0, false),
-		renderApprovalOption(approvalSessionOptionLabel(m.approval.metadata), "s", scope, m.approval.selected == 1, false),
+		renderApprovalOption(approvalSessionOptionLabel(m.approval.metadata), "s", "", m.approval.selected == 1, false),
 		renderApprovalOption("Deny", "d", "", m.approval.selected == 2, true),
 	}
 
@@ -384,10 +383,6 @@ func memoryApprovalKind(metadata map[string]any) string {
 	}
 }
 
-func approvalSessionScope(metadata map[string]any) string {
-	return strings.TrimSpace(core.AsString(metadata["approval_session_scope"]))
-}
-
 func approvalPermissionKind(metadata map[string]any) string {
 	return strings.TrimSpace(core.AsString(metadata["permission_kind"]))
 }
@@ -401,15 +396,6 @@ func approvalSessionOptionLabel(metadata map[string]any) string {
 		return "Allow similar commands"
 	}
 	return "Allow session"
-}
-
-func approvalOptionScopeDescription(scope string) string {
-	switch strings.TrimSpace(scope) {
-	case "this shell command":
-		return "same command"
-	default:
-		return ""
-	}
 }
 
 func approvalToolDisplayName(toolName string) string {

@@ -17,7 +17,7 @@ const (
 	defaultReadFileOutlineLines = 80
 )
 
-func (b *Toolset) readFile(_ context.Context, call core.ToolCall) (core.ToolResult, error) {
+func (b *Toolset) readFile(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
 	var in struct {
 		FilePath string `json:"file_path"`
 		Offset   *int   `json:"offset"`
@@ -26,7 +26,7 @@ func (b *Toolset) readFile(_ context.Context, call core.ToolCall) (core.ToolResu
 	if err := decodeInput(call.Input, &in); err != nil {
 		return marshalToolError(call, "invalid_args", err.Error()), nil
 	}
-	abs, err := b.safeReadPath(in.FilePath)
+	abs, err := b.safeReadPath(ctx, in.FilePath)
 	if err != nil {
 		return b.marshalReadPathError(call, in.FilePath, err), nil
 	}

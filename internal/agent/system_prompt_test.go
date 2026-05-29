@@ -22,8 +22,8 @@ func TestRuntimeEnvironmentBlockIncludesWorkspaceAndShellRunCWD(t *testing.T) {
 		"Shell: /bin/sh (/bin/sh -lc)",
 		"Shell commands run from the current Whale workspace by default",
 		"shell_run cwd parameter",
-		"path:\"codex\" means a codex entry under this workspace",
-		"git -C ../codex",
+		"request file access approval for external read paths",
+		"do not retry the same external operation through another tool",
 	} {
 		if !strings.Contains(block, want) {
 			t.Fatalf("runtime block missing %q:\n%s", want, block)

@@ -24,7 +24,7 @@ const (
 	grepScannerBufferBytes = 1024 * 1024
 )
 
-func (b *Toolset) searchContent(_ context.Context, call core.ToolCall) (core.ToolResult, error) {
+func (b *Toolset) searchContent(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
 	var in struct {
 		Path        string `json:"path"`
 		Pattern     string `json:"pattern"`
@@ -38,7 +38,7 @@ func (b *Toolset) searchContent(_ context.Context, call core.ToolCall) (core.Too
 	if strings.TrimSpace(in.Pattern) == "" {
 		return marshalToolError(call, "invalid_args", "pattern is required"), nil
 	}
-	abs, err := b.safeReadPath(in.Path)
+	abs, err := b.safeReadPath(ctx, in.Path)
 	if err != nil {
 		return b.marshalReadPathError(call, in.Path, err), nil
 	}

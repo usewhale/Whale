@@ -20,7 +20,7 @@ var defaultIgnoredDirs = map[string]bool{
 	"target":       true,
 }
 
-func (b *Toolset) searchFiles(_ context.Context, call core.ToolCall) (core.ToolResult, error) {
+func (b *Toolset) searchFiles(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
 	var in struct {
 		Path    string `json:"path"`
 		Pattern string `json:"pattern"`
@@ -38,7 +38,7 @@ func (b *Toolset) searchFiles(_ context.Context, call core.ToolCall) (core.ToolR
 	if in.Limit > 2000 {
 		in.Limit = 2000
 	}
-	abs, err := b.safeReadPath(in.Path)
+	abs, err := b.safeReadPath(ctx, in.Path)
 	if err != nil {
 		return b.marshalReadPathError(call, in.Path, err), nil
 	}

@@ -3,12 +3,16 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/session"
+	whaletools "github.com/usewhale/whale/internal/tools"
 )
 
 type approvalProvider struct {
@@ -421,7 +425,7 @@ func historyContainsApprovalDeniedMarker(msgs []Message, toolName string) bool {
 		}
 		if strings.Contains(msg.Text, "<approval_denied>") &&
 			strings.Contains(msg.Text, "tool: "+toolName) &&
-			strings.Contains(msg.Text, "Do not retry or continue") {
+			strings.Contains(msg.Text, "switch to another tool to bypass") {
 			return true
 		}
 	}
@@ -547,6 +551,79 @@ func TestApprovalAllowForSessionCachesSemanticShellFamily(t *testing.T) {
 	}
 	if !reflect.DeepEqual(keys, [][]string{{"shell:bounded:go:test"}}) {
 		t.Fatalf("approval keys = %v, want shell:bounded:go:test", keys)
+	}
+}
+
+type externalReadApprovalProvider struct {
+	path  string
+	calls int
+}
+
+func (p *externalReadApprovalProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	p.calls++
+	if p.calls <= 2 {
+		return eventStream(toolUseEvent(toolCall("tc-read", "read_file", `{"file_path":`+strconv.Quote(p.path)+`}`)))
+	}
+	return eventStream(endTurnEvent("done"))
+}
+
+func TestApprovalAllowForSessionCachesExternalReadDirectory(t *testing.T) {
+	home, err := os.MkdirTemp(".", "whale-agent-ext-read-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, err = filepath.Abs(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(home) })
+
+	workspace := filepath.Join(home, "workspace")
+	external := filepath.Join(home, "external")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(external, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	externalFile := filepath.Join(external, "guide.txt")
+	if err := os.WriteFile(externalFile, []byte("approved external read\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	toolset, err := whaletools.NewToolset(workspace)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	store := NewInMemoryStore()
+	prov := &externalReadApprovalProvider{path: externalFile}
+	asked := 0
+	a := NewAgentWithRegistry(
+		prov,
+		store,
+		NewToolRegistry(toolset.Tools()),
+		WithProjectMemory(false, 0, nil, workspace),
+		WithToolPolicy(RulePolicy{Default: PermissionAllow, Rules: DefaultRules(), WorkspaceRoot: workspace}),
+		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
+			asked++
+			if got, want := req.Keys, []string{"external_read:" + filepath.ToSlash(external)}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("external read approval keys = %v, want %v", got, want)
+			}
+			if req.Metadata["permission_kind"] != "external_directory" {
+				t.Fatalf("permission metadata = %+v, want external_directory", req.Metadata)
+			}
+			return ApprovalAllowForSession
+		}),
+	)
+
+	if _, err := a.RunSession(context.Background(), "s-external-read", "read"); err != nil {
+		t.Fatalf("run1 failed: %v", err)
+	}
+	if _, err := a.RunSession(context.Background(), "s-external-read", "read again"); err != nil {
+		t.Fatalf("run2 failed: %v", err)
+	}
+	if asked != 1 {
+		t.Fatalf("expected external read approval to be cached by directory, got %d prompts", asked)
 	}
 }
 

@@ -9164,7 +9164,7 @@ func TestApprovalViewHidesDuplicatePendingToolRow(t *testing.T) {
 	}
 }
 
-func TestApprovalViewShortensShellSessionScope(t *testing.T) {
+func TestApprovalViewHidesShellSessionScope(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 100
 	m.height = 24
@@ -9174,11 +9174,11 @@ func TestApprovalViewShortensShellSessionScope(t *testing.T) {
 	m.approval.metadata = map[string]any{"approval_session_scope": "this shell command"}
 
 	view := xansi.Strip(m.View())
-	if !strings.Contains(view, "Allow session (s) same command") {
-		t.Fatalf("expected shortened shell session option:\n%s", view)
+	if !strings.Contains(view, "Allow session (s)") {
+		t.Fatalf("expected shell session option:\n%s", view)
 	}
-	if strings.Contains(view, "Allow for session") || strings.Contains(view, "this shell command") {
-		t.Fatalf("approval shell session option should stay compact:\n%s", view)
+	if strings.Contains(view, "Allow session (s) same command") || strings.Contains(view, "Allow for session") || strings.Contains(view, "this shell command") {
+		t.Fatalf("approval shell session option should hide scope detail:\n%s", view)
 	}
 }
 
@@ -9882,6 +9882,31 @@ func TestSummarizeToolResultForChat_ShellRunFailureShowsReason(t *testing.T) {
 	want := "Command failed (exit 2) · 1.2s\nls: cannot access x: No such file or directory"
 	if got != want {
 		t.Fatalf("unexpected summary text:\nwant: %q\ngot:  %q", want, got)
+	}
+}
+
+func TestSummarizeToolResultForChat_ShellGrepNoMatchesIsNeutral(t *testing.T) {
+	raw := `{"success":false,"code":"exec_failed","message":"command failed","data":{"status":"error","summary":"command failed","metrics":{"exit_code":1,"duration_ms":52},"payload":{"command":"grep -rn \"^func firstNonEmpty\\b\" internal/ --include='*.go' | grep -v \"core/\" | grep -v \"_test.go\"","stderr":"","stdout":""}}}`
+	role, got := summarizeToolResultForChat("shell_run", raw)
+	if role != "result_neutral" {
+		t.Fatalf("expected result_neutral role, got %q", role)
+	}
+	if got != "No matches · 52ms" {
+		t.Fatalf("unexpected summary text: %q", got)
+	}
+	if title := completedToolTitle("shell_run", raw, ""); strings.HasPrefix(title, "Command failed") {
+		t.Fatalf("no-match grep should not render as command failure title: %q", title)
+	}
+}
+
+func TestSummarizeToolResultForChat_ShellExitOneWithStderrStillFails(t *testing.T) {
+	raw := `{"success":false,"code":"exec_failed","message":"command failed","data":{"status":"error","metrics":{"duration_ms":20,"exit_code":1},"payload":{"command":"grep pattern missing.txt","stderr":"grep: missing.txt: No such file or directory","stdout":""}}}`
+	role, got := summarizeToolResultForChat("shell_run", raw)
+	if role != "result_failed" {
+		t.Fatalf("expected result_failed role, got %q", role)
+	}
+	if !strings.Contains(got, "Command failed (exit 1)") {
+		t.Fatalf("expected real grep error to remain a command failure, got %q", got)
 	}
 }
 

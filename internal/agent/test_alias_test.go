@@ -76,4 +76,5 @@ var (
 	NewJSONLStore          = store.NewJSONLStore
 	MostRecentSessionID    = store.MostRecentSessionID
 	ListSessions           = session.ListSessions
+	DefaultRules           = policy.DefaultRules
 )

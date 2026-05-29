@@ -16,12 +16,13 @@ import (
 )
 
 type preparedToolDispatch struct {
-	Index          int
-	Call           core.ToolCall
-	PreHookContext string
-	GrantOnSuccess bool
-	GrantKey       string
-	GrantKeys      []string
+	Index             int
+	Call              core.ToolCall
+	PreHookContext    string
+	GrantOnSuccess    bool
+	GrantKey          string
+	GrantKeys         []string
+	ExternalReadRoots []string
 }
 
 type toolDispatchOutcome struct {
@@ -462,9 +463,14 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 		var grantOnSuccess bool
 		var grantKey string
 		var grantKeys []string
+		var externalReadRoots []string
+		externalReadRoots = policy.ExternalReadApprovalRootsForDecision(call, decision)
 		if decision.RequiresApproval {
-			keys := policy.ApprovalKeys(call)
+			keys := policy.ApprovalKeysForDecision(call, decision)
 			key := policy.ApprovalKey(call)
+			if len(keys) > 0 {
+				key = keys[0]
+			}
 			approved := a.approvalCache.HasAll(sessionID, keys)
 			if approved {
 				a.recordApprovalForCall(sessionID, lastModel, assistant.ID, approvalEventCachedAllowed, call, decision, key, keys, policy.ApprovalScope(call))
@@ -543,12 +549,13 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			}
 		}
 		prepared := preparedToolDispatch{
-			Index:          i,
-			Call:           call,
-			PreHookContext: preHookContext,
-			GrantOnSuccess: grantOnSuccess,
-			GrantKey:       grantKey,
-			GrantKeys:      grantKeys,
+			Index:             i,
+			Call:              call,
+			PreHookContext:    preHookContext,
+			GrantOnSuccess:    grantOnSuccess,
+			GrantKey:          grantKey,
+			GrantKeys:         grantKeys,
+			ExternalReadRoots: externalReadRoots,
 		}
 		if _, ok := maybeReadyParallelSubagentCall(i, call); ok {
 			pendingParallelSubagents = append(pendingParallelSubagents, prepared)
@@ -591,7 +598,7 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history [
 			continue
 		}
 
-		finalRes, ok, primarySucceeded := a.dispatchWithRecovery(ctx, sessionID, assistant.ID, lastModel, call, events, tools)
+		finalRes, ok, primarySucceeded := a.dispatchWithRecovery(ctx, sessionID, assistant.ID, lastModel, call, externalReadRoots, events, tools)
 		if err := ctx.Err(); err != nil {
 			return core.Message{}, nil, llm.Usage{}, "", false, err
 		}
@@ -622,7 +629,7 @@ func (a *Agent) flushPendingParallelSubagents(ctx context.Context, sessionID, as
 	var outcomes []toolDispatchOutcome
 	if len(groups) != 1 || groups[0].Start != pending[0].Index || len(groups[0].Calls) != len(pending) {
 		for _, prepared := range pending {
-			finalRes, ok, primarySucceeded := a.dispatchWithRecovery(ctx, sessionID, assistantMessageID, model, prepared.Call, events, tools)
+			finalRes, ok, primarySucceeded := a.dispatchWithRecovery(ctx, sessionID, assistantMessageID, model, prepared.Call, prepared.ExternalReadRoots, events, tools)
 			if err := ctx.Err(); err != nil {
 				return err
 			}
@@ -664,7 +671,7 @@ func (a *Agent) dispatchParallelSubagentsWithRecovery(ctx context.Context, sessi
 	for i := 0; i < limit; i++ {
 		go func() {
 			for prepared := range workCh {
-				finalRes, ok, primarySucceeded := a.dispatchWithRecovery(ctx, sessionID, assistantMessageID, model, prepared.Call, events, tools)
+				finalRes, ok, primarySucceeded := a.dispatchWithRecovery(ctx, sessionID, assistantMessageID, model, prepared.Call, prepared.ExternalReadRoots, events, tools)
 				// outcomeCh is buffered for every pending call so a worker that
 				// already started can report without blocking after parent
 				// cancellation. The actual stop still depends on

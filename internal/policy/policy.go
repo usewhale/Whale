@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/skills"
 )
 
 type PermissionAction string
@@ -56,23 +57,32 @@ type RulePolicy struct {
 	Default       PermissionAction
 	Rules         []PermissionRule
 	WorkspaceRoot string
+	WorktreeRoot  string
 }
 
 type DefaultToolPolicy struct {
 	Default       PermissionAction
 	Rules         []PermissionRule
 	WorkspaceRoot string
+	WorktreeRoot  string
 }
 
 type PolicyDecision struct {
-	Allow            bool
-	RequiresApproval bool
-	Reason           string
-	Code             string
-	Phase            string
-	MatchedRule      string
-	Permission       string
-	Pattern          string
+	Allow                bool
+	RequiresApproval     bool
+	Reason               string
+	Code                 string
+	Phase                string
+	MatchedRule          string
+	Permission           string
+	Pattern              string
+	ApprovalRequirements []ApprovalRequirement
+	AllowedRequirements  []ApprovalRequirement
+}
+
+type ApprovalRequirement struct {
+	Permission string
+	Pattern    string
 }
 
 type ToolPolicy interface {
@@ -216,8 +226,12 @@ func (p RulePolicy) Decide(spec core.ToolSpec, call core.ToolCall) PolicyDecisio
 	}
 	var ask *PermissionRule
 	var askReq permissionRequest
+	var askReqs []permissionRequest
+	var allowedExternal *permissionRequest
+	var allowedExternalRule PermissionRule
+	var allowedReqs []permissionRequest
 	for _, req := range requests {
-		rule := p.evaluate(req.Kind, req.Pattern)
+		rule, matched := p.evaluateDetailed(req.Kind, req.Pattern)
 		switch rule.Action {
 		case PermissionDeny:
 			return PolicyDecision{
@@ -233,18 +247,42 @@ func (p RulePolicy) Decide(spec core.ToolSpec, call core.ToolCall) PolicyDecisio
 			copy := rule
 			ask = &copy
 			askReq = req
+			askReqs = append(askReqs, req)
+		case PermissionAllow:
+			if req.Kind == "external_directory" && matched {
+				copy := req
+				allowedExternal = &copy
+				allowedExternalRule = rule
+				allowedReqs = append(allowedReqs, req)
+			}
 		}
 	}
 	if ask != nil {
 		return PolicyDecision{
-			Allow:            true,
-			RequiresApproval: true,
-			Reason:           "permission rule requires approval",
-			Code:             "permission_required",
-			Phase:            "needs_approval",
-			MatchedRule:      ruleLabel(*ask),
-			Permission:       askReq.Kind,
-			Pattern:          askReq.Pattern,
+			Allow:                true,
+			RequiresApproval:     true,
+			Reason:               "permission rule requires approval",
+			Code:                 "permission_required",
+			Phase:                "needs_approval",
+			MatchedRule:          ruleLabel(*ask),
+			Permission:           askReq.Kind,
+			Pattern:              askReq.Pattern,
+			ApprovalRequirements: approvalRequirementsFromRequests(askReqs),
+			AllowedRequirements:  approvalRequirementsFromRequests(allowedReqs),
+		}
+	}
+	if allowedExternal != nil {
+		return PolicyDecision{
+			Allow:       true,
+			Code:        "permission_allow",
+			Phase:       "allowed",
+			MatchedRule: ruleLabel(allowedExternalRule),
+			Permission:  allowedExternal.Kind,
+			Pattern:     allowedExternal.Pattern,
+			AllowedRequirements: []ApprovalRequirement{{
+				Permission: allowedExternal.Kind,
+				Pattern:    allowedExternal.Pattern,
+			}},
 		}
 	}
 	return PolicyDecision{Allow: true, Code: "permission_allow", Phase: "allowed"}
@@ -257,13 +295,35 @@ func (p DefaultToolPolicy) Decide(spec core.ToolSpec, call core.ToolCall) Policy
 	if def == "" {
 		def = PermissionAllow
 	}
-	return RulePolicy{Default: def, Rules: rules, WorkspaceRoot: p.WorkspaceRoot}.Decide(spec, call)
+	return RulePolicy{Default: def, Rules: rules, WorkspaceRoot: p.WorkspaceRoot, WorktreeRoot: p.WorktreeRoot}.Decide(spec, call)
+}
+
+func approvalRequirementsFromRequests(requests []permissionRequest) []ApprovalRequirement {
+	if len(requests) == 0 {
+		return nil
+	}
+	out := make([]ApprovalRequirement, 0, len(requests))
+	seen := map[string]bool{}
+	for _, req := range requests {
+		if strings.TrimSpace(req.Kind) == "" || strings.TrimSpace(req.Pattern) == "" {
+			continue
+		}
+		key := req.Kind + "\x00" + req.Pattern
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, ApprovalRequirement{Permission: req.Kind, Pattern: req.Pattern})
+	}
+	return out
 }
 
 type permissionRequest struct {
 	Kind    string
 	Pattern string
 }
+
+const dynamicShellRedirectionTarget = "dynamic redirection target"
 
 func (p RulePolicy) requestsFor(spec core.ToolSpec, call core.ToolCall) []permissionRequest {
 	kind := permissionKind(spec.Name)
@@ -282,6 +342,10 @@ func (p RulePolicy) requestsFor(spec core.ToolSpec, call core.ToolCall) []permis
 		cmd := shellCommandFromInput(call.Input)
 		requests[0].Pattern = cmd
 		for _, dir := range p.externalDirs(cmd) {
+			requests = append(requests, permissionRequest{Kind: "external_directory", Pattern: dir})
+		}
+	case "read_file", "list_dir", "grep", "search_files":
+		for _, dir := range p.externalDirsFromReadInput(call) {
 			requests = append(requests, permissionRequest{Kind: "external_directory", Pattern: dir})
 		}
 	default:
@@ -364,12 +428,17 @@ func patchEditPaths(input string) []string {
 }
 
 func (p RulePolicy) evaluate(permission, pattern string) PermissionRule {
+	rule, _ := p.evaluateDetailed(permission, pattern)
+	return rule
+}
+
+func (p RulePolicy) evaluateDetailed(permission, pattern string) (PermissionRule, bool) {
 	fallback := PermissionRule{Permission: permission, Pattern: "*", Action: p.Default}
 	if fallback.Action == "" {
 		fallback.Action = PermissionAllow
 	}
 	if permission == "shell" {
-		return p.evaluateShell(pattern, fallback)
+		return p.evaluateShell(pattern, fallback), true
 	}
 	for i := len(p.Rules) - 1; i >= 0; i-- {
 		rule := p.Rules[i]
@@ -380,10 +449,10 @@ func (p RulePolicy) evaluate(permission, pattern string) PermissionRule {
 			continue
 		}
 		if wildcardMatch(rule.Pattern, pattern) {
-			return rule
+			return rule, true
 		}
 	}
-	return fallback
+	return fallback, false
 }
 
 func (p RulePolicy) evaluateShell(command string, fallback PermissionRule) PermissionRule {
@@ -585,6 +654,10 @@ func splitShellRuleSegments(command string) []string {
 				current.WriteRune(r)
 				continue
 			}
+			if r == '|' && previousNonSpaceRune(runes, i) == '>' {
+				current.WriteRune(r)
+				continue
+			}
 			flush()
 			if r == '|' && i+1 < len(runes) && runes[i+1] == r {
 				i++
@@ -634,8 +707,20 @@ func (p RulePolicy) externalDirs(command string) []string {
 	if command == "" || root == "" {
 		return nil
 	}
+	projectRoots := p.projectRoots()
 	var out []string
 	for _, segment := range expandShellRuleSegments(command) {
+		for _, token := range shellRedirectionPathTokens(segment) {
+			if token == dynamicShellRedirectionTarget {
+				out = append(out, dynamicShellRedirectionTarget)
+				continue
+			}
+			clean := p.resolveShellPathToken(root, token)
+			if clean == "" || pathInsideAny(clean, projectRoots) || pathInsideTrustedShellPath(clean) {
+				continue
+			}
+			out = append(out, externalDirForToken(clean))
+		}
 		argv := strings.Fields(segment)
 		if len(argv) == 0 || !shellFileCommand(argv[0]) {
 			continue
@@ -647,7 +732,7 @@ func (p RulePolicy) externalDirs(command string) []string {
 				continue
 			}
 			clean := p.resolveShellPathToken(root, arg)
-			if clean == "" || pathInside(clean, root) || pathInsideTrustedTemp(clean) {
+			if clean == "" || pathInsideAny(clean, projectRoots) || pathInsideTrustedShellPath(clean) {
 				continue
 			}
 			out = append(out, externalDirForToken(clean))
@@ -661,6 +746,7 @@ func (p RulePolicy) externalDirsFromMCPInput(input string) []string {
 	if root == "" || strings.TrimSpace(input) == "" {
 		return nil
 	}
+	projectRoots := p.projectRoots()
 	var body map[string]any
 	if err := json.Unmarshal([]byte(input), &body); err != nil {
 		return nil
@@ -668,12 +754,60 @@ func (p RulePolicy) externalDirsFromMCPInput(input string) []string {
 	var out []string
 	for _, token := range mcpPathTokens(body) {
 		clean := p.resolveShellPathToken(root, token)
-		if clean == "" || pathInside(clean, root) || pathInsideTrustedTemp(clean) {
+		if clean == "" || pathInsideAny(clean, projectRoots) || pathInsideTrustedTemp(clean) {
 			continue
 		}
 		out = append(out, externalDirForToken(clean))
 	}
 	return uniqueStrings(out)
+}
+
+func (p RulePolicy) externalDirsFromReadInput(call core.ToolCall) []string {
+	root := cleanAbs(p.WorkspaceRoot)
+	if root == "" {
+		return nil
+	}
+	target := readScopeTarget(call)
+	if target == "*" {
+		return nil
+	}
+	clean := p.resolveShellPathToken(root, target)
+	if clean == "" || pathInsideAny(clean, p.projectRoots()) || p.isDiscoveredSkillReadPath(clean) {
+		return nil
+	}
+	return []string{externalDirForToken(clean)}
+}
+
+func (p RulePolicy) isDiscoveredSkillReadPath(target string) bool {
+	root := cleanAbs(p.WorkspaceRoot)
+	if root == "" || strings.TrimSpace(target) == "" {
+		return false
+	}
+	targetReal := canonicalAccessPath(target)
+	if targetReal == "" {
+		return false
+	}
+	for _, skill := range skills.Discover(skills.DefaultRoots(root)) {
+		if skill == nil || strings.TrimSpace(skill.Path) == "" {
+			continue
+		}
+		dirReal := canonicalAccessPath(skill.Path)
+		if dirReal != "" && pathInside(targetReal, dirReal) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p RulePolicy) projectRoots() []string {
+	roots := []string{}
+	if root := cleanAbs(p.WorkspaceRoot); root != "" {
+		roots = append(roots, root)
+	}
+	if root := cleanAbs(p.WorktreeRoot); root != "" {
+		roots = append(roots, root)
+	}
+	return uniqueStrings(roots)
 }
 
 func mcpPathTokens(body map[string]any) []string {
@@ -801,6 +935,141 @@ func shellPathArgBeforeRedirection(arg string) string {
 	return arg[:idx]
 }
 
+func shellRedirectionPathTokens(segment string) []string {
+	var out []string
+	runes := []rune(segment)
+	var quote rune
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+			}
+			continue
+		}
+		if r == '\'' || r == '"' {
+			quote = r
+			continue
+		}
+		if r == '\\' {
+			i++
+			continue
+		}
+		if r != '>' && r != '<' && !(r == '&' && i+1 < len(runes) && runes[i+1] == '>') {
+			continue
+		}
+		if r == '<' && i+1 < len(runes) && runes[i+1] == '<' {
+			for i+1 < len(runes) && runes[i+1] == '<' {
+				i++
+			}
+			continue
+		}
+		if token, next := shellRedirectionTargetAfter(runes, i); token != "" {
+			out = append(out, token)
+			i = next
+		}
+	}
+	return uniqueStrings(out)
+}
+
+func shellRedirectionTargetAfter(runes []rune, op int) (string, int) {
+	i := op
+	if runes[i] == '&' && i+1 < len(runes) && runes[i+1] == '>' {
+		i += 2
+	} else {
+		i++
+		for i < len(runes) && (runes[i] == '>' || runes[i] == '|' || runes[i] == '&') {
+			i++
+		}
+	}
+	for i < len(runes) && (runes[i] == ' ' || runes[i] == '\t') {
+		i++
+	}
+	var b strings.Builder
+	var quote rune
+	for ; i < len(runes); i++ {
+		r := runes[i]
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+				continue
+			}
+			b.WriteRune(r)
+			continue
+		}
+		if r == '\'' || r == '"' {
+			quote = r
+			continue
+		}
+		if r == ' ' || r == '\t' || r == ';' || r == '|' || r == '&' {
+			break
+		}
+		b.WriteRune(r)
+	}
+	return cleanShellRedirectionPathToken(b.String()), i
+}
+
+func shellRedirectionOperatorNeedsPath(field string) bool {
+	if strings.HasPrefix(field, "<<") || strings.HasSuffix(field, "<<") {
+		return false
+	}
+	switch field {
+	case ">", ">>", "<", ">|", "&>", "&>>":
+		return true
+	}
+	if len(field) >= 2 && allDigits(field[:len(field)-1]) && (strings.HasSuffix(field, ">") || strings.HasSuffix(field, "<")) {
+		return true
+	}
+	if len(field) >= 3 && allDigits(field[:len(field)-2]) && strings.HasSuffix(field, ">>") {
+		return true
+	}
+	return false
+}
+
+func attachedShellRedirectionPath(field string) string {
+	if strings.Contains(field, "<<") {
+		return ""
+	}
+	for i, r := range field {
+		if r != '>' && r != '<' {
+			continue
+		}
+		j := i + 1
+		for j < len(field) && (field[j] == '>' || field[j] == '|' || field[j] == '&') {
+			j++
+		}
+		return cleanShellRedirectionPathToken(field[j:])
+	}
+	return ""
+}
+
+func cleanShellRedirectionPathToken(token string) string {
+	token = strings.Trim(strings.TrimSpace(token), `"'`)
+	if token == "" || strings.HasPrefix(token, "&") || strings.Contains(token, "://") {
+		return ""
+	}
+	if shellPathTokenIsDynamic(token) {
+		return dynamicShellRedirectionTarget
+	}
+	return token
+}
+
+func shellPathTokenIsDynamic(token string) bool {
+	return strings.ContainsAny(token, "<>$`") || strings.Contains(token, "$(") || strings.Contains(token, "${") || strings.HasPrefix(token, "~")
+}
+
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func pathInsideTrustedTemp(clean string) bool {
 	if clean == "" {
 		return false
@@ -810,6 +1079,13 @@ func pathInsideTrustedTemp(clean string) bool {
 	}
 	return clean == "/tmp" || strings.HasPrefix(clean, "/tmp/") ||
 		clean == "/private/tmp" || strings.HasPrefix(clean, "/private/tmp/")
+}
+
+func pathInsideTrustedShellPath(clean string) bool {
+	if pathInsideTrustedTemp(clean) {
+		return true
+	}
+	return filepath.Clean(clean) == "/dev/null"
 }
 
 // externalDirForToken returns the directory a shell path token should be
@@ -1162,6 +1438,15 @@ func pathInside(path, root string) bool {
 		return false
 	}
 	return ok
+}
+
+func pathInsideAny(path string, roots []string) bool {
+	for _, root := range roots {
+		if pathInside(path, root) {
+			return true
+		}
+	}
+	return false
 }
 
 func uniqueStrings(in []string) []string {

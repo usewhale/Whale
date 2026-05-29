@@ -336,7 +336,7 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 		hookSources:           hookSources,
 		currentMode:           modeState.Mode,
 		sessionID:             sessionID,
-		permissionPolicy:      policy.RulePolicy{Default: cfg.PermissionDefault, Rules: append([]policy.PermissionRule{}, cfg.PermissionRules...), WorkspaceRoot: workspaceRoot},
+		permissionPolicy:      policy.RulePolicy{Default: cfg.PermissionDefault, Rules: append([]policy.PermissionRule{}, cfg.PermissionRules...), WorkspaceRoot: workspaceRoot, WorktreeRoot: start.Worktree.Path},
 		autoAcceptPermissions: cfg.AutoAcceptPermissions,
 		budgetWarningUSD:      cfg.BudgetWarningUSD,
 		cfg:                   cfg,

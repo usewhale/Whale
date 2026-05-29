@@ -1546,15 +1546,11 @@ func TestPathEscapeDenied(t *testing.T) {
 	}
 }
 
-func TestReadOnlyPathErrorsExplainWorkspaceAndSiblingRecovery(t *testing.T) {
+func TestReadOnlyPathErrorsExplainExternalApproval(t *testing.T) {
 	parent := t.TempDir()
 	workspace := filepath.Join(parent, "workspace")
-	sibling := filepath.Join(parent, "codex")
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatalf("mkdir workspace: %v", err)
-	}
-	if err := os.MkdirAll(sibling, 0o755); err != nil {
-		t.Fatalf("mkdir sibling: %v", err)
 	}
 	ts, err := NewToolset(workspace)
 	if err != nil {
@@ -1570,9 +1566,7 @@ func TestReadOnlyPathErrorsExplainWorkspaceAndSiblingRecovery(t *testing.T) {
 		"Current workspace root: " + workspace,
 		"Requested path: codex",
 		"Resolved path: " + filepath.Join(workspace, "codex"),
-		"not a sibling project",
-		"`ls '../codex'`",
-		"`git -C '../codex' ...`",
+		"External read paths require file access approval",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("expected list_dir diagnostic to contain %q:\n%s", want, msg)
@@ -1580,7 +1574,7 @@ func TestReadOnlyPathErrorsExplainWorkspaceAndSiblingRecovery(t *testing.T) {
 	}
 }
 
-func TestReadOnlyPathEscapeErrorsExplainWorkspaceAndSiblingRecovery(t *testing.T) {
+func TestReadOnlyPathEscapeErrorsExplainExternalApproval(t *testing.T) {
 	workspace := t.TempDir()
 	ts, err := NewToolset(workspace)
 	if err != nil {
@@ -1624,8 +1618,7 @@ func TestReadOnlyPathEscapeErrorsExplainWorkspaceAndSiblingRecovery(t *testing.T
 				"path escapes workspace",
 				"Current workspace root: " + workspace,
 				"Requested path: ../codex",
-				"not a sibling project",
-				"`ls '../codex'`",
+				"External read paths require file access approval",
 			} {
 				if !strings.Contains(msg, want) {
 					t.Fatalf("expected %s diagnostic to contain %q:\n%s", tc.name, want, msg)
@@ -1635,32 +1628,120 @@ func TestReadOnlyPathEscapeErrorsExplainWorkspaceAndSiblingRecovery(t *testing.T
 	}
 }
 
-func TestReadOnlyPathErrorsShellQuoteSiblingRecovery(t *testing.T) {
-	workspace := t.TempDir()
+func TestApprovedExternalReadRootsAllowReadOnlyTools(t *testing.T) {
+	parent := t.TempDir()
+	workspace := filepath.Join(parent, "workspace")
+	external := filepath.Join(parent, "external")
+	if err := os.MkdirAll(filepath.Join(external, "nested"), 0o755); err != nil {
+		t.Fatalf("mkdir external: %v", err)
+	}
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(external, "nested", "guide.txt"), []byte("needle\n"), 0o644); err != nil {
+		t.Fatalf("write external fixture: %v", err)
+	}
 	ts, err := NewToolset(workspace)
 	if err != nil {
 		t.Fatalf("new toolset: %v", err)
 	}
+	ctx := WithApprovedExternalReadRoots(context.Background(), []string{external})
 
-	res, err := ts.listDir(context.Background(), tc("list_dir", map[string]any{"path": "../repo;touch pwn$(boom)'x/file.txt"}))
+	readRes, err := ts.readFile(ctx, tc("read_file", map[string]any{"file_path": filepath.Join(external, "nested", "guide.txt")}))
+	if err != nil || readRes.IsError || !strings.Contains(readRes.Content, "needle") {
+		t.Fatalf("approved external read_file failed: err=%v res=%+v", err, readRes)
+	}
+	listRes, err := ts.listDir(ctx, tc("list_dir", map[string]any{"path": external}))
+	if err != nil || listRes.IsError || !strings.Contains(listRes.Content, "nested/") {
+		t.Fatalf("approved external list_dir failed: err=%v res=%+v", err, listRes)
+	}
+	grepRes, err := ts.searchContent(ctx, tc("grep", map[string]any{"path": external, "pattern": "needle"}))
+	if err != nil || grepRes.IsError || !strings.Contains(grepRes.Content, "guide.txt") {
+		t.Fatalf("approved external grep failed: err=%v res=%+v", err, grepRes)
+	}
+	searchRes, err := ts.searchFiles(ctx, tc("search_files", map[string]any{"path": external, "pattern": "guide"}))
+	if err != nil || searchRes.IsError || !strings.Contains(searchRes.Content, "guide.txt") {
+		t.Fatalf("approved external search_files failed: err=%v res=%+v", err, searchRes)
+	}
+}
+
+func TestApprovedExternalReadRootsPreserveMissingPathErrors(t *testing.T) {
+	parent := t.TempDir()
+	workspace := filepath.Join(parent, "workspace")
+	external := filepath.Join(parent, "external")
+	if err := os.MkdirAll(external, 0o755); err != nil {
+		t.Fatalf("mkdir external: %v", err)
+	}
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatalf("mkdir workspace: %v", err)
+	}
+	ts, err := NewToolset(workspace)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	ctx := WithApprovedExternalReadRoots(context.Background(), []string{external})
+	missingFile := filepath.Join(external, "missing", "guide.txt")
+	missingDir := filepath.Join(external, "missing")
+
+	readRes, err := ts.readFile(ctx, tc("read_file", map[string]any{"file_path": missingFile}))
+	if err != nil {
+		t.Fatalf("read_file err: %v", err)
+	}
+	if got := toolErrorCode(t, readRes); got != "not_found" {
+		t.Fatalf("read_file missing code = %q, want not_found; res=%+v", got, readRes)
+	}
+
+	listRes, err := ts.listDir(ctx, tc("list_dir", map[string]any{"path": missingDir}))
 	if err != nil {
 		t.Fatalf("list_dir err: %v", err)
 	}
-	msg := toolErrorMessage(t, res)
-	for _, want := range []string{
-		"`ls '../repo;touch pwn$(boom)'\\''x'`",
-		"`git -C '../repo;touch pwn$(boom)'\\''x' ...`",
-	} {
-		if !strings.Contains(msg, want) {
-			t.Fatalf("expected diagnostic to contain shell-quoted command %q:\n%s", want, msg)
-		}
+	if got := toolErrorCode(t, listRes); got != "not_found" {
+		t.Fatalf("list_dir missing code = %q, want not_found; res=%+v", got, listRes)
 	}
-	for _, bad := range []string{
-		"`ls ../repo;touch pwn$(boom)'x`",
-		"`git -C ../repo;touch pwn$(boom)'x ...`",
-	} {
-		if strings.Contains(msg, bad) {
-			t.Fatalf("diagnostic contains unsafe unquoted command %q:\n%s", bad, msg)
+
+	grepRes, err := ts.searchContent(ctx, tc("grep", map[string]any{"path": missingDir, "pattern": "needle"}))
+	if err != nil {
+		t.Fatalf("grep err: %v", err)
+	}
+	if strings.Contains(grepRes.Content, "permission_denied") {
+		t.Fatalf("grep missing path should not be permission_denied: %+v", grepRes)
+	}
+
+	searchRes, err := ts.searchFiles(ctx, tc("search_files", map[string]any{"path": missingDir, "pattern": "guide"}))
+	if err != nil {
+		t.Fatalf("search_files err: %v", err)
+	}
+	if searchRes.IsError || strings.Contains(searchRes.Content, "permission_denied") {
+		t.Fatalf("search_files missing path should not be permission_denied: %+v", searchRes)
+	}
+}
+
+func TestApprovedExternalReadRootsExpandHomeBeforeWorkspaceFallback(t *testing.T) {
+	workspace := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(filepath.Join(workspace, "~"), 0o755); err != nil {
+		t.Fatalf("mkdir workspace tilde dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "~", "guide.txt"), []byte("workspace tilde\n"), 0o644); err != nil {
+		t.Fatalf("write workspace tilde file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "guide.txt"), []byte("home file\n"), 0o644); err != nil {
+		t.Fatalf("write home file: %v", err)
+	}
+	ts, err := NewToolset(workspace)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	ctx := WithApprovedExternalReadRoots(context.Background(), []string{home})
+
+	for _, raw := range []string{"~/guide.txt", "$HOME/guide.txt"} {
+		res, err := ts.readFile(ctx, tc("read_file", map[string]any{"file_path": raw}))
+		if err != nil || res.IsError {
+			t.Fatalf("approved home read %q failed: err=%v res=%+v", raw, err, res)
+		}
+		if !strings.Contains(res.Content, "home file") || strings.Contains(res.Content, "workspace tilde") {
+			t.Fatalf("home read %q used wrong file: %+v", raw, res)
 		}
 	}
 }

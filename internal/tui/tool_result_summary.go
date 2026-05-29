@@ -155,6 +155,13 @@ func summarizeShellResult(env toolResultEnvelope, successBySignal bool) (string,
 }
 
 func summarizeFailedShellResult(env toolResultEnvelope) (string, string) {
+	if shellFailureIsNoMatches(env) {
+		duration := formatDurationMS(asInt64(env.metrics["duration_ms"]))
+		if duration != "" {
+			return "result_neutral", "No matches · " + duration
+		}
+		return "result_neutral", "No matches"
+	}
 	if shellFailureUsesGenericSummary(env) {
 		return summarizeFailedResult(env, "command failed")
 	}
@@ -179,6 +186,84 @@ func shellFailureLabel(env toolResultEnvelope) string {
 		return fmt.Sprintf("Command failed (exit %d)", exitCode)
 	}
 	return "Command failed"
+}
+
+func shellFailureIsNoMatches(env toolResultEnvelope) bool {
+	if env.code != "exec_failed" || !hasInt(env.metrics["exit_code"]) || asInt(env.metrics["exit_code"]) != 1 {
+		return false
+	}
+	if strings.TrimSpace(core.AsString(env.payload["stdout"])) != "" || strings.TrimSpace(core.AsString(env.payload["stderr"])) != "" {
+		return false
+	}
+	return shellCommandUsesSearchExitOne(core.AsString(env.payload["command"]))
+}
+
+func shellCommandUsesSearchExitOne(command string) bool {
+	base := shellSegmentBaseCommand(lastShellCommandSegment(command))
+	return base == "grep" || base == "rg" || base == "git grep"
+}
+
+func lastShellCommandSegment(command string) string {
+	command = strings.TrimSpace(command)
+	start := 0
+	last := command
+	var quote rune
+	escaped := false
+	runes := []rune(command)
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if r == '\\' && quote != '\'' {
+			escaped = true
+			continue
+		}
+		if quote != 0 {
+			if r == quote {
+				quote = 0
+			}
+			continue
+		}
+		if r == '\'' || r == '"' {
+			quote = r
+			continue
+		}
+		switch runes[i] {
+		case '|', ';':
+			if segment := strings.TrimSpace(string(runes[start:i])); segment != "" {
+				last = segment
+			}
+			if runes[i] == '|' && i+1 < len(runes) && runes[i+1] == '|' {
+				i++
+			}
+			start = i + 1
+		case '&':
+			if i+1 < len(runes) && runes[i+1] == '&' {
+				if segment := strings.TrimSpace(string(runes[start:i])); segment != "" {
+					last = segment
+				}
+				i++
+				start = i + 1
+			}
+		}
+	}
+	if segment := strings.TrimSpace(string(runes[start:])); segment != "" {
+		last = segment
+	}
+	return last
+}
+
+func shellSegmentBaseCommand(segment string) string {
+	fields := strings.Fields(strings.TrimSpace(segment))
+	if len(fields) == 0 {
+		return ""
+	}
+	if fields[0] == "git" && len(fields) > 1 && fields[1] == "grep" {
+		return "git grep"
+	}
+	return fields[0]
 }
 
 func shellFailureUsesGenericSummary(env toolResultEnvelope) bool {

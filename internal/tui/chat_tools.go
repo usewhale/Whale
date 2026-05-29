@@ -346,7 +346,7 @@ func completedToolTitle(toolName, raw, previous string) string {
 		if cmd == "" {
 			cmd = "shell command"
 		}
-		if !toolEnvelopeSucceeded(env) && env.code == "exec_failed" {
+		if !toolEnvelopeSucceeded(env) && env.code == "exec_failed" && !shellFailureIsNoMatches(env) {
 			return shellFailureLabel(env) + ": " + cmd
 		}
 		return "Ran " + cmd
@@ -379,6 +379,8 @@ func shellResultRole(role string) string {
 	switch strings.TrimSpace(role) {
 	case "result_ok":
 		return "shell_result_ok"
+	case "result_neutral":
+		return "shell_result_neutral"
 	case "result_failed":
 		return "shell_result_failed"
 	case "result_timeout":

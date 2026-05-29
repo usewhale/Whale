@@ -6,11 +6,13 @@ import (
 	"time"
 
 	"github.com/usewhale/whale/internal/core"
+	toolctx "github.com/usewhale/whale/internal/tools"
 )
 
-func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMessageID, model string, call core.ToolCall, events chan<- AgentEvent, tools *core.ToolRegistry) (core.ToolResult, bool, bool) {
+func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMessageID, model string, call core.ToolCall, externalReadRoots []string, events chan<- AgentEvent, tools *core.ToolRegistry) (core.ToolResult, bool, bool) {
 	attempt := 0
 	dispatchCtx := core.WithToolResultArchive(ctx, a.toolResultArchiveDir, sessionID)
+	dispatchCtx = toolctx.WithApprovedExternalReadRoots(dispatchCtx, externalReadRoots)
 	emit := func(ev AgentEvent) bool {
 		return sendAgentEvent(ctx, events, ev)
 	}
