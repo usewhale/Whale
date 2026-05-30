@@ -7,6 +7,9 @@ import (
 
 func (c *Composer) HandlePaste(value string) {
 	c.ensureInitialized()
+	if c.hasSelection() {
+		c.deleteSelection()
+	}
 	value = strings.ReplaceAll(value, "\r\n", "\n")
 	value = strings.ReplaceAll(value, "\r", "\n")
 	if len([]rune(value)) > largePasteCharThreshold {
@@ -15,6 +18,7 @@ func (c *Composer) HandlePaste(value string) {
 		c.textarea.InsertString(value)
 	}
 	c.markRawCacheStale()
+	c.selectionRuneOffset = -1
 	c.prunePendingPastes()
 	c.reflow()
 }

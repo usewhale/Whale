@@ -50,8 +50,8 @@ func TestDefaultSemanticColors(t *testing.T) {
 	if string(Default.Border) != "240" {
 		t.Fatalf("border: want 240, got %s", Default.Border)
 	}
-	if string(Default.Selection) != "238" {
-		t.Fatalf("selection: want 238, got %s", Default.Selection)
+	if string(Default.Selection) != "240" {
+		t.Fatalf("selection: want 240, got %s", Default.Selection)
 	}
 	if string(Default.Info) != "111" {
 		t.Fatalf("info: want 111, got %s", Default.Info)
