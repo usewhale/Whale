@@ -169,6 +169,52 @@ fallback_filenames = ["AGENTS.md", ".claude/instructions.md", "CLAUDE.md"]
 and `deepseek-v4-pro` get 1,000,000 tokens (1M); other models default to 128K. No
 manual configuration is needed.
 
+## Custom API Endpoints and Non-DeepSeek Models
+
+Whale supports connecting to compatible API endpoints by setting `[api].base_url`
+in `config.toml`. This includes:
+
+- Third-party DeepSeek-compatible services (e.g., Alibaba Bailian)
+- API relay / proxy services (e.g., tokenshengsheng.com)
+- Any service that implements the `/chat/completions` endpoint
+
+Example configuration for an API relay:
+
+```toml
+model = "gpt-5.5"
+reasoning_effort = "medium"
+thinking_enabled = false
+
+[api]
+base_url = "https://tokenshengsheng.com/v1"
+
+[permissions]
+auto_accept = true
+default = "allow"
+```
+
+When using non-DeepSeek models through an API relay, `thinking_enabled` should
+typically be set to `false`, as most third-party models do not support the
+DeepSeek thinking protocol.
+
+### Prompt-based Tool Calling
+
+For models that do not support the native `tools` parameter (detected
+automatically when the model name does not contain "deepseek" or "codex"),
+Whale activates **prompt-based tool calling**:
+
+1. A standalone system message with tool instructions is prepended to every
+   request, telling the model to output tool calls as JSON code blocks
+2. Whale parses multiple JSON formats from the model's text output:
+   - Standard: `{"tool_call": {"name": "...", "arguments": {...}}}`
+   - Command-style: `{"command": "..."}`
+   - Named: `{"name": "...", "arguments": {...}}` or `{"tool": "...", "args": {...}}`
+   - JSON objects with `path`, `query`, or `pattern` fields
+3. Tool results are fed back to the model as natural-language user messages,
+   preserving full conversational context
+
+This mechanism activates automatically — no manual configuration needed.
+
 ## Migrating old config
 
 Whale v0.1.8 and earlier used `preferences.json` and `settings.json`. New

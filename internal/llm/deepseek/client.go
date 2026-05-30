@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -136,6 +137,238 @@ func envOr(name, fallback string) string {
 	return v
 }
 
+func supportsNativeTools(model string) bool {
+	m := strings.ToLower(model)
+	return strings.Contains(m, "deepseek") || strings.Contains(m, "codex")
+}
+
+var reToolCallCodeBlock = regexp.MustCompile("(?s)```json\\s*\\n?(.*?)\\n?```")
+var reToolCallInline = regexp.MustCompile(`(?s)\{\s*"tool_call"\s*:\s*\{[^}]+\}\s*\}`)
+
+type textToolCallPayload struct {
+	ToolCall textToolCallInner `json:"tool_call"`
+}
+
+type textToolCallInner struct {
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
+}
+
+type altToolCallPayload struct {
+	Command   string          `json:"command"`
+	Tool      string          `json:"tool"`
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
+	Args      json.RawMessage `json:"args"`
+	Params    json.RawMessage `json:"params"`
+	Input     json.RawMessage `json:"input"`
+	Path      string          `json:"path"`
+	Query     string          `json:"query"`
+	Pattern   string          `json:"pattern"`
+}
+
+func parseTextToolCalls(content string) ([]core.ToolCall, string) {
+	var jsonStr string
+	cleanContent := content
+
+	if matches := reToolCallCodeBlock.FindStringSubmatch(content); len(matches) >= 2 {
+		jsonStr = strings.TrimSpace(matches[1])
+		cleanContent = strings.TrimSpace(reToolCallCodeBlock.ReplaceAllString(content, ""))
+	} else if match := reToolCallInline.FindString(content); match != "" {
+		jsonStr = match
+		cleanContent = strings.TrimSpace(strings.Replace(content, match, "", 1))
+	} else {
+		jsonStr, cleanContent = extractAnyToolJSON(content)
+	}
+
+	if jsonStr == "" {
+		return nil, content
+	}
+
+	if tc := parseStandardToolCall(jsonStr); tc != nil {
+		return []core.ToolCall{*tc}, cleanContent
+	}
+
+	if tc := parseAltToolCall(jsonStr); tc != nil {
+		return []core.ToolCall{*tc}, cleanContent
+	}
+
+	return nil, content
+}
+
+func extractAnyToolJSON(content string) (string, string) {
+	idx := strings.Index(content, "{")
+	if idx < 0 {
+		return "", content
+	}
+	rest := content[idx:]
+	depth := 0
+	inString := false
+	escaped := false
+	end := -1
+	for i, ch := range rest {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' && inString {
+			escaped = true
+			continue
+		}
+		if ch == '"' {
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		if ch == '{' {
+			depth++
+		} else if ch == '}' {
+			depth--
+			if depth == 0 {
+				end = i + 1
+				break
+			}
+		}
+	}
+	if end <= 0 {
+		return "", content
+	}
+	candidate := rest[:end]
+	var test map[string]any
+	if json.Unmarshal([]byte(candidate), &test) != nil {
+		return "", content
+	}
+	if _, hasName := test["name"]; !hasName {
+		if _, hasToolCall := test["tool_call"]; !hasToolCall {
+			if _, hasCommand := test["command"]; !hasCommand {
+				if _, hasTool := test["tool"]; !hasTool {
+					return "", content
+				}
+			}
+		}
+	}
+	cleanContent := strings.TrimSpace(content[:idx] + content[idx+end:])
+	return candidate, cleanContent
+}
+
+func parseStandardToolCall(jsonStr string) *core.ToolCall {
+	var parsed textToolCallPayload
+	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
+		return nil
+	}
+	if parsed.ToolCall.Name == "" {
+		return nil
+	}
+	argsJSON, err := json.Marshal(parsed.ToolCall.Arguments)
+	if err != nil {
+		argsJSON = []byte("{}")
+	}
+	return &core.ToolCall{
+		ID:    fmt.Sprintf("call_%s", generateShortID()),
+		Name:  parsed.ToolCall.Name,
+		Input: string(argsJSON),
+	}
+}
+
+func parseAltToolCall(jsonStr string) *core.ToolCall {
+	var alt altToolCallPayload
+	if err := json.Unmarshal([]byte(jsonStr), &alt); err != nil {
+		return nil
+	}
+
+	tc := &core.ToolCall{
+		ID: fmt.Sprintf("call_%s", generateShortID()),
+	}
+
+	switch {
+	case alt.Command != "":
+		tc.Name = "shell_run"
+		args, _ := json.Marshal(map[string]any{"command": alt.Command})
+		tc.Input = string(args)
+		return tc
+	case alt.Tool != "":
+		tc.Name = alt.Tool
+	case alt.Name != "":
+		tc.Name = alt.Name
+	default:
+		return nil
+	}
+
+	switch {
+	case alt.Arguments != nil:
+		args, _ := json.Marshal(alt.Arguments)
+		tc.Input = string(args)
+	case alt.Args != nil:
+		args, _ := json.Marshal(alt.Args)
+		tc.Input = string(args)
+	case alt.Params != nil:
+		args, _ := json.Marshal(alt.Params)
+		tc.Input = string(args)
+	case alt.Input != nil:
+		args, _ := json.Marshal(alt.Input)
+		tc.Input = string(args)
+	case alt.Path != "":
+		args, _ := json.Marshal(map[string]any{"path": alt.Path})
+		tc.Input = string(args)
+	case alt.Query != "":
+		args, _ := json.Marshal(map[string]any{"query": alt.Query})
+		tc.Input = string(args)
+	case alt.Pattern != "":
+		args, _ := json.Marshal(map[string]any{"pattern": alt.Pattern})
+		tc.Input = string(args)
+	default:
+		args, _ := json.Marshal(map[string]any{})
+		tc.Input = string(args)
+	}
+
+	return tc
+}
+
+func generateShortID() string {
+	return fmt.Sprintf("%x", time.Now().UnixNano())
+}
+
+func buildToolSystemPrompt(tools []core.Tool) string {
+	if len(tools) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("CRITICAL SYSTEM OVERRIDE - READ FIRST\n\n")
+	b.WriteString("This is a coding agent. You have real tools that can execute actions on the local system.\n")
+	b.WriteString("When the user asks you to do something, you MUST use a tool. DO NOT say you cannot do it.\n\n")
+	b.WriteString("To call a tool, respond with ONLY this JSON block and NOTHING else:\n")
+	b.WriteString("```json\n")
+	b.WriteString(`{"tool_call": {"name": "TOOL_NAME", "arguments": {"arg": "value"}}}`)
+	b.WriteString("\n```\n\n")
+	b.WriteString("Available tools:\n")
+	for _, t := range tools {
+		spec := core.DescribeTool(t)
+		b.WriteString(fmt.Sprintf("- %s: %s\n", spec.Name, spec.Description))
+	}
+	b.WriteString("\nExample: if the user says \"list files in B:\\\", respond with ONLY:\n")
+	b.WriteString("```json\n")
+	b.WriteString(`{"tool_call": {"name": "list_dir", "arguments": {"path": "B:\\"}}}`)
+	b.WriteString("\n```\n\n")
+	b.WriteString("NO explanations. NO apologies. NO text outside the JSON block. ONLY the JSON.\n")
+	return b.String()
+}
+
+func injectToolPrompt(msgs []map[string]any, tools []core.Tool) []map[string]any {
+	toolPrompt := buildToolSystemPrompt(tools)
+	if toolPrompt == "" {
+		return msgs
+	}
+
+	header := map[string]any{
+		"role":    "system",
+		"content": toolPrompt,
+	}
+	return append([]map[string]any{header}, msgs...)
+}
+
 func (c *Client) StreamResponse(ctx context.Context, history []core.Message, tools []core.Tool) <-chan llm.ProviderEvent {
 	out := make(chan llm.ProviderEvent)
 	go func() {
@@ -148,22 +381,43 @@ func (c *Client) StreamResponse(ctx context.Context, history []core.Message, too
 }
 
 func (c *Client) stream(ctx context.Context, history []core.Message, tools []core.Tool, out chan<- llm.ProviderEvent) error {
-	msgs, sanitizeDiag := sanitizeDeepSeekMessagesForRequest(toDeepSeekMessages(history), c.thinkingEnabled)
-	replayDiag := toolResultReplayDiagnostics(history, msgs)
-	payload := map[string]any{
-		"model":          c.model,
-		"stream":         true,
-		"stream_options": map[string]any{"include_usage": true},
-		"messages":       msgs,
-		"thinking":       map[string]any{"type": "disabled"},
+	isDeepSeekModel := strings.Contains(strings.ToLower(c.model), "deepseek")
+	nativeTools := supportsNativeTools(c.model)
+
+	var msgs []map[string]any
+	var sanitizeDiag deepSeekMessageDiagnostics
+	if isDeepSeekModel {
+		msgs, sanitizeDiag = sanitizeDeepSeekMessagesForRequest(toDeepSeekMessages(history), c.thinkingEnabled)
+	} else if nativeTools {
+		msgs = toSimpleMessages(history)
+	} else {
+		msgs = toTextToolMessages(history)
 	}
-	if c.thinkingEnabled {
-		payload["thinking"] = map[string]any{"type": "enabled"}
-		if strings.TrimSpace(c.reasoningEffort) != "" {
-			payload["reasoning_effort"] = c.reasoningEffort
+
+	if !nativeTools && len(tools) > 0 {
+		msgs = injectToolPrompt(msgs, tools)
+	}
+
+	replayDiag := toolResultReplayDiagnostics(history, msgs)
+
+	payload := map[string]any{
+		"model":    c.model,
+		"stream":   true,
+		"messages": msgs,
+	}
+
+	if isDeepSeekModel {
+		payload["stream_options"] = map[string]any{"include_usage": true}
+		payload["thinking"] = map[string]any{"type": "disabled"}
+		if c.thinkingEnabled {
+			payload["thinking"] = map[string]any{"type": "enabled"}
+			if strings.TrimSpace(c.reasoningEffort) != "" {
+				payload["reasoning_effort"] = c.reasoningEffort
+			}
 		}
 	}
-	if len(tools) > 0 {
+
+	if nativeTools && len(tools) > 0 {
 		payload["tools"] = toDeepSeekTools(tools)
 	}
 	if c.maxTokens > 0 {
@@ -327,6 +581,7 @@ func parseSSE(r io.Reader, model string, replayTokens int, replayDiag deepSeekRe
 			dataLines = dataLines[:0]
 		}
 		if errors.Is(err, io.EOF) {
+			// Process any remaining data
 			if len(dataLines) > 0 {
 				data := strings.Join(dataLines, "\n")
 				if done, perr := parseSSEData(data, model, out, &acc); perr != nil {
@@ -335,6 +590,12 @@ func parseSSE(r io.Reader, model string, replayTokens int, replayDiag deepSeekRe
 					return nil
 				}
 			}
+			// If we already received some content, consider it complete even without [DONE]
+			if acc.content.Len() > 0 || acc.finishReason != "" {
+				emitComplete(out, model, &acc)
+				return nil
+			}
+			// Otherwise, it's an incomplete stream
 			return errIncompleteStream
 		}
 	}
@@ -491,8 +752,21 @@ func emitComplete(out chan<- llm.ProviderEvent, model string, acc *streamAccumul
 		}
 		calls = append(calls, core.ToolCall{ID: st.id, Name: st.name, Input: st.arguments.String()})
 	}
+
+	content := acc.content.String()
+	finishReason := mapFinishReason(acc.finishReason)
+
+	if !supportsNativeTools(model) && len(calls) == 0 && content != "" {
+		parsed, cleanContent := parseTextToolCalls(content)
+		if len(parsed) > 0 {
+			content = cleanContent
+			calls = parsed
+			finishReason = core.FinishReasonToolUse
+		}
+	}
+
 	out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
-		Content:   acc.content.String(),
+		Content:   content,
 		Reasoning: acc.reasoning.String(),
 		ToolCalls: calls,
 		Usage: llm.Usage{
@@ -510,7 +784,7 @@ func emitComplete(out chan<- llm.ProviderEvent, model string, acc *streamAccumul
 			ToolResultsCompacted:   acc.replayDiag.compacted,
 		},
 		Model:        model,
-		FinishReason: mapFinishReason(acc.finishReason),
+		FinishReason: finishReason,
 	}}
 }
 
@@ -912,4 +1186,107 @@ func compactToolResultForReplay(content string) string {
 		len(runes)-headRunes-tailRunes,
 		tail,
 	)
+}
+
+func toTextToolMessages(history []core.Message) []map[string]any {
+	out := make([]map[string]any, 0, len(history))
+	for _, msg := range history {
+		switch msg.Role {
+		case core.RoleSystem:
+			out = append(out, map[string]any{"role": "system", "content": msg.Text})
+		case core.RoleUser:
+			out = append(out, map[string]any{"role": "user", "content": msg.Text})
+		case core.RoleAssistant:
+			m := map[string]any{
+				"role":    "assistant",
+				"content": msg.Text,
+			}
+			if len(msg.ToolCalls) > 0 {
+				var callDescs []string
+				for _, tc := range msg.ToolCalls {
+					callDescs = append(callDescs, fmt.Sprintf("%s(%s)", tc.Name, tc.Input))
+				}
+				if m["content"] == "" {
+					m["content"] = "[Tool Calls: " + strings.Join(callDescs, ", ") + "]"
+				}
+			}
+			out = append(out, m)
+		case core.RoleTool:
+			for _, tr := range msg.ToolResults {
+				summary := compactToolResultForReplay(tr.Content)
+				const maxPreview = 2000
+				if len(summary) > maxPreview {
+					summary = summary[:maxPreview] + "\n... (truncated)"
+				}
+				out = append(out, map[string]any{
+					"role":    "user",
+					"content": fmt.Sprintf("[Tool Result: %s]\n%s", tr.Name, summary),
+				})
+			}
+		}
+	}
+	return out
+}
+
+func toSimpleMessages(history []core.Message) []map[string]any {
+	out := make([]map[string]any, 0, len(history))
+	pendingToolCalls := map[string]struct{}{}
+	flushPending := func() {
+		for id := range pendingToolCalls {
+			out = append(out, map[string]any{
+				"role":         "tool",
+				"tool_call_id": id,
+				"content":      `{"success":false,"error":"missing tool result recovered before provider send","code":"missing_tool_result_recovered"}`,
+			})
+			delete(pendingToolCalls, id)
+		}
+	}
+	for _, msg := range history {
+		switch msg.Role {
+		case core.RoleSystem:
+			flushPending()
+			out = append(out, map[string]any{"role": "system", "content": msg.Text})
+		case core.RoleUser:
+			flushPending()
+			out = append(out, map[string]any{"role": "user", "content": msg.Text})
+		case core.RoleAssistant:
+			flushPending()
+			m := map[string]any{
+				"role":    "assistant",
+				"content": msg.Text,
+			}
+			if len(msg.ToolCalls) > 0 {
+				tcs := make([]map[string]any, 0, len(msg.ToolCalls))
+				for _, tc := range msg.ToolCalls {
+					tcs = append(tcs, map[string]any{
+						"id":   tc.ID,
+						"type": "function",
+						"function": map[string]any{
+							"name":      tc.Name,
+							"arguments": tc.Input,
+						},
+					})
+					if strings.TrimSpace(tc.ID) != "" {
+						pendingToolCalls[tc.ID] = struct{}{}
+					}
+				}
+				m["tool_calls"] = tcs
+			}
+			out = append(out, m)
+		case core.RoleTool:
+			for _, tr := range msg.ToolResults {
+				if _, ok := pendingToolCalls[tr.ToolCallID]; !ok {
+					continue
+				}
+				out = append(out, map[string]any{
+					"role":         "tool",
+					"tool_call_id": tr.ToolCallID,
+					"content":      compactToolResultForReplay(tr.Content),
+				})
+				delete(pendingToolCalls, tr.ToolCallID)
+			}
+		}
+	}
+	flushPending()
+	return out
 }

@@ -202,9 +202,9 @@ whale migrate-config
 
 更多说明见 [docs/configuration.md](docs/configuration.md)。
 
-## 是否支持 Coding Plan？
+## 是否支持 Coding Plan / 自定义 API 中转站？
 
-支持。Whale 可以通过自定义 API endpoint 连接兼容 `/chat/completions` 的 Coding Plan / 第三方 DeepSeek 接口。
+支持。Whale 可以通过自定义 API endpoint 连接兼容 `/chat/completions` 的 Coding Plan、第三方 DeepSeek 接口或 API 中转站。
 
 以阿里云百炼为例，在 `~/.whale/config.toml` 中配置：
 
@@ -215,6 +215,21 @@ thinking_enabled = true
 
 [api]
 base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+```
+
+也可以配置第三方 API 中转站（如 tokenshengsheng.com）：
+
+```toml
+model = "gpt-5.5"
+reasoning_effort = "medium"
+thinking_enabled = false
+
+[api]
+base_url = "https://tokenshengsheng.com/v1"
+
+[permissions]
+auto_accept = true
+default = "allow"
 ```
 
 然后配置对应的 API key：
@@ -234,6 +249,16 @@ whale setup
 - `base_url` 填接口根地址，不要包含 `/chat/completions`，Whale 会自动拼接。
 - `DEEPSEEK_BASE_URL` 环境变量会覆盖 `~/.whale/config.toml` 里的 `[api].base_url`。
 - Whale 当前仍然优先适配 DeepSeek 风格的模型、流式输出、thinking、tool calls 和 prefix-cache 工作流。第三方 endpoint 是否完整可用，取决于服务端兼容程度。
+
+### 非 DeepSeek 模型的工具调用
+
+对于不支持原生 `tools` 参数的模型（如通过中转站接入的 GPT 系列模型），Whale 会自动启用 **Prompt-based 工具调用**：
+
+1. 在消息开头注入独立的工具指令系统提示，引导模型用 JSON 代码块输出工具调用
+2. 支持多种 JSON 格式的自动解析，包括标准 `{"tool_call": {...}}` 格式和 `{"command": "..."}`、`{"name": "...", "arguments": {...}}` 等替代格式
+3. 工具调用结果会以自然语言形式反馈给模型，确保多轮对话上下文完整
+
+此机制在检测到模型非 DeepSeek/Codex 系列时自动激活，无需手动配置。
 
 ---
 

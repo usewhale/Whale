@@ -37,7 +37,8 @@ func IsSupportedModel(model string) bool {
 			return true
 		}
 	}
-	return false
+	// Allow any model for custom API endpoints
+	return true
 }
 
 func DefaultMemoryFileOrder() []string {
@@ -57,5 +58,6 @@ func ContextWindowForModel(model string) int {
 	if IsDeepSeekV4Model(model) {
 		return DeepSeekV4ContextWindow
 	}
-	return DefaultContextWindow
+	// Use large context window for custom models
+	return DeepSeekV4ContextWindow
 }
