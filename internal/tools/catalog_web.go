@@ -6,7 +6,7 @@ func (b *Toolset) webTools() []core.Tool {
 	return []core.Tool{
 		toolFn{
 			name:        "web_search",
-			description: "Search the public web and return structured results. Uses DuckDuckGo HTML with Bing fallback when needed.",
+			description: "Search the public web and return structured results. Uses DuckDuckGo HTML with Bing fallback when needed; blocked, timed out, or unparseable searches return recovery hints.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
@@ -35,32 +35,32 @@ func (b *Toolset) webTools() []core.Tool {
 		},
 		toolFn{
 			name:        "fetch",
-			description: "Fetch a URL and return content. Supports text|markdown|html output formats with aliases and timeout/truncation control.",
+			description: "Fetch a URL, extract readable content, and answer the supplied prompt. Use official/raw URLs when possible; recovery hints are returned for blocked, timed out, or authenticated resources.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
 				"properties": map[string]any{
-					"url":        map[string]any{"type": "string", "description": "Target URL (http/https)"},
-					"format":     map[string]any{"type": "string", "enum": []string{"text", "txt", "plain", "markdown", "md", "html", "raw", "bytes"}},
+					"url":        map[string]any{"type": "string", "description": "Target URL (http/https). Plain http URLs are upgraded to https except localhost/IPs."},
+					"prompt":     map[string]any{"type": "string", "description": "What to extract or answer from the fetched content."},
 					"timeout_ms": map[string]any{"type": "integer", "minimum": 1, "maximum": 60000},
 				},
-				"required": []string{"url"},
+				"required": []string{"url", "prompt"},
 			},
 			readOnly: true,
 			fn:       b.fetch,
 		},
 		toolFn{
 			name:        "web_fetch",
-			description: "Fetch a web page and extract readable content plus page title. Supports text|markdown|html output formats with aliases.",
+			description: "Fetch a web page, extract readable content plus page title, and answer the supplied prompt. Use official/raw URLs when possible; recovery hints are returned for blocked, timed out, or authenticated resources.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
 				"properties": map[string]any{
-					"url":        map[string]any{"type": "string", "description": "Target URL (http/https)"},
-					"format":     map[string]any{"type": "string", "enum": []string{"text", "txt", "plain", "markdown", "md", "html", "raw", "bytes"}},
+					"url":        map[string]any{"type": "string", "description": "Target URL (http/https). Plain http URLs are upgraded to https except localhost/IPs."},
+					"prompt":     map[string]any{"type": "string", "description": "What to extract or answer from the fetched content."},
 					"timeout_ms": map[string]any{"type": "integer", "minimum": 1, "maximum": 60000},
 				},
-				"required": []string{"url"},
+				"required": []string{"url", "prompt"},
 			},
 			readOnly: true,
 			fn:       b.webFetch,

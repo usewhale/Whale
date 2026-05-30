@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -16,54 +15,19 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
-func TestFetchTextAndHTML(t *testing.T) {
-	ts, err := NewToolset(t.TempDir())
-	if err != nil {
-		t.Fatalf("new toolset: %v", err)
-	}
-	ts.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader(`<html><head><title>T</title></head><body><h1>Hello</h1><p>World</p></body></html>`)),
-			Header:     make(http.Header),
-			Request:    req,
-		}, nil
-	})}
-
-	resText, err := ts.fetch(context.Background(), core.ToolCall{
-		ID:    "1",
-		Name:  "fetch",
-		Input: `{"url":"https://example.com","format":"text"}`,
-	})
-	if err != nil || resText.IsError {
-		t.Fatalf("fetch text failed err=%v res=%+v", err, resText)
-	}
-	if !strings.Contains(resText.Content, "Hello") || strings.Contains(resText.Content, "<h1>") {
-		t.Fatalf("expected extracted text, got: %s", resText.Content)
-	}
-
-	resHTML, err := ts.fetch(context.Background(), core.ToolCall{
-		ID:    "2",
-		Name:  "fetch",
-		Input: `{"url":"https://example.com","format":"html"}`,
-	})
-	if err != nil || resHTML.IsError {
-		t.Fatalf("fetch html failed err=%v res=%+v", err, resHTML)
-	}
-	var htmlOut struct {
-		Data struct {
-			Content string `json:"content"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal([]byte(resHTML.Content), &htmlOut); err != nil {
-		t.Fatalf("unmarshal html output: %v", err)
-	}
-	if !strings.Contains(htmlOut.Data.Content, "<h1>Hello</h1>") {
-		t.Fatalf("expected raw html, got: %s", htmlOut.Data.Content)
-	}
+type fakeWebFetchExtractor struct {
+	gotPrompt  string
+	gotContent string
+	out        string
 }
 
-func TestFetchFormatAliases(t *testing.T) {
+func (f *fakeWebFetchExtractor) Extract(ctx context.Context, prompt, content string) (string, error) {
+	f.gotPrompt = prompt
+	f.gotContent = content
+	return f.out, nil
+}
+
+func TestFetchReturnsReadableContent(t *testing.T) {
 	ts, err := NewToolset(t.TempDir())
 	if err != nil {
 		t.Fatalf("new toolset: %v", err)
@@ -71,8 +35,8 @@ func TestFetchFormatAliases(t *testing.T) {
 	ts.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader(`<html><body><h1>Hello</h1></body></html>`)),
-			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`<html><head><title>T</title></head><body><nav>skip</nav><h1>Hello</h1><p>World</p></body></html>`)),
+			Header:     http.Header{"Content-Type": []string{"text/html"}},
 			Request:    req,
 		}, nil
 	})}
@@ -80,52 +44,50 @@ func TestFetchFormatAliases(t *testing.T) {
 	res, err := ts.fetch(context.Background(), core.ToolCall{
 		ID:    "1",
 		Name:  "fetch",
-		Input: `{"url":"https://example.com","format":"raw"}`,
-	})
-	if err != nil || res.IsError {
-		t.Fatalf("fetch raw failed err=%v res=%+v", err, res)
-	}
-	var out struct {
-		Data struct {
-			Content string `json:"content"`
-			Format  string `json:"format"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
-		t.Fatalf("unmarshal raw output: %v", err)
-	}
-	if out.Data.Format != "html" {
-		t.Fatalf("expected raw alias to normalize to html, got %q", out.Data.Format)
-	}
-	if !strings.Contains(out.Data.Content, "<h1>Hello</h1>") {
-		t.Fatalf("expected raw html content, got: %s", out.Data.Content)
-	}
-}
-
-func TestFetchDecodesHTTPCharset(t *testing.T) {
-	raw := []byte("<html><head><title>Caf\xe9</title></head><body><p>Caf\xe9</p></body></html>")
-	ts, err := NewToolset(t.TempDir())
-	if err != nil {
-		t.Fatalf("new toolset: %v", err)
-	}
-	ts.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(bytes.NewReader(raw)),
-			Header:     http.Header{"Content-Type": []string{"text/html; charset=iso-8859-1"}},
-			Request:    req,
-		}, nil
-	})}
-
-	res, err := ts.fetch(context.Background(), core.ToolCall{
-		ID:    "1",
-		Name:  "fetch",
-		Input: `{"url":"https://example.com","format":"html"}`,
+		Input: `{"url":"https://example.com","prompt":"return the main text"}`,
 	})
 	if err != nil || res.IsError {
 		t.Fatalf("fetch failed err=%v res=%+v", err, res)
 	}
+	var out struct {
+		Data struct {
+			URL     string `json:"url"`
+			Title   string `json:"title"`
+			Content string `json:"content"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+		t.Fatalf("unmarshal output: %v", err)
+	}
+	if out.Data.URL != "https://example.com" || out.Data.Title != "T" {
+		t.Fatalf("unexpected metadata: %+v", out.Data)
+	}
+	if !strings.Contains(out.Data.Content, "Hello") || strings.Contains(out.Data.Content, "skip") || strings.Contains(out.Data.Content, "<h1>") {
+		t.Fatalf("expected extracted readable text, got: %q", out.Data.Content)
+	}
+}
 
+func TestFetchUsesConfiguredExtractor(t *testing.T) {
+	ts, _ := NewToolset(t.TempDir())
+	extractor := &fakeWebFetchExtractor{out: "answer from extractor"}
+	ts.SetWebFetchExtractor(extractor)
+	ts.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`<html><body><h1>Deep detail</h1></body></html>`)),
+			Header:     http.Header{"Content-Type": []string{"text/html"}},
+			Request:    req,
+		}, nil
+	})}
+
+	res, err := ts.fetch(context.Background(), core.ToolCall{
+		ID:    "1",
+		Name:  "fetch",
+		Input: `{"url":"https://example.com","prompt":"summarize"}`,
+	})
+	if err != nil || res.IsError {
+		t.Fatalf("fetch failed err=%v res=%+v", err, res)
+	}
 	var out struct {
 		Data struct {
 			Content string `json:"content"`
@@ -134,73 +96,63 @@ func TestFetchDecodesHTTPCharset(t *testing.T) {
 	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
 		t.Fatalf("unmarshal output: %v", err)
 	}
-	if !strings.Contains(out.Data.Content, "Café") {
-		t.Fatalf("expected decoded ISO-8859-1 content, got: %q", out.Data.Content)
+	if out.Data.Content != "answer from extractor" {
+		t.Fatalf("expected extractor output, got %q", out.Data.Content)
+	}
+	if extractor.gotPrompt != "summarize" || !strings.Contains(extractor.gotContent, "Deep detail") {
+		t.Fatalf("extractor received prompt=%q content=%q", extractor.gotPrompt, extractor.gotContent)
 	}
 }
 
-func TestFetchInvalidAndHTTPError(t *testing.T) {
-	ts, err := NewToolset(t.TempDir())
-	if err != nil {
-		t.Fatalf("new toolset: %v", err)
-	}
-	res, err := ts.fetch(context.Background(), core.ToolCall{ID: "1", Name: "fetch", Input: `{"url":"ftp://example.com"}`})
+func TestFetchRejectsMissingPromptAndOldFormatOnlyInput(t *testing.T) {
+	ts, _ := NewToolset(t.TempDir())
+	res, err := ts.fetch(context.Background(), core.ToolCall{
+		ID:    "1",
+		Name:  "fetch",
+		Input: `{"url":"https://example.com","format":"raw"}`,
+	})
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, "url scheme must be http or https") {
-		t.Fatalf("expected invalid scheme error, got: %s", res.Content)
+	if !res.IsError || !strings.Contains(res.Content, "prompt is required") {
+		t.Fatalf("expected prompt required error, got: %s", res.Content)
 	}
+}
 
+func TestFetchHTTPErrorIncludesRecoveryHint(t *testing.T) {
+	ts, _ := NewToolset(t.TempDir())
 	ts.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
-			StatusCode: http.StatusBadGateway,
-			Body:       io.NopCloser(strings.NewReader("boom")),
+			StatusCode: http.StatusUnauthorized,
+			Body:       io.NopCloser(strings.NewReader("auth required")),
 			Header:     make(http.Header),
 			Request:    req,
 		}, nil
 	})}
-	res2, err := ts.fetch(context.Background(), core.ToolCall{ID: "2", Name: "fetch", Input: `{"url":"https://example.com"}`})
+	res, err := ts.fetch(context.Background(), core.ToolCall{
+		ID:    "1",
+		Name:  "fetch",
+		Input: `{"url":"https://api.github.com/repos/usewhale/whale/contents/README.md","prompt":"read"}`,
+	})
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if !res2.IsError || !strings.Contains(res2.Content, "http 502") {
-		t.Fatalf("expected http error, got: %s", res2.Content)
-	}
-}
-
-func TestFetchMarksLowContentSPAShell(t *testing.T) {
-	ts, _ := NewToolset(t.TempDir())
-	ts.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body: io.NopCloser(strings.NewReader(`
-<html>
-<head><title>Google Antigravity</title><script type="module" src="/main.js"></script></head>
-<body><app-root></app-root></body>
-</html>`)),
-			Header:  make(http.Header),
-			Request: req,
-		}, nil
-	})}
-	res, err := ts.fetch(context.Background(), core.ToolCall{ID: "1", Name: "fetch", Input: `{"url":"https://antigravity.google/docs/hooks"}`})
-	if err != nil || res.IsError {
-		t.Fatalf("fetch failed err=%v res=%+v", err, res)
+	if !res.IsError {
+		t.Fatalf("expected error, got: %+v", res)
 	}
 	var out struct {
 		Data struct {
-			LowContent bool   `json:"low_content"`
-			NextSteps  string `json:"next_steps"`
+			Recovery struct {
+				Code              string `json:"code"`
+				RecommendedAction string `json:"recommended_action"`
+			} `json:"recovery"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if !out.Data.LowContent {
-		t.Fatalf("expected low content diagnosis, got: %s", res.Content)
-	}
-	if !strings.Contains(out.Data.NextSteps, "web_search") {
-		t.Fatalf("expected web_search next step, got: %q", out.Data.NextSteps)
+	if out.Data.Recovery.Code != "github_auth_or_api_blocked" || !strings.Contains(out.Data.Recovery.RecommendedAction, "raw.githubusercontent.com") {
+		t.Fatalf("expected GitHub recovery hint, got: %+v", out.Data.Recovery)
 	}
 }
 
@@ -213,42 +165,17 @@ func TestFetchRegistryIncludesTool(t *testing.T) {
 	for _, td := range ts.Tools() {
 		if td.Name() == "fetch" {
 			found = true
-			if !core.DescribeTool(td).ReadOnly {
+			desc := core.DescribeTool(td)
+			if !desc.ReadOnly {
 				t.Fatal("fetch should be readOnly")
+			}
+			if !strings.Contains(desc.Description, "recovery hints") {
+				t.Fatalf("expected recovery hint in description: %q", desc.Description)
 			}
 			break
 		}
 	}
 	if !found {
 		t.Fatal("fetch not registered")
-	}
-}
-
-func TestFetchTruncationMarker(t *testing.T) {
-	large := strings.Repeat("a", maxFetchBytes+100)
-	ts, _ := NewToolset(t.TempDir())
-	ts.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(strings.NewReader(large)),
-			Header:     make(http.Header),
-			Request:    req,
-		}, nil
-	})}
-	res, err := ts.fetch(context.Background(), core.ToolCall{ID: "1", Name: "fetch", Input: `{"url":"https://example.com"}`})
-	if err != nil || res.IsError {
-		t.Fatalf("fetch failed err=%v res=%+v", err, res)
-	}
-	var out struct {
-		Data struct {
-			Truncated bool   `json:"truncated"`
-			Content   string `json:"content"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if !out.Data.Truncated || !strings.Contains(out.Data.Content, "[truncated]") {
-		t.Fatalf("expected truncation marker, got: %s", res.Content)
 	}
 }

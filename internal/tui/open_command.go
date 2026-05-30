@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/usewhale/whale/internal/app"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 )
 
 type openCommandFinishedMsg struct {
@@ -15,12 +15,12 @@ type openCommandFinishedMsg struct {
 }
 
 func (m *model) startOpenCommand(line string) tea.Cmd {
-	if m.svc == nil {
+	if m.runtime == nil {
 		return func() tea.Msg {
 			return openCommandFinishedMsg{err: fmt.Errorf("open command is unavailable")}
 		}
 	}
-	path, cmd, err := m.svc.PrepareOpenCommand(line)
+	path, cmd, err := m.runtime.PrepareOpenCommand(line)
 	if err != nil {
 		return func() tea.Msg {
 			return openCommandFinishedMsg{err: err}
@@ -42,7 +42,7 @@ func (m *model) handleOpenCommandFinished(msg openCommandFinishedMsg) tea.Cmd {
 	m.clearProviderRetryStatus()
 	m.appendLocalCommandEcho(m.popLocalSubmitCommand())
 	role := "info"
-	text := app.OpenCommandSuccessText(msg.path)
+	text := protocol.OpenCommandSuccessText(msg.path)
 	if msg.err != nil {
 		role = "error"
 		text = msg.err.Error()

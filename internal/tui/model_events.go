@@ -7,14 +7,13 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/usewhale/whale/internal/app"
-	"github.com/usewhale/whale/internal/app/service"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
 const providerRetryStatusMinimumTTL = 250 * time.Millisecond
 
-func (m *model) setProviderRetryStatus(ev service.Event) {
+func (m *model) setProviderRetryStatus(ev protocol.Event) {
 	m.providerRetryStatus = strings.TrimSpace(ev.Text)
 	ttl := providerRetryStatusMinimumTTL
 	if ev.Metadata != nil {
@@ -52,95 +51,84 @@ func metadataBool(v any) bool {
 	return ok && b
 }
 
-func (m *model) handleServiceEvent(ev service.Event) (tea.Cmd, bool, bool) {
+func (m *model) handleServiceEvent(ev protocol.Event) (tea.Cmd, bool, bool) {
 	if ev.AutoAcceptKnown {
 		m.autoAccept = ev.AutoAccept
 	}
+	if action, ok := uiActionFromServiceEvent(ev); ok {
+		return m.handleUIAction(action)
+	}
 	switch ev.Kind {
-	case service.EventAssistantDelta:
+	case protocol.EventAssistantDelta:
 		m.handleAssistantDeltaEvent(ev)
-	case service.EventReasoningDelta:
+	case protocol.EventReasoningDelta:
 		m.handleReasoningDeltaEvent(ev)
-	case service.EventPlanDelta:
+	case protocol.EventPlanDelta:
 		m.handlePlanDeltaEvent(ev)
-	case service.EventPlanCompleted:
+	case protocol.EventPlanCompleted:
 		m.handlePlanCompletedEvent(ev)
-	case service.EventPlanUpdate:
+	case protocol.EventPlanUpdate:
 		m.handlePlanUpdateEvent(ev)
-	case service.EventProviderRetry:
+	case protocol.EventProviderRetry:
 		m.handleProviderRetryEvent(ev)
-	case service.EventInfo:
+	case protocol.EventInfo:
 		m.handleInfoEvent(ev)
-	case service.EventError:
+	case protocol.EventError:
 		m.handleErrorEvent(ev)
-	case service.EventLocalSubmitResult:
+	case protocol.EventLocalSubmitResult:
 		m.handleLocalSubmitResultEvent(ev)
-	case service.EventDiffResult:
+	case protocol.EventDiffResult:
 		m.handleDiffResultEvent(ev)
-	case service.EventBtwStarted:
+	case protocol.EventBtwStarted:
 		m.handleBtwStartedEvent(ev)
-	case service.EventBtwDelta:
+	case protocol.EventBtwDelta:
 		m.handleBtwDeltaEvent(ev)
-	case service.EventBtwDone:
+	case protocol.EventBtwDone:
 		m.handleBtwDoneEvent(ev)
-	case service.EventBtwError:
+	case protocol.EventBtwError:
 		m.handleBtwErrorEvent(ev)
-	case service.EventToolCall:
+	case protocol.EventToolCall:
 		m.handleToolCallEvent(ev)
-	case service.EventToolResult:
+	case protocol.EventToolResult:
 		return m.handleToolResultEvent(ev), false, false
-	case service.EventTaskStarted:
+	case protocol.EventTaskStarted:
 		m.handleTaskStartedEvent(ev)
-	case service.EventTaskProgress:
+	case protocol.EventTaskProgress:
 		m.handleTaskProgressEvent(ev)
-	case service.EventTaskCompleted:
+	case protocol.EventTaskCompleted:
 		m.handleTaskCompletedEvent(ev)
-	case service.EventMCPStatus:
+	case protocol.EventMCPStatus:
 		m.handleMCPStatusEvent(ev)
-	case service.EventMCPComplete:
+	case protocol.EventMCPComplete:
 		m.handleMCPCompleteEvent(ev)
-	case service.EventApprovalRequired:
+	case protocol.EventApprovalRequired:
 		m.handleApprovalRequiredEvent(ev)
-	case service.EventUserInputRequired:
+	case protocol.EventUserInputRequired:
 		m.handleUserInputRequiredEvent(ev)
-	case service.EventSessionsListed:
+	case protocol.EventSessionsListed:
 		m.handleSessionsListedEvent(ev)
-	case service.EventLocalSubmitDone:
+	case protocol.EventLocalSubmitDone:
 		m.clearProviderRetryStatus()
 		return m.finishLocalSubmit(), false, false
-	case service.EventTurnDone:
+	case protocol.EventTurnDone:
 		m.clearProviderRetryStatus()
 		return m.handleTurnDone(ev), false, false
-	case service.EventModelPicker:
-		m.handleModelPickerEvent(ev)
-	case service.EventPermissionsMenu:
-		m.handlePermissionsMenuEvent(ev)
-	case service.EventSkillLoaded:
+	case protocol.EventSkillLoaded:
 		m.handleSkillLoadedEvent(ev)
-	case service.EventSkillsMenu:
-		m.handleSkillsMenuEvent(ev)
-	case service.EventSkillsManager:
-		m.handleSkillsManagerEvent(ev)
-	case service.EventPluginsManager:
-		m.handlePluginsManagerEvent(ev)
-	case service.EventReviewMenu:
-		m.handleReviewMenuEvent(ev)
-	case service.EventViewModeChanged:
+	case protocol.EventViewModeChanged:
 		return m.handleViewModeChangedEvent(ev), false, false
-	case service.EventWorktreeExitPrompt:
+	case protocol.EventWorktreeExitPrompt:
 		m.handleWorktreeExitPromptEvent(ev)
-	case service.EventClearScreen:
-		return m.handleClearScreenEvent(), false, true
-	case service.EventSessionHydrated:
+	case protocol.EventSessionHydrated:
 		return m.handleSessionHydratedEvent(ev), false, false
-	case service.EventExitRequested:
+	case protocol.EventExitRequested:
 		m.handleExitRequestedEvent()
 		return nil, true, false
 	}
 	return nil, false, false
 }
 
-func (m *model) handleServiceEvents(events []service.Event) (tea.Cmd, bool, bool) {
+func (m *model) handleServiceEvents(events []protocol.Event) (tea.Cmd, bool, bool) {
 	cmds := make([]tea.Cmd, 0, len(events))
 	for _, ev := range events {
 		cmd, quit, direct := m.handleServiceEvent(ev)
@@ -154,7 +142,7 @@ func (m *model) handleServiceEvents(events []service.Event) (tea.Cmd, bool, bool
 	return tea.Sequence(cmds...), false, false
 }
 
-func (m *model) handleTurnDone(ev service.Event) tea.Cmd {
+func (m *model) handleTurnDone(ev protocol.Event) tea.Cmd {
 	wasBusy := m.busy
 	wasStopping := m.stopping
 	wasFrozen := m.viewportFrozen
@@ -173,18 +161,28 @@ func (m *model) handleTurnDone(ev service.Event) tea.Cmd {
 	if !wasStopping {
 		m.markNoFinalAnswerIfNeeded()
 	}
+	// Preserve the user's scroll position: if they scrolled up mid-turn (frozen
+	// viewport, followTail cleared) we deliberately do NOT yank them back to the
+	// tail when the turn completes.
 	m.commitLiveTranscript(reconciledAssistant && !wasFrozen)
 	m.appendTurnDurationNotice(wasBusy, wasStopping, turnDuration)
 	if wasFrozen {
 		m.unfreezeChatViewport()
 		m.refreshViewportContentFollow(false)
 	}
+	// ...but always emit the completed turn into the terminal's native
+	// scrollback, even when scrolled up. The normal flush in handleServiceUpdate
+	// is gated on followTail/!frozen and would otherwise defer this until the
+	// next keystroke, leaving the final answer hidden (the "看起来突然停下来"
+	// symptom). Flushing here keeps the in-app position untouched while making
+	// the finished answer immediately reachable via terminal scroll.
+	turnScrollbackCmd := m.flushCompletedTurnToNativeScrollbackCmd()
 	m.addLog(logEntry{Kind: "turn_done", Source: "assistant", Summary: truncateLine(ev.LastResponse, 120), Raw: ev.LastResponse})
 	m.status = "ready"
 	queuedTurnStarted := false
 	queuedRestored := false
 	shouldOpenPlanPicker := wasBusy && !wasBlockingModal && m.chatMode == "plan" && m.sawPlanThisTurn && m.mode == modeChat
-	var eventCmd tea.Cmd
+	eventCmd := turnScrollbackCmd
 	pendingWindowsInput := m.snapshotWindowsBusyInput()
 	if wasStopping {
 		m.deferredPlanPicker = false
@@ -198,14 +196,25 @@ func (m *model) handleTurnDone(ev service.Event) tea.Cmd {
 		m.status = "wait for command to finish"
 	} else if next, ok := m.popQueuedPrompt(); ok {
 		m.deferredPlanPicker = false
-		eventCmd = tea.Batch(m.submitPromptWithBinding(next.Text, next.SkillBinding), m.restoreWindowsBusyInput(pendingWindowsInput))
+		eventCmd = tea.Batch(eventCmd, m.submitPromptWithBinding(next.Text, next.SkillBinding), m.restoreWindowsBusyInput(pendingWindowsInput))
 		queuedTurnStarted = true
 	}
 	if !queuedTurnStarted && !queuedRestored && m.localSubmitPending == 0 && !m.hasPendingWindowsBusyInput() && shouldOpenPlanPicker {
 		m.openPlanImplementationPicker()
 	}
+	// Desktop notification: only if user has been idle for 6+ seconds.
+	m.maybeNotifyTurnDone(ev.LastResponse)
 	m.resetTurnVisibility()
 	return eventCmd
+}
+
+// maybeNotifyTurnDone sends a desktop notification when a turn completes.
+func (m *model) maybeNotifyTurnDone(lastResponse string) {
+	if m.notifier == nil {
+		return
+	}
+	summary := truncateLine(lastResponse, 120)
+	m.notifier.SendTurnDone(summary)
 }
 
 const turnDurationNoticeThreshold = 30 * time.Second
@@ -260,7 +269,7 @@ func (m *model) openPlanImplementationPicker() {
 	m.planImplementation.index = 0
 }
 
-func (m *model) appendLocalSubmitResult(role, text string, localResult *app.LocalResult) {
+func (m *model) appendLocalSubmitResult(role, text string, localResult *protocol.LocalResult) {
 	if m.busy {
 		if localResult != nil {
 			m.appendLiveLocalResult(localResult)
@@ -330,10 +339,10 @@ func (m *model) resetLiveAttemptForProviderRetry() {
 	m.refreshLiveViewportContent()
 }
 
-func isAgentTurnDone(ev service.Event) bool {
+func isAgentTurnDone(ev protocol.Event) bool {
 	if ev.Metadata == nil {
 		return false
 	}
-	agentTurn, ok := ev.Metadata[service.EventMetadataAgentTurn].(bool)
+	agentTurn, ok := ev.Metadata[protocol.EventMetadataAgentTurn].(bool)
 	return ok && agentTurn
 }

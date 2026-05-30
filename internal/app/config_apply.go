@@ -1,0 +1,262 @@
+package app
+
+import (
+	"fmt"
+	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/policy"
+	"github.com/usewhale/whale/internal/store"
+	"strings"
+	"time"
+)
+
+func ApplyLoadedConfig(cfg *Config, loaded LoadedConfig) error {
+	if err := ApplyFileConfig(cfg, loaded.Global); err != nil {
+		return err
+	}
+	if err := ApplyFileConfig(cfg, loaded.Project); err != nil {
+		return err
+	}
+	if err := ApplyFileConfig(cfg, loaded.ProjectLocal); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ApplyFileConfig(cfg *Config, file FileConfig) error {
+	if strings.TrimSpace(file.Model) != "" {
+		cfg.Model = strings.TrimSpace(file.Model)
+	}
+	if strings.TrimSpace(file.ReasoningEffort) != "" {
+		cfg.ReasoningEffort = strings.TrimSpace(file.ReasoningEffort)
+	}
+	if file.ThinkingEnabled != nil {
+		cfg.ThinkingEnabled = *file.ThinkingEnabled
+	}
+	if strings.TrimSpace(file.UI.ViewMode) != "" {
+		mode, err := NormalizeViewMode(file.UI.ViewMode)
+		if err != nil {
+			return err
+		}
+		cfg.ViewMode = mode
+	}
+	if file.UI.ShowReasoning != nil {
+		cfg.ShowReasoning = *file.UI.ShowReasoning
+	}
+	if file.UI.CheckForUpdateOnStartup != nil {
+		cfg.CheckForUpdateOnStartup = *file.UI.CheckForUpdateOnStartup
+	}
+	if err := applyPermissionsConfig(cfg, file.Permissions); err != nil {
+		return err
+	}
+	if file.Budget.SessionLimitUSD != nil {
+		cfg.BudgetWarningUSD = *file.Budget.SessionLimitUSD
+	}
+	if strings.TrimSpace(file.MCP.ConfigPath) != "" {
+		cfg.MCPConfigPath = expandUserPath(file.MCP.ConfigPath)
+	}
+	if strings.TrimSpace(file.API.BaseURL) != "" {
+		cfg.APIBaseURL = strings.TrimRight(strings.TrimSpace(file.API.BaseURL), "/")
+	}
+	if file.Retry.MaxAttempts != nil {
+		if *file.Retry.MaxAttempts < 0 {
+			return fmt.Errorf("invalid retry.max_attempts: must be 0 or greater")
+		}
+		cfg.RetryMaxAttempts = *file.Retry.MaxAttempts
+		cfg.RetryMaxAttemptsExplicit = true
+	}
+	if file.Retry.StreamMaxAttempts != nil {
+		if *file.Retry.StreamMaxAttempts <= 0 {
+			return fmt.Errorf("invalid retry.stream_max_attempts: must be greater than 0")
+		}
+		cfg.RetryStreamMaxAttempts = *file.Retry.StreamMaxAttempts
+	}
+	if strings.TrimSpace(file.Retry.StreamIdleTimeout) != "" {
+		d, err := time.ParseDuration(strings.TrimSpace(file.Retry.StreamIdleTimeout))
+		if err != nil {
+			return fmt.Errorf("invalid retry.stream_idle_timeout: %w", err)
+		}
+		if d <= 0 {
+			return fmt.Errorf("invalid retry.stream_idle_timeout: must be greater than 0")
+		}
+		cfg.RetryStreamIdleTimeout = d
+	}
+	if strings.TrimSpace(file.Retry.MaxDelay) != "" {
+		d, err := time.ParseDuration(strings.TrimSpace(file.Retry.MaxDelay))
+		if err != nil {
+			return fmt.Errorf("invalid retry.max_delay: %w", err)
+		}
+		if d <= 0 {
+			return fmt.Errorf("invalid retry.max_delay: must be greater than 0")
+		}
+		cfg.RetryMaxDelay = d
+	}
+	if file.Tasks.MaxParallelSubagents != nil {
+		if *file.Tasks.MaxParallelSubagents <= 0 {
+			return fmt.Errorf("invalid tasks.max_parallel_subagents: must be greater than 0")
+		}
+		cfg.MaxParallelSubagents = *file.Tasks.MaxParallelSubagents
+	}
+	if file.Context.AutoCompact != nil {
+		cfg.AutoCompact = *file.Context.AutoCompact
+	}
+	if file.Context.CompactThreshold != nil {
+		cfg.AutoCompactThreshold = *file.Context.CompactThreshold
+	}
+	if file.ProjectDoc.Enabled != nil {
+		cfg.MemoryEnabled = *file.ProjectDoc.Enabled
+	}
+	if file.ProjectDoc.MaxBytes != nil {
+		cfg.MemoryMaxChars = *file.ProjectDoc.MaxBytes
+	}
+	if len(file.ProjectDoc.FallbackFilenames) > 0 {
+		cfg.MemoryFileOrder = strings.Join(trimList(file.ProjectDoc.FallbackFilenames), ",")
+	}
+	if len(file.Skills.Disabled) > 0 {
+		cfg.SkillsDisabled = mergeNames(cfg.SkillsDisabled, file.Skills.Disabled)
+	}
+	if len(file.Skills.Enabled) > 0 {
+		cfg.SkillsDisabled = removeNames(cfg.SkillsDisabled, file.Skills.Enabled)
+	}
+	if len(file.Plugins.Disabled) > 0 {
+		cfg.PluginsDisabled = mergeNames(cfg.PluginsDisabled, file.Plugins.Disabled)
+	}
+	if len(file.Plugins.Enabled) > 0 {
+		cfg.PluginsDisabled = removeNames(cfg.PluginsDisabled, file.Plugins.Enabled)
+	}
+	return nil
+}
+
+func LoadAndApplyConfig(cfg Config, workspaceRoot string) (Config, error) {
+	base := DefaultConfig()
+	base.DataDir = core.FirstNonEmpty(strings.TrimSpace(cfg.DataDir), store.DefaultDataDir())
+
+	loaded, err := LoadConfigFiles(base.DataDir, workspaceRoot)
+	if err != nil {
+		return Config{}, err
+	}
+	if err := ApplyLoadedConfig(&base, loaded); err != nil {
+		return Config{}, err
+	}
+	overlayExplicitConfig(&base, cfg)
+	base.ConfigLoaded = true
+	return base, nil
+}
+
+func overlayExplicitConfig(dst *Config, src Config) {
+	def := DefaultConfig()
+	dst.DataDir = core.FirstNonEmpty(strings.TrimSpace(src.DataDir), dst.DataDir)
+	if src.ModelExplicit || (strings.TrimSpace(src.Model) != "" && src.Model != def.Model) {
+		dst.Model = src.Model
+		dst.ModelExplicit = src.ModelExplicit
+	}
+	if src.PermissionDefault != "" && src.PermissionDefault != def.PermissionDefault {
+		dst.PermissionDefault = src.PermissionDefault
+	}
+	if len(src.PermissionRules) > 0 && !permissionRulesEqual(src.PermissionRules, def.PermissionRules) {
+		dst.PermissionRules = append([]policy.PermissionRule{}, src.PermissionRules...)
+	}
+	if src.AutoAcceptPermissions != def.AutoAcceptPermissions {
+		dst.AutoAcceptPermissions = src.AutoAcceptPermissions
+	}
+	if src.AutoCompact != def.AutoCompact {
+		dst.AutoCompact = src.AutoCompact
+	}
+	if src.AutoCompactThreshold != def.AutoCompactThreshold {
+		dst.AutoCompactThreshold = src.AutoCompactThreshold
+	}
+	if src.MemoryEnabled != def.MemoryEnabled {
+		dst.MemoryEnabled = src.MemoryEnabled
+	}
+	if src.MemoryMaxChars != 0 && src.MemoryMaxChars != def.MemoryMaxChars {
+		dst.MemoryMaxChars = src.MemoryMaxChars
+	}
+	if strings.TrimSpace(src.MemoryFileOrder) != "" && src.MemoryFileOrder != def.MemoryFileOrder {
+		dst.MemoryFileOrder = src.MemoryFileOrder
+	}
+	if src.BudgetWarningUSD != def.BudgetWarningUSD {
+		dst.BudgetWarningUSD = src.BudgetWarningUSD
+	}
+	if strings.TrimSpace(src.ReasoningEffort) != "" && src.ReasoningEffort != def.ReasoningEffort {
+		dst.ReasoningEffort = src.ReasoningEffort
+	}
+	if src.ThinkingEnabled != def.ThinkingEnabled {
+		dst.ThinkingEnabled = src.ThinkingEnabled
+	}
+	if src.CheckForUpdateOnStartup != def.CheckForUpdateOnStartup {
+		dst.CheckForUpdateOnStartup = src.CheckForUpdateOnStartup
+	}
+	if strings.TrimSpace(src.ViewMode) != "" && src.ViewMode != def.ViewMode {
+		dst.ViewMode = src.ViewMode
+	}
+	if src.ShowReasoning != def.ShowReasoning {
+		dst.ShowReasoning = src.ShowReasoning
+	}
+	if src.RetryMaxAttemptsExplicit || (src.RetryMaxAttempts != 0 && src.RetryMaxAttempts != def.RetryMaxAttempts) {
+		dst.RetryMaxAttempts = src.RetryMaxAttempts
+		dst.RetryMaxAttemptsExplicit = src.RetryMaxAttemptsExplicit
+	}
+	if src.RetryStreamMaxAttempts != 0 && src.RetryStreamMaxAttempts != def.RetryStreamMaxAttempts {
+		dst.RetryStreamMaxAttempts = src.RetryStreamMaxAttempts
+	}
+	if src.RetryStreamIdleTimeout != 0 && src.RetryStreamIdleTimeout != def.RetryStreamIdleTimeout {
+		dst.RetryStreamIdleTimeout = src.RetryStreamIdleTimeout
+	}
+	if src.RetryMaxDelay != 0 && src.RetryMaxDelay != def.RetryMaxDelay {
+		dst.RetryMaxDelay = src.RetryMaxDelay
+	}
+	if src.MaxParallelSubagents != 0 && src.MaxParallelSubagents != def.MaxParallelSubagents {
+		dst.MaxParallelSubagents = src.MaxParallelSubagents
+	}
+	if strings.TrimSpace(src.MCPConfigPath) != "" {
+		dst.MCPConfigPath = src.MCPConfigPath
+	}
+	if strings.TrimSpace(src.APIBaseURL) != "" {
+		dst.APIBaseURL = strings.TrimRight(strings.TrimSpace(src.APIBaseURL), "/")
+	}
+	if len(src.SkillsDisabled) > 0 {
+		dst.SkillsDisabled = trimList(src.SkillsDisabled)
+	}
+	if len(src.PluginsDisabled) > 0 {
+		dst.PluginsDisabled = trimList(src.PluginsDisabled)
+	}
+}
+
+func permissionRulesEqual(a, b []policy.PermissionRule) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func applyPermissionsConfig(cfg *Config, file FilePermissionsConfig) error {
+	if strings.TrimSpace(file.Default) != "" {
+		action, err := policy.ParsePermissionAction(file.Default)
+		if err != nil {
+			return fmt.Errorf("invalid permissions.default: %w", err)
+		}
+		cfg.PermissionDefault = action
+	}
+	if file.AutoAccept != nil {
+		cfg.AutoAcceptPermissions = *file.AutoAccept
+	}
+	rules, err := policy.RulesFromConfig(policy.PermissionConfig{
+		Read:              file.Read,
+		Edit:              file.Edit,
+		Shell:             file.Shell,
+		ExternalDirectory: file.ExternalDirectory,
+		MCP:               file.MCP,
+		Memory:            file.Memory,
+		Task:              file.Task,
+		MutatingTool:      file.MutatingTool,
+	})
+	if err != nil {
+		return fmt.Errorf("invalid permissions: %w", err)
+	}
+	cfg.PermissionRules = append(cfg.PermissionRules, rules...)
+	return nil
+}

@@ -3,8 +3,7 @@ package render
 import (
 	"strings"
 
-	"github.com/usewhale/whale/internal/app"
-	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 )
 
 type MessageKind string
@@ -32,11 +31,11 @@ type UIMessage struct {
 	ToolName      string
 	ToolIdentity  string
 	Streaming     bool
-	Local         *app.LocalResult
+	Local         *protocol.LocalResult
 	FocusSummary  *FocusSummary
 	Notice        *SystemNotice
 	FullReasoning bool
-	SubagentSteps []core.SubagentStep
+	SubagentSteps []protocol.ProgressStep
 }
 
 type SystemNotice struct {
@@ -231,7 +230,7 @@ func (a *Assembler) AddSubagent(toolCallID, text string) {
 	a.AddSubagentWithSteps(toolCallID, text, nil)
 }
 
-func (a *Assembler) AddSubagentWithSteps(toolCallID, text string, steps []core.SubagentStep) {
+func (a *Assembler) AddSubagentWithSteps(toolCallID, text string, steps []protocol.ProgressStep) {
 	t := strings.TrimSpace(strings.TrimRight(text, "\n"))
 	if t == "" {
 		return
@@ -249,7 +248,7 @@ func (a *Assembler) AddSubagentWithSteps(toolCallID, text string, steps []core.S
 	}
 }
 
-func (a *Assembler) UpdateSubagentProgress(toolCallID, text string, role string, steps []core.SubagentStep) {
+func (a *Assembler) UpdateSubagentProgress(toolCallID, text string, role string, steps []protocol.ProgressStep) {
 	if toolCallID == "" {
 		return
 	}
@@ -304,7 +303,7 @@ func (a *Assembler) AddStatus(text string) {
 	})
 }
 
-func (a *Assembler) AddLocalResult(result *app.LocalResult) {
+func (a *Assembler) AddLocalResult(result *protocol.LocalResult) {
 	if result == nil || strings.TrimSpace(result.Kind) == "" {
 		return
 	}

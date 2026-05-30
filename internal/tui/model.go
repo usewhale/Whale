@@ -11,11 +11,10 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/usewhale/whale/internal/app"
-	appcommands "github.com/usewhale/whale/internal/app/commands"
-	"github.com/usewhale/whale/internal/app/service"
-	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/defaults"
+	"github.com/usewhale/whale/internal/notification"
+	appcommands "github.com/usewhale/whale/internal/runtime/commands"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	"github.com/usewhale/whale/internal/tui/composer"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
@@ -50,8 +49,8 @@ const (
 )
 
 type model struct {
-	svc                    *service.Service
-	dispatch               func(service.Intent)
+	runtime                Runtime
+	dispatch               func(protocol.Intent)
 	input                  composer.Composer
 	viewport               viewport.Model
 	chat                   chatList
@@ -63,6 +62,8 @@ type model struct {
 	startupHeaderOnce      *bool
 	sizeMsgReceived        bool
 	ephemeralMessages      []tuirender.UIMessage
+	lastUserInput          time.Time
+	notifier               *notification.Notifier
 	logs                   []logEntry
 	diffs                  []diffEntry
 	width                  int
@@ -115,10 +116,10 @@ type model struct {
 	userInput      struct {
 		toolCallID     string
 		toolName       string
-		questions      []core.UserInputQuestion
+		questions      []protocol.UserInputQuestion
 		index          int
 		selectedOption int
-		answers        []core.UserInputAnswer
+		answers        []protocol.UserInputAnswer
 	}
 	palette struct {
 		actions  []paletteAction
@@ -147,7 +148,7 @@ type model struct {
 		searching bool
 		cancel    func()
 	}
-	skillBinding *app.SkillBinding
+	skillBinding *protocol.SkillBinding
 	skillsMenu   struct {
 		selected int
 	}
@@ -184,7 +185,7 @@ type model struct {
 		selected   int
 	}
 	worktreeExit struct {
-		summary  app.WorktreeExitSummary
+		summary  protocol.WorktreeExitSummary
 		selected int
 	}
 	planImplementation struct {
@@ -221,7 +222,7 @@ type modelViewCache struct {
 
 type queuedPrompt struct {
 	Text         string
-	SkillBinding *app.SkillBinding
+	SkillBinding *protocol.SkillBinding
 }
 
 type paletteAction struct {
@@ -261,8 +262,8 @@ type skillManagerItem struct {
 	Toggleable          bool
 }
 
-type svcMsg service.Event
-type svcBatchMsg []service.Event
+type svcMsg protocol.Event
+type svcBatchMsg []protocol.Event
 
 type errMsg struct{ err error }
 type quitTimeoutMsg struct{}
@@ -270,7 +271,7 @@ type busyTickMsg struct{}
 
 const serviceDeltaFrame = 100 * time.Millisecond
 
-func newModel(svc *service.Service, modelName, effort, thinking string) model {
+func newModel(rt Runtime, modelName, effort, thinking string) model {
 	filter := textinput.New()
 	filter.Placeholder = "filter logs (press /)"
 	filter.Prompt = "/"
@@ -285,14 +286,14 @@ func newModel(svc *service.Service, modelName, effort, thinking string) model {
 	if thinking == "" {
 		thinking = "on"
 	}
-	viewMode := app.ViewModeDefault
+	viewMode := protocol.ViewModeDefault
 	showReasoning := false
-	if svc != nil {
-		viewMode = svc.ViewMode()
-		showReasoning = svc.ShowReasoning()
+	if rt != nil {
+		viewMode = rt.ViewMode()
+		showReasoning = rt.ShowReasoning()
 	}
 	m := model{
-		svc:               svc,
+		runtime:           rt,
 		input:             composer.New(),
 		viewport:          vp,
 		chat:              newChatList(),
@@ -312,6 +313,7 @@ func newModel(svc *service.Service, modelName, effort, thinking string) model {
 		viewMode:          viewMode,
 		showReasoning:     showReasoning,
 		chatMode:          "agent",
+		notifier:          notification.New(),
 		product:           "Whale",
 		version:           resolveVersion(),
 		cwd:               resolveWorkingDirectory(),
@@ -319,23 +321,23 @@ func newModel(svc *service.Service, modelName, effort, thinking string) model {
 		historyIndex:      -1,
 		viewCache:         &modelViewCache{},
 	}
-	if svc != nil {
-		m.dispatch = svc.Dispatch
+	if rt != nil {
+		m.dispatch = rt.Dispatch
 	}
 	m.slash.all = appcommands.DefaultSlashCommands()
 	m.resetTranscript()
 	return m
 }
 
-func (m *model) dispatchIntent(in service.Intent) {
+func (m *model) dispatchIntent(in protocol.Intent) {
 	if m.dispatch != nil {
 		m.dispatch(in)
 	}
 }
 
-func waitEventCmd(svc *service.Service) tea.Cmd {
+func waitEventCmd(rt Runtime) tea.Cmd {
 	return func() tea.Msg {
-		ev := <-svc.Events()
+		ev := <-rt.Events()
 		if !shouldBatchServiceEvent(ev) {
 			return svcMsg(ev)
 		}
@@ -344,7 +346,7 @@ func waitEventCmd(svc *service.Service) tea.Cmd {
 		defer timer.Stop()
 		for {
 			select {
-			case next := <-svc.Events():
+			case next := <-rt.Events():
 				events = appendBatchedServiceEvent(events, next)
 				if !shouldBatchServiceEvent(next) {
 					return svcBatchMsg(events)
@@ -356,7 +358,7 @@ func waitEventCmd(svc *service.Service) tea.Cmd {
 	}
 }
 
-func appendBatchedServiceEvent(events []service.Event, ev service.Event) []service.Event {
+func appendBatchedServiceEvent(events []protocol.Event, ev protocol.Event) []protocol.Event {
 	if shouldBatchServiceEvent(ev) && len(events) > 0 {
 		last := &events[len(events)-1]
 		if last.Kind == ev.Kind {
@@ -367,9 +369,9 @@ func appendBatchedServiceEvent(events []service.Event, ev service.Event) []servi
 	return append(events, ev)
 }
 
-func shouldBatchServiceEvent(ev service.Event) bool {
+func shouldBatchServiceEvent(ev protocol.Event) bool {
 	switch ev.Kind {
-	case service.EventAssistantDelta, service.EventReasoningDelta, service.EventPlanDelta:
+	case protocol.EventAssistantDelta, protocol.EventReasoningDelta, protocol.EventPlanDelta:
 		return true
 	default:
 		return false
@@ -403,7 +405,7 @@ func clearScreenCmdForOS(goos string, out io.Writer) tea.Cmd {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(waitEventCmd(m.svc), detectGitBranchCmd(m.cwdPath))
+	return tea.Batch(waitEventCmd(m.runtime), detectGitBranchCmd(m.cwdPath))
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -411,9 +413,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		return m.handleWindowSizeMsg(msg)
 	case svcMsg:
-		return m.handleServiceUpdate([]service.Event{service.Event(msg)})
+		return m.handleServiceUpdate([]protocol.Event{protocol.Event(msg)})
 	case svcBatchMsg:
-		return m.handleServiceUpdate([]service.Event(msg))
+		return m.handleServiceUpdate([]protocol.Event(msg))
 	case windowsDeferredEnterMsg:
 		return m, m.sequenceCmds(m.handleWindowsDeferredEnter(msg))
 	case windowsPendingEnterTailMsg:
@@ -512,7 +514,7 @@ func (m model) handleWindowSizeMsg(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	return m, m.sequenceCmds(headerCmd, scrollbackReplayCmd)
 }
 
-func (m model) handleServiceUpdate(events []service.Event) (tea.Model, tea.Cmd) {
+func (m model) handleServiceUpdate(events []protocol.Event) (tea.Model, tea.Cmd) {
 	eventCmd, quit, direct := m.handleServiceEvents(events)
 	if quit {
 		return m, m.sequenceCmds(tea.Quit)
@@ -522,10 +524,11 @@ func (m model) handleServiceUpdate(events []service.Event) (tea.Model, tea.Cmd) 
 	}
 	headerCmd := m.startupHeaderPrintCmd()
 	scrollbackCmd := m.flushNativeScrollbackCmd()
-	return m, m.sequenceCmds(eventCmd, headerCmd, scrollbackCmd, waitEventCmd(m.svc))
+	return m, m.sequenceCmds(eventCmd, headerCmd, scrollbackCmd, waitEventCmd(m.runtime))
 }
 
 func (m *model) handleUpdateKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
+	m.lastUserInput = time.Now()
 	if !msg.Paste && m.consumeMouseCSIFragment(msg) {
 		m.refreshViewportContent()
 		return nil, false, true

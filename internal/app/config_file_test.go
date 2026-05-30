@@ -374,6 +374,7 @@ func TestApplyFileConfigUsesGroupedConfig(t *testing.T) {
 		Retry: FileRetryConfig{
 			MaxAttempts:       intPtr(5),
 			StreamMaxAttempts: intPtr(7),
+			StreamIdleTimeout: "30s",
 			MaxDelay:          "45s",
 		},
 		Budget: FileBudgetConfig{SessionLimitUSD: &budgetLimit},
@@ -400,7 +401,7 @@ func TestApplyFileConfigUsesGroupedConfig(t *testing.T) {
 	if cfg.APIBaseURL != "https://dashscope.aliyuncs.com/compatible-mode/v1" {
 		t.Fatalf("api base url not applied: %s", cfg.APIBaseURL)
 	}
-	if cfg.RetryMaxAttempts != 5 || cfg.RetryStreamMaxAttempts != 7 || cfg.RetryMaxDelay != 45*time.Second {
+	if cfg.RetryMaxAttempts != 5 || cfg.RetryStreamMaxAttempts != 7 || cfg.RetryStreamIdleTimeout != 30*time.Second || cfg.RetryMaxDelay != 45*time.Second {
 		t.Fatalf("retry not applied: %+v", cfg)
 	}
 	if cfg.AutoCompact || cfg.AutoCompactThreshold != compactThreshold {
@@ -501,6 +502,9 @@ func TestApplyFileConfigRejectsInvalidRetryConfig(t *testing.T) {
 	}
 	if err := ApplyFileConfig(&cfg, FileConfig{Retry: FileRetryConfig{StreamMaxAttempts: intPtr(0)}}); err == nil {
 		t.Fatal("expected invalid stream_max_attempts error")
+	}
+	if err := ApplyFileConfig(&cfg, FileConfig{Retry: FileRetryConfig{StreamIdleTimeout: "0s"}}); err == nil {
+		t.Fatal("expected invalid stream_idle_timeout error")
 	}
 	if err := ApplyFileConfig(&cfg, FileConfig{Retry: FileRetryConfig{MaxDelay: "soon"}}); err == nil {
 		t.Fatal("expected invalid max_delay error")

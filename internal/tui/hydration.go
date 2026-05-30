@@ -5,19 +5,20 @@ import (
 	"strings"
 
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
 const maxHydratedVisibleMessages = 8
 
-func (m *model) hydrateSessionMessages(msgs []core.Message) {
+func (m *model) hydrateSessionMessages(msgs []protocol.Message) {
 	for _, msg := range recentHydrationMessages(msgs, maxHydratedVisibleMessages) {
 		switch msg.Role {
-		case core.RoleUser:
+		case string(core.RoleUser):
 			if strings.TrimSpace(msg.Text) != "" && !msg.Hidden {
 				m.append("you", msg.Text)
 			}
-		case core.RoleAssistant:
+		case string(core.RoleAssistant):
 			hasVisibleText := strings.TrimSpace(msg.Text) != "" && !isEnvironmentInventoryBlock(msg.Text)
 			if strings.TrimSpace(msg.Reasoning) != "" {
 				m.append("think", msg.Reasoning)
@@ -46,7 +47,7 @@ func (m *model) hydrateSessionMessages(msgs []core.Message) {
 				}
 				m.appendToolCall(tc.ID, tc.Name, summarizeHydratedToolCall(tc))
 			}
-		case core.RoleTool:
+		case string(core.RoleTool):
 			for _, tr := range msg.ToolResults {
 				body := strings.TrimSpace(tr.Content)
 				if body == "" {
@@ -109,7 +110,7 @@ func hydratedPlanUpdateText(body string) (string, bool) {
 	return text, text != ""
 }
 
-func recentHydrationMessages(msgs []core.Message, maxVisible int) []core.Message {
+func recentHydrationMessages(msgs []protocol.Message, maxVisible int) []protocol.Message {
 	if maxVisible <= 0 || len(msgs) == 0 {
 		return nil
 	}
@@ -127,11 +128,11 @@ func recentHydrationMessages(msgs []core.Message, maxVisible int) []core.Message
 	return msgs[start:]
 }
 
-func isVisibleHydrationMessage(msg core.Message) bool {
+func isVisibleHydrationMessage(msg protocol.Message) bool {
 	switch msg.Role {
-	case core.RoleUser:
+	case string(core.RoleUser):
 		return strings.TrimSpace(msg.Text) != "" && !msg.Hidden
-	case core.RoleAssistant:
+	case string(core.RoleAssistant):
 		if strings.TrimSpace(msg.Reasoning) != "" {
 			return true
 		}
@@ -139,7 +140,7 @@ func isVisibleHydrationMessage(msg core.Message) bool {
 			return true
 		}
 		return len(msg.ToolCalls) > 0
-	case core.RoleTool:
+	case string(core.RoleTool):
 		for _, tr := range msg.ToolResults {
 			if strings.TrimSpace(tr.Content) != "" {
 				return true

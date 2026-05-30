@@ -2,99 +2,76 @@ package tools
 
 import (
 	"context"
-	"fmt"
-	"io"
-	"net/http"
-	"net/url"
-	"strings"
+	"encoding/json"
 
 	"github.com/usewhale/whale/internal/core"
-)
-
-const (
-	defaultFetchTimeoutMS = 15000
-	maxFetchTimeoutMS     = 60000
-	maxFetchBytes         = 2 * 1024 * 1024
+	"github.com/usewhale/whale/internal/webfetch"
 )
 
 func (b *Toolset) fetch(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
+	return b.runWebFetch(ctx, call)
+}
+
+func (b *Toolset) runWebFetch(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
 	var in struct {
 		URL       string `json:"url"`
-		Format    string `json:"format"`
+		Prompt    string `json:"prompt"`
 		TimeoutMS int    `json:"timeout_ms"`
 	}
 	if err := decodeInput(call.Input, &in); err != nil {
 		return marshalToolError(call, "invalid_args", err.Error()), nil
 	}
-	u, err := url.Parse(strings.TrimSpace(in.URL))
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return marshalToolError(call, "invalid_args", "valid url is required"), nil
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return marshalToolError(call, "invalid_args", "url scheme must be http or https"), nil
-	}
-
-	format, ok := parseWebFetchFormat(in.Format, webFetchFormatText)
-	if !ok {
-		return marshalToolError(call, "invalid_args", "format must be one of: text, markdown, html"), nil
-	}
-
-	timeoutMS := in.TimeoutMS
-	if timeoutMS <= 0 {
-		timeoutMS = defaultFetchTimeoutMS
-	}
-	if timeoutMS > maxFetchTimeoutMS {
-		timeoutMS = maxFetchTimeoutMS
-	}
-
-	cctx, cancel := context.WithTimeout(ctx, timeDurationMS(timeoutMS))
-	defer cancel()
-	req, err := http.NewRequestWithContext(cctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return marshalToolError(call, "fetch_failed", err.Error()), nil
-	}
-	req.Header.Set("User-Agent", webSearchUserAgent)
-	req.Header.Set("Accept", "*/*")
-	resp, err := b.httpClient.Do(req)
-	if err != nil {
-		return marshalToolError(call, "fetch_failed", err.Error()), nil
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return marshalToolError(call, "fetch_failed", fmt.Sprintf("http %d", resp.StatusCode)), nil
-	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchBytes+1))
-	if err != nil {
-		return marshalToolError(call, "fetch_failed", err.Error()), nil
-	}
-	truncated := false
-	if len(raw) > maxFetchBytes {
-		truncated = true
-		raw = raw[:maxFetchBytes]
-	}
-	body := decodeWebBody(raw, resp.Header.Get("Content-Type"))
-	text := htmlToText(body)
-	content := body
-	switch format {
-	case webFetchFormatText, webFetchFormatMarkdown:
-		content = text
-	case webFetchFormatHTML:
-		content = body
-	}
-	if truncated {
-		content += "\n\n[truncated]"
-	}
-	title := extractHTMLTitle(body)
-	lowContent := detectLowWebContent(u.String(), title, body, text)
-
-	return marshalToolResult(call, map[string]any{
-		"url":                u.String(),
-		"status_code":        resp.StatusCode,
-		"content":            content,
-		"format":             string(format),
-		"truncated":          truncated,
-		"low_content":        lowContent.LowContent,
-		"low_content_reason": lowContent.Reason,
-		"next_steps":         lowContent.NextSteps,
+	b.syncWebFetchClient()
+	result, err := b.webFetchClient.Fetch(ctx, webfetch.Request{
+		URL:       in.URL,
+		Prompt:    in.Prompt,
+		TimeoutMS: in.TimeoutMS,
 	})
+	if err != nil {
+		if fetchErr, ok := err.(*webfetch.Error); ok {
+			return marshalWebFetchError(call, fetchErr), nil
+		}
+		return marshalToolError(call, "fetch_failed", err.Error()), nil
+	}
+	return marshalToolResult(call, webFetchResultData(result))
+}
+
+func webFetchResultData(result webfetch.Result) map[string]any {
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return map[string]any{"content": result.Content}
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return map[string]any{"content": result.Content}
+	}
+	return out
+}
+
+func marshalWebFetchError(call core.ToolCall, err *webfetch.Error) core.ToolResult {
+	data := map[string]any{}
+	if err.Result.URL != "" {
+		data["url"] = err.Result.URL
+	}
+	if err.Result.FinalURL != "" {
+		data["final_url"] = err.Result.FinalURL
+	}
+	if err.Result.StatusCode != 0 {
+		data["status_code"] = err.Result.StatusCode
+		data["code_text"] = err.Result.CodeText
+	}
+	if err.Result.Recovery != nil {
+		data["recovery"] = err.Result.Recovery
+	}
+	content, marshalErr := core.MarshalToolEnvelope(core.ToolEnvelope{
+		OK:      false,
+		Success: false,
+		Code:    err.Code,
+		Message: err.Message,
+		Data:    data,
+	})
+	if marshalErr != nil {
+		return marshalToolError(call, err.Code, err.Message)
+	}
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}
 }

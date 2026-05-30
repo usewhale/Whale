@@ -6,13 +6,13 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/usewhale/whale/internal/app"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	"github.com/usewhale/whale/internal/telemetry"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
 func (m model) focusEnabled() bool {
-	return strings.TrimSpace(m.viewMode) == app.ViewModeFocus
+	return strings.TrimSpace(m.viewMode) == protocol.ViewModeFocus
 }
 
 func (m model) focusMessages(messages []tuirender.UIMessage) []tuirender.UIMessage {
@@ -26,13 +26,13 @@ func (m model) focusMessages(messages []tuirender.UIMessage) []tuirender.UIMessa
 }
 
 func (m *model) toggleFocusView() bool {
-	next := app.ViewModeFocus
+	next := protocol.ViewModeFocus
 	if m.focusEnabled() {
-		next = app.ViewModeDefault
+		next = protocol.ViewModeDefault
 	}
 	m.viewMode = next
 	m.persistViewMode(next)
-	m.setEphemeralInfo(app.ViewModeToggleMessage(next))
+	m.setEphemeralInfo(protocol.ViewModeToggleMessage(next))
 	if !m.busy {
 		m.status = "ready"
 	}
@@ -41,10 +41,10 @@ func (m *model) toggleFocusView() bool {
 }
 
 func (m *model) persistViewMode(mode string) {
-	if m.svc == nil {
+	if m.runtime == nil {
 		return
 	}
-	if err := m.svc.SetViewMode(mode); err != nil {
+	if err := m.runtime.SetViewMode(mode); err != nil {
 		m.append("error", err.Error())
 	}
 }

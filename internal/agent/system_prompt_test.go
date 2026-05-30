@@ -110,6 +110,25 @@ func TestImmutableSystemBlocksDeclareCurrentModeAuthoritatively(t *testing.T) {
 	}
 }
 
+func TestPlanModeInstructionsTreatExecutionRequestsAsPlanning(t *testing.T) {
+	a := NewAgentWithRegistry(nil, nil, core.NewToolRegistry(nil), WithSessionMode(session.ModePlan))
+	joined := strings.Join(a.buildImmutableSystemBlocks(), "\n\n")
+
+	for _, want := range []string{
+		"User intent, imperative wording",
+		"create a branch",
+		"treat it as a request to plan the execution",
+		"Do not run side-effectful commands",
+		"Do not output slash commands such as /agent",
+		"Only the user or UI can switch modes",
+		"<proposed_plan>",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("plan mode instructions missing %q:\n%s", want, joined)
+		}
+	}
+}
+
 func TestImmutableSystemBlocksIncludeFocusOutputStyleOnlyInFocusView(t *testing.T) {
 	a := NewAgentWithRegistry(nil, nil, core.NewToolRegistry(nil))
 

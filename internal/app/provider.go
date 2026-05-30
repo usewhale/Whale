@@ -2,6 +2,7 @@ package app
 
 import (
 	"strings"
+	"time"
 
 	"github.com/usewhale/whale/internal/llm"
 	"github.com/usewhale/whale/internal/llm/deepseek"
@@ -17,6 +18,7 @@ type providerOptions struct {
 	MaxTokens         int
 	RetryPolicy       llmretry.Policy
 	StreamMaxAttempts int
+	StreamIdleTimeout time.Duration
 }
 
 func newDeepSeekProvider(opts providerOptions) (llm.Provider, error) {
@@ -39,6 +41,9 @@ func newDeepSeekProvider(opts providerOptions) (llm.Provider, error) {
 	}
 	if opts.StreamMaxAttempts > 0 {
 		dsOpts = append(dsOpts, deepseek.WithStreamMaxAttempts(opts.StreamMaxAttempts))
+	}
+	if opts.StreamIdleTimeout > 0 {
+		dsOpts = append(dsOpts, deepseek.WithStreamIdleTimeout(opts.StreamIdleTimeout))
 	}
 	if opts.MaxTokens > 0 {
 		dsOpts = append(dsOpts, deepseek.WithMaxTokens(opts.MaxTokens))

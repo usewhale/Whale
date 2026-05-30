@@ -170,7 +170,7 @@ func (s *Service) runTurnWith(start func(context.Context) (<-chan agent.AgentEve
 		case agent.AgentEventTypeUserInputRequired:
 			if ev.ToolCall != nil && ev.UserInputReq != nil {
 				deltas.flushReliable()
-				s.emit(Event{Kind: EventUserInputRequired, ToolCallID: ev.ToolCall.ID, ToolName: ev.ToolCall.Name, Questions: ev.UserInputReq.Questions})
+				s.emit(Event{Kind: EventUserInputRequired, ToolCallID: ev.ToolCall.ID, ToolName: ev.ToolCall.Name, Questions: protocolUserInputQuestions(ev.UserInputReq.Questions)})
 			}
 		case agent.AgentEventTypeUserInputSubmitted, agent.AgentEventTypeUserInputCancelled:
 			deltas.flushReliable()
@@ -251,7 +251,7 @@ func taskActivityEvent(kind EventKind, info *agent.TaskActivityInfo) Event {
 		Status:           info.Status,
 		Count:            info.Count,
 		DurationMS:       info.DurationMS,
-		ProgressMessages: info.ProgressMessages,
+		ProgressMessages: protocolProgressSteps(info.ProgressMessages),
 	}
 }
 

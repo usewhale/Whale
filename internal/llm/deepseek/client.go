@@ -23,6 +23,7 @@ import (
 const (
 	defaultBaseURL               = "https://api.deepseek.com"
 	defaultStreamMaxAttempts     = 6
+	defaultStreamIdleTimeout     = 90 * time.Second
 	maxToolResultReplayTokens    = 2000
 	maxToolResultReplayChars     = 12 * 1024
 	compactedToolResultKeepRunes = 3000
@@ -41,6 +42,7 @@ type Client struct {
 	retryPolicy       llmretry.Policy
 	retrySleeper      llmretry.Sleeper
 	streamMaxAttempts int
+	streamIdleTimeout time.Duration
 }
 
 type Option func(*Client)
@@ -85,6 +87,14 @@ func WithStreamMaxAttempts(v int) Option {
 	}
 }
 
+func WithStreamIdleTimeout(v time.Duration) Option {
+	return func(c *Client) {
+		if v > 0 {
+			c.streamIdleTimeout = v
+		}
+	}
+}
+
 func withRetrySleeper(s llmretry.Sleeper) Option {
 	return func(c *Client) {
 		if s != nil {
@@ -105,6 +115,7 @@ func New(opts ...Option) (*Client, error) {
 		retryPolicy:       llmretry.DefaultPolicy(),
 		retrySleeper:      llmretry.Sleep,
 		streamMaxAttempts: defaultStreamMaxAttempts,
+		streamIdleTimeout: defaultStreamIdleTimeout,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -124,6 +135,9 @@ func New(opts ...Option) (*Client, error) {
 	}
 	if c.streamMaxAttempts <= 0 {
 		c.streamMaxAttempts = defaultStreamMaxAttempts
+	}
+	if c.streamIdleTimeout <= 0 {
+		c.streamIdleTimeout = defaultStreamIdleTimeout
 	}
 	return c, nil
 }
@@ -201,7 +215,7 @@ func (c *Client) streamWithRetries(ctx context.Context, body []byte, msgs []map[
 			continue
 		}
 
-		parseErr := parseSSE(resp.Body, c.model, estimateReasoningReplayTokens(msgs), replayDiag, out)
+		parseErr := parseSSE(resp.Body, c.model, estimateReasoningReplayTokens(msgs), replayDiag, c.streamIdleTimeout, out)
 		_ = resp.Body.Close()
 		if parseErr == nil {
 			return nil
@@ -301,17 +315,114 @@ func shouldRetryStreamError(err error) bool {
 	if err == nil {
 		return false
 	}
+	var progressErr *streamProgressError
+	if errors.As(err, &progressErr) {
+		return false
+	}
+	var terminalErr *streamTerminalError
+	if errors.As(err, &terminalErr) {
+		return false
+	}
 	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
 }
 
-func parseSSE(r io.Reader, model string, replayTokens int, replayDiag deepSeekReplayDiagnostics, out chan<- llm.ProviderEvent) error {
-	reader := bufio.NewReader(r)
+type streamProgressError struct {
+	err error
+}
+
+func (e *streamProgressError) Error() string {
+	return e.err.Error()
+}
+
+func (e *streamProgressError) Unwrap() error {
+	return e.err
+}
+
+type streamStallError struct {
+	timeout time.Duration
+}
+
+func (e *streamStallError) Error() string {
+	return fmt.Sprintf("DeepSeek stream stalled after %s without model output", e.timeout)
+}
+
+type streamTerminalError struct {
+	msg string
+}
+
+func (e *streamTerminalError) Error() string {
+	return e.msg
+}
+
+func streamError(err error, hadProgress bool) error {
+	if err == nil || !hadProgress {
+		return err
+	}
+	return &streamProgressError{err: err}
+}
+
+type sseLineResult struct {
+	line string
+	err  error
+}
+
+func readSSELines(r io.Reader, done <-chan struct{}) <-chan sseLineResult {
+	ch := make(chan sseLineResult, 1)
+	go func() {
+		defer close(ch)
+		reader := bufio.NewReader(r)
+		for {
+			line, err := reader.ReadString('\n')
+			select {
+			case ch <- sseLineResult{line: line, err: err}:
+			case <-done:
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	return ch
+}
+
+func parseSSE(r io.ReadCloser, model string, replayTokens int, replayDiag deepSeekReplayDiagnostics, idleTimeout time.Duration, out chan<- llm.ProviderEvent) error {
+	if idleTimeout <= 0 {
+		idleTimeout = defaultStreamIdleTimeout
+	}
+	done := make(chan struct{})
+	defer close(done)
+	defer r.Close()
+	lines := readSSELines(r, done)
 	var dataLines []string
 	acc := streamAccumulator{callsByIndex: map[int]*toolCallState{}, readyIndices: map[int]bool{}, reasoningReplayTokens: replayTokens, replayDiag: replayDiag}
+	hadProgress := false
+	idleTimer := time.NewTimer(idleTimeout)
+	defer idleTimer.Stop()
+	resetIdleTimer := func() {
+		if !idleTimer.Stop() {
+			select {
+			case <-idleTimer.C:
+			default:
+			}
+		}
+		idleTimer.Reset(idleTimeout)
+	}
 	for {
-		line, err := reader.ReadString('\n')
+		var res sseLineResult
+		var ok bool
+		select {
+		case res, ok = <-lines:
+			if !ok {
+				return streamError(errIncompleteStream, hadProgress)
+			}
+		case <-idleTimer.C:
+			_ = r.Close()
+			return streamError(&streamStallError{timeout: idleTimeout}, hadProgress)
+		}
+		line, err := res.line, res.err
 		if err != nil && !errors.Is(err, io.EOF) {
-			return err
+			return streamError(err, hadProgress)
 		}
 		trimmed := strings.TrimRight(line, "\r\n")
 		if strings.HasPrefix(trimmed, "data:") {
@@ -319,23 +430,29 @@ func parseSSE(r io.Reader, model string, replayTokens int, replayDiag deepSeekRe
 		}
 		if trimmed == "" && len(dataLines) > 0 {
 			data := strings.Join(dataLines, "\n")
-			if done, perr := parseSSEData(data, model, out, &acc); perr != nil {
-				return perr
+			if done, progressed, perr := parseSSEData(data, model, out, &acc); perr != nil {
+				return streamError(perr, hadProgress || progressed)
 			} else if done {
 				return nil
+			} else if progressed {
+				hadProgress = true
+				resetIdleTimer()
 			}
 			dataLines = dataLines[:0]
 		}
 		if errors.Is(err, io.EOF) {
 			if len(dataLines) > 0 {
 				data := strings.Join(dataLines, "\n")
-				if done, perr := parseSSEData(data, model, out, &acc); perr != nil {
-					return perr
+				if done, progressed, perr := parseSSEData(data, model, out, &acc); perr != nil {
+					return streamError(perr, hadProgress || progressed)
 				} else if done {
 					return nil
+				} else if progressed {
+					hadProgress = true
+					resetIdleTimer()
 				}
 			}
-			return errIncompleteStream
+			return streamError(errIncompleteStream, hadProgress)
 		}
 	}
 }
@@ -385,18 +502,20 @@ type streamAccumulator struct {
 	replayDiag            deepSeekReplayDiagnostics
 }
 
-func parseSSEData(data, model string, out chan<- llm.ProviderEvent, acc *streamAccumulator) (bool, error) {
+func parseSSEData(data, model string, out chan<- llm.ProviderEvent, acc *streamAccumulator) (bool, bool, error) {
 	if data == "[DONE]" {
-		emitComplete(out, model, acc)
-		return true, nil
+		if err := emitComplete(out, model, acc); err != nil {
+			return false, false, err
+		}
+		return true, false, nil
 	}
 	if strings.TrimSpace(data) == "" {
-		return false, nil
+		return false, false, nil
 	}
 
 	var frame sseFrame
 	if err := json.Unmarshal([]byte(data), &frame); err != nil {
-		return false, nil // skip malformed frame
+		return false, false, nil // skip malformed frame
 	}
 	if len(frame.Choices) == 0 {
 		// some providers emit usage-only terminal frames
@@ -409,7 +528,7 @@ func parseSSEData(data, model string, out chan<- llm.ProviderEvent, acc *streamA
 				PromptCacheMissTokens: frame.Usage.PromptCacheMissTokens,
 			}
 		}
-		return false, nil
+		return false, false, nil
 	}
 	if frame.Usage.TotalTokens > 0 || frame.Usage.PromptTokens > 0 || frame.Usage.CompletionTokens > 0 {
 		acc.usage = llm.Usage{
@@ -421,12 +540,14 @@ func parseSSEData(data, model string, out chan<- llm.ProviderEvent, acc *streamA
 		}
 	}
 	ch := frame.Choices[0]
+	progressed := false
 	if ch.FinishReason != "" {
 		acc.finishReason = ch.FinishReason
 	}
 	if ch.Delta.Content != "" {
 		acc.content.WriteString(ch.Delta.Content)
 		out <- llm.ProviderEvent{Type: llm.EventContentDelta, Content: ch.Delta.Content}
+		progressed = true
 	}
 	if ch.Delta.ReasoningContent != "" {
 		acc.reasoning.WriteString(ch.Delta.ReasoningContent)
@@ -434,8 +555,10 @@ func parseSSEData(data, model string, out chan<- llm.ProviderEvent, acc *streamA
 			Type:           llm.EventReasoningDelta,
 			ReasoningDelta: ch.Delta.ReasoningContent,
 		}
+		progressed = true
 	}
 	for _, tc := range ch.Delta.ToolCalls {
+		progressed = true
 		idx := 0
 		if tc.Index != nil {
 			idx = *tc.Index
@@ -476,13 +599,15 @@ func parseSSEData(data, model string, out chan<- llm.ProviderEvent, acc *streamA
 	}
 	if ch.FinishReason == "tool_calls" {
 		out <- llm.ProviderEvent{Type: llm.EventToolUseStop}
-		emitComplete(out, model, acc)
-		return true, nil
+		if err := emitComplete(out, model, acc); err != nil {
+			return false, progressed, err
+		}
+		return true, progressed, nil
 	}
-	return false, nil
+	return false, progressed, nil
 }
 
-func emitComplete(out chan<- llm.ProviderEvent, model string, acc *streamAccumulator) {
+func emitComplete(out chan<- llm.ProviderEvent, model string, acc *streamAccumulator) error {
 	calls := make([]core.ToolCall, 0, len(acc.callsByIndex))
 	for i := 0; i < len(acc.callsByIndex); i++ {
 		st := acc.callsByIndex[i]
@@ -491,9 +616,17 @@ func emitComplete(out chan<- llm.ProviderEvent, model string, acc *streamAccumul
 		}
 		calls = append(calls, core.ToolCall{ID: st.id, Name: st.name, Input: st.arguments.String()})
 	}
+	content := acc.content.String()
+	reasoning := acc.reasoning.String()
+	if len(calls) == 0 && strings.TrimSpace(content) == "" {
+		if strings.TrimSpace(reasoning) != "" {
+			return &streamTerminalError{msg: "DeepSeek stream ended with reasoning but no assistant content or tool calls"}
+		}
+		return &streamTerminalError{msg: "DeepSeek stream ended without assistant content or tool calls"}
+	}
 	out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
-		Content:   acc.content.String(),
-		Reasoning: acc.reasoning.String(),
+		Content:   content,
+		Reasoning: reasoning,
 		ToolCalls: calls,
 		Usage: llm.Usage{
 			PromptTokens:           acc.usage.PromptTokens,
@@ -512,6 +645,7 @@ func emitComplete(out chan<- llm.ProviderEvent, model string, acc *streamAccumul
 		Model:        model,
 		FinishReason: mapFinishReason(acc.finishReason),
 	}}
+	return nil
 }
 
 func estimateReasoningReplayTokens(messages []map[string]any) int {

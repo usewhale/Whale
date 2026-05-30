@@ -17,7 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/usewhale/whale/internal/agent"
-	appcommands "github.com/usewhale/whale/internal/app/commands"
+	appcommands "github.com/usewhale/whale/internal/commands"
 	"github.com/usewhale/whale/internal/core"
 	whalemcp "github.com/usewhale/whale/internal/mcp"
 	"github.com/usewhale/whale/internal/plugins/memoryplugin"
@@ -1355,6 +1355,65 @@ func TestBuildMCPLocalResultIncludesStructuredFields(t *testing.T) {
 	for _, want := range []string{"Status", "Auth", "Tools"} {
 		if !localResultSectionHasField(result.Sections[0], want) {
 			t.Fatalf("expected mcp section field %q, got %+v", want, result.Sections[0].Fields)
+		}
+	}
+}
+
+func TestExecuteSlashDoctorReturnsStructuredLocalResult(t *testing.T) {
+	dir := t.TempDir()
+	sessionsDir := filepath.Join(dir, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatalf("mkdir sessions: %v", err)
+	}
+	msgStore, err := store.NewJSONLStore(sessionsDir)
+	if err != nil {
+		t.Fatalf("store init: %v", err)
+	}
+	// Write a session file so countSessions returns >0
+	sanitized := core.SanitizeSessionID("sess-1")
+	if err := os.WriteFile(filepath.Join(sessionsDir, sanitized+".jsonl"), []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write session file: %v", err)
+	}
+
+	app := &App{
+		ctx:           context.Background(),
+		sessionsDir:   sessionsDir,
+		workspaceRoot: dir,
+		sessionID:     "sess-1",
+		msgStore:      msgStore,
+		cfg:           DefaultConfig(),
+	}
+
+	out, err := app.ExecuteLocalCommand("/doctor")
+	if err != nil {
+		t.Fatalf("execute /doctor: %v", err)
+	}
+	if !out.Handled || out.LocalResult == nil || out.LocalResult.Kind != "doctor" {
+		t.Fatalf("expected structured doctor result, got %+v", out)
+	}
+	if out.Text == "" || out.Text != out.LocalResult.PlainText {
+		t.Fatalf("expected text fallback to match plain result, text=%q local=%q", out.Text, out.LocalResult.PlainText)
+	}
+	// Verify session storage fields
+	for _, want := range []string{"Directory", "Session ID", "Total sessions"} {
+		if !localResultHasField(out.LocalResult, want) {
+			t.Fatalf("expected local result field %q, got %+v", want, out.LocalResult.Fields)
+		}
+	}
+	// Verify sections exist
+	if len(out.LocalResult.Sections) != 2 {
+		t.Fatalf("expected 2 sections, got %d", len(out.LocalResult.Sections))
+	}
+	if out.LocalResult.Sections[0].Title != "Session Files" {
+		t.Fatalf("expected section[0] title %q, got %q", "Session Files", out.LocalResult.Sections[0].Title)
+	}
+	if out.LocalResult.Sections[1].Title != "Diagnostics" {
+		t.Fatalf("expected section[1] title %q, got %q", "Diagnostics", out.LocalResult.Sections[1].Title)
+	}
+	// Verify plain text contains key info
+	for _, want := range []string{"Session Storage", "Session ID:", sessionsDir, "Diagnostics"} {
+		if !strings.Contains(out.Text, want) {
+			t.Fatalf("expected plain text to contain %q, got:\n%s", want, out.Text)
 		}
 	}
 }

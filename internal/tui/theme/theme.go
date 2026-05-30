@@ -48,7 +48,7 @@ var Default = Palette{
 	Error:          lipgloss.Color("203"),
 	Palette:        lipgloss.Color("212"),
 	StatusIdle:     lipgloss.Color("86"),
-	Selection:      lipgloss.Color("238"),
+	Selection:      lipgloss.Color("240"),
 	UserAccent:     lipgloss.Color("63"),
 	UserBackground: lipgloss.Color("236"),
 	Plan:           lipgloss.Color("75"),

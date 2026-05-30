@@ -3,7 +3,7 @@ package app
 import (
 	"strings"
 
-	appcommands "github.com/usewhale/whale/internal/app/commands"
+	appcommands "github.com/usewhale/whale/internal/commands"
 )
 
 func buildHelpLocalResult() *LocalResult {

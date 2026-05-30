@@ -7,9 +7,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/usewhale/whale/internal/app"
-	appcommands "github.com/usewhale/whale/internal/app/commands"
-	"github.com/usewhale/whale/internal/app/service"
+	appcommands "github.com/usewhale/whale/internal/runtime/commands"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
@@ -30,12 +29,12 @@ func (m *model) submitPrompt(value string) tea.Cmd {
 	return m.submitPromptWithBinding(value, m.currentSkillBinding(value))
 }
 
-func (m *model) submitPromptWithBinding(value string, binding *app.SkillBinding) tea.Cmd {
+func (m *model) submitPromptWithBinding(value string, binding *protocol.SkillBinding) tea.Cmd {
 	value = strings.TrimSpace(value)
 	if value == "" {
 		return nil
 	}
-	submit := appcommands.ClassifySubmit(value, app.CommandsHelp, "/mcp")
+	submit := appcommands.ClassifySubmit(value, appcommands.CommandsHelp(), "/mcp")
 	if submit.LocalNoTurn() {
 		return m.submitLocalNoTurn(submit)
 	}
@@ -53,7 +52,7 @@ func (m *model) submitPromptWithBinding(value string, binding *app.SkillBinding)
 	clearFileSuggestions(m)
 	m.startBusy()
 	m.status = "running"
-	m.dispatchIntent(service.Intent{Kind: service.IntentSubmit, Input: value, SkillBinding: binding})
+	m.dispatchIntent(protocol.Intent{Kind: protocol.IntentSubmit, Input: value, SkillBinding: binding})
 	m.refreshViewportContentFollow(true)
 	return busyTickCmd()
 }
@@ -66,7 +65,7 @@ func (m *model) submitPromptWhileBusy(value string) {
 		}
 		return
 	}
-	submit := appcommands.ClassifySubmit(value, app.CommandsHelp, "/mcp")
+	submit := appcommands.ClassifySubmit(value, appcommands.CommandsHelp(), "/mcp")
 	if submit.BusyImmediate() {
 		_ = m.submitLocalNoTurn(submit)
 		return
@@ -87,7 +86,7 @@ func (m *model) submitPromptFromDeferredBusyEnter(value string, wasStopping bool
 	if wasStopping && !m.busy {
 		return nil
 	}
-	submit := appcommands.ClassifySubmit(value, app.CommandsHelp, "/mcp")
+	submit := appcommands.ClassifySubmit(value, appcommands.CommandsHelp(), "/mcp")
 	if submit.BusyImmediate() {
 		_ = m.submitLocalNoTurn(submit)
 		return nil
@@ -139,10 +138,10 @@ func (m *model) submitLocalNoTurn(submit appcommands.SubmitClassification) tea.C
 	if !m.busy || submit.SubmitBarrier() {
 		m.status = "command pending"
 	}
-	if app.IsOpenCommandLine(cmd) {
+	if appcommands.IsOpenCommandLine(cmd) {
 		return m.startOpenCommand(cmd)
 	}
-	m.dispatchIntent(service.Intent{Kind: service.IntentSubmitLocal, Input: cmd})
+	m.dispatchIntent(protocol.Intent{Kind: protocol.IntentSubmitLocal, Input: cmd})
 	m.refreshViewportContent()
 	return nil
 }
@@ -221,7 +220,7 @@ func (m *model) restoreQueuedPromptsToComposerWithCurrent(currentValue string) (
 type windowsBusyInputSnapshot struct {
 	ok           bool
 	value        string
-	skillBinding *app.SkillBinding
+	skillBinding *protocol.SkillBinding
 	windowsPaste windowsPasteFallbackState
 }
 

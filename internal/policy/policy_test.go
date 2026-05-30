@@ -169,7 +169,7 @@ func TestDefaultToolPolicyAutoAllowsCommonShellChecksInOnRequest(t *testing.T) {
 		"rg whale internal | wc -l",
 		"git diff --stat",
 		"git diff main...HEAD",
-		"git diff --no-index /dev/null internal/app/commands/review.go",
+		"git diff --no-index /dev/null internal/commands/review.go",
 		"git show --stat --patch HEAD",
 		"git log --oneline -5",
 		"git branch --show-current",

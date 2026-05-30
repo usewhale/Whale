@@ -13,6 +13,7 @@ import (
 
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/skills"
+	"github.com/usewhale/whale/internal/webfetch"
 )
 
 type Toolset struct {
@@ -20,6 +21,7 @@ type Toolset struct {
 	worktreeRoot      string
 	originalWorkspace string
 	httpClient        *http.Client
+	webFetchClient    *webfetch.Client
 	ddgSearchURL      string
 	bingSearchURL     string
 	tasks             *shellTaskRegistry
@@ -55,14 +57,34 @@ func NewToolset(root string) (*Toolset, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve root: %w", err)
 	}
+	httpClient := &http.Client{Timeout: 15 * time.Second}
 	return &Toolset{
-		root:          abs,
-		httpClient:    &http.Client{Timeout: 15 * time.Second},
+		root:       abs,
+		httpClient: httpClient,
+		webFetchClient: webfetch.NewClient(webfetch.Options{
+			HTTPClient: httpClient,
+		}),
 		ddgSearchURL:  "https://html.duckduckgo.com/html/?q=%s",
 		bingSearchURL: "https://www.bing.com/search?q=%s",
 		tasks:         newShellTaskRegistry(),
 		fileLocks:     newFileMutationLocks(),
 	}, nil
+}
+
+func (b *Toolset) SetWebFetchExtractor(extractor webfetch.Extractor) {
+	if b.webFetchClient != nil {
+		b.webFetchClient.SetExtractor(extractor)
+	}
+}
+
+func (b *Toolset) syncWebFetchClient() {
+	if b.webFetchClient == nil {
+		b.webFetchClient = webfetch.NewClient(webfetch.Options{
+			HTTPClient: b.httpClient,
+		})
+		return
+	}
+	b.webFetchClient.SetHTTPClient(b.httpClient)
 }
 
 func (b *Toolset) SetSkillDisabled(names []string) {

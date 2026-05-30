@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
@@ -74,7 +75,7 @@ func (m *model) updateTaskProgress(toolCallID, toolName, text, status string, me
 	return m.updateTaskProgressWithSteps(toolCallID, toolName, text, status, metadata, nil)
 }
 
-func (m *model) updateTaskProgressWithSteps(toolCallID, toolName, text, status string, metadata map[string]any, steps []core.SubagentStep) bool {
+func (m *model) updateTaskProgressWithSteps(toolCallID, toolName, text, status string, metadata map[string]any, steps []protocol.ProgressStep) bool {
 	if toolCallID == "" || m.assembler == nil {
 		return false
 	}

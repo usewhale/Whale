@@ -7,7 +7,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
 	"github.com/muesli/termenv"
-	"github.com/usewhale/whale/internal/app"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 )
 
 func assertVisibleWidthAtMost(t *testing.T, lines []string, maxWidth int) {
@@ -564,10 +564,10 @@ func TestChatLines_LocalStatusRendersStructuredCard(t *testing.T) {
 		Role: "local_status",
 		Kind: KindLocalStatus,
 		Text: "Status\n\n- session: sess-1",
-		Local: &app.LocalResult{
+		Local: &protocol.LocalResult{
 			Kind:  "status",
 			Title: "Status",
-			Fields: []app.LocalResultField{
+			Fields: []protocol.LocalResultField{
 				{Label: "Session", Value: "sess-1"},
 				{Label: "Mode", Value: "agent", Tone: "info"},
 				{Label: "Model", Value: "deepseek-v4-pro", Tone: "info"},
@@ -600,24 +600,24 @@ func TestChatLines_LocalMCPRendersStructuredSections(t *testing.T) {
 		Role: "local_mcp",
 		Kind: KindLocalMCP,
 		Text: "MCP\n\nconfig: /tmp/mcp.json\nservers: 2",
-		Local: &app.LocalResult{
+		Local: &protocol.LocalResult{
 			Kind:  "mcp",
 			Title: "MCP",
-			Fields: []app.LocalResultField{
+			Fields: []protocol.LocalResultField{
 				{Label: "Config", Value: "/tmp/mcp.json"},
 				{Label: "Servers", Value: "2", Tone: "info"},
 			},
-			Sections: []app.LocalResultSection{
+			Sections: []protocol.LocalResultSection{
 				{
 					Title: "context7",
-					Fields: []app.LocalResultField{
+					Fields: []protocol.LocalResultField{
 						{Label: "Status", Value: "connected", Tone: "info"},
 						{Label: "Tools", Value: "3"},
 					},
 				},
 				{
 					Title: "fs",
-					Fields: []app.LocalResultField{
+					Fields: []protocol.LocalResultField{
 						{Label: "Status", Value: "failed", Tone: "error"},
 						{Label: "Tools", Value: "0"},
 						{Label: "Error", Value: "timeout", Tone: "error"},
@@ -645,10 +645,10 @@ func TestChatLines_LocalResultFieldsStayWithinNarrowCard(t *testing.T) {
 		Role: "local_status",
 		Kind: KindLocalStatus,
 		Text: "Status\n\n- original workspace: /very/long/workspace/path",
-		Local: &app.LocalResult{
+		Local: &protocol.LocalResult{
 			Kind:  "status",
 			Title: "Status",
-			Fields: []app.LocalResultField{
+			Fields: []protocol.LocalResultField{
 				{Label: "Original workspace", Value: "/very/long/workspace/path/that/must/wrap"},
 				{Label: "Context window", Value: "100% left (0 used / 128k)"},
 			},

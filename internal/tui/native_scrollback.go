@@ -75,7 +75,27 @@ func (m *model) replayNativeScrollbackCmd() tea.Cmd {
 }
 
 func (m *model) flushNativeScrollbackCmd() tea.Cmd {
-	if m.page != pageChat || m.viewportFrozen || !m.followTail {
+	if m.viewportFrozen || !m.followTail {
+		return nil
+	}
+	return m.emitNativeScrollbackCmd()
+}
+
+// flushCompletedTurnToNativeScrollbackCmd emits the just-finished turn into
+// native scrollback regardless of follow-tail or viewport-freeze state. Unlike
+// the normal flushNativeScrollbackCmd gate, a turn that completes while the
+// user is scrolled up must still reach real scrollback so the final answer is
+// immediately reachable by scrolling the terminal, rather than being deferred
+// (and hidden) until the user returns to the tail.
+func (m *model) flushCompletedTurnToNativeScrollbackCmd() tea.Cmd {
+	return m.emitNativeScrollbackCmd()
+}
+
+// emitNativeScrollbackCmd prints transcript[nativeScrollbackPrinted:] to the
+// terminal's native scrollback and advances the printed cursor. Callers own
+// the follow-tail/freeze gating decision.
+func (m *model) emitNativeScrollbackCmd() tea.Cmd {
+	if m.page != pageChat {
 		return nil
 	}
 	start := min(max(m.nativeScrollbackPrinted, 0), len(m.transcript))

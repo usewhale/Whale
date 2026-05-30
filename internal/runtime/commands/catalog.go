@@ -51,6 +51,7 @@ func DefaultSlashCommands() []SlashCommandSpec {
 		{Name: "/resume", Description: "Open the resume picker", AutoRun: true},
 		{Name: "/clear", Description: "Clear the visible conversation", AutoRun: true},
 		{Name: "/status", Description: "Show session and configuration status", AutoRun: true},
+		{Name: "/doctor", Description: "Show session storage and diagnostic information", AutoRun: true},
 		{Name: "/stats", Description: "Show usage and tool statistics", ArgumentHint: "[usage|tools|repair|recent|profile|all]", Options: []SlashCommandOption{
 			{Token: "usage", Description: "Show token and cost usage", AutoRun: true},
 			{Token: "tools", Description: "Show tool-call counts", AutoRun: true},

@@ -6,9 +6,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/usewhale/whale/internal/app"
-	"github.com/usewhale/whale/internal/app/service"
-	"github.com/usewhale/whale/internal/skills"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
 
@@ -28,7 +26,7 @@ func (m *model) updateSkillMatches() {
 		m.skills.selected = 0
 		return
 	}
-	if m.svc != nil || m.skills.all == nil {
+	if m.runtime != nil || m.skills.all == nil {
 		m.refreshSkillSuggestions()
 	}
 	matches := make([]skillSuggestion, 0, len(m.skills.all))
@@ -45,11 +43,11 @@ func (m *model) updateSkillMatches() {
 }
 
 func (m *model) refreshSkillSuggestions() {
-	if m.svc == nil {
+	if m.runtime == nil {
 		m.skills.all = nil
 		return
 	}
-	views := m.svc.SkillSuggestions()
+	views := m.runtime.SkillSuggestions()
 	out := make([]skillSuggestion, 0, len(views))
 	for _, view := range views {
 		out = append(out, skillSuggestion{
@@ -116,7 +114,7 @@ func (m model) renderSkillSuggestions() string {
 	for i := start; i < end; i++ {
 		skill := m.skills.matches[i]
 		desc := strings.TrimSpace(skill.Description)
-		if skill.Status == string(skills.AvailabilityNeedsSetup) && strings.TrimSpace(skill.Reason) != "" {
+		if skill.Status == string(protocol.SkillAvailabilityNeedsSetup) && strings.TrimSpace(skill.Reason) != "" {
 			desc = skill.Reason
 		}
 		rows = append(rows, pickerSuggestionRow("$"+skill.Name, desc, i == m.skills.selected, labelWidth))
@@ -139,7 +137,7 @@ func (m *model) insertSelectedSkill() bool {
 	}
 	m.input.SetValue("$" + name + " ")
 	if path := strings.TrimSpace(selected.SkillFilePath); path != "" {
-		m.skillBinding = &app.SkillBinding{Name: name, SkillFilePath: path}
+		m.skillBinding = &protocol.SkillBinding{Name: name, SkillFilePath: path}
 	} else {
 		m.skillBinding = nil
 	}
@@ -150,7 +148,7 @@ func (m *model) insertSelectedSkill() bool {
 	return true
 }
 
-func (m *model) currentSkillBinding(value string) *app.SkillBinding {
+func (m *model) currentSkillBinding(value string) *protocol.SkillBinding {
 	if m.skillBinding == nil {
 		return nil
 	}
@@ -202,7 +200,7 @@ func (m *model) handleSkillsMenuKey(msg tea.KeyMsg) tea.Cmd {
 		case 0:
 			m.openSkillsListFromMenu()
 		case 1:
-			m.dispatchIntent(service.Intent{Kind: service.IntentRequestSkillsManage})
+			m.dispatchIntent(protocol.Intent{Kind: protocol.IntentRequestSkillsManage})
 		}
 	}
 	return nil
@@ -242,7 +240,7 @@ func renderSkillsMenuRow(item skillsMenuItem, selected bool) string {
 	return pickerSuggestionRow(item.Name, item.Description, selected, 26)
 }
 
-func (m *model) setSkillsManagerItems(views []skills.SkillView) {
+func (m *model) setSkillsManagerItems(views []protocol.SkillView) {
 	current := ""
 	if m.skillsManager.selected >= 0 && m.skillsManager.selected < len(m.skillsManager.matches) {
 		idx := m.skillsManager.matches[m.skillsManager.selected]
@@ -252,20 +250,20 @@ func (m *model) setSkillsManagerItems(views []skills.SkillView) {
 	}
 	items := make([]skillManagerItem, 0, len(views))
 	for _, view := range views {
-		enabled := view.Status != skills.AvailabilityDisabled && view.Status != skills.AvailabilityProblem
+		enabled := view.Status != string(protocol.SkillAvailabilityDisabled) && view.Status != string(protocol.SkillAvailabilityProblem)
 		desc := strings.TrimSpace(view.Description)
-		if view.Status == skills.AvailabilityNeedsSetup || view.Status == skills.AvailabilityDisabled || view.Status == skills.AvailabilityProblem {
+		if view.Status == string(protocol.SkillAvailabilityNeedsSetup) || view.Status == string(protocol.SkillAvailabilityDisabled) || view.Status == string(protocol.SkillAvailabilityProblem) {
 			desc = strings.TrimSpace(view.Reason)
 		}
 		items = append(items, skillManagerItem{
 			Name:                view.Name,
 			Description:         desc,
 			OriginalDescription: strings.TrimSpace(view.Description),
-			Status:              string(view.Status),
+			Status:              view.Status,
 			Reason:              view.Reason,
 			Source:              view.Source,
 			Enabled:             enabled,
-			Toggleable:          view.Status != skills.AvailabilityProblem,
+			Toggleable:          view.Status != string(protocol.SkillAvailabilityProblem),
 		})
 	}
 	m.skillsManager.all = items
@@ -373,15 +371,15 @@ func (m *model) toggleSelectedManagedSkill() {
 	}
 	item.Enabled = !item.Enabled
 	if item.Enabled {
-		item.Status = string(skills.AvailabilityReady)
+		item.Status = string(protocol.SkillAvailabilityReady)
 		if strings.TrimSpace(item.OriginalDescription) != "" {
 			item.Description = item.OriginalDescription
 		}
 	} else {
-		item.Status = string(skills.AvailabilityDisabled)
+		item.Status = string(protocol.SkillAvailabilityDisabled)
 		item.Description = "Disabled in config"
 	}
-	m.dispatchIntent(service.Intent{Kind: service.IntentSetSkillEnabled, SkillName: item.Name, SkillEnabled: item.Enabled})
+	m.dispatchIntent(protocol.Intent{Kind: protocol.IntentSetSkillEnabled, SkillName: item.Name, SkillEnabled: item.Enabled})
 }
 
 func (m model) renderSkillsManager() string {

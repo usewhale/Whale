@@ -99,10 +99,11 @@ func (m model) renderDiffPagerHints(mainWidth int) string {
 
 func truncateLine(s string, max int) string {
 	s = strings.TrimSpace(s)
-	if len(s) <= max {
+	runes := []rune(s)
+	if len(runes) <= max {
 		return s
 	}
-	return s[:max] + "..."
+	return string(runes[:max]) + "..."
 }
 
 func tail(items []string, n int) []string {

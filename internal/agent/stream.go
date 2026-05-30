@@ -259,18 +259,16 @@ func modeBlockedDetailsForCall(mode session.Mode, call core.ToolCall) (code, mes
 		if call.Name == "shell_run" {
 			return "plan_mode_blocked",
 				"shell command is not classified as safe read-only",
-				"Current mode: plan. Plan mode allows only safe read-only shell commands. This shell command is not classified as safe read-only; stay here to refine the plan, or switch to agent mode with /agent or Shift+Tab when it's time to execute commands with side effects.",
+				"Current mode: plan. Plan mode allows only safe read-only shell commands. This shell command is not classified as safe read-only; stay here to refine the plan and produce a <proposed_plan> block for review. Only the user or UI can switch modes.",
 				map[string]any{
-					"current_mode":    "plan",
-					"suggested_modes": []string{"/agent", "Shift+Tab"},
+					"current_mode": "plan",
 				}
 		}
 		return "plan_mode_blocked",
 			"tool unavailable in plan mode",
-			"Current mode: plan. Plan mode is read-only until the plan is approved. Stay here to refine the plan, or switch to agent mode with /agent or Shift+Tab when it's time to implement.",
+			"Current mode: plan. Plan mode is read-only until the plan is approved. Stay here to refine the plan and produce a <proposed_plan> block for review. Only the user or UI can switch modes.",
 			map[string]any{
-				"current_mode":    "plan",
-				"suggested_modes": []string{"/agent", "Shift+Tab"},
+				"current_mode": "plan",
 			}
 	default:
 		return "mode_blocked",

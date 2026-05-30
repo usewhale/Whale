@@ -227,6 +227,16 @@ func TestWebSearchBingUnparseableFallbackFails(t *testing.T) {
 			t.Fatalf("expected error to contain %q, got %q", want, msg)
 		}
 	}
+	recovery := toolErrorRecovery(t, res)
+	if recovery.Code != "search_no_parseable_results" {
+		t.Fatalf("expected no-parseable recovery, got %+v", recovery)
+	}
+	if recovery.Retryable {
+		t.Fatalf("expected no-parseable recovery to be non-retryable: %+v", recovery)
+	}
+	if !containsString(recovery.NextSteps, "Do not retry the same query against the same search backend.") {
+		t.Fatalf("expected stop-repeat next step, got %+v", recovery.NextSteps)
+	}
 }
 
 func TestWebSearchBingChallengeFallbackFails(t *testing.T) {
@@ -269,6 +279,110 @@ func TestWebSearchBingChallengeFallbackFails(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("expected error to contain %q, got %q", want, msg)
 		}
+	}
+	recovery := toolErrorRecovery(t, res)
+	if recovery.Code != "search_bot_challenge" {
+		t.Fatalf("expected bot challenge recovery, got %+v", recovery)
+	}
+	if recovery.Retryable {
+		t.Fatalf("expected bot challenge recovery to be non-retryable: %+v", recovery)
+	}
+}
+
+func TestWebSearchBingBlockedPageMessageMatchesRecovery(t *testing.T) {
+	ts, err := NewToolset(t.TempDir())
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	ts.ddgSearchURL = "https://ddg.test/search?q=%s"
+	ts.bingSearchURL = "https://bing.test/search?q=%s"
+	ts.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host == "ddg.test" {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader(`<html><body>Unfortunately, bots use DuckDuckGo too</body></html>`)),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(`<html><body>Access denied</body></html>`)),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	res, err := ts.webSearch(context.Background(), core.ToolCall{
+		ID:    "1",
+		Name:  "web_search",
+		Input: `{"query":"blocked"}`,
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	msg := toolErrorMessage(t, res)
+	if !strings.Contains(msg, "bing fallback returned a blocked page") {
+		t.Fatalf("expected blocked-page message, got %q", msg)
+	}
+	if strings.Contains(msg, "bing fallback returned a bot challenge") {
+		t.Fatalf("blocked page should not be described as bot challenge: %q", msg)
+	}
+	recovery := toolErrorRecovery(t, res)
+	if recovery.Code != "search_blocked" {
+		t.Fatalf("expected blocked recovery, got %+v", recovery)
+	}
+}
+
+func TestWebSearchRateLimitRecovery(t *testing.T) {
+	res := webSearchErrorForStatuses(t, http.StatusTooManyRequests, http.StatusTooManyRequests)
+	recovery := toolErrorRecovery(t, res)
+	if recovery.Code != "search_rate_limited" || !recovery.Retryable {
+		t.Fatalf("expected retryable rate-limit recovery, got %+v", recovery)
+	}
+	if !strings.Contains(recovery.RecommendedAction, "Wait") {
+		t.Fatalf("expected wait recommendation, got %+v", recovery)
+	}
+}
+
+func TestWebSearchBlockedRecovery(t *testing.T) {
+	res := webSearchErrorForStatuses(t, http.StatusForbidden, http.StatusForbidden)
+	recovery := toolErrorRecovery(t, res)
+	if recovery.Code != "search_blocked" || recovery.Retryable {
+		t.Fatalf("expected non-retryable blocked recovery, got %+v", recovery)
+	}
+}
+
+func TestWebSearchBackendErrorRecovery(t *testing.T) {
+	res := webSearchErrorForStatuses(t, http.StatusBadGateway, http.StatusServiceUnavailable)
+	recovery := toolErrorRecovery(t, res)
+	if recovery.Code != "search_backend_error" || !recovery.Retryable {
+		t.Fatalf("expected retryable backend recovery, got %+v", recovery)
+	}
+}
+
+func TestWebSearchTimeoutRecovery(t *testing.T) {
+	ts, err := NewToolset(t.TempDir())
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	ts.ddgSearchURL = "https://ddg.test/search?q=%s"
+	ts.bingSearchURL = "https://bing.test/search?q=%s"
+	ts.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return nil, context.DeadlineExceeded
+	})}
+
+	res, err := ts.webSearch(context.Background(), core.ToolCall{
+		ID:    "1",
+		Name:  "web_search",
+		Input: `{"query":"timeout"}`,
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	recovery := toolErrorRecovery(t, res)
+	if recovery.Code != "search_timeout" || !recovery.Retryable {
+		t.Fatalf("expected retryable timeout recovery, got %+v", recovery)
 	}
 }
 
@@ -372,4 +486,78 @@ func TestWebSearchCompatSearchQueryArray(t *testing.T) {
 	if err != nil || res.IsError {
 		t.Fatalf("compat search query failed err=%v res=%+v", err, res)
 	}
+}
+
+func webSearchErrorForStatuses(t *testing.T, ddgStatus, bingStatus int) core.ToolResult {
+	t.Helper()
+	ts, err := NewToolset(t.TempDir())
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	ts.ddgSearchURL = "https://ddg.test/search?q=%s"
+	ts.bingSearchURL = "https://bing.test/search?q=%s"
+	ts.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		status := ddgStatus
+		if req.URL.Host == "bing.test" {
+			status = bingStatus
+		}
+		return &http.Response{
+			StatusCode: status,
+			Body:       io.NopCloser(strings.NewReader("")),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+	res, err := ts.webSearch(context.Background(), core.ToolCall{
+		ID:    "1",
+		Name:  "web_search",
+		Input: `{"query":"status"}`,
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected web search error, got %+v", res)
+	}
+	return res
+}
+
+type testWebSearchRecovery struct {
+	Code              string   `json:"code"`
+	Retryable         bool     `json:"retryable"`
+	RecommendedAction string   `json:"recommended_action"`
+	NextSteps         []string `json:"next_steps"`
+}
+
+func toolErrorRecovery(t *testing.T, res core.ToolResult) testWebSearchRecovery {
+	t.Helper()
+	if !res.IsError {
+		t.Fatalf("expected tool error, got %+v", res)
+	}
+	env, ok := core.ParseToolEnvelope(res.Content)
+	if !ok {
+		t.Fatalf("parse tool envelope: %s", res.Content)
+	}
+	raw, ok := env.Data["recovery"]
+	if !ok {
+		t.Fatalf("missing recovery in envelope: %+v", env)
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal recovery: %v", err)
+	}
+	var recovery testWebSearchRecovery
+	if err := json.Unmarshal(b, &recovery); err != nil {
+		t.Fatalf("decode recovery: %v", err)
+	}
+	return recovery
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }

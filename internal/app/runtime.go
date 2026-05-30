@@ -48,6 +48,7 @@ func (a *App) ensureAgent() (*agent.Agent, error) {
 			ThinkingEnabled:   a.thinkingEnabled,
 			RetryPolicy:       retryPolicyFromConfig(a.cfg),
 			StreamMaxAttempts: a.cfg.RetryStreamMaxAttempts,
+			StreamIdleTimeout: a.cfg.RetryStreamIdleTimeout,
 		})
 		if err != nil {
 			return nil, err

@@ -189,6 +189,10 @@ func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 		stats := a.buildStatsLocalResult("overview")
 		return CommandExecution{Handled: true, Text: stats.PlainText, LocalResult: stats}, nil
 	}
+	if trimmed == "/doctor" {
+		result := buildDoctorLocalResult(a)
+		return CommandExecution{Handled: true, Text: result.PlainText, LocalResult: result}, nil
+	}
 	if a.pluginManager != nil {
 		res, handled, err := a.pluginManager.HandleCommand(a.ctx, trimmed)
 		if handled || err != nil {

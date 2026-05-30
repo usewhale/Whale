@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -13,9 +14,11 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/usewhale/whale/internal/app"
+	"github.com/usewhale/whale/internal/app/appserver"
 	"github.com/usewhale/whale/internal/build"
 	"github.com/usewhale/whale/internal/defaults"
 	"github.com/usewhale/whale/internal/tui"
+	"github.com/usewhale/whale/internal/ui/tuiadapter"
 	whaleworktree "github.com/usewhale/whale/internal/worktree"
 )
 
@@ -47,7 +50,41 @@ func bindPersistentFlags(c *cobra.Command, opts *cliOptions) {
 
 func runLoop(opts *cliOptions, start app.StartOptions) error {
 	start.Worktree = opts.worktreeSession
-	return tui.RunTUI(opts.cfg, start)
+	ctx := context.Background()
+	cfg, err := loadCLIConfigIfNeeded(opts.cfg)
+	if err != nil {
+		return err
+	}
+	outcome, action, err := runUpdatePromptIfNeeded(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	if outcome == updatePromptRun {
+		return runUpdateAction(action)
+	}
+	if outcome == updatePromptInterrupt {
+		return nil
+	}
+	rt, err := tuiadapter.NewRuntime(ctx, cfg, start)
+	if err != nil {
+		if app.IsCrossWorkspaceResumeError(err) {
+			fmt.Println(err.Error())
+			return nil
+		}
+		return err
+	}
+	return tui.RunTUI(rt, tui.RunOptions{ResumeMenu: start.ResumeMenu})
+}
+
+func loadCLIConfigIfNeeded(cfg app.Config) (app.Config, error) {
+	if cfg.ConfigLoaded {
+		return cfg, nil
+	}
+	workspaceRoot, err := os.Getwd()
+	if err != nil {
+		return cfg, fmt.Errorf("get workspace: %w", err)
+	}
+	return app.LoadAndApplyConfig(cfg, workspaceRoot)
 }
 
 func prepareWorktree(cmd *cobra.Command, opts *cliOptions) error {
@@ -277,5 +314,24 @@ func newRootCmd(opts *cliOptions) *cobra.Command {
 	root.AddCommand(newMigrateConfigCmd(opts))
 	root.AddCommand(newSetupCmd(opts))
 	root.AddCommand(newResumeCmd(opts))
+	root.AddCommand(newAppServerCmd(opts))
 	return root
+}
+
+func newAppServerCmd(opts *cliOptions) *cobra.Command {
+	return &cobra.Command{
+		Use:    "app-server",
+		Short:  "Run the local Whale app-server protocol over stdio.",
+		Args:   cobra.NoArgs,
+		Hidden: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := rejectWorktreeFlag(cmd); err != nil {
+				return err
+			}
+			if err := prepareCLIConfig(cmd, opts); err != nil {
+				return err
+			}
+			return appserver.Run(cmd.Context(), opts.cfg, app.StartOptions{NewSession: true}, cmd.InOrStdin(), cmd.OutOrStdout())
+		},
+	}
 }

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -28,6 +29,39 @@ type webSearchEntry struct {
 	Snippet string `json:"snippet,omitempty"`
 }
 
+type webSearchRecovery struct {
+	Code              string   `json:"code"`
+	Retryable         bool     `json:"retryable"`
+	RecommendedAction string   `json:"recommended_action"`
+	NextSteps         []string `json:"next_steps,omitempty"`
+}
+
+type webSearchError struct {
+	message  string
+	recovery webSearchRecovery
+}
+
+func (e *webSearchError) Error() string { return e.message }
+
+type webSearchFetchError struct {
+	status  int
+	timeout bool
+	err     error
+}
+
+func (e *webSearchFetchError) Error() string {
+	if e.status != 0 {
+		return fmt.Sprintf("http %d", e.status)
+	}
+	if e.timeout {
+		return "timeout"
+	}
+	if e.err != nil {
+		return e.err.Error()
+	}
+	return "request failed"
+}
+
 func (b *Toolset) webSearch(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
 	var in webSearchInput
 	if err := decodeInput(call.Input, &in); err != nil {
@@ -41,6 +75,9 @@ func (b *Toolset) webSearch(ctx context.Context, call core.ToolCall) (core.ToolR
 	timeoutMS := normalizeWebSearchTimeoutMS(in.TimeoutMS)
 	results, source, note, err := b.searchWithFallback(ctx, query, maxResults, timeoutMS)
 	if err != nil {
+		if searchErr, ok := err.(*webSearchError); ok {
+			return marshalWebSearchError(call, searchErr), nil
+		}
 		return marshalToolError(call, "web_search_failed", err.Error()), nil
 	}
 	return marshalToolResult(call, buildWebSearchResult(query, source, note, results))
@@ -119,6 +156,22 @@ func buildWebSearchResult(query, source, note string, results []webSearchEntry) 
 	return data
 }
 
+func marshalWebSearchError(call core.ToolCall, err *webSearchError) core.ToolResult {
+	content, marshalErr := core.MarshalToolEnvelope(core.ToolEnvelope{
+		OK:      false,
+		Success: false,
+		Code:    "web_search_failed",
+		Message: err.message,
+		Data: map[string]any{
+			"recovery": err.recovery,
+		},
+	})
+	if marshalErr != nil {
+		return marshalToolError(call, "web_search_failed", err.message)
+	}
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}
+}
+
 func (b *Toolset) searchWithFallback(ctx context.Context, query string, maxResults int, timeoutMS int) ([]webSearchEntry, string, string, error) {
 	ddgHTML, ddgErr := b.fetchSearchHTML(ctx, fmt.Sprintf(b.ddgSearchURL, url.QueryEscape(query)), timeoutMS)
 	ddgResults := parseDuckDuckGoResults(ddgHTML, maxResults)
@@ -145,10 +198,12 @@ func (b *Toolset) searchWithFallback(ctx context.Context, query string, maxResul
 	}
 
 	if ddgBlocked && bingErr != nil {
-		return nil, "", "", fmt.Errorf("duckduckgo challenge and bing fallback failed: %v", bingErr)
+		msg := fmt.Sprintf("duckduckgo returned a bot challenge and bing fallback failed: %v", bingErr)
+		return nil, "", "", webSearchFailure(msg, classifySearchFetchErrors(ddgErr, bingErr, "search_bot_challenge"))
 	}
 	if ddgErr != nil && bingErr != nil {
-		return nil, "", "", fmt.Errorf("duckduckgo failed: %v; bing failed: %v", ddgErr, bingErr)
+		msg := fmt.Sprintf("duckduckgo failed: %v; bing failed: %v", ddgErr, bingErr)
+		return nil, "", "", webSearchFailure(msg, classifySearchFetchErrors(ddgErr, bingErr, "search_backend_error"))
 	}
 	if ddgNoResults {
 		return []webSearchEntry{}, "duckduckgo", "", nil
@@ -161,12 +216,19 @@ func (b *Toolset) searchWithFallback(ctx context.Context, query string, maxResul
 		if isBingNoResults(bingHTML) {
 			return []webSearchEntry{}, "bing", note, nil
 		}
-		if isBingChallenge(bingHTML) {
-			return nil, "", "", fmt.Errorf("%s; bing fallback returned a bot challenge", duckDuckGoFallbackFailure(ddgErr, ddgBlocked, ddgHTML))
+		if challengeCode := classifySearchChallengeHTML(bingHTML); challengeCode != "" {
+			reason := "bot challenge"
+			if challengeCode == "search_blocked" {
+				reason = "blocked page"
+			}
+			msg := fmt.Sprintf("%s; bing fallback returned a %s", duckDuckGoFallbackFailure(ddgErr, ddgBlocked, ddgHTML), reason)
+			return nil, "", "", webSearchFailure(msg, challengeCode)
 		}
-		return nil, "", "", fmt.Errorf("%s; bing fallback returned no parseable results (%s)", duckDuckGoFallbackFailure(ddgErr, ddgBlocked, ddgHTML), webSearchHTMLPreview(bingHTML))
+		msg := fmt.Sprintf("%s; bing fallback returned no parseable results (%s)", duckDuckGoFallbackFailure(ddgErr, ddgBlocked, ddgHTML), webSearchHTMLPreview(bingHTML))
+		return nil, "", "", webSearchFailure(msg, "search_no_parseable_results")
 	}
-	return nil, "", "", fmt.Errorf("%s; bing fallback failed: %v", duckDuckGoFallbackFailure(ddgErr, ddgBlocked, ddgHTML), bingErr)
+	msg := fmt.Sprintf("%s; bing fallback failed: %v", duckDuckGoFallbackFailure(ddgErr, ddgBlocked, ddgHTML), bingErr)
+	return nil, "", "", webSearchFailure(msg, classifySearchFetchErrors(ddgErr, bingErr, "search_backend_error"))
 }
 
 func (b *Toolset) fetchSearchHTML(ctx context.Context, fullURL string, timeoutMS int) (string, error) {
@@ -181,17 +243,24 @@ func (b *Toolset) fetchSearchHTML(ctx context.Context, fullURL string, timeoutMS
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 	resp, err := b.httpClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", classifySearchRequestError(cctx, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("http %d", resp.StatusCode)
+		return "", &webSearchFetchError{status: resp.StatusCode}
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
 	if err != nil {
-		return "", err
+		return "", &webSearchFetchError{err: err}
 	}
 	return string(body), nil
+}
+
+func classifySearchRequestError(ctx context.Context, err error) error {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return &webSearchFetchError{timeout: true, err: err}
+	}
+	return &webSearchFetchError{err: err}
 }
 
 func parseDuckDuckGoResults(html string, maxResults int) []webSearchEntry {
@@ -303,12 +372,18 @@ func isDuckDuckGoNoResults(html string) bool {
 		strings.Contains(lower, "not find any results")
 }
 
-func isBingChallenge(html string) bool {
+func classifySearchChallengeHTML(html string) string {
 	lower := strings.ToLower(html)
-	return strings.Contains(lower, "captcha") ||
+	if strings.Contains(lower, "captcha") ||
 		strings.Contains(lower, "verify you are human") ||
-		strings.Contains(lower, "access denied") ||
-		strings.Contains(lower, "forbidden")
+		strings.Contains(lower, "unusual traffic") {
+		return "search_bot_challenge"
+	}
+	if strings.Contains(lower, "access denied") ||
+		strings.Contains(lower, "forbidden") {
+		return "search_blocked"
+	}
+	return ""
 }
 
 func isBingNoResults(html string) bool {
@@ -326,6 +401,94 @@ func duckDuckGoFallbackFailure(err error, blocked bool, html string) string {
 		return fmt.Sprintf("duckduckgo failed: %v", err)
 	}
 	return fmt.Sprintf("duckduckgo returned no parseable results (%s)", webSearchHTMLPreview(html))
+}
+
+func classifySearchFetchErrors(ddgErr, bingErr error, fallback string) string {
+	for _, err := range []error{ddgErr, bingErr} {
+		var fetchErr *webSearchFetchError
+		if !errors.As(err, &fetchErr) {
+			continue
+		}
+		if fetchErr.timeout {
+			return "search_timeout"
+		}
+		if fetchErr.status == http.StatusTooManyRequests {
+			return "search_rate_limited"
+		}
+		if fetchErr.status == http.StatusForbidden {
+			return "search_blocked"
+		}
+	}
+	for _, err := range []error{ddgErr, bingErr} {
+		var fetchErr *webSearchFetchError
+		if errors.As(err, &fetchErr) && fetchErr.status >= 500 && fetchErr.status <= 599 {
+			return "search_backend_error"
+		}
+	}
+	return fallback
+}
+
+func webSearchFailure(message, code string) *webSearchError {
+	return &webSearchError{
+		message:  message,
+		recovery: webSearchRecoveryForCode(code),
+	}
+}
+
+func webSearchRecoveryForCode(code string) webSearchRecovery {
+	baseSteps := []string{
+		"Do not retry the same query against the same search backend.",
+		"If the user already provided a URL, use fetch with that URL and a focused prompt.",
+		"For docs, APIs, repositories, or releases, prefer official URLs, raw GitHub URLs, or gh when available.",
+	}
+	switch code {
+	case "search_rate_limited":
+		return webSearchRecovery{
+			Code:              code,
+			Retryable:         true,
+			RecommendedAction: "Wait before retrying, or use a shorter more specific query instead of repeating the same search.",
+			NextSteps: append([]string{
+				"Wait at least 10-30 seconds before another search attempt.",
+			}, baseSteps...),
+		}
+	case "search_blocked":
+		return webSearchRecovery{
+			Code:              code,
+			Retryable:         false,
+			RecommendedAction: "The search backend is blocking this client; stop retrying the same backend and switch to an official URL or user-provided URL.",
+			NextSteps:         baseSteps,
+		}
+	case "search_bot_challenge":
+		return webSearchRecovery{
+			Code:              code,
+			Retryable:         false,
+			RecommendedAction: "The search backend returned a bot challenge; stop retrying the same query and ask for or construct a more direct official URL.",
+			NextSteps:         baseSteps,
+		}
+	case "search_no_parseable_results":
+		return webSearchRecovery{
+			Code:              code,
+			Retryable:         false,
+			RecommendedAction: "The search page did not contain parseable results; try a simpler query or a site:official-domain query instead of repeating this request.",
+			NextSteps: append([]string{
+				"Use fewer natural-language words and include exact product, API, or repository names.",
+			}, baseSteps...),
+		}
+	case "search_timeout":
+		return webSearchRecovery{
+			Code:              code,
+			Retryable:         true,
+			RecommendedAction: "The search request timed out; retry at most once with a shorter query, then switch to a known official URL or ask the user for a URL.",
+			NextSteps:         baseSteps,
+		}
+	default:
+		return webSearchRecovery{
+			Code:              "search_backend_error",
+			Retryable:         true,
+			RecommendedAction: "The search backend failed; retry later or use an official URL, raw GitHub URL, gh, or a user-provided URL.",
+			NextSteps:         baseSteps,
+		}
+	}
 }
 
 func webSearchHTMLPreview(html string) string {

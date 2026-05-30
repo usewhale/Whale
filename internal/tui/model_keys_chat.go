@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/usewhale/whale/internal/app/service"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 )
 
 func (m *model) handleChatModeKey(msg tea.KeyMsg) (tea.Cmd, bool) {
@@ -22,7 +22,7 @@ func (m *model) handleChatModeKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 			return m.flushNativeScrollbackCmd(), true
 		}
 		if !m.busy && !m.hasSlashSuggestions() && !m.hasFilePanel() && !m.hasSkillSuggestions() {
-			m.dispatchIntent(service.Intent{Kind: service.IntentToggleMode})
+			m.dispatchIntent(protocol.Intent{Kind: protocol.IntentToggleMode})
 			return nil, true
 		}
 	case "up":
@@ -169,7 +169,7 @@ func (m *model) handleGlobalKey(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 			if m.dispatch == nil {
 				return nil, true, true
 			}
-			m.dispatchIntent(service.Intent{Kind: service.IntentRequestExit})
+			m.dispatchIntent(protocol.Intent{Kind: protocol.IntentRequestExit})
 			m.quitArmedUntil = time.Time{}
 			m.status = "exiting"
 			return nil, false, true

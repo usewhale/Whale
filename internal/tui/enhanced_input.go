@@ -262,10 +262,44 @@ func translateEnhancedPrintableSequence(input []byte) ([]byte, int, bool) {
 	if !ok {
 		codepoint, modifier, consumed, ok = parseModifyOtherKeysPrintableSequence(input)
 	}
-	if !ok || !isTextInputModifier(modifier) || !isPrintableCodepoint(codepoint) {
+	if !ok || !isTextInputModifier(modifier) {
 		return nil, 0, false
 	}
+	if !isPrintableCodepoint(codepoint) {
+		return translateCSIUFunctionKey(codepoint, modifier, consumed)
+	}
 	return []byte(string(rune(codepoint))), consumed, true
+}
+
+// translateCSIUFunctionKey translates a CSI u / modifyOtherKeys sequence
+// for a non-printable function key (Home, End, etc.) into the traditional
+// CSI sequence that Bubble Tea can parse. Ghostty, Kitty, and other
+// terminals that implement the Kitty keyboard protocol encode function
+// keys like Home as "\x1b[1;2u" instead of the standard "\x1b[1;2H".
+func translateCSIUFunctionKey(codepoint, modifier, consumed int) ([]byte, int, bool) {
+	// Map CSI u codepoint to the traditional CSI terminator character.
+	var terminator string
+	switch codepoint {
+	case 1:
+		terminator = "H" // Home
+	case 4:
+		terminator = "F" // End
+	default:
+		return nil, 0, false
+	}
+
+	switch modifier {
+	case 1:
+		return []byte("\x1b[" + terminator), consumed, true
+	case 2:
+		return []byte("\x1b[1;2" + terminator), consumed, true
+	case 3:
+		return []byte("\x1b[1;3" + terminator), consumed, true
+	case 4:
+		return []byte("\x1b[1;4" + terminator), consumed, true
+	default:
+		return nil, 0, false
+	}
 }
 
 func parseCSIUPrintableSequence(input []byte) (int, int, int, bool) {

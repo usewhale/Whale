@@ -134,6 +134,7 @@ base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 [retry]
 max_attempts = 4
 stream_max_attempts = 6
+stream_idle_timeout = "90s"
 max_delay = "60s"
 
 [tasks]
@@ -198,7 +199,8 @@ If you started with Whale v0.1.9 or newer, you do not need this command.
   and `Retry-After` support. `max_attempts` counts request attempts before
   streaming starts; set it to `0` to send one request and disable request
   retries. `stream_max_attempts` counts full stream attempts when the provider
-  disconnects after streaming has started.
+  disconnects before producing model output. `stream_idle_timeout` bounds how
+  long Whale waits without any streamed model output before surfacing a stall.
 - `[tasks].max_parallel_subagents` limits how many eligible `spawn_subagent`
   calls can run at once in a parallel batch. If unset, Whale uses an internal
   CPU-based default, and each batch is still capped by the number of calls in

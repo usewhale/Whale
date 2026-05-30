@@ -218,17 +218,12 @@ func TestStreamResponseRetriesRateLimitBeforeSSE(t *testing.T) {
 	}
 }
 
-func TestStreamResponseRetriesDisconnectedSSE(t *testing.T) {
+func TestStreamResponseDoesNotRetryDisconnectedSSEAfterProgress(t *testing.T) {
 	var requests int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		w.Header().Set("Content-Type", "text/event-stream")
-		if requests == 1 {
-			_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"old\"}}]}\n\n")
-			return
-		}
-		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n")
-		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"old\"}}]}\n\n")
 	}))
 	defer srv.Close()
 
@@ -252,44 +247,39 @@ func TestStreamResponseRetriesDisconnectedSSE(t *testing.T) {
 	}
 
 	var sawOld bool
-	var sawRetry bool
-	var complete string
+	var retryEvents int
+	var gotErr error
 	for ev := range c.StreamResponse(context.Background(), []core.Message{{Role: core.RoleUser, Text: "hi"}}, nil) {
 		switch ev.Type {
 		case llm.EventError:
-			t.Fatalf("provider error: %v", ev.Err)
+			gotErr = ev.Err
 		case llm.EventContentDelta:
 			if ev.Content == "old" {
 				sawOld = true
 			}
 		case llm.EventRetryScheduled:
-			sawRetry = true
-			if ev.Retry == nil || ev.Retry.Stage != "stream" || !ev.Retry.StreamReset || ev.Retry.Attempt != 1 || ev.Retry.MaxAttempts != 2 {
-				t.Fatalf("retry info: %+v", ev.Retry)
-			}
-		case llm.EventComplete:
-			if ev.Response != nil {
-				complete = ev.Response.Content
-			}
+			retryEvents++
 		}
 	}
-	if requests != 2 {
-		t.Fatalf("requests: want 2, got %d", requests)
+	if requests != 1 {
+		t.Fatalf("requests: want 1, got %d", requests)
 	}
-	if !sawOld || !sawRetry {
-		t.Fatalf("sawOld=%v sawRetry=%v", sawOld, sawRetry)
+	if !sawOld {
+		t.Fatal("missing streamed content before disconnect")
 	}
-	if complete != "ok" {
-		t.Fatalf("complete content: %q", complete)
+	if retryEvents != 0 {
+		t.Fatalf("retry events: want 0, got %d", retryEvents)
+	}
+	if !errors.Is(gotErr, errIncompleteStream) {
+		t.Fatalf("error: want incomplete stream, got %v", gotErr)
 	}
 }
 
-func TestStreamResponseExhaustsDisconnectedSSE(t *testing.T) {
+func TestStreamResponseExhaustsDisconnectedSSEBeforeProgress(t *testing.T) {
 	var requests int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n")
 	}))
 	defer srv.Close()
 
@@ -325,6 +315,219 @@ func TestStreamResponseExhaustsDisconnectedSSE(t *testing.T) {
 	}
 	if !errors.Is(gotErr, errIncompleteStream) {
 		t.Fatalf("error: want incomplete stream, got %v", gotErr)
+	}
+}
+
+func TestStreamResponseRetriesIdleSSEBeforeProgress(t *testing.T) {
+	var requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "text/event-stream")
+		if requests == 1 {
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			<-r.Context().Done()
+			return
+		}
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	policy := llmretry.DefaultPolicy()
+	policy.Jitter = 0
+	c, err := New(
+		WithAPIKey("test-key"),
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+		WithRetryPolicy(policy),
+		WithStreamMaxAttempts(2),
+		WithStreamIdleTimeout(20*time.Millisecond),
+		withRetrySleeper(func(_ context.Context, _ time.Duration) error { return nil }),
+	)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	var sawRetry bool
+	var complete string
+	for ev := range c.StreamResponse(context.Background(), []core.Message{{Role: core.RoleUser, Text: "hi"}}, nil) {
+		switch ev.Type {
+		case llm.EventError:
+			t.Fatalf("provider error: %v", ev.Err)
+		case llm.EventRetryScheduled:
+			sawRetry = true
+			if ev.Retry == nil || ev.Retry.Stage != "stream" || !ev.Retry.StreamReset {
+				t.Fatalf("retry info: %+v", ev.Retry)
+			}
+		case llm.EventComplete:
+			if ev.Response != nil {
+				complete = ev.Response.Content
+			}
+		}
+	}
+	if requests != 2 {
+		t.Fatalf("requests: want 2, got %d", requests)
+	}
+	if !sawRetry {
+		t.Fatal("missing retry event")
+	}
+	if complete != "ok" {
+		t.Fatalf("complete content: %q", complete)
+	}
+}
+
+func TestStreamResponseKeepalivesDoNotResetIdleTimeout(t *testing.T) {
+	var requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "text/event-stream")
+		if requests == 1 {
+			ticker := time.NewTicker(5 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					_, _ = fmt.Fprint(w, ": keepalive\n\n")
+					if f, ok := w.(http.Flusher); ok {
+						f.Flush()
+					}
+				case <-r.Context().Done():
+					return
+				}
+			}
+		}
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	policy := llmretry.DefaultPolicy()
+	policy.Jitter = 0
+	c, err := New(
+		WithAPIKey("test-key"),
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+		WithRetryPolicy(policy),
+		WithStreamMaxAttempts(2),
+		WithStreamIdleTimeout(20*time.Millisecond),
+		withRetrySleeper(func(_ context.Context, _ time.Duration) error { return nil }),
+	)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	var sawRetry bool
+	var complete string
+	for ev := range c.StreamResponse(context.Background(), []core.Message{{Role: core.RoleUser, Text: "hi"}}, nil) {
+		switch ev.Type {
+		case llm.EventError:
+			t.Fatalf("provider error: %v", ev.Err)
+		case llm.EventRetryScheduled:
+			sawRetry = true
+		case llm.EventComplete:
+			if ev.Response != nil {
+				complete = ev.Response.Content
+			}
+		}
+	}
+	if requests != 2 {
+		t.Fatalf("requests: want 2, got %d", requests)
+	}
+	if !sawRetry {
+		t.Fatal("missing retry event")
+	}
+	if complete != "ok" {
+		t.Fatalf("complete content: %q", complete)
+	}
+}
+
+func TestStreamResponseDoesNotRetryIdleSSEAfterReasoning(t *testing.T) {
+	var requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Let\"}}]}\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	c, err := New(
+		WithAPIKey("test-key"),
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+		WithStreamMaxAttempts(2),
+		WithStreamIdleTimeout(20*time.Millisecond),
+		withRetrySleeper(func(_ context.Context, _ time.Duration) error {
+			t.Fatal("unexpected retry sleep")
+			return nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	var sawReasoning bool
+	var retryEvents int
+	var gotErr error
+	for ev := range c.StreamResponse(context.Background(), []core.Message{{Role: core.RoleUser, Text: "hi"}}, nil) {
+		switch ev.Type {
+		case llm.EventReasoningDelta:
+			if ev.ReasoningDelta == "Let" {
+				sawReasoning = true
+			}
+		case llm.EventRetryScheduled:
+			retryEvents++
+		case llm.EventError:
+			gotErr = ev.Err
+		}
+	}
+	if requests != 1 {
+		t.Fatalf("requests: want 1, got %d", requests)
+	}
+	if !sawReasoning {
+		t.Fatal("missing reasoning delta")
+	}
+	if retryEvents != 0 {
+		t.Fatalf("retry events: want 0, got %d", retryEvents)
+	}
+	if gotErr == nil || !strings.Contains(gotErr.Error(), "stalled") {
+		t.Fatalf("error: want stall, got %v", gotErr)
+	}
+}
+
+func TestStreamResponseRejectsReasoningOnlyComplete(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Let\"}}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	c, err := New(WithAPIKey("test-key"), WithBaseURL(srv.URL), WithHTTPClient(srv.Client()))
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	var sawComplete bool
+	var gotErr error
+	for ev := range c.StreamResponse(context.Background(), []core.Message{{Role: core.RoleUser, Text: "hi"}}, nil) {
+		switch ev.Type {
+		case llm.EventComplete:
+			sawComplete = true
+		case llm.EventError:
+			gotErr = ev.Err
+		}
+	}
+	if sawComplete {
+		t.Fatal("unexpected complete event")
+	}
+	if gotErr == nil || !strings.Contains(gotErr.Error(), "reasoning") {
+		t.Fatalf("error: want reasoning-only response, got %v", gotErr)
 	}
 }
 

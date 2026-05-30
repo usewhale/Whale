@@ -7,9 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/usewhale/whale/internal/app"
-	"github.com/usewhale/whale/internal/app/service"
-	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
@@ -343,7 +341,7 @@ func TestProjectFocusMessagesCollapsesSubagentCells(t *testing.T) {
 			Kind:     tuirender.KindSubagent,
 			ToolName: "spawn_subagent",
 			Text:     "Subagent review running\nsession: child-123\ncurrent: read_file\ndetail: reading internal/tasks/runner.go",
-			SubagentSteps: []core.SubagentStep{
+			SubagentSteps: []protocol.ProgressStep{
 				{ToolName: "read_file", Status: "running", Summary: "reading internal/tasks/runner.go"},
 			},
 		},
@@ -555,7 +553,7 @@ func TestProjectNormalMessagesKeepsCompletedMCPDisplay(t *testing.T) {
 
 func TestModelChatMessagesApplyFocusView(t *testing.T) {
 	m := newModel(nil, "deepseek-v4-pro", "high", "on")
-	m.viewMode = app.ViewModeFocus
+	m.viewMode = protocol.ViewModeFocus
 	m.transcript = []tuirender.UIMessage{
 		{Role: "you", Kind: tuirender.KindText, Text: "question"},
 		{Role: "think", Kind: tuirender.KindThinking, Text: "hidden thought"},
@@ -574,7 +572,7 @@ func TestModelChatMessagesApplyFocusView(t *testing.T) {
 
 func TestModelChatMessagesFocusHidesReasoningEvenWhenShowReasoningEnabled(t *testing.T) {
 	m := newModel(nil, "deepseek-v4-pro", "high", "on")
-	m.viewMode = app.ViewModeFocus
+	m.viewMode = protocol.ViewModeFocus
 	m.showReasoning = true
 	m.transcript = []tuirender.UIMessage{
 		{Role: "you", Kind: tuirender.KindText, Text: "question"},
@@ -1175,7 +1173,7 @@ func TestProjectFocusMessagesFallsBackWhenTaskHasNoDetail(t *testing.T) {
 
 func TestFocusNativeScrollbackDefersToolOnlySummaries(t *testing.T) {
 	m := newModel(nil, "deepseek-v4-flash", "high", "on")
-	m.viewMode = app.ViewModeFocus
+	m.viewMode = protocol.ViewModeFocus
 	m.width = 80
 	m.height = 24
 	m.transcript = []tuirender.UIMessage{{Role: "you", Kind: tuirender.KindText, Text: "inspect these changes"}}
@@ -1209,7 +1207,7 @@ func TestFocusNativeScrollbackDefersToolOnlySummaries(t *testing.T) {
 
 func TestFocusNativeScrollbackDoesNotLeakHiddenOnlyMessages(t *testing.T) {
 	m := newModel(nil, "deepseek-v4-flash", "high", "on")
-	m.viewMode = app.ViewModeFocus
+	m.viewMode = protocol.ViewModeFocus
 	m.width = 80
 	m.height = 24
 	m.transcript = []tuirender.UIMessage{{Role: "you", Kind: tuirender.KindText, Text: "question"}}
@@ -1227,7 +1225,7 @@ func TestFocusNativeScrollbackDoesNotLeakHiddenOnlyMessages(t *testing.T) {
 
 func TestFocusNativeScrollbackFlushesDeferredToolSummaryBeforeNextVisibleMessage(t *testing.T) {
 	m := newModel(nil, "deepseek-v4-flash", "high", "on")
-	m.viewMode = app.ViewModeFocus
+	m.viewMode = protocol.ViewModeFocus
 	m.width = 80
 	m.height = 24
 	m.transcript = []tuirender.UIMessage{{Role: "you", Kind: tuirender.KindText, Text: "first prompt"}}
@@ -1254,7 +1252,7 @@ func TestViewModeChangedEventRefreshesFooter(t *testing.T) {
 	m := newModel(nil, "deepseek-v4-pro", "high", "on")
 	m.width = 100
 	m.height = 20
-	_, _, _ = m.handleServiceEvent(serviceViewModeChanged(app.ViewModeFocus))
+	_, _, _ = m.handleServiceEvent(serviceViewModeChanged(protocol.ViewModeFocus))
 
 	view := m.View()
 	if !strings.Contains(view, "focus") {
@@ -1274,7 +1272,7 @@ func TestViewModeChangedEventRefreshesFooter(t *testing.T) {
 
 func TestFocusFooterIndicatorSurvivesLongDirectory(t *testing.T) {
 	m := newModel(nil, "deepseek-v4-pro", "high", "on")
-	m.viewMode = app.ViewModeFocus
+	m.viewMode = protocol.ViewModeFocus
 	m.cwd = "/Users/goranka/Engineer/ai/dsk/whale-output-mouse-copy"
 	m.width = 72
 	m.height = 12
@@ -1290,7 +1288,7 @@ func TestFocusToggleMessageClearsOnNextSubmit(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.width = 100
 	m.height = 20
-	_, _, _ = m.handleServiceEvent(serviceViewModeChanged(app.ViewModeFocus))
+	_, _, _ = m.handleServiceEvent(serviceViewModeChanged(protocol.ViewModeFocus))
 	if !strings.Contains(m.View(), "Focus view enabled") {
 		t.Fatalf("missing focus toggle message:\n%s", m.View())
 	}
@@ -1325,7 +1323,7 @@ func TestCtrlOTogglesFocusView(t *testing.T) {
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
 	m = next.(model)
 	collapsed := strings.Join(tuirender.ChatLines(m.chatMessages(), 100), "\n")
-	if m.viewMode != app.ViewModeFocus || strings.Contains(collapsed, "hidden thought") || !strings.Contains(collapsed, "(ctrl+o to expand)") {
+	if m.viewMode != protocol.ViewModeFocus || strings.Contains(collapsed, "hidden thought") || !strings.Contains(collapsed, "(ctrl+o to expand)") {
 		t.Fatalf("expected ctrl+o to collapse into focus view:\n%s", collapsed)
 	}
 	if len(*intents) != 0 {
@@ -1335,7 +1333,7 @@ func TestCtrlOTogglesFocusView(t *testing.T) {
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
 	m = next.(model)
 	reexpanded := strings.Join(tuirender.ChatLines(m.chatMessages(), 100), "\n")
-	if m.viewMode != app.ViewModeDefault || !strings.Contains(reexpanded, "hidden thought") || !strings.Contains(reexpanded, "(ctrl+o to collapse)") {
+	if m.viewMode != protocol.ViewModeDefault || !strings.Contains(reexpanded, "hidden thought") || !strings.Contains(reexpanded, "(ctrl+o to collapse)") {
 		t.Fatalf("expected second ctrl+o to expand into default view:\n%s", reexpanded)
 	}
 	if len(*intents) != 0 {
@@ -1391,7 +1389,7 @@ func TestCtrlORedrawsPreviouslyPrintedTranscript(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected ctrl+o to redraw printed transcript")
 	}
-	if m.viewMode != app.ViewModeFocus {
+	if m.viewMode != protocol.ViewModeFocus {
 		t.Fatalf("expected focus view, got %q", m.viewMode)
 	}
 	if m.nativeScrollbackPrinted != len(m.transcript) {
@@ -1426,7 +1424,7 @@ func TestViewModeChangedEventRedrawsPreviouslyPrintedTranscript(t *testing.T) {
 	m := newModel(nil, "deepseek-v4-pro", "high", "on")
 	m.width = 100
 	m.height = 20
-	m.viewMode = app.ViewModeFocus
+	m.viewMode = protocol.ViewModeFocus
 	m.transcript = []tuirender.UIMessage{
 		{Role: "you", Kind: tuirender.KindText, Text: "old question"},
 		{Role: "think", Kind: tuirender.KindThinking, Text: "old hidden thought"},
@@ -1440,11 +1438,11 @@ func TestViewModeChangedEventRedrawsPreviouslyPrintedTranscript(t *testing.T) {
 		t.Fatalf("test setup should start with collapsed focus transcript:\n%s", collapsed)
 	}
 
-	cmd, _, _ := m.handleServiceEvent(serviceViewModeChanged(app.ViewModeDefault))
+	cmd, _, _ := m.handleServiceEvent(serviceViewModeChanged(protocol.ViewModeDefault))
 	if cmd == nil {
 		t.Fatal("expected /focus view-mode event to redraw printed transcript")
 	}
-	if m.viewMode != app.ViewModeDefault {
+	if m.viewMode != protocol.ViewModeDefault {
 		t.Fatalf("expected default view, got %q", m.viewMode)
 	}
 	if m.nativeScrollbackPrinted != len(m.transcript) {
@@ -1458,6 +1456,6 @@ func TestViewModeChangedEventRedrawsPreviouslyPrintedTranscript(t *testing.T) {
 	}
 }
 
-func serviceViewModeChanged(mode string) service.Event {
-	return service.Event{Kind: service.EventViewModeChanged, ViewMode: mode, Text: app.ViewModeToggleMessage(mode)}
+func serviceViewModeChanged(mode string) protocol.Event {
+	return protocol.Event{Kind: protocol.EventViewModeChanged, ViewMode: mode, Text: protocol.ViewModeToggleMessage(mode)}
 }

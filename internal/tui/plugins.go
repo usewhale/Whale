@@ -8,8 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	xansi "github.com/charmbracelet/x/ansi"
 
-	"github.com/usewhale/whale/internal/app/service"
-	"github.com/usewhale/whale/internal/plugins"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
 
@@ -21,7 +20,7 @@ type pluginManagerItem struct {
 	Enabled     bool
 }
 
-func (m *model) setPluginsManagerItems(statuses []plugins.PluginStatus) {
+func (m *model) setPluginsManagerItems(statuses []protocol.PluginStatus) {
 	current := ""
 	if m.pluginsManager.selected >= 0 && m.pluginsManager.selected < len(m.pluginsManager.matches) {
 		idx := m.pluginsManager.matches[m.pluginsManager.selected]
@@ -55,7 +54,7 @@ func (m *model) setPluginsManagerItems(statuses []plugins.PluginStatus) {
 	}
 }
 
-func pluginUsageSummary(st plugins.PluginStatus) string {
+func pluginUsageSummary(st protocol.PluginStatus) string {
 	parts := []string{}
 	if len(st.Commands) > 0 {
 		usages := make([]string, 0, len(st.Commands))
@@ -84,7 +83,7 @@ func pluginUsageSummary(st plugins.PluginStatus) string {
 	if len(parts) == 0 && len(st.Manifest.Capabilities) > 0 {
 		caps := make([]string, 0, len(st.Manifest.Capabilities))
 		for _, cap := range st.Manifest.Capabilities {
-			caps = append(caps, string(cap))
+			caps = append(caps, cap)
 		}
 		parts = append(parts, strings.Join(caps, ", "))
 	}
@@ -140,7 +139,7 @@ func (m *model) toggleSelectedManagedPlugin() {
 	}
 	item := &m.pluginsManager.all[idx]
 	item.Enabled = !item.Enabled
-	m.dispatchIntent(service.Intent{Kind: service.IntentSetPluginEnabled, PluginID: item.ID, PluginEnabled: item.Enabled})
+	m.dispatchIntent(protocol.Intent{Kind: protocol.IntentSetPluginEnabled, PluginID: item.ID, PluginEnabled: item.Enabled})
 }
 
 func (m model) renderPluginsManager() string {

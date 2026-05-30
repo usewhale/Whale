@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/session"
 )
 
@@ -65,12 +66,14 @@ func TestPlanModeBlocksWriteTools(t *testing.T) {
 	}
 	var sawModeBlocked bool
 	var sawPlanBlockedResult bool
+	var blockedContent string
 	for ev := range events {
 		if ev.Type == AgentEventTypeToolModeBlocked && ev.ToolBlocked != nil && ev.ToolBlocked.ReasonCode == "plan_mode_blocked" {
 			sawModeBlocked = true
 		}
 		if ev.Type == AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, "plan_mode_blocked") {
 			sawPlanBlockedResult = true
+			blockedContent = ev.Result.Content
 		}
 	}
 	if !sawModeBlocked {
@@ -78,5 +81,51 @@ func TestPlanModeBlocksWriteTools(t *testing.T) {
 	}
 	if !sawPlanBlockedResult {
 		t.Fatal("expected plan mode blocked tool result")
+	}
+	for _, want := range []string{
+		"proposed_plan",
+		"Only the user or UI can switch modes",
+	} {
+		if !strings.Contains(blockedContent, want) {
+			t.Fatalf("plan mode blocked result missing %q:\n%s", want, blockedContent)
+		}
+	}
+	for _, forbidden := range []string{"/agent", "Shift+Tab", "suggested_modes"} {
+		if strings.Contains(blockedContent, forbidden) {
+			t.Fatalf("plan mode blocked result should not suggest assistant mode switching %q:\n%s", forbidden, blockedContent)
+		}
+	}
+}
+
+func TestPlanModeBlockedDetailsGuideTowardProposedPlan(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		call core.ToolCall
+	}{
+		{name: "shell", call: core.ToolCall{Name: "shell_run"}},
+		{name: "write", call: core.ToolCall{Name: "write_file"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, _, summary, data := modeBlockedDetailsForCall(session.ModePlan, tc.call)
+			if code != "plan_mode_blocked" {
+				t.Fatalf("expected plan_mode_blocked, got %q", code)
+			}
+			for _, want := range []string{"<proposed_plan>", "Only the user or UI can switch modes"} {
+				if !strings.Contains(summary, want) {
+					t.Fatalf("summary missing %q:\n%s", want, summary)
+				}
+			}
+			for _, forbidden := range []string{"/agent", "Shift+Tab"} {
+				if strings.Contains(summary, forbidden) {
+					t.Fatalf("summary should not suggest assistant mode switching %q:\n%s", forbidden, summary)
+				}
+			}
+			if got := data["current_mode"]; got != "plan" {
+				t.Fatalf("expected current_mode plan, got %#v", got)
+			}
+			if _, ok := data["suggested_modes"]; ok {
+				t.Fatalf("plan mode blocked data should not suggest mode commands: %+v", data)
+			}
+		})
 	}
 }
