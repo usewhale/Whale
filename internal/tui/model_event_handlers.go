@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/usewhale/whale/internal/runtime/protocol"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -254,6 +255,10 @@ func (m *model) handleApprovalRequiredEvent(ev protocol.Event) {
 	m.approval.selected = 0
 	m.addLog(logEntry{Kind: "approval_required", Source: ev.ToolName, Summary: ev.Text, Raw: ev.Text})
 	m.status = "approval required"
+	// Desktop notification for approval request (only if user is idle).
+	if m.notifier != nil && time.Since(m.lastUserInput) > 6*time.Second {
+		m.notifier.SendApprovalRequired(ev.ToolName, ev.Text)
+	}
 }
 
 func (m *model) handleUserInputRequiredEvent(ev protocol.Event) {

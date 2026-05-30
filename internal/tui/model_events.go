@@ -202,8 +202,19 @@ func (m *model) handleTurnDone(ev protocol.Event) tea.Cmd {
 	if !queuedTurnStarted && !queuedRestored && m.localSubmitPending == 0 && !m.hasPendingWindowsBusyInput() && shouldOpenPlanPicker {
 		m.openPlanImplementationPicker()
 	}
+	// Desktop notification: only if user has been idle for 6+ seconds.
+	m.maybeNotifyTurnDone(ev.LastResponse)
 	m.resetTurnVisibility()
 	return eventCmd
+}
+
+// maybeNotifyTurnDone sends a desktop notification when a turn completes.
+func (m *model) maybeNotifyTurnDone(lastResponse string) {
+	if m.notifier == nil {
+		return
+	}
+	summary := truncateLine(lastResponse, 120)
+	m.notifier.SendTurnDone(summary)
 }
 
 const turnDurationNoticeThreshold = 30 * time.Second

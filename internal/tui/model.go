@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/usewhale/whale/internal/defaults"
+	"github.com/usewhale/whale/internal/notification"
 	appcommands "github.com/usewhale/whale/internal/runtime/commands"
 	"github.com/usewhale/whale/internal/runtime/protocol"
 	"github.com/usewhale/whale/internal/tui/composer"
@@ -61,6 +62,8 @@ type model struct {
 	startupHeaderOnce      *bool
 	sizeMsgReceived        bool
 	ephemeralMessages      []tuirender.UIMessage
+	lastUserInput          time.Time
+	notifier               *notification.Notifier
 	logs                   []logEntry
 	diffs                  []diffEntry
 	width                  int
@@ -310,6 +313,7 @@ func newModel(rt Runtime, modelName, effort, thinking string) model {
 		viewMode:          viewMode,
 		showReasoning:     showReasoning,
 		chatMode:          "agent",
+		notifier:          notification.New(),
 		product:           "Whale",
 		version:           resolveVersion(),
 		cwd:               resolveWorkingDirectory(),
@@ -524,6 +528,7 @@ func (m model) handleServiceUpdate(events []protocol.Event) (tea.Model, tea.Cmd)
 }
 
 func (m *model) handleUpdateKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
+	m.lastUserInput = time.Now()
 	if !msg.Paste && m.consumeMouseCSIFragment(msg) {
 		m.refreshViewportContent()
 		return nil, false, true
