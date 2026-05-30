@@ -3,7 +3,7 @@ package tui
 import (
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/usewhale/whale/internal/app/service"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 	"strings"
 	"testing"
@@ -12,9 +12,9 @@ import (
 
 func TestTurnDoneReasoningOnlyCommitsFallback(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 80, height: 24, busy: true}
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventReasoningDelta, Text: "I should answer."}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventReasoningDelta, Text: "I should answer."}))
 	m = next.(model)
-	next, cmd := m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+	next, cmd := m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	m = next.(model)
 	if cmd == nil {
 		t.Fatal("expected wait-event command")
@@ -28,14 +28,14 @@ func TestTurnDoneReasoningOnlyCommitsFallback(t *testing.T) {
 }
 func TestTurnDoneReconcilesDroppedAssistantDeltaFromLastResponse(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 80, height: 8, busy: true}
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind: service.EventAssistantDelta,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind: protocol.EventAssistantDelta,
 		Text: "visible answer head\n",
 	}))
 	m = next.(model)
 
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:         service.EventTurnDone,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:         protocol.EventTurnDone,
 		LastResponse: "visible answer head\nmissing latest tail",
 		Metadata:     agentTurnMetadata(),
 	}))
@@ -54,8 +54,8 @@ func TestTurnDoneRecoversAssistantWhenAllDeltasDropped(t *testing.T) {
 	m.beginTurnTranscript()
 	m.busy = true
 
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind:         service.EventTurnDone,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:         protocol.EventTurnDone,
 		LastResponse: "final answer only present in LastResponse",
 		Metadata:     agentTurnMetadata(),
 	}))
@@ -73,8 +73,8 @@ func TestTurnDoneAddsDurationNoticeForLongTurn(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 80, height: 24, busy: true}
 	m.busySince = time.Now().Add(-(3*time.Minute + 5*time.Second))
 
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind:         service.EventTurnDone,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:         protocol.EventTurnDone,
 		LastResponse: "done",
 		Metadata:     agentTurnMetadata(),
 	}))
@@ -92,8 +92,8 @@ func TestTurnDoneSkipsDurationNoticeForShortTurn(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 80, height: 24, busy: true}
 	m.busySince = time.Now().Add(-29 * time.Second)
 
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind:         service.EventTurnDone,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:         protocol.EventTurnDone,
 		LastResponse: "done",
 		Metadata:     agentTurnMetadata(),
 	}))
@@ -219,7 +219,7 @@ func TestMarkNoFinalAnswerIfNeededSkippedWithAssistant(t *testing.T) {
 func TestProviderRetryEventUpdatesStatusWithoutTranscript(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	beforeTranscript := len(m.transcript)
-	m.handleServiceEvent(service.Event{Kind: service.EventProviderRetry, Text: "API rate limited, retrying in 2s (1/3)", Metadata: map[string]any{"delay_ms": int64(2000)}})
+	m.handleServiceEvent(protocol.Event{Kind: protocol.EventProviderRetry, Text: "API rate limited, retrying in 2s (1/3)", Metadata: map[string]any{"delay_ms": int64(2000)}})
 
 	if m.status != "ready" {
 		t.Fatalf("status should not be overwritten by retry, got %s", m.status)
@@ -236,8 +236,8 @@ func TestProviderRetryEventUpdatesStatusWithoutTranscript(t *testing.T) {
 }
 func TestProviderRetryStatusClearsOnAssistantDelta(t *testing.T) {
 	m := newModel(nil, "", "", "")
-	m.handleServiceEvent(service.Event{Kind: service.EventProviderRetry, Text: "API rate limited, retrying in 2s (1/3)", Metadata: map[string]any{"delay_ms": int64(2000)}})
-	m.handleServiceEvent(service.Event{Kind: service.EventAssistantDelta, Text: "ok"})
+	m.handleServiceEvent(protocol.Event{Kind: protocol.EventProviderRetry, Text: "API rate limited, retrying in 2s (1/3)", Metadata: map[string]any{"delay_ms": int64(2000)}})
+	m.handleServiceEvent(protocol.Event{Kind: protocol.EventAssistantDelta, Text: "ok"})
 
 	if m.providerRetryStatus != "" || !m.providerRetryUntil.IsZero() {
 		t.Fatalf("provider retry status not cleared: %q until=%v", m.providerRetryStatus, m.providerRetryUntil)
@@ -245,8 +245,8 @@ func TestProviderRetryStatusClearsOnAssistantDelta(t *testing.T) {
 }
 func TestProviderRetryStreamResetClearsLiveAttempt(t *testing.T) {
 	m := newModel(nil, "", "", "")
-	m.handleServiceEvent(service.Event{Kind: service.EventAssistantDelta, Text: "old answer"})
-	m.handleServiceEvent(service.Event{Kind: service.EventReasoningDelta, Text: "old thought"})
+	m.handleServiceEvent(protocol.Event{Kind: protocol.EventAssistantDelta, Text: "old answer"})
+	m.handleServiceEvent(protocol.Event{Kind: protocol.EventReasoningDelta, Text: "old thought"})
 	m.appendToolCall("tc-old", "shell_run", `{"command":"date"}`)
 
 	if len(m.assembler.Snapshot()) == 0 {
@@ -255,8 +255,8 @@ func TestProviderRetryStreamResetClearsLiveAttempt(t *testing.T) {
 	if m.busyTokenCount == 0 {
 		t.Fatal("expected live token count before retry reset")
 	}
-	m.handleServiceEvent(service.Event{
-		Kind:     service.EventProviderRetry,
+	m.handleServiceEvent(protocol.Event{
+		Kind:     protocol.EventProviderRetry,
 		Text:     "API stream disconnected, retrying in 1s (1/1)",
 		Metadata: map[string]any{"delay_ms": int64(1000), "stage": "stream", "stream_reset": true},
 	})
@@ -319,7 +319,7 @@ func TestChatViewportTurnDoneUnfreezesScrolledLiveOutput(t *testing.T) {
 	m = next.(model)
 	m.append("assistant", "live-tail-after-scroll\n")
 
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventTurnDone, LastResponse: "done"}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone, LastResponse: "done"}))
 	m = next.(model)
 	if m.viewportFrozen {
 		t.Fatal("expected turn completion to unfreeze chat viewport")
@@ -346,7 +346,7 @@ func TestTurnDoneWhileScrolledFlushesNativeScrollbackImmediately(t *testing.T) {
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
 	m = next.(model)
 	m.append("assistant", "tail while scrolled\n")
-	cmd := m.handleTurnDone(service.Event{Kind: service.EventTurnDone, LastResponse: "done"})
+	cmd := m.handleTurnDone(protocol.Event{Kind: protocol.EventTurnDone, LastResponse: "done"})
 
 	// The user's scroll position is preserved (we do not yank them to the tail)...
 	if m.followTail {
@@ -383,8 +383,8 @@ func TestLongTurnDoneWhileScrolledPreservesViewportButFlushesDurationNotice(t *t
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
 	m = next.(model)
 	m.append("assistant", "tail while scrolled\n")
-	cmd := m.handleTurnDone(service.Event{
-		Kind:         service.EventTurnDone,
+	cmd := m.handleTurnDone(protocol.Event{
+		Kind:         protocol.EventTurnDone,
 		LastResponse: "done",
 		Metadata:     agentTurnMetadata(),
 	})
@@ -422,12 +422,12 @@ func TestTurnDoneReconciliationPreservesScrolledPosition(t *testing.T) {
 	m.beginTurnTranscript()
 	m.startBusy()
 
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventAssistantDelta, Text: "visible assistant"}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventAssistantDelta, Text: "visible assistant"}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventToolCall, ToolCallID: "tc-1", ToolName: "read_file", Text: `read_file: {"file_path":"internal/tui/model.go"}`}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolCall, ToolCallID: "tc-1", ToolName: "read_file", Text: `read_file: {"file_path":"internal/tui/model.go"}`}))
 	m = next.(model)
 	raw := `{"success":true,"data":{"status":"ok","metrics":{"returned_lines":24,"total_lines":100},"payload":{"file_path":"internal/tui/model.go","content":"package tui"}}}`
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventToolResult, ToolCallID: "tc-1", ToolName: "read_file", Text: raw}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolResult, ToolCallID: "tc-1", ToolName: "read_file", Text: raw}))
 	m = next.(model)
 
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgUp})
@@ -436,10 +436,10 @@ func TestTurnDoneReconciliationPreservesScrolledPosition(t *testing.T) {
 		t.Fatalf("expected user scroll to freeze away from tail, frozen=%v follow=%v", m.viewportFrozen, m.followTail)
 	}
 
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:         service.EventTurnDone,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:         protocol.EventTurnDone,
 		LastResponse: "visible assistant with final reconciliation",
-		Metadata:     map[string]any{service.EventMetadataAgentTurn: true},
+		Metadata:     map[string]any{protocol.EventMetadataAgentTurn: true},
 	}))
 	m = next.(model)
 
@@ -459,23 +459,23 @@ func TestTurnDoneReconciliationPreservesScrolledPosition(t *testing.T) {
 }
 func TestToolDeniedDoesNotAddNoFinalAnswerNotice(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 80, height: 24, busy: true}
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventReasoningDelta, Text: "I should edit the file."}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventReasoningDelta, Text: "I should edit the file."}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolCall,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolCall,
 		ToolCallID: "tc-1",
 		ToolName:   "edit",
 		Text:       `edit: internal/tui/model.go`,
 	}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolResult,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolResult,
 		ToolCallID: "tc-1",
 		ToolName:   "edit",
 		Text:       `{"success":false,"code":"approval_denied","message":"tool approval denied"}`,
 	}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	m = next.(model)
 	snap := m.assembler.Snapshot()
 	for _, entry := range snap {

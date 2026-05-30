@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/usewhale/whale/internal/app/service"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 	"strings"
 	"testing"
@@ -64,7 +64,7 @@ func TestWindowsUnbracketedPasteFallbackKeepsLinesInOnePrompt(t *testing.T) {
 	if len(*intents) != 1 {
 		t.Fatalf("expected one submit after paste quiet period, got %+v", *intents)
 	}
-	if got := (*intents)[0]; got.Kind != service.IntentSubmit || got.Input != "line one\nline two" {
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmit || got.Input != "line one\nline two" {
 		t.Fatalf("unexpected submit intent: %+v", got)
 	}
 }
@@ -206,7 +206,7 @@ func TestWindowsPasteFallbackFastEnterSubmitsTypedCharacter(t *testing.T) {
 	if len(*intents) != 1 {
 		t.Fatalf("expected one submit intent, got %+v", *intents)
 	}
-	if got := (*intents)[0]; got.Kind != service.IntentSubmit || got.Input != "hello" {
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmit || got.Input != "hello" {
 		t.Fatalf("unexpected submit intent: %+v", got)
 	}
 }
@@ -250,7 +250,7 @@ func TestWindowsPasteFallbackEnterThenHumanTypingSubmitsAndKeepsRune(t *testing.
 	if len(*intents) != 1 {
 		t.Fatalf("expected the deferred prompt to submit once, got %+v", *intents)
 	}
-	if got := (*intents)[0]; got.Kind != service.IntentSubmit || got.Input != "hello" {
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmit || got.Input != "hello" {
 		t.Fatalf("unexpected submit intent: %+v", got)
 	}
 }
@@ -461,7 +461,7 @@ func TestWindowsPasteFallbackFastEnterSubmitsShortBurst(t *testing.T) {
 	if len(*intents) != 1 {
 		t.Fatalf("expected one submit intent, got %+v", *intents)
 	}
-	if got := (*intents)[0]; got.Kind != service.IntentSubmit || got.Input != "hi" {
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmit || got.Input != "hi" {
 		t.Fatalf("unexpected submit intent: %+v", got)
 	}
 }
@@ -499,7 +499,7 @@ func TestWindowsPasteFallbackFastEnterSubmitsLongTypedPrompt(t *testing.T) {
 	if len(*intents) != 1 {
 		t.Fatalf("expected one submit intent, got %+v", *intents)
 	}
-	if got := (*intents)[0]; got.Kind != service.IntentSubmit || got.Input != line {
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmit || got.Input != line {
 		t.Fatalf("unexpected submit intent: %+v", got)
 	}
 }
@@ -532,7 +532,7 @@ func TestWindowsPasteFallbackSingleLinePasteThenEnterSubmits(t *testing.T) {
 	if len(*intents) != 1 {
 		t.Fatalf("expected single-line paste to submit after deferred enter, got %+v", *intents)
 	}
-	if got := (*intents)[0]; got.Kind != service.IntentSubmit || got.Input != "fix bug" {
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmit || got.Input != "fix bug" {
 		t.Fatalf("unexpected submit intent: %+v", got)
 	}
 }
@@ -616,7 +616,7 @@ func TestWindowsUnbracketedPasteFallbackNormalizesCRLF(t *testing.T) {
 	if len(*intents) != 1 {
 		t.Fatalf("expected one submit after CRLF paste, got %+v", *intents)
 	}
-	if got := (*intents)[0]; got.Kind != service.IntentSubmit || got.Input != "foo\nbar" {
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmit || got.Input != "foo\nbar" {
 		t.Fatalf("unexpected submit intent: %+v", got)
 	}
 }
@@ -696,7 +696,7 @@ func TestWindowsUnbracketedPasteFallbackAllowsSubsequentPasteBlocks(t *testing.T
 	if len(*intents) != 1 {
 		t.Fatalf("expected one submit after both paste blocks, got %+v", *intents)
 	}
-	if got := (*intents)[0]; got.Kind != service.IntentSubmit || got.Input != "first\nblock\nsecond" {
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmit || got.Input != "first\nblock\nsecond" {
 		t.Fatalf("unexpected submit intent: %+v", got)
 	}
 }
@@ -736,7 +736,7 @@ func TestWindowsUnbracketedPasteFallbackPreservesTabIndentAsSpaces(t *testing.T)
 	if len(*intents) != 1 {
 		t.Fatalf("expected one submit after tab-indented paste, got %+v", *intents)
 	}
-	if got := (*intents)[0]; got.Kind != service.IntentSubmit || got.Input != "foo\n    bar" {
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmit || got.Input != "foo\n    bar" {
 		t.Fatalf("unexpected submit intent: %+v", got)
 	}
 }
@@ -803,7 +803,7 @@ func TestWindowsUnbracketedPasteFallbackPreservesSingleLineTabBeforeSubmit(t *te
 	if len(*intents) != 1 {
 		t.Fatalf("expected one submit after single-line pasted tab, got %+v", *intents)
 	}
-	if got := (*intents)[0]; got.Kind != service.IntentSubmit || got.Input != "a    b" {
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmit || got.Input != "a    b" {
 		t.Fatalf("unexpected submit intent: %+v", got)
 	}
 }
@@ -851,7 +851,7 @@ func TestWindowsUnbracketedPasteFallbackPreservesBlankLines(t *testing.T) {
 	if len(*intents) != 1 {
 		t.Fatalf("expected one submit after paste quiet period, got %+v", *intents)
 	}
-	if got := (*intents)[0]; got.Kind != service.IntentSubmit || got.Input != "a\n\nb" {
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmit || got.Input != "a\n\nb" {
 		t.Fatalf("unexpected submit intent: %+v", got)
 	}
 }
@@ -937,7 +937,7 @@ func TestWindowsPasteFallbackCtrlCResetsQuietWindow(t *testing.T) {
 	if len(*intents) != 1 {
 		t.Fatalf("expected one replacement submit, got %+v", *intents)
 	}
-	if got := (*intents)[0]; got.Kind != service.IntentSubmit || got.Input != "replacement" {
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmit || got.Input != "replacement" {
 		t.Fatalf("unexpected submit intent: %+v", got)
 	}
 }
@@ -1007,7 +1007,7 @@ func TestWindowsDeferredBusyEnterPreservesBusySlashClassification(t *testing.T) 
 		if len(*intents) != 1 {
 			t.Fatalf("expected immediate local dispatch after deferred tick, got %+v", *intents)
 		}
-		if got := (*intents)[0]; got.Kind != service.IntentSubmitLocal || got.Input != "/status" {
+		if got := (*intents)[0]; got.Kind != protocol.IntentSubmitLocal || got.Input != "/status" {
 			t.Fatalf("unexpected dispatched intent: %+v", got)
 		}
 		if len(m.queuedPrompts) != 0 {
@@ -1031,7 +1031,7 @@ func TestWindowsDeferredBusyEnterPreservesBusySlashClassification(t *testing.T) 
 		if len(*intents) != 1 {
 			t.Fatalf("expected immediate busy local dispatch, got %+v", *intents)
 		}
-		if got := (*intents)[0]; got.Kind != service.IntentSubmitLocal || got.Input != "/status" {
+		if got := (*intents)[0]; got.Kind != protocol.IntentSubmitLocal || got.Input != "/status" {
 			t.Fatalf("unexpected dispatched intent: %+v", got)
 		}
 		if m.windowsPaste.pendingEnter {
@@ -1080,7 +1080,7 @@ func TestWindowsDeferredBusyEnterPreservesBusySlashClassification(t *testing.T) 
 		m = next.(model)
 		deferredID := m.windowsPaste.pendingEnterID
 
-		next, _ = m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+		next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 		m = next.(model)
 		if m.busy {
 			t.Fatal("expected turn done to clear busy before deferred tick")
@@ -1091,7 +1091,7 @@ func TestWindowsDeferredBusyEnterPreservesBusySlashClassification(t *testing.T) 
 		if len(*intents) != 1 {
 			t.Fatalf("expected slash command to submit after turn finished, got %+v", *intents)
 		}
-		if got := (*intents)[0]; got.Kind != service.IntentSubmit || got.Input != "/ask inspect this" {
+		if got := (*intents)[0]; got.Kind != protocol.IntentSubmit || got.Input != "/ask inspect this" {
 			t.Fatalf("unexpected dispatched intent: %+v", got)
 		}
 		if got := m.input.Value(); got != "" {
@@ -1113,7 +1113,7 @@ func TestWindowsDeferredBusyEnterPreservesBusySlashClassification(t *testing.T) 
 		m = next.(model)
 		deferredID := m.windowsPaste.pendingEnterID
 
-		next, _ = m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+		next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 		m = next.(model)
 		if m.busy {
 			t.Fatal("expected turn done to clear busy before deferred tick")
@@ -1124,7 +1124,7 @@ func TestWindowsDeferredBusyEnterPreservesBusySlashClassification(t *testing.T) 
 		if len(*intents) != 1 {
 			t.Fatalf("expected local command to execute after turn finished, got %+v", *intents)
 		}
-		if got := (*intents)[0]; got.Kind != service.IntentSubmitLocal || got.Input != "/new scratch" {
+		if got := (*intents)[0]; got.Kind != protocol.IntentSubmitLocal || got.Input != "/new scratch" {
 			t.Fatalf("unexpected dispatched intent: %+v", got)
 		}
 		if got := m.input.Value(); got != "" {
@@ -1147,7 +1147,7 @@ func TestWindowsDeferredBusyEnterPreservesBusySlashClassification(t *testing.T) 
 		deferredID := m.windowsPaste.pendingEnterID
 
 		m.localSubmitPending = 1
-		next, _ = m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+		next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 		m = next.(model)
 		if m.busy {
 			t.Fatal("expected turn done to clear busy before deferred tick")
@@ -1182,7 +1182,7 @@ func TestWindowsDeferredBusyEnterSuppressesPlanPickerWhenTurnDoneArrivesFirst(t 
 	}
 	deferredID := m.windowsPaste.pendingEnterID
 
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	m = next.(model)
 	if m.mode == modePlanImplementation {
 		t.Fatal("pending deferred busy enter should suppress plan implementation picker")
@@ -1193,7 +1193,7 @@ func TestWindowsDeferredBusyEnterSuppressesPlanPickerWhenTurnDoneArrivesFirst(t 
 
 	next, _ = m.Update(windowsDeferredEnterMsg{id: deferredID})
 	m = next.(model)
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSubmit || (*intents)[0].Input != "follow up while working" {
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentSubmit || (*intents)[0].Input != "follow up while working" {
 		t.Fatalf("expected deferred busy follow-up to submit after turn done, got %+v", *intents)
 	}
 	if m.mode != modeChat {
@@ -1217,9 +1217,9 @@ func TestWindowsDeferredBusyEnterSurvivesQueuedDrainBeforeTick(t *testing.T) {
 	}
 	deferredID := m.windowsPaste.pendingEnterID
 
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	m = next.(model)
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSubmit || (*intents)[0].Input != "older queued" {
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentSubmit || (*intents)[0].Input != "older queued" {
 		t.Fatalf("expected older queued prompt to start, got %+v", *intents)
 	}
 	if got := m.input.Value(); got != "new follow up" {
@@ -1262,7 +1262,7 @@ func TestWindowsActiveBusyPasteSuppressesPlanPickerWhenTurnDoneArrivesFirst(t *t
 		t.Fatalf("buffer after pasted continuation = %q", got)
 	}
 
-	m, _ = updateTestModel(t, m, svcMsg(service.Event{Kind: service.EventTurnDone}))
+	m, _ = updateTestModel(t, m, svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	if m.mode == modePlanImplementation {
 		t.Fatal("active busy paste should suppress plan implementation picker")
 	}
@@ -1282,7 +1282,7 @@ func TestWindowsActiveBusyPasteSuppressesPlanPickerWhenTurnDoneArrivesFirst(t *t
 	}
 	submitID := m.windowsPaste.pendingEnterID
 	m, _ = updateTestModel(t, m, windowsDeferredEnterMsg{id: submitID})
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSubmit || (*intents)[0].Input != "line one\nline two" {
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentSubmit || (*intents)[0].Input != "line one\nline two" {
 		t.Fatalf("expected active busy paste to submit after final enter, got %+v", *intents)
 	}
 }
@@ -1305,7 +1305,7 @@ func TestWindowsActiveBusyPasteSuppressesPlanPickerAfterQuietWindow(t *testing.T
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line two")})
 	m.windowsPaste.activeUntil = time.Now().Add(-time.Second)
 
-	m, _ = updateTestModel(t, m, svcMsg(service.Event{Kind: service.EventTurnDone}))
+	m, _ = updateTestModel(t, m, svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	if m.mode == modePlanImplementation {
 		t.Fatal("expired quiet window should not let plan implementation picker cover busy pasted input")
 	}
@@ -1343,8 +1343,8 @@ func TestWindowsActiveBusyPasteSurvivesQueuedDrainBeforeFinalEnter(t *testing.T)
 		t.Fatalf("buffer after pasted continuation = %q", got)
 	}
 
-	m, _ = updateTestModel(t, m, svcMsg(service.Event{Kind: service.EventTurnDone}))
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSubmit || (*intents)[0].Input != "older queued" {
+	m, _ = updateTestModel(t, m, svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentSubmit || (*intents)[0].Input != "older queued" {
 		t.Fatalf("expected older queued prompt to start, got %+v", *intents)
 	}
 	if got := m.windowsPasteBuffer(); got != "line one\nline two" {
@@ -1390,8 +1390,8 @@ func TestWindowsExpiredActiveBusyPasteSurvivesQueuedDrainBeforeFinalEnter(t *tes
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line two")})
 	m.windowsPaste.activeUntil = time.Now().Add(-time.Second)
 
-	m, _ = updateTestModel(t, m, svcMsg(service.Event{Kind: service.EventTurnDone}))
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSubmit || (*intents)[0].Input != "older queued" {
+	m, _ = updateTestModel(t, m, svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentSubmit || (*intents)[0].Input != "older queued" {
 		t.Fatalf("expected older queued prompt to start, got %+v", *intents)
 	}
 	if got := m.windowsPasteBuffer(); got != "line one\nline two" {
@@ -1440,7 +1440,7 @@ func TestWindowsActiveBusyPasteSurvivesLocalSubmitDeferredQueuedDrain(t *testing
 
 	m.localSubmitPending = 1
 	m.queuedPrompts = []queuedPrompt{{Text: "older queued"}}
-	m, _ = updateTestModel(t, m, svcMsg(service.Event{Kind: service.EventTurnDone}))
+	m, _ = updateTestModel(t, m, svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	if len(*intents) != 0 {
 		t.Fatalf("queued prompt should wait for local submit done, got %+v", *intents)
 	}
@@ -1448,8 +1448,8 @@ func TestWindowsActiveBusyPasteSurvivesLocalSubmitDeferredQueuedDrain(t *testing
 		t.Fatalf("expected active Windows paste to remain while local submit is pending, got %q", got)
 	}
 
-	m, _ = updateTestModel(t, m, svcMsg(service.Event{Kind: service.EventLocalSubmitDone}))
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSubmit || (*intents)[0].Input != "older queued" {
+	m, _ = updateTestModel(t, m, svcMsg(protocol.Event{Kind: protocol.EventLocalSubmitDone}))
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentSubmit || (*intents)[0].Input != "older queued" {
 		t.Fatalf("expected older queued prompt to start after local submit done, got %+v", *intents)
 	}
 	if got := m.windowsPasteBuffer(); got != "line one\nline two" {
@@ -1481,12 +1481,12 @@ func TestWindowsActiveBusyPasteSuppressesDeferredPlanPickerAfterLocalSubmitDone(
 
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("line two")})
 	m.localSubmitPending = 1
-	m, _ = updateTestModel(t, m, svcMsg(service.Event{Kind: service.EventTurnDone}))
+	m, _ = updateTestModel(t, m, svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	if !m.deferredPlanPicker {
 		t.Fatal("expected plan implementation picker to defer while local submit is pending")
 	}
 
-	m, _ = updateTestModel(t, m, svcMsg(service.Event{Kind: service.EventLocalSubmitDone}))
+	m, _ = updateTestModel(t, m, svcMsg(protocol.Event{Kind: protocol.EventLocalSubmitDone}))
 	if m.mode == modePlanImplementation {
 		t.Fatal("pending Windows paste should suppress deferred implementation picker")
 	}
@@ -1517,7 +1517,7 @@ func TestWindowsDeferredStoppingBusyEnterDoesNotSubmitAfterTurnDoneArrivesFirst(
 	}
 	deferredID := m.windowsPaste.pendingEnterID
 
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	m = next.(model)
 	if m.mode == modePlanImplementation {
 		t.Fatal("pending deferred stopping enter should suppress plan implementation picker")
@@ -1566,7 +1566,7 @@ func TestWindowsDeferredBusyEnterInterruptedBeforeTickStaysInComposer(t *testing
 		t.Fatal("expected interrupt to preserve busy-input marker so plan picker stays suppressed")
 	}
 
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	m = next.(model)
 	if m.mode == modePlanImplementation {
 		t.Fatal("pending interrupted enter should suppress plan implementation picker")
@@ -1603,7 +1603,7 @@ func TestWindowsDeferredEnterStillSubmitsSingleLine(t *testing.T) {
 	if len(*intents) != 1 {
 		t.Fatalf("expected deferred submit, got %+v", *intents)
 	}
-	if got := (*intents)[0]; got.Kind != service.IntentSubmit || got.Input != "run the tests" {
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmit || got.Input != "run the tests" {
 		t.Fatalf("unexpected submit intent: %+v", got)
 	}
 }
@@ -1719,7 +1719,7 @@ func TestWindowsBracketedPasteCanSubmitImmediately(t *testing.T) {
 	if len(*intents) != 1 {
 		t.Fatalf("expected bracketed paste to submit immediately, got %+v", *intents)
 	}
-	if got := (*intents)[0]; got.Kind != service.IntentSubmit || got.Input != "line one\nline two" {
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmit || got.Input != "line one\nline two" {
 		t.Fatalf("unexpected submit intent: %+v", got)
 	}
 }
@@ -1764,7 +1764,7 @@ func TestWindowsPasteFallbackIMECommitSubmitsNormally(t *testing.T) {
 	if len(*intents) != 1 {
 		t.Fatalf("expected one submit intent, got %+v", *intents)
 	}
-	if got := (*intents)[0]; got.Kind != service.IntentSubmit || got.Input != "你好" {
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmit || got.Input != "你好" {
 		t.Fatalf("unexpected submit intent: %+v", got)
 	}
 }
@@ -1777,7 +1777,7 @@ func TestDefaultEnterSubmitRemainsImmediate(t *testing.T) {
 	if len(*intents) != 1 {
 		t.Fatalf("expected immediate submit, got %+v", *intents)
 	}
-	if got := (*intents)[0]; got.Kind != service.IntentSubmit || got.Input != "run the tests" {
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmit || got.Input != "run the tests" {
 		t.Fatalf("unexpected submit intent: %+v", got)
 	}
 }
@@ -1819,7 +1819,7 @@ func TestWindowsPasteFallbackTypingPreservesSkillBinding(t *testing.T) {
 		t.Fatalf("expected one submit intent, got %+v", *intents)
 	}
 	got := (*intents)[0]
-	if got.Kind != service.IntentSubmit || got.Input != "$code-review review this diff" {
+	if got.Kind != protocol.IntentSubmit || got.Input != "$code-review review this diff" {
 		t.Fatalf("unexpected submit intent: %+v", got)
 	}
 	if got.SkillBinding == nil || got.SkillBinding.Name != "code-review" || got.SkillBinding.SkillFilePath != "/tmp/code-review/SKILL.md" {
@@ -1862,7 +1862,7 @@ func TestStoppingTurnDoneRestoresQueuedPromptsWithPendingWindowsPaste(t *testing
 	m.windowsPaste.busyInputStop = true
 	flushID := m.windowsPaste.burstID
 
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	m = next.(model)
 
 	if len(*intents) != 0 {
@@ -1893,7 +1893,7 @@ func TestCtrlCWhileBusyClearsDraftAndPendingWindowsEnter(t *testing.T) {
 	// unconditional busy interrupt for users who also want to cancel the
 	// running turn.
 	m, intents := newModelWithDispatchSpy()
-	m.svc = &service.Service{}
+	m.runtime = &testRuntime{}
 	m.width = 80
 	m.height = 24
 	m.windowsPaste.enabled = true

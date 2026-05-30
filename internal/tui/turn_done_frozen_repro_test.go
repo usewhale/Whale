@@ -2,11 +2,11 @@ package tui
 
 import (
 	"fmt"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/usewhale/whale/internal/app/service"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
@@ -54,8 +54,8 @@ func TestTurnDoneWhileFrozenFlushesFinalToScrollback(t *testing.T) {
 	}
 
 	// The turn completes normally with a final answer (end_turn).
-	cmd := m.handleTurnDone(service.Event{
-		Kind:         service.EventTurnDone,
+	cmd := m.handleTurnDone(protocol.Event{
+		Kind:         protocol.EventTurnDone,
 		LastResponse: "THE FINAL ANSWER — 要继续完成 planState 集成吗？",
 		Metadata:     agentTurnMetadata(),
 	})

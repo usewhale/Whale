@@ -102,18 +102,18 @@ func (s *Service) Dispatch(in Intent) {
 		s.emit(Event{Kind: EventInfo, Text: msg})
 		s.emit(Event{Kind: EventTurnDone, LastResponse: msg})
 	case IntentRequestSkillsManage:
-		s.emit(Event{Kind: EventSkillsManager, Skills: s.SkillsForManager()})
+		s.emit(Event{Kind: EventSkillsManagerUpdated, Skills: protocolSkills(s.SkillsForManager())})
 	case IntentSetSkillEnabled:
 		if _, err := s.app.SetSkillEnabled(in.SkillName, in.SkillEnabled); err != nil {
 			s.emit(Event{Kind: EventError, Text: err.Error()})
 			return
 		}
-		s.emit(Event{Kind: EventSkillsManager, Skills: s.SkillsForManager()})
+		s.emit(Event{Kind: EventSkillsManagerUpdated, Skills: protocolSkills(s.SkillsForManager())})
 	case IntentSetPluginEnabled:
 		if _, err := s.app.SetPluginEnabled(in.PluginID, in.PluginEnabled); err != nil {
 			s.emit(Event{Kind: EventError, Text: err.Error()})
 			return
 		}
-		s.emit(Event{Kind: EventPluginsManager, Plugins: s.PluginsForManager()})
+		s.emit(Event{Kind: EventPluginsManagerUpdated, Plugins: protocolPlugins(s.PluginsForManager())})
 	}
 }

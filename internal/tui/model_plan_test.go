@@ -2,7 +2,7 @@ package tui
 
 import (
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/usewhale/whale/internal/app/service"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 	"strings"
 	"testing"
@@ -17,12 +17,12 @@ func TestPlanTurnDoneWithAssistantButNoProposedPlanDoesNotShowNotice(t *testing.
 		height:    24,
 		busy:      true,
 	}
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind: service.EventAssistantDelta,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind: protocol.EventAssistantDelta,
 		Text: "Here is the test execution plan:\n\n- Run TUI tests\n- Run full tests",
 	}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	m = next.(model)
 
 	if m.mode == modePlanImplementation {
@@ -107,9 +107,9 @@ func TestVisibleSubmittedTextForPlanPrompt(t *testing.T) {
 func TestLiveTokenEstimateCountsReasoningAndPlanDeltas(t *testing.T) {
 	m := newModel(nil, "", "", "")
 
-	m.handleServiceEvent(service.Event{Kind: service.EventReasoningDelta, Text: "think "})
-	m.handleServiceEvent(service.Event{Kind: service.EventPlanDelta, Text: "plan "})
-	m.handleServiceEvent(service.Event{Kind: service.EventAssistantDelta, Text: "answer"})
+	m.handleServiceEvent(protocol.Event{Kind: protocol.EventReasoningDelta, Text: "think "})
+	m.handleServiceEvent(protocol.Event{Kind: protocol.EventPlanDelta, Text: "plan "})
+	m.handleServiceEvent(protocol.Event{Kind: protocol.EventAssistantDelta, Text: "answer"})
 
 	want := estimateTokens("think plan answer")
 	if m.busyTokenCount != want {
@@ -129,7 +129,7 @@ func TestSlashSuggestionPlanAutoRunsWhenSelected(t *testing.T) {
 	if len(*intents) != 1 {
 		t.Fatalf("expected one dispatch for selected /plan, got %+v", *intents)
 	}
-	if (*intents)[0].Kind != service.IntentSubmitLocal || (*intents)[0].Input != "/plan" {
+	if (*intents)[0].Kind != protocol.IntentSubmitLocal || (*intents)[0].Input != "/plan" {
 		t.Fatalf("unexpected dispatched intent: %+v", (*intents)[0])
 	}
 	if got := m.input.Value(); got != "" {
@@ -147,7 +147,7 @@ func TestQueuedPromptSuppressesPlanImplementationPicker(t *testing.T) {
 	m.sawPlanThisTurn = true
 	m.queuedPrompts = []queuedPrompt{{Text: "queued follow up"}}
 
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	m = next.(model)
 
 	if m.mode == modePlanImplementation {
@@ -165,7 +165,7 @@ func TestPlanImplementationPickerDefersUntilLocalSubmitDone(t *testing.T) {
 	m.sawPlanThisTurn = true
 	m.localSubmitPending = 1
 
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	m = next.(model)
 	if m.mode == modePlanImplementation {
 		t.Fatal("plan implementation picker should wait for pending local submit")
@@ -183,7 +183,7 @@ func TestPlanImplementationPickerDefersUntilLocalSubmitDone(t *testing.T) {
 		t.Fatalf("pending local submit should block implementation intent, got %+v", *intents)
 	}
 
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventLocalSubmitDone}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventLocalSubmitDone}))
 	m = next.(model)
 	if m.mode != modePlanImplementation {
 		t.Fatalf("expected deferred implementation picker after local submit done, got mode %v", m.mode)
@@ -194,7 +194,7 @@ func TestPlanImplementationPickerDefersUntilLocalSubmitDone(t *testing.T) {
 
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(model)
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentImplementPlan {
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentImplementPlan {
 		t.Fatalf("expected implementation intent after pending local submit clears, got %+v", *intents)
 	}
 }
@@ -207,7 +207,7 @@ func TestQueuedPromptSuppressesDeferredPlanImplementationPicker(t *testing.T) {
 	m.localSubmitPending = 1
 	m.queuedPrompts = []queuedPrompt{{Text: "queued follow up"}}
 
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	m = next.(model)
 	if m.mode == modePlanImplementation {
 		t.Fatal("plan implementation picker should not open before local submit done")
@@ -216,7 +216,7 @@ func TestQueuedPromptSuppressesDeferredPlanImplementationPicker(t *testing.T) {
 		t.Fatal("expected plan picker to be deferred while local submit is pending")
 	}
 
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventLocalSubmitDone}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventLocalSubmitDone}))
 	m = next.(model)
 	if m.mode == modePlanImplementation {
 		t.Fatal("queued prompt should suppress deferred implementation picker")
@@ -224,7 +224,7 @@ func TestQueuedPromptSuppressesDeferredPlanImplementationPicker(t *testing.T) {
 	if m.deferredPlanPicker {
 		t.Fatal("expected queued prompt to clear deferred implementation picker")
 	}
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSubmit || (*intents)[0].Input != "queued follow up" {
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentSubmit || (*intents)[0].Input != "queued follow up" {
 		t.Fatalf("expected queued follow-up submitted after local submit done, got %+v", *intents)
 	}
 }
@@ -236,13 +236,13 @@ func TestPlanCompletedReplacesPartialPlanAndTurnDoneShowsPicker(t *testing.T) {
 		busy:      true,
 		status:    "working",
 	}
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventPlanDelta, Text: "partial"}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventPlanDelta, Text: "partial"}))
 	m = next.(model)
 	liveRendered := strings.Join(tuirender.ChatLines(m.assembler.Snapshot(), 80), "\n")
 	if !strings.Contains(liveRendered, "Proposed Plan") || !strings.Contains(liveRendered, "partial") {
 		t.Fatalf("expected live proposed plan render, got %q", liveRendered)
 	}
-	next, cmd := m.Update(svcMsg(service.Event{Kind: service.EventPlanCompleted, Text: "complete final plan"}))
+	next, cmd := m.Update(svcMsg(protocol.Event{Kind: protocol.EventPlanCompleted, Text: "complete final plan"}))
 	m = next.(model)
 	if cmd == nil {
 		t.Fatal("expected wait-event command")
@@ -260,7 +260,7 @@ func TestPlanCompletedReplacesPartialPlanAndTurnDoneShowsPicker(t *testing.T) {
 	if m.lastProposedPlan != "complete final plan" {
 		t.Fatalf("expected last proposed plan to be captured, got %q", m.lastProposedPlan)
 	}
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventTurnDone, LastResponse: "done"}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone, LastResponse: "done"}))
 	m = next.(model)
 
 	if m.mode != modePlanImplementation {
@@ -283,7 +283,7 @@ func TestPlanImplementationIntentDoesNotEmbedLastProposedPlan(t *testing.T) {
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(model)
 
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentImplementPlan {
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentImplementPlan {
 		t.Fatalf("expected implement intent, got %+v", *intents)
 	}
 	if (*intents)[0].Input != "" {
@@ -305,7 +305,7 @@ func TestPlanImplementationNoDeclinesAndClearsPendingPlan(t *testing.T) {
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(model)
 
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentDeclinePlan {
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentDeclinePlan {
 		t.Fatalf("expected decline intent, got %+v", *intents)
 	}
 	if m.mode != modeChat {
@@ -329,7 +329,7 @@ func TestPlanImplementationEscDeclinesAndStaysInPlanMode(t *testing.T) {
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = next.(model)
 
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentDeclinePlan {
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentDeclinePlan {
 		t.Fatalf("expected decline intent, got %+v", *intents)
 	}
 	if m.mode != modeChat || m.chatMode != "plan" {
@@ -344,12 +344,12 @@ func TestPlanUpdateEventRendersUpdatedPlan(t *testing.T) {
 		assembler: tuirender.NewAssembler(),
 		mode:      modeChat,
 	}
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventPlanUpdate, Text: "[x] Inspect\n[~] Patch\n[ ] Test"}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventPlanUpdate, Text: "[x] Inspect\n[~] Patch\n[ ] Test"}))
 	m = next.(model)
 	if len(m.transcript) != 0 {
 		t.Fatalf("plan update should wait for tool result before committing transcript, got %+v", m.transcript)
 	}
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventToolResult, ToolCallID: "plan-1", ToolName: "update_plan", Text: `{"success":true}`}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolResult, ToolCallID: "plan-1", ToolName: "update_plan", Text: `{"success":true}`}))
 	m = next.(model)
 	if len(m.transcript) != 1 || m.transcript[0].Kind != tuirender.KindPlanUpdate {
 		t.Fatalf("expected plan update in transcript, got %+v", m.transcript)
@@ -365,11 +365,11 @@ func TestPlanUpdateDoesNotClearPendingToolCallsBeforeResult(t *testing.T) {
 		mode:             modeChat,
 		pendingToolCalls: map[string]struct{}{},
 	}
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventToolCall, ToolCallID: "read-1", ToolName: "read_file", Text: `read_file: docs/plugins.md`}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolCall, ToolCallID: "read-1", ToolName: "read_file", Text: `read_file: docs/plugins.md`}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventToolCall, ToolCallID: "plan-1", ToolName: "update_plan", Text: `update_plan: 2 step(s)`}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolCall, ToolCallID: "plan-1", ToolName: "update_plan", Text: `update_plan: 2 step(s)`}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventPlanUpdate, Text: "[x] Inspect\n[ ] Report"}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventPlanUpdate, Text: "[x] Inspect\n[ ] Report"}))
 	m = next.(model)
 
 	if _, ok := m.pendingToolCalls["read-1"]; !ok {
@@ -382,14 +382,14 @@ func TestPlanUpdateDoesNotClearPendingToolCallsBeforeResult(t *testing.T) {
 		t.Fatalf("plan update should remain live while another tool is pending, got %+v", m.transcript)
 	}
 
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventToolResult, ToolCallID: "plan-1", ToolName: "update_plan", Text: `{"success":true}`}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolResult, ToolCallID: "plan-1", ToolName: "update_plan", Text: `{"success":true}`}))
 	m = next.(model)
 	if len(m.transcript) != 0 {
 		t.Fatalf("update_plan result should not commit while read tool is pending, got %+v", m.transcript)
 	}
 
 	readResult := `{"success":true,"data":{"content":"ok"},"metadata":{"duration_ms":1}}`
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventToolResult, ToolCallID: "read-1", ToolName: "read_file", Text: readResult}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolResult, ToolCallID: "read-1", ToolName: "read_file", Text: readResult}))
 	m = next.(model)
 	if len(m.transcript) != 2 {
 		t.Fatalf("expected read result and plan update committed together, got %+v", m.transcript)
@@ -409,9 +409,9 @@ func TestStalePlanCompletionDoesNotOpenPickerOnLaterTurnDone(t *testing.T) {
 		busy:      false,
 		status:    "ready",
 	}
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventPlanCompleted, Text: "complete final plan"}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventPlanCompleted, Text: "complete final plan"}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventTurnDone, LastResponse: "status"}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone, LastResponse: "status"}))
 	m = next.(model)
 
 	if m.mode == modePlanImplementation {
@@ -429,7 +429,7 @@ func TestPlanCompletedWithoutDeltasStillRendersPlan(t *testing.T) {
 		busy:      true,
 	}
 	plan := strings.Repeat("final plan\n", 100)
-	next, cmd := m.Update(svcMsg(service.Event{Kind: service.EventPlanCompleted, Text: plan}))
+	next, cmd := m.Update(svcMsg(protocol.Event{Kind: protocol.EventPlanCompleted, Text: plan}))
 	m = next.(model)
 	if cmd == nil {
 		t.Fatal("expected wait-event command")
@@ -444,7 +444,7 @@ func TestPlanCompletedWithoutDeltasStillRendersPlan(t *testing.T) {
 	if !strings.Contains(rendered, "Proposed Plan") || !strings.Contains(rendered, "final plan") {
 		t.Fatalf("expected rendered proposed plan, got %q", rendered)
 	}
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventTurnDone, LastResponse: "done"}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone, LastResponse: "done"}))
 	m = next.(model)
 	snap := m.assembler.Snapshot()
 	if len(snap) != 0 {
@@ -456,15 +456,15 @@ func TestPlanCompletedWithoutDeltasStillRendersPlan(t *testing.T) {
 }
 func TestBusyLocalCommandResultDoesNotDuplicateCompletedPlan(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, chatMode: "plan", width: 100, height: 30, busy: true}
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventPlanDelta, Text: "partial plan"}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventPlanDelta, Text: "partial plan"}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:   service.EventLocalSubmitResult,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:   protocol.EventLocalSubmitResult,
 		Status: "info",
 		Text:   "Status\n\nsession: test-session",
 	}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventPlanCompleted, Text: "complete final plan"}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventPlanCompleted, Text: "complete final plan"}))
 	m = next.(model)
 
 	if got := len(m.assembler.Snapshot()); got != 0 {

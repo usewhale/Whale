@@ -19,6 +19,7 @@ import (
 	llmretry "github.com/usewhale/whale/internal/llm/retry"
 	"github.com/usewhale/whale/internal/plugins"
 	"github.com/usewhale/whale/internal/policy"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/skills"
 	"github.com/usewhale/whale/internal/store"
@@ -80,7 +81,7 @@ func TestReviewMenuEventDeliversUnderBackpressure(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		s.emit(Event{Kind: EventReviewMenu})
+		s.emit(Event{Kind: EventReviewRequested})
 		close(done)
 	}()
 
@@ -88,7 +89,7 @@ func TestReviewMenuEventDeliversUnderBackpressure(t *testing.T) {
 	for {
 		select {
 		case ev := <-s.Events():
-			if ev.Kind == EventReviewMenu {
+			if ev.Kind == EventReviewRequested {
 				select {
 				case <-done:
 				case <-time.After(2 * time.Second):
@@ -465,13 +466,13 @@ func TestSkillsCommandOpensMenuAndToggleUpdatesSuggestions(t *testing.T) {
 	waitForServiceEvent(t, svc, EventSessionHydrated)
 
 	svc.Dispatch(Intent{Kind: IntentSubmit, Input: "/skills"})
-	evMenu := waitForServiceEvent(t, svc, EventSkillsMenu)
-	if evMenu.Kind != EventSkillsMenu {
+	evMenu := waitForServiceEvent(t, svc, EventSkillsSelectionRequested)
+	if evMenu.Kind != EventSkillsSelectionRequested {
 		t.Fatalf("expected skills menu event, got %+v", evMenu)
 	}
 	svc.Dispatch(Intent{Kind: IntentRequestSkillsManage})
-	ev := waitForServiceEvent(t, svc, EventSkillsManager)
-	if !hasServiceSkill(ev.Skills, "test-skill", "ready") {
+	ev := waitForServiceEvent(t, svc, EventSkillsManagerUpdated)
+	if !hasProtocolSkill(ev.Skills, "test-skill", "ready") {
 		t.Fatalf("unexpected skills manager event: %+v", ev.Skills)
 	}
 	if !hasServiceSkill(svc.SkillSuggestions(), "test-skill", "ready") {
@@ -479,8 +480,8 @@ func TestSkillsCommandOpensMenuAndToggleUpdatesSuggestions(t *testing.T) {
 	}
 
 	svc.Dispatch(Intent{Kind: IntentSetSkillEnabled, SkillName: "test-skill", SkillEnabled: false})
-	ev = waitForServiceEvent(t, svc, EventSkillsManager)
-	if !hasServiceSkill(ev.Skills, "test-skill", "disabled") {
+	ev = waitForServiceEvent(t, svc, EventSkillsManagerUpdated)
+	if !hasProtocolSkill(ev.Skills, "test-skill", "disabled") {
 		t.Fatalf("expected disabled skill manager event, got %+v", ev.Skills)
 	}
 	if got := svc.SkillSuggestions(); hasServiceSkill(got, "test-skill", "") {
@@ -488,8 +489,8 @@ func TestSkillsCommandOpensMenuAndToggleUpdatesSuggestions(t *testing.T) {
 	}
 
 	svc.Dispatch(Intent{Kind: IntentSetSkillEnabled, SkillName: "test-skill", SkillEnabled: true})
-	ev = waitForServiceEvent(t, svc, EventSkillsManager)
-	if !hasServiceSkill(ev.Skills, "test-skill", "ready") {
+	ev = waitForServiceEvent(t, svc, EventSkillsManagerUpdated)
+	if !hasProtocolSkill(ev.Skills, "test-skill", "ready") {
 		t.Fatalf("expected ready skill manager event, got %+v", ev.Skills)
 	}
 	if got := svc.SkillSuggestions(); !hasServiceSkill(got, "test-skill", "ready") {
@@ -503,6 +504,16 @@ func hasServiceSkill(all []skills.SkillView, name, status string) bool {
 			continue
 		}
 		return status == "" || string(skill.Status) == status
+	}
+	return false
+}
+
+func hasProtocolSkill(all []protocol.SkillView, name, status string) bool {
+	for _, skill := range all {
+		if skill.Name != name {
+			continue
+		}
+		return status == "" || skill.Status == status
 	}
 	return false
 }
@@ -524,14 +535,14 @@ func TestPluginsCommandOpensManagerAndToggleUpdatesRuntime(t *testing.T) {
 	waitForServiceEvent(t, svc, EventSessionHydrated)
 
 	svc.Dispatch(Intent{Kind: IntentSubmit, Input: "/plugins"})
-	ev := waitForServiceEvent(t, svc, EventPluginsManager)
-	if !hasServicePlugin(ev.Plugins, "memory", true) {
+	ev := waitForServiceEvent(t, svc, EventPluginsManagerUpdated)
+	if !hasProtocolPlugin(ev.Plugins, "memory", true) {
 		t.Fatalf("expected memory plugin enabled, got %+v", ev.Plugins)
 	}
 
 	svc.Dispatch(Intent{Kind: IntentSetPluginEnabled, PluginID: "memory", PluginEnabled: false})
-	ev = waitForServiceEvent(t, svc, EventPluginsManager)
-	if !hasServicePlugin(ev.Plugins, "memory", false) {
+	ev = waitForServiceEvent(t, svc, EventPluginsManagerUpdated)
+	if !hasProtocolPlugin(ev.Plugins, "memory", false) {
 		t.Fatalf("expected memory plugin disabled, got %+v", ev.Plugins)
 	}
 	cfgFile, loaded, err := app.LoadConfigFile(app.ProjectLocalConfigPath(work))
@@ -543,13 +554,22 @@ func TestPluginsCommandOpensManagerAndToggleUpdatesRuntime(t *testing.T) {
 	}
 
 	svc.Dispatch(Intent{Kind: IntentSetPluginEnabled, PluginID: "memory", PluginEnabled: true})
-	ev = waitForServiceEvent(t, svc, EventPluginsManager)
-	if !hasServicePlugin(ev.Plugins, "memory", true) {
+	ev = waitForServiceEvent(t, svc, EventPluginsManagerUpdated)
+	if !hasProtocolPlugin(ev.Plugins, "memory", true) {
 		t.Fatalf("expected memory plugin enabled again, got %+v", ev.Plugins)
 	}
 }
 
 func hasServicePlugin(all []plugins.PluginStatus, id string, enabled bool) bool {
+	for _, plugin := range all {
+		if plugin.Manifest.ID == id {
+			return plugin.Enabled == enabled
+		}
+	}
+	return false
+}
+
+func hasProtocolPlugin(all []protocol.PluginStatus, id string, enabled bool) bool {
 	for _, plugin := range all {
 		if plugin.Manifest.ID == id {
 			return plugin.Enabled == enabled
@@ -1216,7 +1236,7 @@ func TestPermissionsCommandOpensMenuAndSetsSessionAutoAccept(t *testing.T) {
 
 	svc.Dispatch(Intent{Kind: IntentSubmitLocal, Input: "/permissions"})
 
-	menu := waitForServiceEvent(t, svc, EventPermissionsMenu)
+	menu := waitForServiceEvent(t, svc, EventPermissionsSelectionRequested)
 	if menu.AutoAccept {
 		t.Fatalf("unexpected permissions menu auto accept state: %+v", menu)
 	}
@@ -1230,7 +1250,7 @@ func TestPermissionsCommandOpensMenuAndSetsSessionAutoAccept(t *testing.T) {
 	waitForServiceEvent(t, svc, EventTurnDone)
 
 	svc.Dispatch(Intent{Kind: IntentSubmitLocal, Input: "/permissions"})
-	menu = waitForServiceEvent(t, svc, EventPermissionsMenu)
+	menu = waitForServiceEvent(t, svc, EventPermissionsSelectionRequested)
 	if !menu.AutoAccept {
 		t.Fatalf("unexpected permissions menu auto accept state after enable: %+v", menu)
 	}
@@ -1260,14 +1280,14 @@ func TestReviewCommandOpensMenu(t *testing.T) {
 	waitForServiceEvent(t, svc, EventSessionHydrated)
 
 	svc.Dispatch(Intent{Kind: IntentSubmit, Input: "/review"})
-	ev := waitForServiceEvent(t, svc, EventReviewMenu)
-	if ev.Kind != EventReviewMenu {
+	ev := waitForServiceEvent(t, svc, EventReviewRequested)
+	if ev.Kind != EventReviewRequested {
 		t.Fatalf("expected review menu event, got %+v", ev)
 	}
 
 	svc.Dispatch(Intent{Kind: IntentSubmitLocal, Input: "/review"})
-	ev = waitForServiceEvent(t, svc, EventReviewMenu)
-	if ev.Kind != EventReviewMenu {
+	ev = waitForServiceEvent(t, svc, EventReviewRequested)
+	if ev.Kind != EventReviewRequested {
 		t.Fatalf("expected local review menu event, got %+v", ev)
 	}
 }

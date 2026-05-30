@@ -2,16 +2,15 @@ package tui
 
 import (
 	"fmt"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/usewhale/whale/internal/app"
-	"github.com/usewhale/whale/internal/app/service"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
-func (m *model) handleAssistantDeltaEvent(ev service.Event) {
+func (m *model) handleAssistantDeltaEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.append("assistant", ev.Text)
 	m.recordAssistantDelta(ev.Text)
@@ -22,7 +21,7 @@ func (m *model) handleAssistantDeltaEvent(ev service.Event) {
 	m.startBusy()
 }
 
-func (m *model) handleReasoningDeltaEvent(ev service.Event) {
+func (m *model) handleReasoningDeltaEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.append("think", ev.Text)
 	m.recordModelOutputDelta(ev.Text)
@@ -32,7 +31,7 @@ func (m *model) handleReasoningDeltaEvent(ev service.Event) {
 	}
 }
 
-func (m *model) handlePlanDeltaEvent(ev service.Event) {
+func (m *model) handlePlanDeltaEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.appendPlanDelta(ev.Text)
 	m.recordModelOutputDelta(ev.Text)
@@ -42,7 +41,7 @@ func (m *model) handlePlanDeltaEvent(ev service.Event) {
 	}
 }
 
-func (m *model) handlePlanCompletedEvent(ev service.Event) {
+func (m *model) handlePlanCompletedEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	if strings.TrimSpace(ev.Text) != "" {
 		m.lastProposedPlan = strings.TrimSpace(ev.Text)
@@ -56,7 +55,7 @@ func (m *model) handlePlanCompletedEvent(ev service.Event) {
 	m.addLog(logEntry{Kind: "plan_completed", Source: "plan", Summary: truncateLine(ev.Text, 120), Raw: ev.Text})
 }
 
-func (m *model) handlePlanUpdateEvent(ev service.Event) {
+func (m *model) handlePlanUpdateEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	if strings.TrimSpace(ev.Text) != "" {
 		if m.assembler == nil {
@@ -68,7 +67,7 @@ func (m *model) handlePlanUpdateEvent(ev service.Event) {
 	m.addLog(logEntry{Kind: "plan_update", Source: "plan", Summary: truncateLine(ev.Text, 120), Raw: ev.Text})
 }
 
-func (m *model) handleProviderRetryEvent(ev service.Event) {
+func (m *model) handleProviderRetryEvent(ev protocol.Event) {
 	if ev.Metadata != nil && metadataBool(ev.Metadata["stream_reset"]) {
 		m.resetLiveAttemptForProviderRetry()
 	}
@@ -76,7 +75,7 @@ func (m *model) handleProviderRetryEvent(ev service.Event) {
 	m.addLog(logEntry{Kind: "api_retry", Source: "provider", Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Metadata)})
 }
 
-func (m *model) handleInfoEvent(ev service.Event) {
+func (m *model) handleInfoEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	if !isEnvironmentInventoryBlock(ev.Text) {
 		if ev.LocalResult != nil {
@@ -102,14 +101,14 @@ func (m *model) handleInfoEvent(ev service.Event) {
 	m.refreshViewportContentFollow(true)
 }
 
-func (m *model) handleErrorEvent(ev service.Event) {
+func (m *model) handleErrorEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.append("error", ev.Text)
 	m.addLog(logEntry{Kind: "error", Source: "system", Summary: ev.Text, Raw: ev.Text})
 	m.status = "error"
 }
 
-func (m *model) handleLocalSubmitResultEvent(ev service.Event) {
+func (m *model) handleLocalSubmitResultEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	role := ev.Status
 	if role == "" {
@@ -136,7 +135,7 @@ func (m *model) handleLocalSubmitResultEvent(ev service.Event) {
 	}
 }
 
-func (m *model) handleDiffResultEvent(ev service.Event) {
+func (m *model) handleDiffResultEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.appendLocalCommandEcho(m.popLocalSubmitCommand())
 	m.setDiffText(ev.Text)
@@ -146,31 +145,31 @@ func (m *model) handleDiffResultEvent(ev service.Event) {
 	m.viewport.GotoTop()
 }
 
-func (m *model) handleBtwStartedEvent(ev service.Event) {
+func (m *model) handleBtwStartedEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.startBtwPanel(ev.Count, ev.Text)
 	m.refreshViewportContent()
 }
 
-func (m *model) handleBtwDeltaEvent(ev service.Event) {
+func (m *model) handleBtwDeltaEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.appendBtwDelta(ev.Count, ev.Text)
 	m.refreshViewportContent()
 }
 
-func (m *model) handleBtwDoneEvent(ev service.Event) {
+func (m *model) handleBtwDoneEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.finishBtwPanel(ev.Count, ev.Text)
 	m.refreshViewportContent()
 }
 
-func (m *model) handleBtwErrorEvent(ev service.Event) {
+func (m *model) handleBtwErrorEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.failBtwPanel(ev.Count, ev.Text)
 	m.refreshViewportContent()
 }
 
-func (m *model) handleToolCallEvent(ev service.Event) {
+func (m *model) handleToolCallEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	if ev.ToolName != "update_plan" {
 		m.appendToolCall(ev.ToolCallID, ev.ToolName, ev.Text)
@@ -183,7 +182,7 @@ func (m *model) handleToolCallEvent(ev service.Event) {
 	})
 }
 
-func (m *model) handleToolResultEvent(ev service.Event) tea.Cmd {
+func (m *model) handleToolResultEvent(ev protocol.Event) tea.Cmd {
 	m.clearProviderRetryStatus()
 	role, text := summarizeToolResultForChat(ev.ToolName, ev.Text)
 	if suppressesNoFinalAnswer(role) {
@@ -207,42 +206,42 @@ func (m *model) handleToolResultEvent(ev service.Event) tea.Cmd {
 	return nil
 }
 
-func (m *model) handleTaskStartedEvent(ev service.Event) {
+func (m *model) handleTaskStartedEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.status = ev.Text
 	m.addLog(logEntry{Kind: "task_started", Source: ev.ToolName, Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Metadata)})
 }
 
-func (m *model) handleTaskProgressEvent(ev service.Event) {
+func (m *model) handleTaskProgressEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.status = ev.Text
 	m.updateTaskProgressWithSteps(ev.ToolCallID, ev.ToolName, ev.Text, ev.Status, ev.Metadata, ev.ProgressMessages)
 	m.addLog(logEntry{Kind: "task_progress", Source: ev.ToolName, Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Metadata)})
 }
 
-func (m *model) handleTaskCompletedEvent(ev service.Event) {
+func (m *model) handleTaskCompletedEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.status = ev.Text
 	m.addLog(logEntry{Kind: "task_completed", Source: ev.ToolName, Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Metadata)})
 }
 
-func (m *model) handleMCPStatusEvent(ev service.Event) {
+func (m *model) handleMCPStatusEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.status = ev.Text
 	m.addLog(logEntry{Kind: "mcp_status", Source: "mcp", Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Metadata)})
 }
 
-func (m *model) handleMCPCompleteEvent(ev service.Event) {
+func (m *model) handleMCPCompleteEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.status = ev.Text
 	m.addLog(logEntry{Kind: "mcp_complete", Source: "mcp", Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Metadata)})
 }
 
-func (m *model) handleApprovalRequiredEvent(ev service.Event) {
+func (m *model) handleApprovalRequiredEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	if m.stopping {
 		if ev.ToolCallID != "" {
-			m.dispatchIntent(service.Intent{Kind: service.IntentCancelToolApproval, ToolCallID: ev.ToolCallID})
+			m.dispatchIntent(protocol.Intent{Kind: protocol.IntentCancelToolApproval, ToolCallID: ev.ToolCallID})
 		}
 		m.addLog(logEntry{Kind: "approval_required_stale", Source: ev.ToolName, Summary: ev.Text, Raw: ev.Text})
 		return
@@ -257,11 +256,11 @@ func (m *model) handleApprovalRequiredEvent(ev service.Event) {
 	m.status = "approval required"
 }
 
-func (m *model) handleUserInputRequiredEvent(ev service.Event) {
+func (m *model) handleUserInputRequiredEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	if m.stopping {
 		if ev.ToolCallID != "" {
-			m.dispatchIntent(service.Intent{Kind: service.IntentCancelUserInput, ToolCallID: ev.ToolCallID})
+			m.dispatchIntent(protocol.Intent{Kind: protocol.IntentCancelUserInput, ToolCallID: ev.ToolCallID})
 		}
 		m.addLog(logEntry{Kind: "user_input_required_stale", Source: ev.ToolName, Summary: fmt.Sprintf("%d questions", len(ev.Questions)), Raw: fmt.Sprintf("%+v", ev.Questions)})
 		return
@@ -277,7 +276,7 @@ func (m *model) handleUserInputRequiredEvent(ev service.Event) {
 	m.status = "user input required"
 }
 
-func (m *model) handleSessionsListedEvent(ev service.Event) {
+func (m *model) handleSessionsListedEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.mode = modeSessionPicker
 	m.sessionChoices = ev.Choices
@@ -286,7 +285,7 @@ func (m *model) handleSessionsListedEvent(ev service.Event) {
 	m.status = "session picker"
 }
 
-func (m *model) handleModelPickerEvent(ev service.Event) {
+func (m *model) handleModelPickerEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.stopBusy()
 	m.stopping = false
@@ -300,7 +299,7 @@ func (m *model) handleModelPickerEvent(ev service.Event) {
 	m.modelPicker.thinkIx = indexOf(ev.ThinkingChoices, ev.CurrentThinking)
 }
 
-func (m *model) handlePermissionsMenuEvent(ev service.Event) {
+func (m *model) handlePermissionsMenuEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.stopBusy()
 	m.stopping = false
@@ -315,13 +314,13 @@ func (m *model) handlePermissionsMenuEvent(ev service.Event) {
 	m.status = "permissions"
 }
 
-func (m *model) handleSkillLoadedEvent(ev service.Event) {
+func (m *model) handleSkillLoadedEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.addLog(logEntry{Kind: "skill_loaded", Source: "skills", Summary: ev.Text, Raw: ev.Text})
 	m.status = ev.Text
 }
 
-func (m *model) handleSkillsMenuEvent(ev service.Event) {
+func (m *model) handleSkillsMenuEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.stopBusy()
 	m.stopping = false
@@ -335,7 +334,7 @@ func (m *model) handleSkillsMenuEvent(ev service.Event) {
 	m.status = "skills"
 }
 
-func (m *model) handleSkillsManagerEvent(ev service.Event) {
+func (m *model) handleSkillsManagerEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.stopBusy()
 	m.stopping = false
@@ -349,7 +348,7 @@ func (m *model) handleSkillsManagerEvent(ev service.Event) {
 	m.status = "skills"
 }
 
-func (m *model) handlePluginsManagerEvent(ev service.Event) {
+func (m *model) handlePluginsManagerEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.stopBusy()
 	m.stopping = false
@@ -363,7 +362,7 @@ func (m *model) handlePluginsManagerEvent(ev service.Event) {
 	m.status = "plugins"
 }
 
-func (m *model) handleReviewMenuEvent(ev service.Event) {
+func (m *model) handleReviewMenuEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.stopBusy()
 	m.stopping = false
@@ -378,23 +377,23 @@ func (m *model) handleReviewMenuEvent(ev service.Event) {
 	m.status = "review"
 }
 
-func (m *model) handleViewModeChangedEvent(ev service.Event) tea.Cmd {
+func (m *model) handleViewModeChangedEvent(ev protocol.Event) tea.Cmd {
 	m.clearProviderRetryStatus()
 	mode := strings.TrimSpace(ev.ViewMode)
 	if mode == "" {
 		mode = strings.TrimSpace(ev.Text)
 		switch mode {
-		case app.ViewModeToggleMessage(app.ViewModeFocus):
-			mode = app.ViewModeFocus
-		case app.ViewModeToggleMessage(app.ViewModeDefault):
-			mode = app.ViewModeDefault
+		case protocol.ViewModeToggleMessage(protocol.ViewModeFocus):
+			mode = protocol.ViewModeFocus
+		case protocol.ViewModeToggleMessage(protocol.ViewModeDefault):
+			mode = protocol.ViewModeDefault
 		default:
 			mode = strings.TrimPrefix(mode, "view:")
 			mode = strings.TrimSpace(mode)
 		}
 	}
 	if mode == "" {
-		mode = app.ViewModeDefault
+		mode = protocol.ViewModeDefault
 	}
 	m.viewMode = mode
 	if strings.TrimSpace(ev.Text) != "" {
@@ -404,7 +403,7 @@ func (m *model) handleViewModeChangedEvent(ev service.Event) tea.Cmd {
 	return m.redrawTranscriptForFocusToggleCmd()
 }
 
-func (m *model) handleWorktreeExitPromptEvent(ev service.Event) {
+func (m *model) handleWorktreeExitPromptEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	if ev.WorktreeExit != nil {
 		m.worktreeExit.summary = *ev.WorktreeExit
@@ -424,10 +423,10 @@ func (m *model) handleClearScreenEvent() tea.Cmd {
 	m.logs = nil
 	m.diffs = nil
 	m.status = "terminal cleared"
-	return tea.Sequence(clearScreenCmd(), m.startupHeaderPrintCmd(), waitEventCmd(m.svc))
+	return tea.Sequence(clearScreenCmd(), m.startupHeaderPrintCmd(), waitEventCmd(m.runtime))
 }
 
-func (m *model) handleSessionHydratedEvent(ev service.Event) tea.Cmd {
+func (m *model) handleSessionHydratedEvent(ev protocol.Event) tea.Cmd {
 	m.mode = modeChat
 	m.resumeMenu = false
 	prevSessionID := m.sessionID
@@ -465,5 +464,5 @@ func (m *model) handleSessionHydratedEvent(ev service.Event) tea.Cmd {
 
 func (m *model) handleExitRequestedEvent() {
 	m.clearProviderRetryStatus()
-	m.dispatchIntent(service.Intent{Kind: service.IntentShutdown})
+	m.dispatchIntent(protocol.Intent{Kind: protocol.IntentShutdown})
 }

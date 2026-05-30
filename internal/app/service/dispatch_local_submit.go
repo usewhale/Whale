@@ -3,7 +3,7 @@ package service
 import (
 	"fmt"
 	"github.com/usewhale/whale/internal/app"
-	appcommands "github.com/usewhale/whale/internal/app/commands"
+	appcommands "github.com/usewhale/whale/internal/commands"
 	"strings"
 )
 
@@ -55,7 +55,7 @@ func (s *Service) handleLocalSubmit(line string) {
 	prevSessionID := s.app.SessionID()
 	if line == "/model" {
 		s.emit(Event{
-			Kind:            EventModelPicker,
+			Kind:            EventModelSelectionRequested,
 			ModelChoices:    s.app.SupportedModels(),
 			EffortChoices:   s.app.SupportedEfforts(),
 			CurrentModel:    s.app.Model(),
@@ -66,7 +66,7 @@ func (s *Service) handleLocalSubmit(line string) {
 		return
 	}
 	if line == "/permissions" {
-		s.emit(Event{Kind: EventPermissionsMenu, AutoAccept: s.app.AutoAcceptPermissions(), AutoAcceptKnown: true})
+		s.emit(Event{Kind: EventPermissionsSelectionRequested, AutoAccept: s.app.AutoAcceptPermissions(), AutoAcceptKnown: true})
 		return
 	}
 	if line == "/focus" {
@@ -79,15 +79,15 @@ func (s *Service) handleLocalSubmit(line string) {
 		return
 	}
 	if line == "/skills" {
-		s.emit(Event{Kind: EventSkillsMenu})
+		s.emit(Event{Kind: EventSkillsSelectionRequested})
 		return
 	}
 	if line == "/plugins" {
-		s.emit(Event{Kind: EventPluginsManager, Plugins: s.PluginsForManager()})
+		s.emit(Event{Kind: EventPluginsManagerUpdated, Plugins: protocolPlugins(s.PluginsForManager())})
 		return
 	}
 	if line == "/review" {
-		s.emit(Event{Kind: EventReviewMenu})
+		s.emit(Event{Kind: EventReviewRequested})
 		return
 	}
 	if s.app.IsResumeMenu(line) {
@@ -117,7 +117,7 @@ func (s *Service) handleLocalSubmit(line string) {
 			return
 		}
 		if cmd.ClearScreen {
-			s.emit(Event{Kind: EventClearScreen})
+			s.emit(Event{Kind: EventScreenClearRequested})
 		}
 		if cmd.ShouldExit {
 			s.requestExit()
@@ -127,7 +127,7 @@ func (s *Service) handleLocalSubmit(line string) {
 		}
 		if cmd.Text != "" {
 			ev := localSubmitResultEvent("info", cmd.Text)
-			ev.LocalResult = cmd.LocalResult
+			ev.LocalResult = protocolLocalResult(cmd.LocalResult)
 			s.emit(ev)
 		}
 		return
@@ -140,7 +140,7 @@ func (s *Service) handleLocalSubmit(line string) {
 	if cmd.Handled {
 		if cmd.Text != "" {
 			ev := localSubmitResultEvent("info", cmd.Text)
-			ev.LocalResult = cmd.LocalResult
+			ev.LocalResult = protocolLocalResult(cmd.LocalResult)
 			s.emit(ev)
 		}
 		if cmd.Turn != nil {

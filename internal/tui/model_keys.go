@@ -1,11 +1,10 @@
 package tui
 
 import (
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-
-	"github.com/usewhale/whale/internal/app/service"
 )
 
 func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
@@ -123,8 +122,8 @@ func (m *model) interruptBusyTurn() tea.Cmd {
 	alreadyStopping := m.stopping
 	m.cancelBlockingModalForInterrupt(!alreadyStopping)
 	if !alreadyStopping {
-		if m.svc != nil {
-			m.dispatchIntent(service.Intent{Kind: service.IntentShutdown})
+		if m.runtime != nil {
+			m.dispatchIntent(protocol.Intent{Kind: protocol.IntentShutdown})
 		}
 		m.status = "stopping"
 		m.stopping = true
@@ -140,12 +139,12 @@ func (m *model) cancelBlockingModalForInterrupt(dispatch bool) {
 	switch m.mode {
 	case modeApproval:
 		if dispatch && m.approval.toolCallID != "" {
-			m.dispatchIntent(service.Intent{Kind: service.IntentCancelToolApproval, ToolCallID: m.approval.toolCallID})
+			m.dispatchIntent(protocol.Intent{Kind: protocol.IntentCancelToolApproval, ToolCallID: m.approval.toolCallID})
 		}
 		m.mode = modeChat
 	case modeUserInput:
 		if dispatch && !m.busy && m.userInput.toolCallID != "" {
-			m.dispatchIntent(service.Intent{Kind: service.IntentCancelUserInput, ToolCallID: m.userInput.toolCallID})
+			m.dispatchIntent(protocol.Intent{Kind: protocol.IntentCancelUserInput, ToolCallID: m.userInput.toolCallID})
 		}
 		m.mode = modeChat
 	}

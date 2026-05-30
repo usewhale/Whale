@@ -3,7 +3,7 @@ package tui
 import (
 	tea "github.com/charmbracelet/bubbletea"
 	xansi "github.com/charmbracelet/x/ansi"
-	"github.com/usewhale/whale/internal/app/service"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 	"strings"
 	"testing"
@@ -35,7 +35,7 @@ func TestApprovalDecisionAppendsStructuredNotice(t *testing.T) {
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
 	m = next.(model)
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentAllowTool || (*intents)[0].ToolCallID != "tool-1" {
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentAllowTool || (*intents)[0].ToolCallID != "tool-1" {
 		t.Fatalf("unexpected approval intent: %+v", *intents)
 	}
 	if m.assembler == nil {
@@ -69,7 +69,7 @@ func TestApprovalEscCancelsInsteadOfDenying(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("expected esc approval handling to return no command")
 	}
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentCancelToolApproval || (*intents)[0].ToolCallID != "tool-1" {
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentCancelToolApproval || (*intents)[0].ToolCallID != "tool-1" {
 		t.Fatalf("expected esc to cancel approval, got %+v", *intents)
 	}
 	if m.mode != modeChat || m.status != "canceled" {
@@ -90,7 +90,7 @@ func TestApprovalEscRemovesPendingToolCallBeforeTurnDone(t *testing.T) {
 	m.sawReasoningThisTurn = true
 
 	_ = m.handleApprovalKey(tea.KeyMsg{Type: tea.KeyEsc})
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentCancelToolApproval {
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentCancelToolApproval {
 		t.Fatalf("expected esc to cancel approval, got %+v", *intents)
 	}
 	if got := m.assembler.ToolCallText("tool-1"); got != "" {
@@ -103,7 +103,7 @@ func TestApprovalEscRemovesPendingToolCallBeforeTurnDone(t *testing.T) {
 		t.Fatal("cancel should mark the turn as terminal to suppress reasoning-only fallback")
 	}
 
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	m = next.(model)
 	rendered := strings.Join(tuirender.ChatLines(m.transcript, 100), "\n")
 	if strings.Contains(rendered, "Running date") {
@@ -129,13 +129,13 @@ func TestApprovalDStillDenies(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("expected deny approval handling to return no command")
 	}
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentDenyTool || (*intents)[0].ToolCallID != "tool-1" {
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentDenyTool || (*intents)[0].ToolCallID != "tool-1" {
 		t.Fatalf("expected d to deny approval, got %+v", *intents)
 	}
 }
 func TestCtrlCWhileBusyInterruptsBeforeApprovalMode(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
-	m.svc = &service.Service{}
+	m.runtime = &testRuntime{}
 	m.width = 80
 	m.height = 24
 	m.busy = true
@@ -152,9 +152,9 @@ func TestCtrlCWhileBusyInterruptsBeforeApprovalMode(t *testing.T) {
 		t.Fatalf("expected interrupt to leave approval mode, got %v", m.mode)
 	}
 	if len(*intents) != 2 ||
-		(*intents)[0].Kind != service.IntentCancelToolApproval ||
+		(*intents)[0].Kind != protocol.IntentCancelToolApproval ||
 		(*intents)[0].ToolCallID != "tool-1" ||
-		(*intents)[1].Kind != service.IntentShutdown {
+		(*intents)[1].Kind != protocol.IntentShutdown {
 		t.Fatalf("expected cancel approval then shutdown intents, got %+v", *intents)
 	}
 }

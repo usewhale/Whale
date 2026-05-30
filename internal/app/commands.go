@@ -2,7 +2,7 @@ package app
 
 import (
 	"fmt"
-	appcommands "github.com/usewhale/whale/internal/app/commands"
+	appcommands "github.com/usewhale/whale/internal/commands"
 	"github.com/usewhale/whale/internal/session"
 	"strings"
 	"time"

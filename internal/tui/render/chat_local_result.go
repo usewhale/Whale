@@ -1,10 +1,12 @@
 package render
 
 import (
-	"github.com/charmbracelet/lipgloss"
-	"github.com/usewhale/whale/internal/app"
-	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 	"strings"
+
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/usewhale/whale/internal/runtime/protocol"
+	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
 
 func renderLocalResultCard(m UIMessage, width int) []string {
@@ -30,7 +32,7 @@ func renderLocalResultCard(m UIMessage, width int) []string {
 	return strings.Split(strings.TrimRight(card, "\n"), "\n")
 }
 
-func renderLocalResultBody(result *app.LocalResult, width int) string {
+func renderLocalResultBody(result *protocol.LocalResult, width int) string {
 	if result == nil {
 		return ""
 	}
@@ -63,7 +65,7 @@ func renderLocalResultBody(result *app.LocalResult, width int) string {
 	return strings.Join(blocks, "\n\n")
 }
 
-func renderLocalResultFields(fields []app.LocalResultField, width int) string {
+func renderLocalResultFields(fields []protocol.LocalResultField, width int) string {
 	if len(fields) == 0 {
 		return ""
 	}
@@ -87,7 +89,7 @@ func renderLocalResultFields(fields []app.LocalResultField, width int) string {
 	return strings.Join(lines, "\n")
 }
 
-func localResultFieldWidths(fields []app.LocalResultField, width int) (labelWidth int, valueWidth int, separator string) {
+func localResultFieldWidths(fields []protocol.LocalResultField, width int) (labelWidth int, valueWidth int, separator string) {
 	if width < 1 {
 		width = 1
 	}

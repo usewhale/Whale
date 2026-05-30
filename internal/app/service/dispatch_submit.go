@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"github.com/usewhale/whale/internal/agent"
 	"github.com/usewhale/whale/internal/app"
-	appcommands "github.com/usewhale/whale/internal/app/commands"
+	appcommands "github.com/usewhale/whale/internal/commands"
 	"github.com/usewhale/whale/internal/session"
 	"strings"
 )
@@ -53,7 +53,7 @@ func (s *Service) handleSubmitMenuCommand(state *submitState) bool {
 	switch state.line {
 	case "/model":
 		s.emit(Event{
-			Kind:            EventModelPicker,
+			Kind:            EventModelSelectionRequested,
 			ModelChoices:    s.app.SupportedModels(),
 			EffortChoices:   s.app.SupportedEfforts(),
 			CurrentModel:    s.app.Model(),
@@ -63,7 +63,7 @@ func (s *Service) handleSubmitMenuCommand(state *submitState) bool {
 		})
 		return true
 	case "/permissions":
-		s.emit(Event{Kind: EventPermissionsMenu, AutoAccept: s.app.AutoAcceptPermissions(), AutoAcceptKnown: true})
+		s.emit(Event{Kind: EventPermissionsSelectionRequested, AutoAccept: s.app.AutoAcceptPermissions(), AutoAcceptKnown: true})
 		return true
 	case "/focus":
 		mode, err := s.app.ToggleViewMode()
@@ -77,13 +77,13 @@ func (s *Service) handleSubmitMenuCommand(state *submitState) bool {
 		s.emit(Event{Kind: EventTurnDone, LastResponse: msg})
 		return true
 	case "/skills":
-		s.emit(Event{Kind: EventSkillsMenu})
+		s.emit(Event{Kind: EventSkillsSelectionRequested})
 		return true
 	case "/plugins":
-		s.emit(Event{Kind: EventPluginsManager, Plugins: s.PluginsForManager()})
+		s.emit(Event{Kind: EventPluginsManagerUpdated, Plugins: protocolPlugins(s.PluginsForManager())})
 		return true
 	case "/review":
-		s.emit(Event{Kind: EventReviewMenu})
+		s.emit(Event{Kind: EventReviewRequested})
 		return true
 	default:
 		return false
@@ -145,7 +145,7 @@ func (s *Service) handleSubmitSlashCommand(state *submitState) bool {
 	}
 	if cmd.Handled {
 		if cmd.ClearScreen {
-			s.emit(Event{Kind: EventClearScreen})
+			s.emit(Event{Kind: EventScreenClearRequested})
 		}
 		if cmd.ShouldExit {
 			s.requestExit()
@@ -156,7 +156,7 @@ func (s *Service) handleSubmitSlashCommand(state *submitState) bool {
 		// Emit Info after session hydration so the text isn't
 		// wiped by the hydration's assembler reset.
 		if cmd.Text != "" {
-			s.emit(Event{Kind: EventInfo, Text: cmd.Text, LocalResult: cmd.LocalResult})
+			s.emit(Event{Kind: EventInfo, Text: cmd.Text, LocalResult: protocolLocalResult(cmd.LocalResult)})
 		}
 		if cmd.Turn == nil {
 			s.emit(Event{Kind: EventTurnDone, LastResponse: cmd.Text})
@@ -184,7 +184,7 @@ func (s *Service) handleSubmitLocalCommand(state *submitState) bool {
 	}
 	if cmd.Handled {
 		if cmd.Text != "" {
-			s.emit(Event{Kind: EventInfo, Text: cmd.Text, LocalResult: cmd.LocalResult})
+			s.emit(Event{Kind: EventInfo, Text: cmd.Text, LocalResult: protocolLocalResult(cmd.LocalResult)})
 		}
 		if cmd.Turn == nil {
 			s.emit(Event{Kind: EventTurnDone, LastResponse: cmd.Text})

@@ -3,7 +3,7 @@ package tui
 import (
 	"strings"
 
-	"github.com/usewhale/whale/internal/app"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
@@ -39,7 +39,7 @@ func (m *model) appendTranscript(role string, kind tuirender.MessageKind, text s
 	m.refreshViewportContentFollow(true)
 }
 
-func (m *model) appendLocalResult(result *app.LocalResult) {
+func (m *model) appendLocalResult(result *protocol.LocalResult) {
 	if result == nil {
 		return
 	}

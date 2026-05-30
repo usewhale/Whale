@@ -3,7 +3,7 @@ package tui
 import (
 	tea "github.com/charmbracelet/bubbletea"
 	xansi "github.com/charmbracelet/x/ansi"
-	"github.com/usewhale/whale/internal/app/service"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +11,33 @@ import (
 	"testing"
 	"time"
 )
+
+type testRuntime struct {
+	events chan protocol.Event
+}
+
+func (r *testRuntime) Events() <-chan protocol.Event {
+	if r.events == nil {
+		r.events = make(chan protocol.Event)
+	}
+	return r.events
+}
+
+func (r *testRuntime) Dispatch(protocol.Intent) {}
+func (r *testRuntime) Close()                   {}
+func (r *testRuntime) SessionID() string        { return "" }
+func (r *testRuntime) Model() string            { return "" }
+func (r *testRuntime) ReasoningEffort() string  { return "" }
+func (r *testRuntime) ThinkingEnabled() bool    { return true }
+func (r *testRuntime) ViewMode() string         { return "" }
+func (r *testRuntime) ShowReasoning() bool      { return false }
+func (r *testRuntime) SetViewMode(string) error { return nil }
+func (r *testRuntime) SkillSuggestions() []protocol.SkillView {
+	return nil
+}
+func (r *testRuntime) PrepareOpenCommand(string) (string, *exec.Cmd, error) {
+	return "", nil, os.ErrInvalid
+}
 
 type fakeClock struct{ t time.Time }
 
@@ -50,10 +77,10 @@ func runFileSuggestionSearchForTest(t *testing.T, m model, cmd tea.Cmd) model {
 	updated, _ := updateTestModel(t, m, msg)
 	return updated
 }
-func newModelWithDispatchSpy() (model, *[]service.Intent) {
+func newModelWithDispatchSpy() (model, *[]protocol.Intent) {
 	m := newModel(nil, "", "", "")
-	intents := []service.Intent{}
-	m.dispatch = func(in service.Intent) {
+	intents := []protocol.Intent{}
+	m.dispatch = func(in protocol.Intent) {
 		intents = append(intents, in)
 	}
 	return m, &intents

@@ -2,16 +2,17 @@ package tui
 
 import (
 	"fmt"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/usewhale/whale/internal/app"
-	"github.com/usewhale/whale/internal/app/service"
-	tuirender "github.com/usewhale/whale/internal/tui/render"
 	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/usewhale/whale/internal/runtime/protocol"
+	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
 func agentTurnMetadata() map[string]any {
-	return map[string]any{service.EventMetadataAgentTurn: true}
+	return map[string]any{protocol.EventMetadataAgentTurn: true}
 }
 func newLongHistoryComposerModel(historyCount int, input string) model {
 	m := newModel(nil, "", "", "")
@@ -46,7 +47,7 @@ func TestFilePanelNavigationSuppressesHistoryWhenNoMatches(t *testing.T) {
 }
 func TestSkillLoadedEventUpdatesStatusAndLogOnly(t *testing.T) {
 	m := newModel(nil, "", "", "")
-	m.handleServiceEvent(service.Event{Kind: service.EventSkillLoaded, Text: "loaded skill: code-review"})
+	m.handleServiceEvent(protocol.Event{Kind: protocol.EventSkillLoaded, Text: "loaded skill: code-review"})
 
 	if got := len(m.assembler.Snapshot()); got != 0 {
 		t.Fatalf("skill loaded event should not add chat entries, got %d", got)
@@ -63,7 +64,7 @@ func TestSkillLoadedEventUpdatesStatusAndLogOnly(t *testing.T) {
 }
 func TestAutoAcceptInfoAppendsStructuredNotice(t *testing.T) {
 	m := newModel(nil, "", "", "")
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventInfo, Text: "Session auto-accept enabled", AutoAccept: true, AutoAcceptKnown: true}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventInfo, Text: "Session auto-accept enabled", AutoAccept: true, AutoAcceptKnown: true}))
 	m = next.(model)
 	if !m.autoAccept {
 		t.Fatal("expected auto-accept state to update")
@@ -88,7 +89,7 @@ func TestHelpInfoRendersAsListInsteadOfCollapsedParagraph(t *testing.T) {
 	m.width = 100
 	m.height = 30
 
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventLocalSubmitResult, Status: "info", Text: app.BuildHelpText()}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventLocalSubmitResult, Status: "info", Text: buildHelpTextForTest()}))
 	m = next.(model)
 
 	got := strings.Join(tuirender.ChatLines(m.transcript, 100), "\n")
@@ -101,30 +102,48 @@ func TestHelpInfoRendersAsListInsteadOfCollapsedParagraph(t *testing.T) {
 		}
 	}
 }
+
+func buildHelpTextForTest() string {
+	var b strings.Builder
+	b.WriteString("Whale help\n\n")
+	b.WriteString("Browse default commands:\n\n")
+	for i, cmd := range helpCommands() {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString("- `")
+		b.WriteString(cmd.Name)
+		b.WriteString("`\n")
+		b.WriteString("  ")
+		b.WriteString(cmd.Description)
+	}
+	b.WriteString("\n\nFor more help: https://github.com/usewhale/whale")
+	return b.String()
+}
 func TestFinalAssistantDroppedTailPreservesToolOrder(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 30, busy: true}
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventAssistantDelta, Text: "visible assistant"}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventAssistantDelta, Text: "visible assistant"}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolCall,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolCall,
 		ToolCallID: "tc-read",
 		ToolName:   "read_file",
 		Text:       `read_file: {"file_path":"internal/tui/model.go"}`,
 	}))
 	m = next.(model)
 	raw := `{"success":true,"data":{"status":"ok","metrics":{"returned_lines":24,"total_lines":100},"payload":{"file_path":"internal/tui/model.go","content":"package tui"}}}`
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolResult,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolResult,
 		ToolCallID: "tc-read",
 		ToolName:   "read_file",
 		Text:       raw,
 	}))
 	m = next.(model)
 
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:         service.EventTurnDone,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:         protocol.EventTurnDone,
 		LastResponse: "visible assistant recovered tail",
-		Metadata:     map[string]any{service.EventMetadataAgentTurn: true},
+		Metadata:     map[string]any{protocol.EventMetadataAgentTurn: true},
 	}))
 	m = next.(model)
 
@@ -141,30 +160,30 @@ func TestFinalAssistantDroppedTailPreservesToolOrder(t *testing.T) {
 }
 func TestFinalAssistantNonPrefixReconciliationStaysAfterToolOutput(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 30, busy: true}
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventAssistantDelta, Text: "visible pre "}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventAssistantDelta, Text: "visible pre "}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolCall,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolCall,
 		ToolCallID: "tc-read",
 		ToolName:   "read_file",
 		Text:       `read_file: {"file_path":"internal/tui/model.go"}`,
 	}))
 	m = next.(model)
 	raw := `{"success":true,"data":{"status":"ok","metrics":{"returned_lines":24,"total_lines":100},"payload":{"file_path":"internal/tui/model.go","content":"package tui"}}}`
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolResult,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolResult,
 		ToolCallID: "tc-read",
 		ToolName:   "read_file",
 		Text:       raw,
 	}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventAssistantDelta, Text: "visible later"}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventAssistantDelta, Text: "visible later"}))
 	m = next.(model)
 
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:         service.EventTurnDone,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:         protocol.EventTurnDone,
 		LastResponse: "visible pre missing middle visible later final tail",
-		Metadata:     map[string]any{service.EventMetadataAgentTurn: true},
+		Metadata:     map[string]any{protocol.EventMetadataAgentTurn: true},
 	}))
 	m = next.(model)
 
@@ -180,28 +199,28 @@ func TestFinalAssistantNonPrefixReconciliationStaysAfterToolOutput(t *testing.T)
 }
 func TestFinalAssistantFailedCommittedReplacementDoesNotMutateTranscript(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 30, busy: true}
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventAssistantDelta, Text: "visible pre"}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventAssistantDelta, Text: "visible pre"}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolCall,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolCall,
 		ToolCallID: "tc-read",
 		ToolName:   "read_file",
 		Text:       `read_file: {"file_path":"internal/tui/model.go"}`,
 	}))
 	m = next.(model)
 	raw := `{"success":true,"data":{"status":"ok","metrics":{"returned_lines":24,"total_lines":100},"payload":{"file_path":"internal/tui/model.go","content":"package tui"}}}`
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolResult,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolResult,
 		ToolCallID: "tc-read",
 		ToolName:   "read_file",
 		Text:       raw,
 	}))
 	m = next.(model)
 
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:         service.EventTurnDone,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:         protocol.EventTurnDone,
 		LastResponse: "different final response",
-		Metadata:     map[string]any{service.EventMetadataAgentTurn: true},
+		Metadata:     map[string]any{protocol.EventMetadataAgentTurn: true},
 	}))
 	m = next.(model)
 

@@ -2,12 +2,14 @@ package render
 
 import (
 	"fmt"
-	"github.com/charmbracelet/lipgloss"
-	xansi "github.com/charmbracelet/x/ansi"
-	"github.com/usewhale/whale/internal/core"
-	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
+
+	"github.com/usewhale/whale/internal/runtime/protocol"
+	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
 
 func renderToolEvent(m UIMessage, block string, width int) []string {
@@ -79,7 +81,7 @@ func renderSubagentEvent(m UIMessage, header string, bodyLines []string, width, 
 	if stepCount > 0 {
 		shortHeader += " (" + fmt.Sprintf("%d steps)", stepCount)
 		// Show at most subagentCardMaxVisibleSteps, oldest truncated
-		var visible []core.SubagentStep
+		var visible []protocol.ProgressStep
 		truncated := 0
 		if stepCount > subagentCardMaxVisibleSteps {
 			truncated = stepCount - subagentCardMaxVisibleSteps

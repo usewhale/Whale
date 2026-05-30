@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	appcommands "github.com/usewhale/whale/internal/commands"
 )
 
 type OpenCommand struct {
@@ -16,8 +18,7 @@ type OpenCommand struct {
 }
 
 func IsOpenCommandLine(line string) bool {
-	fields := strings.Fields(strings.TrimSpace(line))
-	return len(fields) > 0 && fields[0] == "/open"
+	return appcommands.IsOpenCommandLine(line)
 }
 
 func (a *App) PrepareOpenCommand(line string) (OpenCommand, error) {

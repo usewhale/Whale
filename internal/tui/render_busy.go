@@ -3,8 +3,7 @@ package tui
 import (
 	"fmt"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/usewhale/whale/internal/app"
-	appcommands "github.com/usewhale/whale/internal/app/commands"
+	appcommands "github.com/usewhale/whale/internal/runtime/commands"
 	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 	"math"
 	"strings"
@@ -95,7 +94,7 @@ func busySlashDraftMatchesCommand(input, command string) bool {
 	if len(fields) != 1 {
 		return false
 	}
-	return appcommands.ExpandUniqueSlashPrefix(fields[0], app.CommandsHelp, "/mcp") == command
+	return appcommands.ExpandUniqueSlashPrefix(fields[0], appcommands.CommandsHelp(), "/mcp") == command
 }
 
 func busySlashDraftImmediate(input string) bool {
@@ -103,7 +102,7 @@ func busySlashDraftImmediate(input string) bool {
 	if !appcommands.LooksLikeSlashCommand(input) {
 		return false
 	}
-	return appcommands.ClassifySubmit(input, app.CommandsHelp, "/mcp").BusyImmediate()
+	return appcommands.ClassifySubmit(input, appcommands.CommandsHelp(), "/mcp").BusyImmediate()
 }
 
 func (m model) renderQueuedPrompts(width int) string {

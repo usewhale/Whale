@@ -2,18 +2,19 @@ package tui
 
 import (
 	"fmt"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	xansi "github.com/charmbracelet/x/ansi"
-	"github.com/muesli/termenv"
-	"github.com/usewhale/whale/internal/app"
-	"github.com/usewhale/whale/internal/app/service"
-	tuirender "github.com/usewhale/whale/internal/tui/render"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
+
+	"github.com/usewhale/whale/internal/runtime/protocol"
+	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
 func TestCommitLiveTranscriptClearsAssembler(t *testing.T) {
@@ -31,7 +32,7 @@ func TestAssistantDeltaKeepsMultilineBlockLiveUntilBoundary(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 80
 	m.height = 24
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventAssistantDelta, Text: "stable line\nlive tail"}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventAssistantDelta, Text: "stable line\nlive tail"}))
 	m = next.(model)
 	snap := m.assembler.Snapshot()
 	if len(snap) != 1 || snap[0].Text != "stable line\nlive tail" {
@@ -49,7 +50,7 @@ func TestReasoningDeltaKeepsSingleThinkingCardAcrossNewlines(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 80
 	m.height = 24
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventReasoningDelta, Text: "first thought\n\nsecond thought\nthird thought"}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventReasoningDelta, Text: "first thought\n\nsecond thought\nthird thought"}))
 	m = next.(model)
 	snap := m.assembler.Snapshot()
 	if len(snap) != 1 || snap[0].Role != "think" {
@@ -71,7 +72,7 @@ func TestReasoningDeltaKeepsSingleThinkingCardAcrossNewlines(t *testing.T) {
 }
 func TestCommittedReasoningIsNoLongerStreaming(t *testing.T) {
 	m := newModel(nil, "", "", "")
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventReasoningDelta, Text: "first\nsecond\nthird"}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventReasoningDelta, Text: "first\nsecond\nthird"}))
 	m = next.(model)
 	snap := m.assembler.Snapshot()
 	if len(snap) != 1 || !snap[0].Streaming {
@@ -136,7 +137,7 @@ func TestChatFooterKeepsFocusIndicatorWithGitBranch(t *testing.T) {
 	m := newModel(nil, "deepseek-v4-pro", "high", "on")
 	m.width = 100
 	m.height = 24
-	m.viewMode = app.ViewModeFocus
+	m.viewMode = protocol.ViewModeFocus
 	m.cwd = "/Users/goranka/Engineer/ai/dsk/whale-output-mouse-copy"
 	m.gitBranch = "feat/footer-branch"
 
@@ -198,11 +199,11 @@ func TestChatTranscriptRetainsLocalCommandResultsAcrossSubmits(t *testing.T) {
 	m, _ := newModelWithDispatchSpy()
 	m.width = 80
 	m.height = 14
-	localInfo := func(text string) service.Event {
-		return service.Event{Kind: service.EventLocalSubmitResult, Status: "info", Text: text}
+	localInfo := func(text string) protocol.Event {
+		return protocol.Event{Kind: protocol.EventLocalSubmitResult, Status: "info", Text: text}
 	}
-	localDone := func() service.Event {
-		return service.Event{Kind: service.EventLocalSubmitDone, Metadata: map[string]any{service.EventMetadataLocalSubmit: true}}
+	localDone := func() protocol.Event {
+		return protocol.Event{Kind: protocol.EventLocalSubmitDone, Metadata: map[string]any{protocol.EventMetadataLocalSubmit: true}}
 	}
 	next, _ := m.Update(svcMsg(localInfo("MCP\n\nconfig: /tmp/mcp.json servers: none")))
 	m = next.(model)
@@ -228,8 +229,8 @@ func TestNewSessionLocalResultRendersAsNotice(t *testing.T) {
 	m, _ := newModelWithDispatchSpy()
 	m.width = 80
 	m.height = 14
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind:   service.EventLocalSubmitResult,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:   protocol.EventLocalSubmitResult,
 		Status: "info",
 		Text:   "New session\n\nsession:  fresh\nprevious: old\nresume:   whale resume old\nmode:     agent",
 	}))
@@ -250,15 +251,15 @@ func TestStatusLocalResultRendersAsStructuredTranscriptEntry(t *testing.T) {
 	m.input.SetValue("/status")
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:   service.EventLocalSubmitResult,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:   protocol.EventLocalSubmitResult,
 		Status: "info",
 		Text:   "Status\n\n- session: test-session",
-		LocalResult: &app.LocalResult{
+		LocalResult: &protocol.LocalResult{
 			Kind:      "status",
 			Title:     "Status",
 			PlainText: "Status\n\n- session: test-session",
-			Fields: []app.LocalResultField{
+			Fields: []protocol.LocalResultField{
 				{Label: "Session", Value: "test-session"},
 				{Label: "Mode", Value: "agent", Tone: "info"},
 			},
@@ -285,8 +286,8 @@ func TestLocalCommandResultCommitsIdleAssemblerBeforeNextPrompt(t *testing.T) {
 	m.width = 80
 	m.height = 14
 
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind: service.EventInfo,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind: protocol.EventInfo,
 		Text: "Startup notice",
 	}))
 	m = next.(model)
@@ -297,16 +298,16 @@ func TestLocalCommandResultCommitsIdleAssemblerBeforeNextPrompt(t *testing.T) {
 	m.input.SetValue("/status")
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:   service.EventLocalSubmitResult,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:   protocol.EventLocalSubmitResult,
 		Status: "info",
 		Text:   "Status\n\nsession: test-session",
 	}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind: service.EventLocalSubmitDone,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind: protocol.EventLocalSubmitDone,
 		Metadata: map[string]any{
-			service.EventMetadataLocalSubmit: true,
+			protocol.EventMetadataLocalSubmit: true,
 		},
 	}))
 	m = next.(model)
@@ -330,9 +331,9 @@ func TestLocalCommandResultPreservesLiveTurnOrder(t *testing.T) {
 	m, _ := newModelWithDispatchSpy()
 	m.width = 80
 	m.height = 14
-	localInfo := service.Event{Kind: service.EventLocalSubmitResult, Status: "info", Text: "Stats\n\nusage summary"}
+	localInfo := protocol.Event{Kind: protocol.EventLocalSubmitResult, Status: "info", Text: "Stats\n\nusage summary"}
 
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventAssistantDelta, Text: "streamed answer"}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventAssistantDelta, Text: "streamed answer"}))
 	m = next.(model)
 	next, _ = m.Update(svcMsg(localInfo))
 	m = next.(model)
@@ -344,10 +345,10 @@ func TestLocalCommandResultPreservesLiveTurnOrder(t *testing.T) {
 		t.Fatalf("expected live assistant output before local result:\n%s", rendered)
 	}
 
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:         service.EventTurnDone,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:         protocol.EventTurnDone,
 		LastResponse: "streamed answer with final reconciliation",
-		Metadata:     map[string]any{service.EventMetadataAgentTurn: true},
+		Metadata:     map[string]any{protocol.EventMetadataAgentTurn: true},
 	}))
 	m = next.(model)
 	rendered = strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
@@ -480,10 +481,10 @@ func TestChatStartupHeaderReturnsAfterNewSessionNotice(t *testing.T) {
 	m.startupHeaderPrinted = true
 	m.appendTranscript("assistant", tuirender.KindText, "old content")
 
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventClearScreen}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventScreenClearRequested}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind: service.EventInfo,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind: protocol.EventInfo,
 		Text: "New session\n\nsession: fresh",
 	}))
 	m = next.(model)
@@ -613,7 +614,7 @@ func TestChatFooterUsesSemanticColorSegments(t *testing.T) {
 	m.width = 100
 	m.height = 24
 	m.cwd = "~/Engineer/ai/dsk/whale-theme-colors"
-	m.viewMode = app.ViewModeFocus
+	m.viewMode = protocol.ViewModeFocus
 
 	view := m.View()
 	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
@@ -644,8 +645,8 @@ func TestModelSetRefreshesHeaderCache(t *testing.T) {
 		t.Fatalf("expected initial header model:\n%s", header)
 	}
 
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:   service.EventLocalSubmitResult,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:   protocol.EventLocalSubmitResult,
 		Status: "info",
 		Text:   "model set: newer-model  effort: low  thinking: off",
 	}))
@@ -698,7 +699,7 @@ func TestClearScreenResetsStateAndShowsHeader(t *testing.T) {
 	m.diffs = []diffEntry{{Source: "x", Line: "old"}}
 	m.status = "ready"
 
-	next, cmd := m.Update(svcMsg(service.Event{Kind: service.EventClearScreen}))
+	next, cmd := m.Update(svcMsg(protocol.Event{Kind: protocol.EventScreenClearRequested}))
 	m2 := next.(model)
 
 	if cmd == nil {
@@ -741,7 +742,7 @@ func TestClearScreenInvalidatesRenderedChatCache(t *testing.T) {
 		t.Fatalf("expected old content before clear:\n%s", view)
 	}
 
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventClearScreen}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventScreenClearRequested}))
 	m = next.(model)
 	view := m.View()
 	if strings.Contains(view, "old cached content") {

@@ -2,8 +2,6 @@ package commands
 
 import (
 	"strings"
-
-	"github.com/usewhale/whale/internal/plugins"
 )
 
 type SubmitClass int
@@ -68,10 +66,7 @@ func classifySlashFields(head string, fields []string, line string) SubmitClass 
 		}
 		return SubmitUsageError
 	case "/memory":
-		if class, ok := plugins.BuiltinSlashCommandClass(line); ok {
-			return submitClassFromPluginCommandClass(class)
-		}
-		return SubmitUsageError
+		return classifyMemoryFields(fields)
 	case "/stats":
 		if len(fields) == 1 {
 			return SubmitLocalReadOnly
@@ -156,21 +151,6 @@ func classifySlashFields(head string, fields []string, line string) SubmitClass 
 	}
 }
 
-func submitClassFromPluginCommandClass(class plugins.CommandClass) SubmitClass {
-	switch class {
-	case plugins.CommandReadOnly:
-		return SubmitLocalReadOnly
-	case plugins.CommandMutating:
-		return SubmitLocalMutating
-	case plugins.CommandUI:
-		return SubmitLocalUI
-	case plugins.CommandTurnStarting:
-		return SubmitTurnStarting
-	default:
-		return SubmitUsageError
-	}
-}
-
 func validStatsView(view string) bool {
 	switch view {
 	case "usage", "tools", "repair", "recent", "profile", "all":
@@ -178,4 +158,20 @@ func validStatsView(view string) bool {
 	default:
 		return false
 	}
+}
+
+func classifyMemoryFields(fields []string) SubmitClass {
+	if len(fields) == 1 {
+		return SubmitLocalReadOnly
+	}
+	if len(fields) == 2 && (fields[1] == "list" || fields[1] == "path") {
+		return SubmitLocalReadOnly
+	}
+	if len(fields) == 3 && fields[1] == "show" {
+		return SubmitLocalReadOnly
+	}
+	if len(fields) == 3 && fields[1] == "forget" {
+		return SubmitLocalMutating
+	}
+	return SubmitUsageError
 }

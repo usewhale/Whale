@@ -7,7 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/usewhale/whale/internal/app"
+	appcommands "github.com/usewhale/whale/internal/runtime/commands"
 	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
 
@@ -38,7 +38,7 @@ func (m *model) closeHelp() {
 }
 
 func (m *model) handleHelpKey(msg tea.KeyMsg) tea.Cmd {
-	commands := app.HelpCommands()
+	commands := helpCommands()
 	if len(commands) == 0 {
 		m.closeHelp()
 		return nil
@@ -90,7 +90,7 @@ func (m *model) ensureHelpSelectionVisible() {
 }
 
 func (m model) renderHelp() string {
-	commands := app.HelpCommands()
+	commands := helpCommands()
 	visible := m.helpVisibleCount()
 	start := min(max(0, m.help.offset), max(0, len(commands)-visible))
 	end := min(len(commands), start+visible)
@@ -132,4 +132,22 @@ func (m model) renderHelp() string {
 		Padding(0, 1).
 		Width(width).
 		Render(strings.Join(rows, "\n"))
+}
+
+type helpCommand struct {
+	Name        string
+	Description string
+}
+
+func helpCommands() []helpCommand {
+	specs := appcommands.DefaultSlashCommands()
+	out := make([]helpCommand, 0, len(specs))
+	for _, spec := range specs {
+		name := spec.Name
+		if spec.ArgumentHint != "" {
+			name += " " + spec.ArgumentHint
+		}
+		out = append(out, helpCommand{Name: name, Description: spec.Description})
+	}
+	return out
 }

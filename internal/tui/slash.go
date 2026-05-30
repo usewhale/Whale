@@ -4,7 +4,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	appcommands "github.com/usewhale/whale/internal/app/commands"
+	appcommands "github.com/usewhale/whale/internal/runtime/commands"
 )
 
 type slashSuggestion struct {

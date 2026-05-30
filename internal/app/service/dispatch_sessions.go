@@ -6,7 +6,7 @@ func (s *Service) emitSessionHydrated() {
 		s.emit(Event{Kind: EventError, Text: err.Error()})
 		return
 	}
-	s.emit(Event{Kind: EventSessionHydrated, SessionID: s.app.SessionID(), Messages: msgs, AutoAccept: s.app.AutoAcceptPermissions(), AutoAcceptKnown: true})
+	s.emit(Event{Kind: EventSessionHydrated, SessionID: s.app.SessionID(), Messages: protocolMessages(msgs), AutoAccept: s.app.AutoAcceptPermissions(), AutoAcceptKnown: true})
 }
 
 func (s *Service) emitSessionChoices() bool {

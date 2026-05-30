@@ -30,7 +30,7 @@ func (s *Service) awaitApproval(req policy.ApprovalRequest) policy.ApprovalDecis
 	s.interactionMu.Unlock()
 	metadata := policy.ApprovalMetadata(req.ToolCall, keys, req.Metadata)
 	s.recordApprovalPromptEvent(req, "approval_prompt_shown", keys)
-	s.emit(Event{Kind: EventApprovalRequired, ToolCallID: toolCallID, ToolName: req.ToolCall.Name, Text: policy.ApprovalSummary(req.ToolCall), Metadata: metadata})
+	s.emit(Event{Kind: EventApprovalRequired, ToolCallID: toolCallID, ToolName: req.ToolCall.Name, Text: policy.ApprovalSummary(req.ToolCall), Metadata: metadata, Approval: protocolApprovalRequest(req, keys, metadata)})
 	decision := <-ch
 	s.recordApprovalPromptEvent(req, approvalPromptDecisionEvent(decision), keys)
 	s.approveMu.Lock()
@@ -151,7 +151,7 @@ func (s *Service) awaitUserInput(req agent.UserInputRequest) (core.UserInputResp
 	s.inputs[toolCallID] = ch
 	s.inputMu.Unlock()
 	s.interactionMu.Unlock()
-	s.emit(Event{Kind: EventUserInputRequired, ToolCallID: toolCallID, ToolName: req.ToolCall.Name, Questions: req.Questions})
+	s.emit(Event{Kind: EventUserInputRequired, ToolCallID: toolCallID, ToolName: req.ToolCall.Name, Questions: protocolUserInputQuestions(req.Questions)})
 	decision := <-ch
 	s.inputMu.Lock()
 	delete(s.inputs, toolCallID)

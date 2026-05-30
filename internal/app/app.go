@@ -1,7 +1,7 @@
 package app
 
 import (
-	appcommands "github.com/usewhale/whale/internal/app/commands"
+	appcommands "github.com/usewhale/whale/internal/commands"
 )
 
 var CommandsHelp = appcommands.CommandsHelp()

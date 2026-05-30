@@ -1,55 +1,24 @@
 package tui
 
 import (
-	"context"
 	"fmt"
-	"os"
 	"runtime"
-
-	"github.com/usewhale/whale/internal/app"
-	"github.com/usewhale/whale/internal/app/service"
 )
 
-func RunTUI(cfg app.Config, start app.StartOptions) error {
-	ctx := context.Background()
-	if !cfg.ConfigLoaded {
-		workspaceRoot, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("get workspace: %w", err)
-		}
-		resolved, err := app.LoadAndApplyConfig(cfg, workspaceRoot)
-		if err != nil {
-			return err
-		}
-		cfg = resolved
-	}
-	outcome, action, err := runUpdatePromptIfNeeded(ctx, cfg)
-	if err != nil {
-		return err
-	}
-	if outcome == updatePromptRun {
-		return runUpdateAction(action)
-	}
-	if outcome == updatePromptInterrupt {
-		return nil
-	}
-	svc, err := service.New(ctx, cfg, start)
-	if err != nil {
-		if app.IsCrossWorkspaceResumeError(err) {
-			fmt.Println(err.Error())
-			return nil
-		}
-		return err
-	}
-	defer svc.Close()
-	modelName := svc.Model()
-	effort := svc.ReasoningEffort()
+type RunOptions struct {
+	ResumeMenu bool
+}
+
+func RunTUI(rt Runtime, opts RunOptions) error {
+	defer rt.Close()
+	modelName := rt.Model()
+	effort := rt.ReasoningEffort()
 	thinking := "on"
-	if !svc.ThinkingEnabled() {
+	if !rt.ThinkingEnabled() {
 		thinking = "off"
 	}
-	m := newModel(svc, modelName, effort, thinking)
-	m.resumeMenu = start.ResumeMenu
+	m := newModel(rt, modelName, effort, thinking)
+	m.resumeMenu = opts.ResumeMenu
 	if runtime.GOOS == "windows" {
 		m.windowsPaste.enabled = true
 	}
@@ -61,7 +30,7 @@ func RunTUI(cfg app.Config, start app.StartOptions) error {
 	_, err = p.Run()
 	cleanup()
 	if err == nil {
-		fmt.Printf("To resume this session, run: whale resume %s\n", svc.SessionID())
+		fmt.Printf("To resume this session, run: whale resume %s\n", rt.SessionID())
 	}
 	return err
 }

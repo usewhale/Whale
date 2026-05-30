@@ -17,7 +17,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/usewhale/whale/internal/agent"
-	appcommands "github.com/usewhale/whale/internal/app/commands"
+	appcommands "github.com/usewhale/whale/internal/commands"
 	"github.com/usewhale/whale/internal/core"
 	whalemcp "github.com/usewhale/whale/internal/mcp"
 	"github.com/usewhale/whale/internal/plugins/memoryplugin"

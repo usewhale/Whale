@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/usewhale/whale/internal/app/service"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 )
 
 type worktreeExitOption struct {
@@ -42,7 +42,7 @@ func (m *model) handleWorktreeExitKey(msg tea.KeyMsg) tea.Cmd {
 	case "esc":
 		m.mode = modeChat
 		m.status = "exit canceled"
-		m.dispatchIntent(service.Intent{Kind: service.IntentWorktreeExitChoice, WorktreeAction: "cancel"})
+		m.dispatchIntent(protocol.Intent{Kind: protocol.IntentWorktreeExitChoice, WorktreeAction: "cancel"})
 	case "enter":
 		action := options[m.worktreeExit.selected].action
 		m.mode = modeChat
@@ -54,7 +54,7 @@ func (m *model) handleWorktreeExitKey(msg tea.KeyMsg) tea.Cmd {
 		default:
 			m.status = "exit canceled"
 		}
-		m.dispatchIntent(service.Intent{Kind: service.IntentWorktreeExitChoice, WorktreeAction: action})
+		m.dispatchIntent(protocol.Intent{Kind: protocol.IntentWorktreeExitChoice, WorktreeAction: action})
 	}
 	return nil
 }

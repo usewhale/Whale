@@ -2,12 +2,45 @@ package tui
 
 import (
 	"fmt"
-	"github.com/usewhale/whale/internal/app/service"
-	"github.com/usewhale/whale/internal/core"
-	tuirender "github.com/usewhale/whale/internal/tui/render"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	"strings"
 	"testing"
+
+	"github.com/usewhale/whale/internal/core"
+	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
+
+func protocolMessagesForTest(messages []core.Message) []protocol.Message {
+	out := make([]protocol.Message, 0, len(messages))
+	for _, message := range messages {
+		toolCalls := make([]protocol.ToolCall, 0, len(message.ToolCalls))
+		for _, call := range message.ToolCalls {
+			toolCalls = append(toolCalls, protocol.ToolCall{ID: call.ID, Name: call.Name, Input: call.Input})
+		}
+		toolResults := make([]protocol.ToolResult, 0, len(message.ToolResults))
+		for _, result := range message.ToolResults {
+			toolResults = append(toolResults, protocol.ToolResult{ToolCallID: result.ToolCallID, Name: result.Name, Content: result.Content, Metadata: result.Metadata, IsError: result.IsError})
+		}
+		out = append(out, protocol.Message{
+			ID:           message.ID,
+			SessionID:    message.SessionID,
+			Role:         string(message.Role),
+			Text:         message.Text,
+			Hidden:       message.Hidden,
+			Reasoning:    message.Reasoning,
+			ToolCalls:    toolCalls,
+			ToolResults:  toolResults,
+			FinishReason: string(message.FinishReason),
+			CreatedAt:    message.CreatedAt,
+			UpdatedAt:    message.UpdatedAt,
+		})
+	}
+	return out
+}
+
+func hydrateSessionMessagesForTest(m *model, messages []core.Message) {
+	m.hydrateSessionMessages(protocolMessagesForTest(messages))
+}
 
 func TestIsEnvironmentInventoryBlock_PositiveChinese(t *testing.T) {
 	text := "- 系统： macOS\n- 版本： 26.0\n- 构建号： 25A354"
@@ -29,7 +62,7 @@ func TestHydrateSessionMessages_SuppressesEnvironmentInventoryAssistantBlock(t *
 			Text: "- 系统： macOS\n- 版本： 26.0\n- 构建号： 25A354",
 		},
 	}
-	m.hydrateSessionMessages(msgs)
+	hydrateSessionMessagesForTest(m, msgs)
 	if got := len(m.assembler.Snapshot()); got != 0 {
 		t.Fatalf("expected no chat entries for environment inventory block, got %d", got)
 	}
@@ -42,7 +75,7 @@ func TestHydrateSessionMessages_KeptForNormalAssistantText(t *testing.T) {
 			Text: "Implemented the layout update and kept footer semantics unchanged.",
 		},
 	}
-	m.hydrateSessionMessages(msgs)
+	hydrateSessionMessagesForTest(m, msgs)
 	snap := m.assembler.Snapshot()
 	if len(snap) != 1 {
 		t.Fatalf("expected one assistant entry, got %d", len(snap))
@@ -59,7 +92,7 @@ func TestHydrateSessionMessages_RendersReasoningAsThinkingOnly(t *testing.T) {
 			Reasoning: "I should answer the age question.",
 		},
 	}
-	m.hydrateSessionMessages(msgs)
+	hydrateSessionMessagesForTest(m, msgs)
 	snap := m.assembler.Snapshot()
 	if len(snap) != 1 {
 		t.Fatalf("expected only thinking entry, got %+v", snap)
@@ -77,7 +110,7 @@ func TestHydrateSessionMessages_RendersReasoningAndAssistantSeparately(t *testin
 			Text:      "I do not have an age.",
 		},
 	}
-	m.hydrateSessionMessages(msgs)
+	hydrateSessionMessagesForTest(m, msgs)
 	snap := m.assembler.Snapshot()
 	if len(snap) != 2 {
 		t.Fatalf("expected thinking plus assistant entries, got %+v", snap)
@@ -98,7 +131,7 @@ func TestHydrateSessionMessages_SuppressesHiddenUserText(t *testing.T) {
 			Hidden: true,
 		},
 	}
-	m.hydrateSessionMessages(msgs)
+	hydrateSessionMessagesForTest(m, msgs)
 	if got := len(m.assembler.Snapshot()); got != 0 {
 		t.Fatalf("expected no chat entries for hidden user text, got %d", got)
 	}
@@ -123,7 +156,7 @@ func TestHydrateSessionMessages_RestoresUpdatePlanAsPlanUpdate(t *testing.T) {
 			}},
 		},
 	}
-	m.hydrateSessionMessages(msgs)
+	hydrateSessionMessagesForTest(m, msgs)
 	snap := m.assembler.Snapshot()
 	if len(snap) != 1 || snap[0].Kind != tuirender.KindPlanUpdate {
 		t.Fatalf("expected hydrated plan update only, got %+v", snap)
@@ -147,7 +180,7 @@ func TestHydrateSessionMessages_LimitsVisibleResumeHistory(t *testing.T) {
 			Text: fmt.Sprintf("user-%02d", i),
 		})
 	}
-	m.hydrateSessionMessages(msgs)
+	hydrateSessionMessagesForTest(m, msgs)
 	snap := m.assembler.Snapshot()
 	if len(snap) != maxHydratedVisibleMessages {
 		t.Fatalf("expected %d visible messages, got %d", maxHydratedVisibleMessages, len(snap))
@@ -168,9 +201,9 @@ func TestSessionHydrationTrimsRenderedResumeHistoryLines(t *testing.T) {
 			Text: fmt.Sprintf("msg-%02d\n%s", i, strings.Repeat("line\n", 70)),
 		})
 	}
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind:     service.EventSessionHydrated,
-		Messages: msgs,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:     protocol.EventSessionHydrated,
+		Messages: protocolMessagesForTest(msgs),
 	}))
 	m = next.(model)
 	rendered := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
@@ -186,8 +219,8 @@ func TestStartupResumeMenuClearsAfterSessionHydration(t *testing.T) {
 	m.resumeMenu = true
 	m.mode = modeSessionPicker
 
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind:      service.EventSessionHydrated,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:      protocol.EventSessionHydrated,
 		SessionID: "s1",
 	}))
 	m = next.(model)
@@ -210,7 +243,7 @@ func TestCrossWorkspaceResumeInfoRendersInTUI(t *testing.T) {
 		"  cd '/tmp/other workspace' && '/usr/local/bin/whale' resume sess-1",
 	}, "\n")
 
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventInfo, Text: msg}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventInfo, Text: msg}))
 	m = next.(model)
 	view := m.View()
 	if !strings.Contains(view, "This conversation is from a different directory.") ||
@@ -227,7 +260,7 @@ func TestHydrateSessionMessages_RestoresProposedPlanStyle(t *testing.T) {
 			Text: "drafting...\n<proposed_plan>\n# Plan\n- Patch renderer\n</proposed_plan>",
 		},
 	}
-	m.hydrateSessionMessages(msgs)
+	hydrateSessionMessagesForTest(m, msgs)
 	snap := m.assembler.Snapshot()
 	if len(snap) != 2 || snap[0].Kind != tuirender.KindText || snap[1].Kind != tuirender.KindPlan {
 		t.Fatalf("expected assistant text and proposed plan, got %+v", snap)
@@ -241,12 +274,12 @@ func TestHydrateSessionMessages_RestoresProposedPlanStyle(t *testing.T) {
 }
 func TestSessionHydrationCommitsTranscriptAndClearsLiveAssembler(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 80, height: 24}
-	next, cmd := m.Update(svcMsg(service.Event{
-		Kind: service.EventSessionHydrated,
-		Messages: []core.Message{
+	next, cmd := m.Update(svcMsg(protocol.Event{
+		Kind: protocol.EventSessionHydrated,
+		Messages: protocolMessagesForTest([]core.Message{
 			{Role: core.RoleUser, Text: "hi"},
 			{Role: core.RoleAssistant, Text: "hello"},
-		},
+		}),
 	}))
 	m = next.(model)
 	if cmd == nil {
@@ -263,7 +296,7 @@ func TestSessionHydratedUpdatesAutoAcceptFooterState(t *testing.T) {
 	m := newModel(nil, "deepseek-v4-pro", "high", "on")
 	m.width = 100
 	m.height = 24
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventSessionHydrated, AutoAccept: true, AutoAcceptKnown: true}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventSessionHydrated, AutoAccept: true, AutoAcceptKnown: true}))
 	m = next.(model)
 	if !m.autoAccept {
 		t.Fatal("expected hydrated auto-accept state")
@@ -278,7 +311,7 @@ func TestSessionHydratedPreservesPrintedStartupHeaderForInitialEmptySession(t *t
 		t.Fatal("expected startup header to be printed to native scrollback")
 	}
 
-	next, cmd := m.Update(svcMsg(service.Event{Kind: service.EventSessionHydrated, SessionID: "s1"}))
+	next, cmd := m.Update(svcMsg(protocol.Event{Kind: protocol.EventSessionHydrated, SessionID: "s1"}))
 	m = next.(model)
 	if cmd == nil {
 		t.Fatal("expected wait command after hydration")
@@ -296,7 +329,7 @@ func TestSessionHydratedResetsStartupHeaderForNewEmptySession(t *testing.T) {
 		t.Fatal("expected startup header to be printed to native scrollback")
 	}
 
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventSessionHydrated, SessionID: "new"}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventSessionHydrated, SessionID: "new"}))
 	m = next.(model)
 	if !m.startupHeaderPrinted || m.startupHeaderOnce == nil || !*m.startupHeaderOnce {
 		t.Fatal("expected new empty session hydration to schedule startup header print")

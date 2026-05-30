@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/usewhale/whale/internal/app/service"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 	"regexp"
 	"strings"
@@ -238,9 +238,9 @@ func TestChatViewportFrozenBatchDeltasDoNotRedrawKeyboardScrolledView(t *testing
 	}
 	frozenView := m.viewport.View()
 
-	events := make([]service.Event, 0, 20)
+	events := make([]protocol.Event, 0, 20)
 	for i := 0; i < 20; i++ {
-		events = append(events, service.Event{Kind: service.EventAssistantDelta, Text: fmt.Sprintf("batched-tail-%02d\n", i)})
+		events = append(events, protocol.Event{Kind: protocol.EventAssistantDelta, Text: fmt.Sprintf("batched-tail-%02d\n", i)})
 	}
 	next, _ = m.Update(svcBatchMsg(events))
 	m = next.(model)
@@ -252,23 +252,23 @@ func TestChatViewportFrozenBatchDeltasDoNotRedrawKeyboardScrolledView(t *testing
 	}
 }
 func TestAppendBatchedServiceEventMergesAdjacentDeltas(t *testing.T) {
-	events := []service.Event{}
-	events = appendBatchedServiceEvent(events, service.Event{Kind: service.EventAssistantDelta, Text: "a"})
-	events = appendBatchedServiceEvent(events, service.Event{Kind: service.EventAssistantDelta, Text: "b"})
-	events = appendBatchedServiceEvent(events, service.Event{Kind: service.EventReasoningDelta, Text: "c"})
-	events = appendBatchedServiceEvent(events, service.Event{Kind: service.EventReasoningDelta, Text: "d"})
-	events = appendBatchedServiceEvent(events, service.Event{Kind: service.EventTurnDone, Text: "done"})
+	events := []protocol.Event{}
+	events = appendBatchedServiceEvent(events, protocol.Event{Kind: protocol.EventAssistantDelta, Text: "a"})
+	events = appendBatchedServiceEvent(events, protocol.Event{Kind: protocol.EventAssistantDelta, Text: "b"})
+	events = appendBatchedServiceEvent(events, protocol.Event{Kind: protocol.EventReasoningDelta, Text: "c"})
+	events = appendBatchedServiceEvent(events, protocol.Event{Kind: protocol.EventReasoningDelta, Text: "d"})
+	events = appendBatchedServiceEvent(events, protocol.Event{Kind: protocol.EventTurnDone, Text: "done"})
 
 	if len(events) != 3 {
 		t.Fatalf("expected adjacent deltas to merge into 3 events, got %d: %+v", len(events), events)
 	}
-	if events[0].Kind != service.EventAssistantDelta || events[0].Text != "ab" {
+	if events[0].Kind != protocol.EventAssistantDelta || events[0].Text != "ab" {
 		t.Fatalf("unexpected merged assistant delta: %+v", events[0])
 	}
-	if events[1].Kind != service.EventReasoningDelta || events[1].Text != "cd" {
+	if events[1].Kind != protocol.EventReasoningDelta || events[1].Text != "cd" {
 		t.Fatalf("unexpected merged reasoning delta: %+v", events[1])
 	}
-	if events[2].Kind != service.EventTurnDone {
+	if events[2].Kind != protocol.EventTurnDone {
 		t.Fatalf("expected non-delta event to remain separate, got %+v", events[2])
 	}
 }
@@ -671,15 +671,15 @@ func TestUnmatchedToolResultRefreshesLiveViewportWhilePendingCallsRemain(t *test
 		height:     16,
 		followTail: true,
 	}
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolCall,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolCall,
 		ToolCallID: "tc-1",
 		ToolName:   "shell_run",
 		Text:       `shell_run: {"command":"echo first"}`,
 	}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolCall,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolCall,
 		ToolCallID: "tc-2",
 		ToolName:   "shell_run",
 		Text:       `shell_run: {"command":"echo second"}`,
@@ -690,8 +690,8 @@ func TestUnmatchedToolResultRefreshesLiveViewportWhilePendingCallsRemain(t *test
 	beforeView := m.View()
 
 	raw := `{"success":true,"data":{"status":"ok","metrics":{"duration_ms":12},"payload":{"stdout":"visible output"}}}`
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolResult,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolResult,
 		ToolCallID: "missing-id",
 		ToolName:   "shell_run",
 		Text:       raw,

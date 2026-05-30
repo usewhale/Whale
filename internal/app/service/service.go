@@ -10,6 +10,7 @@ import (
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/plugins"
 	"github.com/usewhale/whale/internal/policy"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	"github.com/usewhale/whale/internal/skills"
 )
 
@@ -60,85 +61,55 @@ type Intent struct {
 	WorktreeAction string
 }
 
-type EventKind string
+type EventKind = protocol.EventKind
+type Event = protocol.Event
 
 const (
-	EventMetadataAgentTurn   = "agent_turn"
-	EventMetadataLocalSubmit = "local_submit"
+	EventMetadataAgentTurn   = protocol.EventMetadataAgentTurn
+	EventMetadataLocalSubmit = protocol.EventMetadataLocalSubmit
 )
 
 const (
-	EventInfo               EventKind = "info"
-	EventError              EventKind = "error"
-	EventAssistantDelta     EventKind = "assistant_delta"
-	EventReasoningDelta     EventKind = "reasoning_delta"
-	EventPlanDelta          EventKind = "plan_delta"
-	EventPlanCompleted      EventKind = "plan_completed"
-	EventPlanUpdate         EventKind = "plan_update"
-	EventProviderRetry      EventKind = "provider_retry"
-	EventToolCall           EventKind = "tool_call"
-	EventToolResult         EventKind = "tool_result"
-	EventTaskStarted        EventKind = "task_started"
-	EventTaskProgress       EventKind = "task_progress"
-	EventTaskCompleted      EventKind = "task_completed"
-	EventMCPStatus          EventKind = "mcp_status"
-	EventMCPComplete        EventKind = "mcp_complete"
-	EventApprovalRequired   EventKind = "approval_required"
-	EventUserInputRequired  EventKind = "user_input_required"
-	EventUserInputDone      EventKind = "user_input_done"
-	EventSessionsListed     EventKind = "sessions_listed"
-	EventLocalSubmitResult  EventKind = "local_submit_result"
-	EventLocalSubmitDone    EventKind = "local_submit_done"
-	EventDiffResult         EventKind = "diff_result"
-	EventBtwStarted         EventKind = "btw_started"
-	EventBtwDelta           EventKind = "btw_delta"
-	EventBtwDone            EventKind = "btw_done"
-	EventBtwError           EventKind = "btw_error"
-	EventTurnDone           EventKind = "turn_done"
-	EventModelPicker        EventKind = "model_picker"
-	EventPermissionsMenu    EventKind = "permissions_menu"
-	EventSkillsMenu         EventKind = "skills_menu"
-	EventSkillsManager      EventKind = "skills_manager"
-	EventPluginsManager     EventKind = "plugins_manager"
-	EventReviewMenu         EventKind = "review_menu"
-	EventViewModeChanged    EventKind = "view_mode_changed"
-	EventSkillLoaded        EventKind = "skill_loaded"
-	EventWorktreeExitPrompt EventKind = "worktree_exit_prompt"
-	EventExitRequested      EventKind = "exit_requested"
-	EventClearScreen        EventKind = "clear_screen"
-	EventSessionHydrated    EventKind = "session_hydrated"
+	EventInfo                          = protocol.EventInfo
+	EventError                         = protocol.EventError
+	EventAssistantDelta                = protocol.EventAssistantDelta
+	EventReasoningDelta                = protocol.EventReasoningDelta
+	EventPlanDelta                     = protocol.EventPlanDelta
+	EventPlanCompleted                 = protocol.EventPlanCompleted
+	EventPlanUpdate                    = protocol.EventPlanUpdate
+	EventProviderRetry                 = protocol.EventProviderRetry
+	EventToolCall                      = protocol.EventToolCall
+	EventToolResult                    = protocol.EventToolResult
+	EventTaskStarted                   = protocol.EventTaskStarted
+	EventTaskProgress                  = protocol.EventTaskProgress
+	EventTaskCompleted                 = protocol.EventTaskCompleted
+	EventMCPStatus                     = protocol.EventMCPStatus
+	EventMCPComplete                   = protocol.EventMCPComplete
+	EventApprovalRequired              = protocol.EventApprovalRequired
+	EventUserInputRequired             = protocol.EventUserInputRequired
+	EventUserInputDone                 = protocol.EventUserInputDone
+	EventSessionsListed                = protocol.EventSessionsListed
+	EventLocalSubmitResult             = protocol.EventLocalSubmitResult
+	EventLocalSubmitDone               = protocol.EventLocalSubmitDone
+	EventDiffResult                    = protocol.EventDiffResult
+	EventBtwStarted                    = protocol.EventBtwStarted
+	EventBtwDelta                      = protocol.EventBtwDelta
+	EventBtwDone                       = protocol.EventBtwDone
+	EventBtwError                      = protocol.EventBtwError
+	EventTurnDone                      = protocol.EventTurnDone
+	EventModelSelectionRequested       = protocol.EventModelSelectionRequested
+	EventPermissionsSelectionRequested = protocol.EventPermissionsSelectionRequested
+	EventSkillsSelectionRequested      = protocol.EventSkillsSelectionRequested
+	EventSkillsManagerUpdated          = protocol.EventSkillsManagerUpdated
+	EventPluginsManagerUpdated         = protocol.EventPluginsManagerUpdated
+	EventReviewRequested               = protocol.EventReviewRequested
+	EventViewModeChanged               = protocol.EventViewModeChanged
+	EventSkillLoaded                   = protocol.EventSkillLoaded
+	EventWorktreeExitPrompt            = protocol.EventWorktreeExitPrompt
+	EventExitRequested                 = protocol.EventExitRequested
+	EventScreenClearRequested          = protocol.EventScreenClearRequested
+	EventSessionHydrated               = protocol.EventSessionHydrated
 )
-
-type Event struct {
-	Kind             EventKind
-	Text             string
-	ToolCallID       string
-	ToolName         string
-	Metadata         map[string]any
-	Status           string
-	Count            int
-	DurationMS       int64
-	ProgressMessages []core.SubagentStep
-	Questions        []core.UserInputQuestion
-	Choices          []string
-	Approval         *policy.ApprovalRequest
-	LastResponse     string
-	ModelChoices     []string
-	EffortChoices    []string
-	CurrentModel     string
-	CurrentEffort    string
-	ThinkingChoices  []string
-	CurrentThinking  string
-	AutoAccept       bool
-	AutoAcceptKnown  bool
-	ViewMode         string
-	LocalResult      *app.LocalResult
-	Skills           []skills.SkillView
-	Plugins          []plugins.PluginStatus
-	WorktreeExit     *app.WorktreeExitSummary
-	SessionID        string
-	Messages         []core.Message
-}
 
 type Service struct {
 	ctx              context.Context

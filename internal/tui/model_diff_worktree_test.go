@@ -3,8 +3,7 @@ package tui
 import (
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/usewhale/whale/internal/app"
-	"github.com/usewhale/whale/internal/app/service"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 	"strings"
 	"testing"
@@ -17,8 +16,8 @@ func TestDiffResultOpensDiffPageAndEscReturnsToChat(t *testing.T) {
 	m.input.SetValue("draft")
 	m.localSubmitCommands = []string{"/diff"}
 
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind: service.EventDiffResult,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind: protocol.EventDiffResult,
 		Text: "diff --git a/README.md b/README.md\n@@ -1 +1 @@\n-old\n+new\n",
 	}))
 	m = next.(model)
@@ -126,8 +125,8 @@ func TestDiffResultResetsPagerToTop(t *testing.T) {
 	for i := 0; i < 60; i++ {
 		lines = append(lines, fmt.Sprintf("+line %02d", i))
 	}
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind: service.EventDiffResult,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind: protocol.EventDiffResult,
 		Text: strings.Join(lines, "\n"),
 	}))
 	m = next.(model)
@@ -138,8 +137,8 @@ func TestDiffResultResetsPagerToTop(t *testing.T) {
 		t.Fatal("expected End to scroll the diff away from the top")
 	}
 
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind: service.EventDiffResult,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind: protocol.EventDiffResult,
 		Text: strings.Join(lines, "\n"),
 	}))
 	m = next.(model)
@@ -150,8 +149,8 @@ func TestDiffResultResetsPagerToTop(t *testing.T) {
 func TestWorktreeExitPromptEnterDispatchesSelectedAction(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.mode = modeWorktreeExit
-	m.worktreeExit.summary = app.WorktreeExitSummary{
-		Session:      app.WorktreeSession{Name: "feature", Path: "/tmp/repo/.whale/worktrees/feature", Branch: "worktree-feature"},
+	m.worktreeExit.summary = protocol.WorktreeExitSummary{
+		Session:      protocol.WorktreeSession{Name: "feature", Path: "/tmp/repo/.whale/worktrees/feature", Branch: "worktree-feature"},
 		ChangedFiles: 1,
 	}
 	m.worktreeExit.selected = 1
@@ -162,7 +161,7 @@ func TestWorktreeExitPromptEnterDispatchesSelectedAction(t *testing.T) {
 	if len(*intents) != 1 {
 		t.Fatalf("expected one intent, got %+v", *intents)
 	}
-	if (*intents)[0].Kind != service.IntentWorktreeExitChoice || (*intents)[0].WorktreeAction != "remove" {
+	if (*intents)[0].Kind != protocol.IntentWorktreeExitChoice || (*intents)[0].WorktreeAction != "remove" {
 		t.Fatalf("unexpected intent: %+v", (*intents)[0])
 	}
 	if m.mode != modeChat || m.status != "removing worktree" {
@@ -178,7 +177,7 @@ func TestWorktreeExitSummaryIncludesIgnoredFiles(t *testing.T) {
 func TestWorktreeExitPromptEscCancelsExit(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.mode = modeWorktreeExit
-	m.worktreeExit.summary = app.WorktreeExitSummary{Session: app.WorktreeSession{Name: "feature"}}
+	m.worktreeExit.summary = protocol.WorktreeExitSummary{Session: protocol.WorktreeSession{Name: "feature"}}
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = next.(model)
@@ -186,7 +185,7 @@ func TestWorktreeExitPromptEscCancelsExit(t *testing.T) {
 	if len(*intents) != 1 {
 		t.Fatalf("expected one intent, got %+v", *intents)
 	}
-	if (*intents)[0].Kind != service.IntentWorktreeExitChoice || (*intents)[0].WorktreeAction != "cancel" {
+	if (*intents)[0].Kind != protocol.IntentWorktreeExitChoice || (*intents)[0].WorktreeAction != "cancel" {
 		t.Fatalf("unexpected intent: %+v", (*intents)[0])
 	}
 	if m.mode != modeChat || m.status != "exit canceled" {

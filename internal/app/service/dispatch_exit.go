@@ -31,7 +31,7 @@ func (s *Service) requestExit() {
 		s.emit(Event{Kind: EventExitRequested})
 		return
 	}
-	s.emit(Event{Kind: EventWorktreeExitPrompt, WorktreeExit: &summary})
+	s.emit(Event{Kind: EventWorktreeExitPrompt, WorktreeExit: protocolWorktreeExitSummary(summary)})
 }
 
 func (s *Service) handleWorktreeExitChoice(action string) {

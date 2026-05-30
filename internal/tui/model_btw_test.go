@@ -2,8 +2,8 @@ package tui
 
 import (
 	tea "github.com/charmbracelet/bubbletea"
-	appcommands "github.com/usewhale/whale/internal/app/commands"
-	"github.com/usewhale/whale/internal/app/service"
+	appcommands "github.com/usewhale/whale/internal/runtime/commands"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	"strings"
 	"testing"
 )
@@ -29,8 +29,8 @@ func TestBtwSecondSubmitWhileLoadingIsBlocked(t *testing.T) {
 	}
 }
 func TestBtwDeltaEventsAreNotBatchableAcrossRequests(t *testing.T) {
-	first := service.Event{Kind: service.EventBtwDelta, Text: "first", Count: 1}
-	second := service.Event{Kind: service.EventBtwDelta, Text: "second", Count: 2}
+	first := protocol.Event{Kind: protocol.EventBtwDelta, Text: "first", Count: 1}
+	second := protocol.Event{Kind: protocol.EventBtwDelta, Text: "second", Count: 2}
 	if shouldBatchServiceEvent(first) {
 		t.Fatal("btw deltas should not be batched because request ids can differ")
 	}
@@ -48,7 +48,7 @@ func TestBtwPanelRendersAndDoesNotAppendTranscript(t *testing.T) {
 	m.width = 80
 	m.height = 24
 	before := len(m.transcript)
-	m, _ = updateTestModel(t, m, svcMsg(service.Event{Kind: service.EventBtwStarted, Text: "quick?", Count: 1}))
+	m, _ = updateTestModel(t, m, svcMsg(protocol.Event{Kind: protocol.EventBtwStarted, Text: "quick?", Count: 1}))
 	if !m.btwPanel.visible || !m.btwPanel.loading {
 		t.Fatalf("expected loading btw panel: %+v", m.btwPanel)
 	}
@@ -56,7 +56,7 @@ func TestBtwPanelRendersAndDoesNotAppendTranscript(t *testing.T) {
 	if !strings.Contains(view, "/btw") || !strings.Contains(view, "Answering...") {
 		t.Fatalf("expected btw loading panel in view:\n%s", view)
 	}
-	m, _ = updateTestModel(t, m, svcMsg(service.Event{Kind: service.EventBtwDone, Text: "**answer**", Count: 1}))
+	m, _ = updateTestModel(t, m, svcMsg(protocol.Event{Kind: protocol.EventBtwDone, Text: "**answer**", Count: 1}))
 	view = m.View()
 	if !strings.Contains(view, "answer") || !strings.Contains(view, "Ctrl+P/Ctrl+N") {
 		t.Fatalf("expected btw answer panel in view:\n%s", view)
@@ -80,7 +80,7 @@ func TestBtwPanelDoesNotConsumeChatInputKeys(t *testing.T) {
 	if len(*intents) != 1 {
 		t.Fatalf("expected enter to submit prompt, got %+v", *intents)
 	}
-	if got := (*intents)[0]; got.Kind != service.IntentSubmit || got.Input != "follow up" {
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmit || got.Input != "follow up" {
 		t.Fatalf("unexpected submit intent: %+v", got)
 	}
 	if !m.btwPanel.visible {

@@ -3,8 +3,7 @@ package tui
 import (
 	tea "github.com/charmbracelet/bubbletea"
 	xansi "github.com/charmbracelet/x/ansi"
-	"github.com/usewhale/whale/internal/app"
-	"github.com/usewhale/whale/internal/app/service"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 	"strings"
 	"testing"
@@ -19,8 +18,8 @@ func TestShellToolResultRefreshesGitBranch(t *testing.T) {
 
 	m := newModel(nil, "", "", "")
 	m.cwdPath = dir
-	cmd, _, _ := m.handleServiceEvent(service.Event{
-		Kind:       service.EventToolResult,
+	cmd, _, _ := m.handleServiceEvent(protocol.Event{
+		Kind:       protocol.EventToolResult,
 		ToolCallID: "tc-shell",
 		ToolName:   "shell_run",
 		Text:       `{"success":true,"code":"ok","data":{"status":"ok","metrics":{"exit_code":0},"payload":{"command":"git checkout -b feat/after-shell","stdout":"","stderr":""}}}`,
@@ -47,21 +46,21 @@ func TestMCPLocalResultRendersAsStructuredTranscriptEntry(t *testing.T) {
 	m.input.SetValue("/mcp")
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:   service.EventLocalSubmitResult,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:   protocol.EventLocalSubmitResult,
 		Status: "info",
 		Text:   "MCP\n\nconfig: /tmp/mcp.json\nservers: 1",
-		LocalResult: &app.LocalResult{
+		LocalResult: &protocol.LocalResult{
 			Kind:      "mcp",
 			Title:     "MCP",
 			PlainText: "MCP\n\nconfig: /tmp/mcp.json\nservers: 1",
-			Fields: []app.LocalResultField{
+			Fields: []protocol.LocalResultField{
 				{Label: "Config", Value: "/tmp/mcp.json"},
 				{Label: "Servers", Value: "1", Tone: "info"},
 			},
-			Sections: []app.LocalResultSection{{
+			Sections: []protocol.LocalResultSection{{
 				Title: "fs",
-				Fields: []app.LocalResultField{
+				Fields: []protocol.LocalResultField{
 					{Label: "Status", Value: "failed", Tone: "error"},
 					{Label: "Error", Value: "timeout", Tone: "error"},
 				},
@@ -86,15 +85,15 @@ func TestMCPLocalResultRendersAsStructuredTranscriptEntry(t *testing.T) {
 }
 func TestToolResultShowsDiffMetadata(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 30}
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolCall,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolCall,
 		ToolCallID: "tc-1",
 		ToolName:   "edit",
 		Text:       `edit: a.txt`,
 	}))
 	m = next.(model)
-	next, cmd := m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolResult,
+	next, cmd := m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolResult,
 		ToolCallID: "tc-1",
 		ToolName:   "edit",
 		Text:       `{"success":true,"data":{"payload":{"file_path":"a.txt","replacements":1}}}`,
@@ -134,15 +133,15 @@ func TestToolResultShowsLargeTranslationDiffTailInChat(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 120
 	m.height = 30
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolCall,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolCall,
 		ToolCallID: "tc-translation",
 		ToolName:   "write",
 		Text:       `write: roadmap.md`,
 	}))
 	m = next.(model)
-	next, cmd := m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolResult,
+	next, cmd := m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolResult,
 		ToolCallID: "tc-translation",
 		ToolName:   "write",
 		Text:       `{"success":true,"data":{"payload":{"file_path":"roadmap.md"}}}`,
@@ -191,16 +190,16 @@ func TestSummarizeToolResultForChat_ShellWaitExitedShowsSuccess(t *testing.T) {
 }
 func TestShellRunTranscriptKeepsStatusAndOutputSeparate(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 30}
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolCall,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolCall,
 		ToolCallID: "tc-shell",
 		ToolName:   "shell_run",
 		Text:       `shell_run: {"command":"cd internal/tui && wc -l model.go model_events.go model_keys.go model_prompt.go"}`,
 	}))
 	m = next.(model)
 	raw := `{"success":true,"code":"ok","data":{"status":"ok","metrics":{"exit_code":0,"duration_ms":23},"payload":{"command":"cd internal/tui && wc -l model.go model_events.go model_keys.go model_prompt.go","cwd":"internal/tui","stdout":"284 model.go\n202 model_events.go\n401 model_keys.go\n88 model_prompt.go\n975 total\n","stderr":""}}}`
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolResult,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolResult,
 		ToolCallID: "tc-shell",
 		ToolName:   "shell_run",
 		Text:       raw,
@@ -222,16 +221,16 @@ func TestShellRunTranscriptKeepsStatusAndOutputSeparate(t *testing.T) {
 }
 func TestShellResultFallsBackToRunningCommandWhenPayloadOmitsCommand(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 30}
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolCall,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolCall,
 		ToolCallID: "tc-shell",
 		ToolName:   "shell_run",
 		Text:       `shell_run: {"command":"git status"}`,
 	}))
 	m = next.(model)
 	raw := `{"success":false,"code":"denied","message":"denied","data":{"status":"error","summary":"denied","payload":{"stderr":"","stdout":""}}}`
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolResult,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolResult,
 		ToolCallID: "tc-shell",
 		ToolName:   "shell_run",
 		Text:       raw,
@@ -319,8 +318,8 @@ func TestSummarizeToolResultForChat_PermissionDeniedPolicyShowsDenied(t *testing
 }
 func TestMCPToolCallRendersUserFacingLabelAndArgs(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 30}
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolCall,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolCall,
 		ToolCallID: "tc-mcp",
 		ToolName:   "mcp__fs__list_directory",
 		Text:       `mcp__fs__list_directory: {"path":"/tmp/中文目录"}`,
@@ -341,16 +340,16 @@ func TestMCPToolCallRendersUserFacingLabelAndArgs(t *testing.T) {
 }
 func TestMCPToolResultKeepsLabelArgsAndOutputSeparate(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 30}
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolCall,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolCall,
 		ToolCallID: "tc-mcp",
 		ToolName:   "mcp__fs__list_directory",
 		Text:       `mcp__fs__list_directory: {"path":"/tmp/project"}`,
 	}))
 	m = next.(model)
 	raw := `{"ok":true,"success":true,"code":"ok","data":{"server":"fs","tool":"list_directory","text":"README.md\ncmd\n"},"metadata":{"duration_ms":121,"source_tool":"mcp__fs__list_directory"}}`
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolResult,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolResult,
 		ToolCallID: "tc-mcp",
 		ToolName:   "mcp__fs__list_directory",
 		Text:       raw,
@@ -372,16 +371,16 @@ func TestMCPToolResultKeepsLabelArgsAndOutputSeparate(t *testing.T) {
 }
 func TestMCPToolResultSummarizesStructuredOnlyContent(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 30}
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolCall,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolCall,
 		ToolCallID: "tc-mcp",
 		ToolName:   "mcp__github__get_issue",
 		Text:       `mcp__github__get_issue: {"owner":"usewhale","repo":"whale","number":169}`,
 	}))
 	m = next.(model)
 	raw := `{"ok":true,"success":true,"code":"ok","data":{"server":"github","tool":"get_issue","text":"","structured_content":{"number":169,"title":"Structured MCP output","state":"open"}},"metadata":{"duration_ms":44}}`
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolResult,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolResult,
 		ToolCallID: "tc-mcp",
 		ToolName:   "mcp__github__get_issue",
 		Text:       raw,
@@ -554,10 +553,10 @@ func TestSummarizeToolResultForChat_ShellOutputTruncated(t *testing.T) {
 }
 func TestToolResultUpdatesToolCellWithoutRawJSON(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat}
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventToolCall, ToolCallID: "tc-1", ToolName: "read_file", Text: `read_file: {"file_path":"internal/tui/model.go"}`}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolCall, ToolCallID: "tc-1", ToolName: "read_file", Text: `read_file: {"file_path":"internal/tui/model.go"}`}))
 	m = next.(model)
 	raw := `{"success":true,"data":{"status":"ok","metrics":{"returned_lines":24,"total_lines":100},"payload":{"file_path":"internal/tui/model.go","content":"package tui"}}}`
-	next, cmd := m.Update(svcMsg(service.Event{Kind: service.EventToolResult, ToolCallID: "tc-1", ToolName: "read_file", Text: raw}))
+	next, cmd := m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolResult, ToolCallID: "tc-1", ToolName: "read_file", Text: raw}))
 	m = next.(model)
 	if cmd == nil {
 		t.Fatal("expected wait-event command")
@@ -572,13 +571,13 @@ func TestToolResultUpdatesToolCellWithoutRawJSON(t *testing.T) {
 }
 func TestMultipleToolResultsWaitForPendingToolCallsBeforeCommit(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 30}
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventToolCall, ToolCallID: "todo-1", ToolName: "todo_update", Text: `todo_update: Summarize findings with severity tags`}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolCall, ToolCallID: "todo-1", ToolName: "todo_update", Text: `todo_update: Summarize findings with severity tags`}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventToolCall, ToolCallID: "todo-2", ToolName: "todo_update", Text: `todo_update: Perform structured file-by-file review`}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolCall, ToolCallID: "todo-2", ToolName: "todo_update", Text: `todo_update: Perform structured file-by-file review`}))
 	m = next.(model)
 
 	raw := `{"success":true,"data":{"count":2,"items":[]}}`
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventToolResult, ToolCallID: "todo-1", ToolName: "todo_update", Text: raw}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolResult, ToolCallID: "todo-1", ToolName: "todo_update", Text: raw}))
 	m = next.(model)
 	if got := len(m.assembler.Snapshot()); got != 2 {
 		t.Fatalf("expected pending tool calls to stay live until all results arrive, got %d", got)
@@ -587,7 +586,7 @@ func TestMultipleToolResultsWaitForPendingToolCallsBeforeCommit(t *testing.T) {
 		t.Fatalf("first result should not create a standalone checkmark:\n%s", got)
 	}
 
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventToolResult, ToolCallID: "todo-2", ToolName: "todo_update", Text: raw}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolResult, ToolCallID: "todo-2", ToolName: "todo_update", Text: raw}))
 	m = next.(model)
 	if got := len(m.assembler.Snapshot()); got != 0 {
 		t.Fatalf("expected completed tool cells to be committed, got %+v", m.assembler.Snapshot())
@@ -616,7 +615,7 @@ func TestTaskToolResultSummaries(t *testing.T) {
 }
 func TestTaskActivityEventsUpdateStatusOnly(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat}
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventTaskStarted, ToolName: "spawn_subagent", Text: "spawn_subagent started · review"}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventTaskStarted, ToolName: "spawn_subagent", Text: "spawn_subagent started · review"}))
 	m = next.(model)
 	if m.status != "spawn_subagent started · review" {
 		t.Fatalf("unexpected status: %q", m.status)
@@ -627,7 +626,7 @@ func TestTaskActivityEventsUpdateStatusOnly(t *testing.T) {
 }
 func TestMCPStatusFailureUpdatesStatusAndLogOnly(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat}
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventMCPStatus, Status: "failed", Text: "MCP startup failed: fs. Run /mcp for details."}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventMCPStatus, Status: "failed", Text: "MCP startup failed: fs. Run /mcp for details."}))
 	m = next.(model)
 	if m.status != "MCP startup failed: fs. Run /mcp for details." {
 		t.Fatalf("unexpected status: %q", m.status)
@@ -641,15 +640,15 @@ func TestMCPStatusFailureUpdatesStatusAndLogOnly(t *testing.T) {
 }
 func TestTaskProgressUpdatesTaskToolRow(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat}
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolCall,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolCall,
 		ToolCallID: "tc-task",
 		ToolName:   "spawn_subagent",
 		Text:       "spawn_subagent: review · inspect internal/tasks",
 	}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:       service.EventTaskProgress,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventTaskProgress,
 		ToolCallID: "tc-task",
 		ToolName:   "spawn_subagent",
 		Text:       "spawn_subagent running · review · reading internal/tasks/runner.go",
@@ -673,8 +672,8 @@ func TestTaskProgressUpdatesTaskToolRow(t *testing.T) {
 		}
 	}
 
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:       service.EventTaskProgress,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventTaskProgress,
 		ToolCallID: "tc-task",
 		ToolName:   "spawn_subagent",
 		Text:       `spawn_subagent running · review · Searched "TaskProgress" in internal/tui (*.go) · 7 matches in 3 files`,
@@ -693,8 +692,8 @@ func TestTaskProgressUpdatesTaskToolRow(t *testing.T) {
 		t.Fatalf("expected child tool and progress metric to be preserved: %+v", snap[0])
 	}
 
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:       service.EventTaskProgress,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventTaskProgress,
 		ToolCallID: "tc-task",
 		ToolName:   "spawn_subagent",
 		Text:       "spawn_subagent compacted · review · Compacted child context (10 -> 3 messages)",
@@ -710,8 +709,8 @@ func TestTaskProgressUpdatesTaskToolRow(t *testing.T) {
 		t.Fatalf("expected non-running progress status to update subagent row without losing current tool: %+v", snap[0])
 	}
 
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:       service.EventTaskProgress,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventTaskProgress,
 		ToolCallID: "tc-task",
 		ToolName:   "spawn_subagent",
 		Text:       "spawn_subagent completed · review · Child finished",
@@ -728,8 +727,8 @@ func TestTaskProgressUpdatesTaskToolRow(t *testing.T) {
 	}
 
 	result := `{"ok":true,"success":true,"data":{"role":"review","child_session_id":"parent--subagent-tc-task","summary":"no permission bypass found"},"metadata":{"duration_ms":1500}}`
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolResult,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolResult,
 		ToolCallID: "tc-task",
 		ToolName:   "spawn_subagent",
 		Text:       result,
@@ -750,15 +749,15 @@ func TestTaskProgressUpdatesTaskToolRow(t *testing.T) {
 }
 func TestSubagentFailureUpdatesDedicatedCell(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat}
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolCall,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolCall,
 		ToolCallID: "tc-task",
 		ToolName:   "spawn_subagent",
 		Text:       "spawn_subagent: review · inspect internal/tasks",
 	}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:       service.EventTaskProgress,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventTaskProgress,
 		ToolCallID: "tc-task",
 		ToolName:   "spawn_subagent",
 		Text:       "spawn_subagent tool_failed · review · Read internal/tasks/runner.go failed",
@@ -775,8 +774,8 @@ func TestSubagentFailureUpdatesDedicatedCell(t *testing.T) {
 	}
 
 	result := `{"ok":false,"success":false,"code":"spawn_subagent_failed","error":"subagent failed","data":{"role":"review","child_session_id":"parent--subagent-tc-task"},"metadata":{"duration_ms":41}}`
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolResult,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolResult,
 		ToolCallID: "tc-task",
 		ToolName:   "spawn_subagent",
 		Text:       result,
@@ -794,8 +793,8 @@ func TestSubagentFailureUpdatesDedicatedCell(t *testing.T) {
 }
 func TestToolCallShowsSearchPatternAndPath(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat}
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolCall,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolCall,
 		ToolCallID: "tc-search",
 		ToolName:   "grep",
 		Text:       `grep: assistant_delta in internal/tui (*.go)`,
@@ -812,16 +811,16 @@ func TestToolCallShowsSearchPatternAndPath(t *testing.T) {
 }
 func TestToolResultKeepsSearchDetailAndAddsSummary(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat}
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolCall,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolCall,
 		ToolCallID: "tc-search",
 		ToolName:   "grep",
 		Text:       `grep: assistant_delta in internal/tui (*.go)`,
 	}))
 	m = next.(model)
 	raw := `{"success":true,"data":{"status":"ok","metrics":{"total_matches":1,"files_matched":1},"payload":{"matches":[]}}}`
-	next, cmd := m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolResult,
+	next, cmd := m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolResult,
 		ToolCallID: "tc-search",
 		ToolName:   "grep",
 		Text:       raw,
@@ -840,8 +839,8 @@ func TestToolResultKeepsSearchDetailAndAddsSummary(t *testing.T) {
 }
 func TestToolCallShowsWebSearchQuery(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat}
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolCall,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolCall,
 		ToolCallID: "tc-web",
 		ToolName:   "web_search",
 		Text:       `web_search: F1 pit strategy tools`,

@@ -2,17 +2,19 @@ package tui
 
 import (
 	"fmt"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
-	xansi "github.com/charmbracelet/x/ansi"
-	"github.com/muesli/termenv"
-	"github.com/usewhale/whale/internal/app"
-	"github.com/usewhale/whale/internal/app/service"
-	tuirender "github.com/usewhale/whale/internal/tui/render"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
+
+	appcommands "github.com/usewhale/whale/internal/runtime/commands"
+	"github.com/usewhale/whale/internal/runtime/protocol"
+	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
 func selectSlashCommand(t *testing.T, m *model, want string) {
@@ -26,7 +28,7 @@ func selectSlashCommand(t *testing.T, m *model, want string) {
 	t.Fatalf("slash command %q not found in matches %+v", want, m.slash.matches)
 }
 func TestSlashCommandsShowSupportedCommandsAndOmitRemovedCommands(t *testing.T) {
-	cmds := parseSlashCommands(app.CommandsHelp)
+	cmds := parseSlashCommands(appcommands.CommandsHelp())
 	if !containsString(cmds, "/permissions") {
 		t.Fatalf("expected /permissions in slash commands: %+v", cmds)
 	}
@@ -128,7 +130,7 @@ func TestSlashOptionSuggestionsInsertSubcommand(t *testing.T) {
 	if len(*intents) != 1 {
 		t.Fatalf("expected /stats usage option to dispatch, got intents %+v", *intents)
 	}
-	if (*intents)[0].Kind != service.IntentSubmitLocal || (*intents)[0].Input != "/stats usage" {
+	if (*intents)[0].Kind != protocol.IntentSubmitLocal || (*intents)[0].Input != "/stats usage" {
 		t.Fatalf("unexpected dispatched intent: %+v", (*intents)[0])
 	}
 	if got := m.input.Value(); got != "" {
@@ -184,7 +186,7 @@ func TestSlashCommandWithOptionsAndAutoRunStillExecutesBareCommand(t *testing.T)
 	if len(*intents) != 1 {
 		t.Fatalf("expected selected /review to dispatch, got %+v", *intents)
 	}
-	if (*intents)[0].Kind != service.IntentSubmitLocal || (*intents)[0].Input != "/review" {
+	if (*intents)[0].Kind != protocol.IntentSubmitLocal || (*intents)[0].Input != "/review" {
 		t.Fatalf("unexpected dispatched intent: %+v", (*intents)[0])
 	}
 	if got := m.input.Value(); got != "" {
@@ -276,7 +278,7 @@ func TestBareAtShowsFileHintWithoutScanning(t *testing.T) {
 	if got := m.input.Value(); got != "" {
 		t.Fatalf("enter on bare @ should submit and clear input, got %q", got)
 	}
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSubmit || (*intents)[0].Input != "@" {
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentSubmit || (*intents)[0].Input != "@" {
 		t.Fatalf("expected bare @ to submit as normal text, got %+v", *intents)
 	}
 }
@@ -506,7 +508,7 @@ func TestSlashSuggestionEnterAutoRunsSingleCommandAndClearsSuggestions(t *testin
 	if len(*intents) != 1 {
 		t.Fatalf("expected one dispatched intent, got %+v", *intents)
 	}
-	if (*intents)[0].Kind != service.IntentSubmit || (*intents)[0].Input != "/compact" {
+	if (*intents)[0].Kind != protocol.IntentSubmit || (*intents)[0].Input != "/compact" {
 		t.Fatalf("unexpected dispatched intent: %+v", (*intents)[0])
 	}
 	if got := m.input.Value(); got != "" {
@@ -581,7 +583,7 @@ func TestShiftTabModeToggleDoesNotStartWorkingState(t *testing.T) {
 	if len(*intents) != 1 {
 		t.Fatalf("expected one mode toggle intent, got %+v", *intents)
 	}
-	if (*intents)[0].Kind != service.IntentToggleMode {
+	if (*intents)[0].Kind != protocol.IntentToggleMode {
 		t.Fatalf("unexpected intent: %+v", (*intents)[0])
 	}
 	if m.busy || !m.busySince.IsZero() {
@@ -656,7 +658,7 @@ func TestLocalImmediateSlashCommandsDoNotStartWorkingState(t *testing.T) {
 			if len(*intents) != 1 {
 				t.Fatalf("expected one dispatched intent, got %+v", *intents)
 			}
-			if (*intents)[0].Kind != service.IntentSubmitLocal || (*intents)[0].Input != cmd {
+			if (*intents)[0].Kind != protocol.IntentSubmitLocal || (*intents)[0].Input != cmd {
 				t.Fatalf("unexpected dispatched intent: %+v", (*intents)[0])
 			}
 			if got := m.input.Value(); got != "" {
@@ -804,7 +806,7 @@ func TestSkillSuggestionSubmitIncludesBinding(t *testing.T) {
 		t.Fatalf("expected one submit intent, got %+v", *intents)
 	}
 	got := (*intents)[0]
-	if got.Kind != service.IntentSubmit || got.Input != "$code-review review this diff" {
+	if got.Kind != protocol.IntentSubmit || got.Input != "$code-review review this diff" {
 		t.Fatalf("unexpected submit intent: %+v", got)
 	}
 	if got.SkillBinding == nil || got.SkillBinding.Name != "code-review" || got.SkillBinding.SkillFilePath != "/tmp/code-review/SKILL.md" {
@@ -862,7 +864,7 @@ func TestSlashSuggestionAskAutoRunsWhenSelected(t *testing.T) {
 	if len(*intents) != 1 {
 		t.Fatalf("expected one dispatch for selected /ask, got %+v", *intents)
 	}
-	if (*intents)[0].Kind != service.IntentSubmitLocal || (*intents)[0].Input != "/ask" {
+	if (*intents)[0].Kind != protocol.IntentSubmitLocal || (*intents)[0].Input != "/ask" {
 		t.Fatalf("unexpected dispatched intent: %+v", (*intents)[0])
 	}
 	if got := m.input.Value(); got != "" {
@@ -883,7 +885,7 @@ func TestSlashTurnStartingCommandsStillStartWorkingState(t *testing.T) {
 			if len(*intents) != 1 {
 				t.Fatalf("expected one dispatched intent, got %+v", *intents)
 			}
-			if (*intents)[0].Kind != service.IntentSubmit || (*intents)[0].Input != prompt {
+			if (*intents)[0].Kind != protocol.IntentSubmit || (*intents)[0].Input != prompt {
 				t.Fatalf("unexpected dispatched intent: %+v", (*intents)[0])
 			}
 			if !m.busy || m.status != "running" {
@@ -909,7 +911,7 @@ func TestEnterWhileBusyExecutesReadOnlySlashAndExitImmediately(t *testing.T) {
 			if len(*intents) != 1 {
 				t.Fatalf("expected immediate local dispatch, got %+v", *intents)
 			}
-			if (*intents)[0].Kind != service.IntentSubmitLocal || (*intents)[0].Input != cmd {
+			if (*intents)[0].Kind != protocol.IntentSubmitLocal || (*intents)[0].Input != cmd {
 				t.Fatalf("unexpected dispatched intent: %+v", (*intents)[0])
 			}
 			if got := m.input.Value(); got != "" {
@@ -1014,11 +1016,11 @@ func TestLocalSlashCommandsEchoBeforeResults(t *testing.T) {
 	m, _ := newModelWithDispatchSpy()
 	m.width = 80
 	m.height = 18
-	localInfo := func(text string) service.Event {
-		return service.Event{Kind: service.EventLocalSubmitResult, Status: "info", Text: text}
+	localInfo := func(text string) protocol.Event {
+		return protocol.Event{Kind: protocol.EventLocalSubmitResult, Status: "info", Text: text}
 	}
-	localDone := func() service.Event {
-		return service.Event{Kind: service.EventLocalSubmitDone, Metadata: map[string]any{service.EventMetadataLocalSubmit: true}}
+	localDone := func() protocol.Event {
+		return protocol.Event{Kind: protocol.EventLocalSubmitDone, Metadata: map[string]any{protocol.EventMetadataLocalSubmit: true}}
 	}
 
 	m.input.SetValue("/mcp")
@@ -1057,7 +1059,7 @@ func TestBusySlashWarningStaysOutOfLiveTurn(t *testing.T) {
 	m.busy = true
 	m.status = "running"
 
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventAssistantDelta, Text: "already visible"}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventAssistantDelta, Text: "already visible"}))
 	m = next.(model)
 	m.input.SetValue("/model")
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -1083,10 +1085,10 @@ func TestBusySlashWarningStaysOutOfLiveTurn(t *testing.T) {
 		t.Fatalf("blocked slash draft should not claim Ctrl+C interrupts:\n%s", view)
 	}
 
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:         service.EventTurnDone,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:         protocol.EventTurnDone,
 		LastResponse: "already visible recovered tail",
-		Metadata:     map[string]any{service.EventMetadataAgentTurn: true},
+		Metadata:     map[string]any{protocol.EventMetadataAgentTurn: true},
 	}))
 	m = next.(model)
 	rendered = strings.Join(tuirender.ChatLines(m.transcript, 100), "\n")
@@ -1292,7 +1294,7 @@ func TestBtwExactSlashEnterShowsUsage(t *testing.T) {
 	if len(*intents) != 1 {
 		t.Fatalf("expected /btw usage local submit, got %+v", *intents)
 	}
-	if got := (*intents)[0]; got.Kind != service.IntentSubmitLocal || got.Input != "/btw" {
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmitLocal || got.Input != "/btw" {
 		t.Fatalf("unexpected intent: %+v", got)
 	}
 }

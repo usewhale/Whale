@@ -3,9 +3,7 @@ package tui
 import (
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/usewhale/whale/internal/app"
-	"github.com/usewhale/whale/internal/app/service"
-	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 	"strings"
 	"testing"
@@ -16,8 +14,8 @@ func TestTurnDoneSkipsDurationNoticeWhileStopping(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 80, height: 24, busy: true, stopping: true}
 	m.busySince = time.Now().Add(-2 * time.Minute)
 
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind:         service.EventTurnDone,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:         protocol.EventTurnDone,
 		LastResponse: "done",
 		Metadata:     agentTurnMetadata(),
 	}))
@@ -76,7 +74,7 @@ func TestSecondIdleCtrlCRequestsExitFlow(t *testing.T) {
 	if len(*intents) != 1 {
 		t.Fatalf("expected one intent, got %+v", *intents)
 	}
-	if (*intents)[0].Kind != service.IntentRequestExit {
+	if (*intents)[0].Kind != protocol.IntentRequestExit {
 		t.Fatalf("expected exit request intent, got %+v", (*intents)[0])
 	}
 	if !m.quitArmedUntil.IsZero() || m.status != "exiting" {
@@ -112,7 +110,7 @@ func TestEnterWhileBusyQueuesInputWithoutSubmitting(t *testing.T) {
 }
 func TestDiffPageCtrlCInterruptsBusyTurn(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
-	m.svc = &service.Service{}
+	m.runtime = &testRuntime{}
 	m.width = 80
 	m.height = 24
 	m.busy = true
@@ -126,7 +124,7 @@ func TestDiffPageCtrlCInterruptsBusyTurn(t *testing.T) {
 	if !m.busy || !m.stopping || m.status != "stopping" {
 		t.Fatalf("expected busy diff page ctrl+c to interrupt, busy=%v stopping=%v status=%q", m.busy, m.stopping, m.status)
 	}
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentShutdown {
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentShutdown {
 		t.Fatalf("expected shutdown intent from diff page ctrl+c, got %+v", *intents)
 	}
 }
@@ -138,7 +136,7 @@ func TestBusyQueuedPromptWaitsForPendingLocalSubmit(t *testing.T) {
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(model)
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSubmitLocal || (*intents)[0].Input != "/stats all" {
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentSubmitLocal || (*intents)[0].Input != "/stats all" {
 		t.Fatalf("expected busy local submit dispatch, got %+v", *intents)
 	}
 
@@ -149,10 +147,10 @@ func TestBusyQueuedPromptWaitsForPendingLocalSubmit(t *testing.T) {
 		t.Fatalf("expected prompt to queue while busy local submit is pending, got %+v", m.queuedPrompts)
 	}
 
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:         service.EventTurnDone,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:         protocol.EventTurnDone,
 		LastResponse: "done",
-		Metadata:     map[string]any{service.EventMetadataAgentTurn: true},
+		Metadata:     map[string]any{protocol.EventMetadataAgentTurn: true},
 	}))
 	m = next.(model)
 	if len(*intents) != 1 {
@@ -162,9 +160,9 @@ func TestBusyQueuedPromptWaitsForPendingLocalSubmit(t *testing.T) {
 		t.Fatalf("expected wait status while local submit is pending, got %q", m.status)
 	}
 
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventLocalSubmitDone}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventLocalSubmitDone}))
 	m = next.(model)
-	if len(*intents) != 2 || (*intents)[1].Kind != service.IntentSubmit || (*intents)[1].Input != "queued after stats" {
+	if len(*intents) != 2 || (*intents)[1].Kind != protocol.IntentSubmit || (*intents)[1].Input != "queued after stats" {
 		t.Fatalf("expected queued prompt to start after local submit done, got %+v", *intents)
 	}
 	if !m.busy {
@@ -174,10 +172,10 @@ func TestBusyQueuedPromptWaitsForPendingLocalSubmit(t *testing.T) {
 func TestTurnDoneShowsWaitStatusWhileLocalSubmitPendingWithoutQueue(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 80, height: 14, busy: true, status: "running", localSubmitPending: 1}
 
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind:         service.EventTurnDone,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:         protocol.EventTurnDone,
 		LastResponse: "done",
-		Metadata:     map[string]any{service.EventMetadataAgentTurn: true},
+		Metadata:     map[string]any{protocol.EventMetadataAgentTurn: true},
 	}))
 	m = next.(model)
 
@@ -194,7 +192,7 @@ func TestQueuedPromptWaitsForAllPendingLocalSubmits(t *testing.T) {
 	m.status = "wait for command to finish"
 	m.queuedPrompts = []queuedPrompt{{Text: "after two locals"}}
 
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventLocalSubmitDone}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventLocalSubmitDone}))
 	m = next.(model)
 	if m.localSubmitPending != 1 {
 		t.Fatalf("expected one pending local submit left, got %d", m.localSubmitPending)
@@ -203,12 +201,12 @@ func TestQueuedPromptWaitsForAllPendingLocalSubmits(t *testing.T) {
 		t.Fatalf("queued prompt should not start before all local submits finish, got %+v", *intents)
 	}
 
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventLocalSubmitDone}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventLocalSubmitDone}))
 	m = next.(model)
 	if m.localSubmitPending != 0 {
 		t.Fatalf("expected all local submits cleared, got %d", m.localSubmitPending)
 	}
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSubmit || (*intents)[0].Input != "after two locals" {
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentSubmit || (*intents)[0].Input != "after two locals" {
 		t.Fatalf("expected queued prompt after final local submit done, got %+v", *intents)
 	}
 	if !m.busy {
@@ -221,7 +219,7 @@ func TestLocalSubmitBarrierBlocksPromptUntilDone(t *testing.T) {
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(model)
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSubmitLocal || (*intents)[0].Input != "/new scratch" {
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentSubmitLocal || (*intents)[0].Input != "/new scratch" {
 		t.Fatalf("expected /new local submit intent, got %+v", *intents)
 	}
 	if m.localSubmitPending != 1 {
@@ -247,7 +245,7 @@ func TestLocalSubmitBarrierBlocksPromptUntilDone(t *testing.T) {
 		t.Fatal("prompt should not start a turn while local submit is pending")
 	}
 
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventLocalSubmitDone, Metadata: map[string]any{service.EventMetadataLocalSubmit: true}}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventLocalSubmitDone, Metadata: map[string]any{protocol.EventMetadataLocalSubmit: true}}))
 	m = next.(model)
 	if m.localSubmitPending != 0 {
 		t.Fatal("expected local submit barrier to clear after done event")
@@ -258,7 +256,7 @@ func TestLocalSubmitBarrierBlocksPromptUntilDone(t *testing.T) {
 
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(model)
-	if len(*intents) != 2 || (*intents)[1].Kind != service.IntentSubmit || (*intents)[1].Input != "start a turn" {
+	if len(*intents) != 2 || (*intents)[1].Kind != protocol.IntentSubmit || (*intents)[1].Input != "start a turn" {
 		t.Fatalf("expected prompt to dispatch after local submit done, got %+v", *intents)
 	}
 	if !m.busy {
@@ -273,7 +271,7 @@ func TestReadOnlyLocalSubmitBlocksPromptUntilDone(t *testing.T) {
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(model)
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSubmitLocal || (*intents)[0].Input != "/stats all" {
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentSubmitLocal || (*intents)[0].Input != "/stats all" {
 		t.Fatalf("expected /stats all local submit intent, got %+v", *intents)
 	}
 	if m.localSubmitPending != 1 {
@@ -296,16 +294,16 @@ func TestReadOnlyLocalSubmitBlocksPromptUntilDone(t *testing.T) {
 		t.Fatalf("expected wait status while read-only local submit is pending, got %q", m.status)
 	}
 
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:   service.EventLocalSubmitResult,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:   protocol.EventLocalSubmitResult,
 		Status: "info",
 		Text:   "Stats\n\nslow usage summary",
 	}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind: service.EventLocalSubmitDone,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind: protocol.EventLocalSubmitDone,
 		Metadata: map[string]any{
-			service.EventMetadataLocalSubmit: true,
+			protocol.EventMetadataLocalSubmit: true,
 		},
 	}))
 	m = next.(model)
@@ -315,7 +313,7 @@ func TestReadOnlyLocalSubmitBlocksPromptUntilDone(t *testing.T) {
 
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(model)
-	if len(*intents) != 2 || (*intents)[1].Kind != service.IntentSubmit || (*intents)[1].Input != "start a turn" {
+	if len(*intents) != 2 || (*intents)[1].Kind != protocol.IntentSubmit || (*intents)[1].Input != "start a turn" {
 		t.Fatalf("expected prompt to dispatch after read-only local submit done, got %+v", *intents)
 	}
 
@@ -355,10 +353,10 @@ func TestTurnDoneSubmitsOneQueuedPrompt(t *testing.T) {
 	m.busy = true
 	m.queuedPrompts = []queuedPrompt{{Text: "first queued"}, {Text: "second queued"}}
 
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	m = next.(model)
 
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentSubmit || (*intents)[0].Input != "first queued" {
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentSubmit || (*intents)[0].Input != "first queued" {
 		t.Fatalf("expected first queued prompt submitted, got %+v", *intents)
 	}
 	if len(m.queuedPrompts) != 1 || m.queuedPrompts[0].Text != "second queued" {
@@ -376,9 +374,9 @@ func TestQueuedPromptsSubmitFIFOAcrossTurns(t *testing.T) {
 	m.busy = true
 	m.queuedPrompts = []queuedPrompt{{Text: "first queued"}, {Text: "second queued"}}
 
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	m = next.(model)
 
 	if len(*intents) != 2 {
@@ -401,7 +399,7 @@ func TestStoppingTurnDoneRestoresQueuedPromptsToComposer(t *testing.T) {
 	m.queuedPrompts = []queuedPrompt{{Text: "first queued"}, {Text: "second queued"}}
 	m.input.SetValue("current draft")
 
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	m = next.(model)
 
 	if len(*intents) != 0 {
@@ -444,7 +442,7 @@ func TestEscWhileBusyKeepsTurnBusyUntilTurnDone(t *testing.T) {
 		t.Fatalf("enter during stopping should not start another turn, busy=%v stopping=%v", m.busy, m.stopping)
 	}
 
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	m = next.(model)
 	if m.busy || m.stopping {
 		t.Fatalf("expected turn done to clear busy/stopping, busy=%v stopping=%v", m.busy, m.stopping)
@@ -454,7 +452,7 @@ func TestEscInterruptDuringThinkingDoesNotShowReasoningOnly(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 80, height: 24, busy: true}
 
 	// Simulate receiving reasoning (thinking) content
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventReasoningDelta, Text: "thinking..."}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventReasoningDelta, Text: "thinking..."}))
 	m = next.(model)
 
 	// User presses Esc to interrupt
@@ -465,7 +463,7 @@ func TestEscInterruptDuringThinkingDoesNotShowReasoningOnly(t *testing.T) {
 	}
 
 	// Stream ends
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	m = next.(model)
 	if m.busy || m.stopping {
 		t.Fatalf("expected turn done to clear state, busy=%v stopping=%v", m.busy, m.stopping)
@@ -481,7 +479,7 @@ func TestEscInterruptDuringThinkingDoesNotShowReasoningOnly(t *testing.T) {
 }
 func TestCtrlCWhileBusyInterruptsWithoutArmingQuit(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
-	m.svc = &service.Service{}
+	m.runtime = &testRuntime{}
 	m.width = 80
 	m.height = 24
 	m.busy = true
@@ -500,7 +498,7 @@ func TestCtrlCWhileBusyInterruptsWithoutArmingQuit(t *testing.T) {
 	if !m.quitArmedUntil.IsZero() {
 		t.Fatal("expected ctrl+c while busy not to arm quit")
 	}
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentShutdown {
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentShutdown {
 		t.Fatalf("expected ctrl+c while busy to dispatch shutdown intent, got %+v", *intents)
 	}
 
@@ -513,7 +511,7 @@ func TestCtrlCWhileBusyInterruptsWithoutArmingQuit(t *testing.T) {
 		t.Fatalf("expected repeated ctrl+c while stopping not to dispatch another intent, got %+v", *intents)
 	}
 
-	next, _ = m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	m = next.(model)
 	if m.busy || m.stopping {
 		t.Fatalf("expected turn done to clear busy/stopping, busy=%v stopping=%v", m.busy, m.stopping)
@@ -530,7 +528,7 @@ func TestCtrlCWhileBusyInterruptsWithoutArmingQuit(t *testing.T) {
 }
 func TestCtrlCWhileBusyInterruptsBeforeUserInputMode(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
-	m.svc = &service.Service{}
+	m.runtime = &testRuntime{}
 	m.width = 80
 	m.height = 24
 	m.busy = true
@@ -546,23 +544,23 @@ func TestCtrlCWhileBusyInterruptsBeforeUserInputMode(t *testing.T) {
 	if m.mode != modeChat {
 		t.Fatalf("expected interrupt to leave user-input mode, got %v", m.mode)
 	}
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentShutdown {
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentShutdown {
 		t.Fatalf("expected user input interrupt to dispatch shutdown only, got %+v", *intents)
 	}
 }
 func TestEscWhileBusyUserInputInterruptsTurn(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
-	m.svc = &service.Service{}
+	m.runtime = &testRuntime{}
 	m.width = 80
 	m.height = 24
 	m.busy = true
 	m.mode = modeUserInput
 	m.userInput.toolCallID = "tool-1"
-	m.userInput.questions = []core.UserInputQuestion{{
+	m.userInput.questions = []protocol.UserInputQuestion{{
 		Header:   "Scope",
 		ID:       "scope",
 		Question: "Continue?",
-		Options:  []core.UserInputOption{{Label: "Yes", Description: "Proceed."}},
+		Options:  []protocol.UserInputOption{{Label: "Yes", Description: "Proceed."}},
 	}}
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -574,7 +572,7 @@ func TestEscWhileBusyUserInputInterruptsTurn(t *testing.T) {
 	if m.mode != modeChat {
 		t.Fatalf("expected interrupt to leave user-input mode, got %v", m.mode)
 	}
-	if len(*intents) != 1 || (*intents)[0].Kind != service.IntentShutdown {
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentShutdown {
 		t.Fatalf("expected esc user input interrupt to dispatch shutdown only, got %+v", *intents)
 	}
 }
@@ -601,7 +599,7 @@ func TestCtrlCWhileStoppingClearsBlockingModalWithoutDuplicateShutdown(t *testin
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m, intents := newModelWithDispatchSpy()
-			m.svc = &service.Service{}
+			m.runtime = &testRuntime{}
 			m.width = 80
 			m.height = 24
 			m.busy = true
@@ -627,32 +625,32 @@ func TestCtrlCWhileStoppingClearsBlockingModalWithoutDuplicateShutdown(t *testin
 func TestStaleBlockingEventsWhileStoppingDoNotOpenModals(t *testing.T) {
 	tests := []struct {
 		name       string
-		ev         service.Event
-		wantIntent service.IntentKind
+		ev         protocol.Event
+		wantIntent protocol.IntentKind
 	}{
 		{
 			name: "approval",
-			ev: service.Event{
-				Kind:       service.EventApprovalRequired,
+			ev: protocol.Event{
+				Kind:       protocol.EventApprovalRequired,
 				ToolCallID: "approval-stale",
 				ToolName:   "shell_run",
 				Text:       "shell_run: sleep 30",
 			},
-			wantIntent: service.IntentCancelToolApproval,
+			wantIntent: protocol.IntentCancelToolApproval,
 		},
 		{
 			name: "user input",
-			ev: service.Event{
-				Kind:       service.EventUserInputRequired,
+			ev: protocol.Event{
+				Kind:       protocol.EventUserInputRequired,
 				ToolCallID: "input-stale",
 				ToolName:   "request_user_input",
-				Questions: []core.UserInputQuestion{{
+				Questions: []protocol.UserInputQuestion{{
 					Header:   "Choice",
 					ID:       "choice",
 					Question: "Continue?",
 				}},
 			},
-			wantIntent: service.IntentCancelUserInput,
+			wantIntent: protocol.IntentCancelUserInput,
 		},
 	}
 	for _, tt := range tests {
@@ -709,7 +707,7 @@ func TestTurnDoneClearsStaleBlockingModal(t *testing.T) {
 			m.status = "stopping"
 			tt.setup(&m)
 
-			next, _ := m.Update(svcMsg(service.Event{Kind: service.EventTurnDone}))
+			next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 			m = next.(model)
 
 			if m.mode != modeChat {
@@ -730,17 +728,17 @@ func TestBusyStatusLocalResultRendersAsStructuredLiveEntry(t *testing.T) {
 	m.height = 14
 	m.busy = true
 
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventAssistantDelta, Text: "working"}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventAssistantDelta, Text: "working"}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:   service.EventLocalSubmitResult,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:   protocol.EventLocalSubmitResult,
 		Status: "info",
 		Text:   "Status\n\n- session: test-session\n- mode: agent",
-		LocalResult: &app.LocalResult{
+		LocalResult: &protocol.LocalResult{
 			Kind:      "status",
 			Title:     "Status",
 			PlainText: "Status\n\n- session: test-session\n- mode: agent",
-			Fields: []app.LocalResultField{
+			Fields: []protocol.LocalResultField{
 				{Label: "Session", Value: "test-session"},
 				{Label: "Mode", Value: "agent", Tone: "info"},
 			},
@@ -768,17 +766,17 @@ func TestBusyMCPLocalResultRendersAsStructuredLiveEntry(t *testing.T) {
 	m.height = 14
 	m.busy = true
 
-	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventAssistantDelta, Text: "working"}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventAssistantDelta, Text: "working"}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:   service.EventLocalSubmitResult,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:   protocol.EventLocalSubmitResult,
 		Status: "info",
 		Text:   "MCP\n\nconfig: /tmp/mcp.json\nservers: 1",
-		LocalResult: &app.LocalResult{
+		LocalResult: &protocol.LocalResult{
 			Kind:      "mcp",
 			Title:     "MCP",
 			PlainText: "MCP\n\nconfig: /tmp/mcp.json\nservers: 1",
-			Fields: []app.LocalResultField{
+			Fields: []protocol.LocalResultField{
 				{Label: "Config", Value: "/tmp/mcp.json"},
 				{Label: "Servers", Value: "1", Tone: "info"},
 			},
@@ -802,15 +800,15 @@ func TestBusyMCPLocalResultRendersAsStructuredLiveEntry(t *testing.T) {
 }
 func TestBusyLocalCommandResultKeepsPendingToolCallLive(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 30, busy: true}
-	next, _ := m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolCall,
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolCall,
 		ToolCallID: "tc-read",
 		ToolName:   "read_file",
 		Text:       `read_file: {"file_path":"internal/tui/model.go"}`,
 	}))
 	m = next.(model)
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:   service.EventLocalSubmitResult,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:   protocol.EventLocalSubmitResult,
 		Status: "info",
 		Text:   "Status\n\nsession: test-session",
 	}))
@@ -820,8 +818,8 @@ func TestBusyLocalCommandResultKeepsPendingToolCallLive(t *testing.T) {
 	}
 
 	raw := `{"success":true,"data":{"status":"ok","metrics":{"returned_lines":24,"total_lines":100},"payload":{"file_path":"internal/tui/model.go","content":"package tui"}}}`
-	next, _ = m.Update(svcMsg(service.Event{
-		Kind:       service.EventToolResult,
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolResult,
 		ToolCallID: "tc-read",
 		ToolName:   "read_file",
 		Text:       raw,
@@ -1184,7 +1182,7 @@ func TestBtwBusySubmitDispatchesLocalSubmit(t *testing.T) {
 	if len(*intents) != 1 {
 		t.Fatalf("expected one intent, got %d", len(*intents))
 	}
-	if got := (*intents)[0]; got.Kind != service.IntentSubmitLocal || got.Input != "/btw what is happening?" {
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmitLocal || got.Input != "/btw what is happening?" {
 		t.Fatalf("unexpected intent: %+v", got)
 	}
 	if m.localSubmitPending != 1 {

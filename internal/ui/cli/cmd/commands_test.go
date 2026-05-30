@@ -17,6 +17,7 @@ import (
 
 	"github.com/usewhale/whale/internal/app"
 	"github.com/usewhale/whale/internal/policy"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/store"
 	whaleworktree "github.com/usewhale/whale/internal/worktree"
@@ -129,6 +130,37 @@ func TestMigrateConfigHelpExplainsVersionBoundary(t *testing.T) {
 	help := out.String()
 	if !strings.Contains(help, "v0.1.8 or earlier") || !strings.Contains(help, "v0.1.9") || !strings.Contains(help, "newer") {
 		t.Fatalf("expected version boundary in help, got:\n%s", help)
+	}
+}
+
+func TestAppServerCommandRunsStdioProtocol(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	opts := &cliOptions{cfg: app.DefaultConfig()}
+	opts.cfg.DataDir = t.TempDir()
+	root := newRootCmd(opts)
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetIn(strings.NewReader(`{"type":"intent","intent":{"kind":"shutdown"}}` + "\n"))
+	root.SetArgs([]string{"app-server"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("app-server: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, `"type":"`+string(protocol.ServerMessageReady)+`"`) ||
+		!strings.Contains(got, `"type":"`+string(protocol.ServerMessageClosed)+`"`) {
+		t.Fatalf("expected ready and closed messages, got:\n%s", got)
 	}
 }
 
