@@ -19,7 +19,7 @@ const (
 	CacheFilename    = "version.json"
 	LatestReleaseURL = "https://api.github.com/repos/usewhale/DeepSeek-Code-Whale/releases/latest"
 	ReleaseNotesURL  = "https://github.com/usewhale/DeepSeek-Code-Whale/releases/latest"
-	CheckInterval    = 20 * time.Hour
+	CheckInterval    = 1 * time.Hour
 )
 
 type Info struct {
@@ -99,6 +99,12 @@ func (c Checker) CachedUpgradeVersion() (Result, bool) {
 		return Result{}, false
 	}
 	info, _ := ReadInfo(c.cachePath())
+	if info != nil {
+		if cachedLatest, ok := parseVersion(info.LatestVersion); ok && current.after(cachedLatest) {
+			info.LatestVersion = c.CurrentVersion
+			_ = WriteInfo(c.cachePath(), *info)
+		}
+	}
 	return c.upgradeFromInfo(info, current)
 }
 
