@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -2224,6 +2225,116 @@ func TestSearchFiles(t *testing.T) {
 	}
 }
 
+func TestSearchFilesAcceptsLimitAndCapsMatches(t *testing.T) {
+	dir := t.TempDir()
+	for i := 0; i < 5; i++ {
+		name := filepath.Join(dir, "alpha"+string(rune('a'+i))+".txt")
+		if err := os.WriteFile(name, []byte("fixture"), 0o644); err != nil {
+			t.Fatalf("write fixture: %v", err)
+		}
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	res, err := ts.searchFiles(context.Background(), tc("search_files", map[string]any{
+		"pattern": "alpha",
+		"limit":   3,
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("search_files failed: err=%v res=%+v", err, res)
+	}
+	data := readFileData(t, res)
+	if got := metricNumber(t, data, "returned"); got != 3 {
+		t.Fatalf("returned = %d, want 3", got)
+	}
+	if got := metricNumber(t, data, "match_limit"); got != 3 {
+		t.Fatalf("match_limit = %d, want 3", got)
+	}
+	if !metricBool(t, data, "match_limit_reached") || !metricBool(t, data, "truncated") {
+		t.Fatalf("expected match limit truncation in %#v", data["metrics"])
+	}
+	if got := searchFileItems(t, data); len(got) != 3 {
+		t.Fatalf("items len = %d, want 3: %#v", len(got), got)
+	}
+	if summary, _ := data["summary"].(string); !strings.Contains(summary, "3 file matches limit reached") {
+		t.Fatalf("missing limit summary: %q", summary)
+	}
+}
+
+func TestSearchFilesDefaultsAndClampsLimit(t *testing.T) {
+	if got := normalizeSearchFilesLimit(0); got != defaultSearchFilesLimit {
+		t.Fatalf("default limit = %d, want %d", got, defaultSearchFilesLimit)
+	}
+	if got := normalizeSearchFilesLimit(maxSearchFilesLimit + 1); got != maxSearchFilesLimit {
+		t.Fatalf("clamped limit = %d, want %d", got, maxSearchFilesLimit)
+	}
+}
+
+func TestSearchFilesFallsBackWhenRipgrepUnavailable(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "alpha.txt"), []byte("fixture"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	res, err := ts.searchFiles(context.Background(), tc("search_files", map[string]any{
+		"pattern": "alpha",
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("search_files failed: err=%v res=%+v", err, res)
+	}
+	data := readFileData(t, res)
+	if got := searchFileItems(t, data); len(got) != 1 || got[0] != "alpha.txt" {
+		t.Fatalf("items = %#v, want alpha.txt", got)
+	}
+	if summary, _ := data["summary"].(string); !strings.Contains(summary, "ripgrep unavailable") {
+		t.Fatalf("missing fallback summary: %q", summary)
+	}
+}
+
+func TestSearchFilesResultReportsTimeout(t *testing.T) {
+	data := buildSearchFilesResult([]string{"alpha.txt"}, fileSearchMeta{TimedOut: true}, 10)
+	metrics, ok := data["metrics"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing metrics in %#v", data)
+	}
+	if metrics["timed_out"] != true || metrics["truncated"] != true || metrics["truncated_by"] != "timeout" {
+		t.Fatalf("missing timeout metrics: %#v", metrics)
+	}
+	if summary, _ := data["summary"].(string); !strings.Contains(summary, "search timed out") {
+		t.Fatalf("missing timeout summary: %q", summary)
+	}
+}
+
+func TestSearchFileNamesWithGoFallbackCancels(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "alpha.txt"), []byte("fixture"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	matches, meta, err := searchFileNamesWithGo(ctx, dir, "alpha", 10, func(path string) string {
+		rel, relErr := filepath.Rel(dir, path)
+		if relErr != nil {
+			return filepath.ToSlash(path)
+		}
+		return filepath.ToSlash(rel)
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if !meta.Cancelled {
+		t.Fatalf("expected cancelled meta: %#v", meta)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("matches len = %d, want 0: %#v", len(matches), matches)
+	}
+}
+
 func TestGrepAcceptsLimitAndCapsMatches(t *testing.T) {
 	dir := t.TempDir()
 	for i := 0; i < 5; i++ {
@@ -2977,6 +3088,19 @@ func grepMatches(t *testing.T, data map[string]any) []any {
 		t.Fatalf("missing matches in %#v", payload)
 	}
 	return matches
+}
+
+func searchFileItems(t *testing.T, data map[string]any) []any {
+	t.Helper()
+	payload, ok := data["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing payload in %#v", data)
+	}
+	items, ok := payload["items"].([]any)
+	if !ok {
+		t.Fatalf("missing items in %#v", payload)
+	}
+	return items
 }
 
 func metricNumber(t *testing.T, data map[string]any, key string) int {

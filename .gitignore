@@ -8,6 +8,7 @@ bin/
 *.test.exe
 *.out
 dist/
+releases/
 
 # --- Caches & Temp ---
 .gocache/
