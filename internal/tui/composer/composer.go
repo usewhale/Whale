@@ -27,6 +27,11 @@ type Composer struct {
 	// that cost repeatedly — the dominant cost during per-rune paste.
 	rawCache      string
 	rawCacheValid bool
+
+	// selectionRuneOffset is the rune offset of the selection anchor in the
+	// full text value. -1 means no active selection. The cursor position
+	// (tracked by textarea) is the other end of the selection range.
+	selectionRuneOffset int
 }
 
 type wrapCacheKey struct {
@@ -63,5 +68,5 @@ func New() Composer {
 	ta.FocusedStyle.CursorLine = lipgloss.NewStyle()
 	ta.BlurredStyle.CursorLine = lipgloss.NewStyle()
 	ta.Focus()
-	return Composer{textarea: ta, width: 80}
+	return Composer{textarea: ta, width: 80, selectionRuneOffset: -1}
 }
