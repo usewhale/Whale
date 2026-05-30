@@ -1,0 +1,756 @@
+package tui
+
+import (
+	"fmt"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
+	"github.com/usewhale/whale/internal/app"
+	"github.com/usewhale/whale/internal/app/service"
+	tuirender "github.com/usewhale/whale/internal/tui/render"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestCommitLiveTranscriptClearsAssembler(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), width: 80, height: 24}
+	m.append("assistant", "streamed answer")
+	m.commitLiveTranscript(true)
+	if got := len(m.assembler.Snapshot()); got != 0 {
+		t.Fatalf("expected live assembler cleared after commit, got %d entries", got)
+	}
+	if len(m.transcript) != 1 || m.transcript[0].Text != "streamed answer" {
+		t.Fatalf("expected committed transcript entry, got %+v", m.transcript)
+	}
+}
+func TestAssistantDeltaKeepsMultilineBlockLiveUntilBoundary(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 80
+	m.height = 24
+	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventAssistantDelta, Text: "stable line\nlive tail"}))
+	m = next.(model)
+	snap := m.assembler.Snapshot()
+	if len(snap) != 1 || snap[0].Text != "stable line\nlive tail" {
+		t.Fatalf("expected newline-delimited assistant content to stay in one live message, got %+v", snap)
+	}
+	view := m.View()
+	if !strings.Contains(view, "stable line") {
+		t.Fatalf("expected first line to remain in the same live block:\n%s", view)
+	}
+	if !strings.Contains(view, "live tail") {
+		t.Fatalf("expected tail to remain in the same live block:\n%s", view)
+	}
+}
+func TestReasoningDeltaKeepsSingleThinkingCardAcrossNewlines(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 80
+	m.height = 24
+	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventReasoningDelta, Text: "first thought\n\nsecond thought\nthird thought"}))
+	m = next.(model)
+	snap := m.assembler.Snapshot()
+	if len(snap) != 1 || snap[0].Role != "think" {
+		t.Fatalf("expected reasoning content to stay in one live thinking message, got %+v", snap)
+	}
+	lines := m.renderChatLines(80)
+	joined := strings.Join(lines, "\n")
+	if got := strings.Count(joined, "Thinking"); got != 1 {
+		t.Fatalf("expected one thinking card, got %d:\n%s", got, joined)
+	}
+	if strings.Contains(joined, "first thought") {
+		t.Fatalf("expected streaming thinking preview to hide older line:\n%s", joined)
+	}
+	for _, want := range []string{"second thought", "third thought"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected %q in thinking card:\n%s", want, joined)
+		}
+	}
+}
+func TestCommittedReasoningIsNoLongerStreaming(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventReasoningDelta, Text: "first\nsecond\nthird"}))
+	m = next.(model)
+	snap := m.assembler.Snapshot()
+	if len(snap) != 1 || !snap[0].Streaming {
+		t.Fatalf("expected live reasoning to be streaming, got %+v", snap)
+	}
+	m.commitLiveTranscript(true)
+	if got := len(m.transcript); got != 1 {
+		t.Fatalf("expected one transcript message, got %d", got)
+	}
+	if m.transcript[0].Streaming {
+		t.Fatalf("committed reasoning should not stay streaming: %+v", m.transcript[0])
+	}
+}
+func TestChatFooterShowsAutoAcceptOnlyWhenEnabled(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-pro", "high", "on")
+	m.width = 100
+	m.height = 24
+	m.cwd = "~/Engineer/ai/dsk/whale"
+
+	view := m.View()
+	assertFooterLastLineNotContains(t, view, "auto-accept on")
+
+	m.autoAccept = true
+	view = m.View()
+	assertFooterLastLine(t, view, "auto-accept on")
+}
+func TestChatFooterShowsGitBranchInsteadOfScrollHint(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-pro", "high", "on")
+	m.width = 100
+	m.height = 24
+	m.cwd = "~/Engineer/ai/dsk/whale-footer-branch-display"
+	m.gitBranch = "feat/footer-branch"
+
+	view := m.View()
+	assertFooterLastLine(t, view, "footer-branch-display")
+	assertFooterLastLine(t, view, "feat/footer-branch")
+	assertFooterLastLineNotContains(t, view, "PgUp/PgDn scroll")
+}
+func TestChatFooterOmitsEmptyGitBranch(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-pro", "high", "on")
+	m.width = 100
+	m.height = 24
+	m.cwd = "~/Engineer/ai/dsk/whale-footer-branch-display"
+
+	view := m.View()
+	assertFooterLastLine(t, view, "whale-footer-branch-display")
+	assertFooterLastLineNotContains(t, view, "PgUp/PgDn scroll")
+}
+func TestChatFooterLongGitBranchDoesNotHideDirectory(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-pro", "high", "on")
+	m.width = 80
+	m.height = 24
+	m.cwd = "~/Engineer/ai/dsk/whale-footer-branch-display"
+	m.gitBranch = "feat/this-is-an-extremely-long-branch-name-that-cannot-fit-in-the-footer"
+
+	view := m.View()
+	assertFooterLastLine(t, view, "footer-branch-display")
+	assertFooterLastLineNotContains(t, view, m.gitBranch)
+	assertFooterLastLineNotContains(t, view, "PgUp/PgDn scroll")
+}
+func TestChatFooterKeepsFocusIndicatorWithGitBranch(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-pro", "high", "on")
+	m.width = 100
+	m.height = 24
+	m.viewMode = app.ViewModeFocus
+	m.cwd = "/Users/goranka/Engineer/ai/dsk/whale-output-mouse-copy"
+	m.gitBranch = "feat/footer-branch"
+
+	view := m.View()
+	assertFooterLastLine(t, view, "focus")
+	assertFooterLastLine(t, view, "feat/footer-branch")
+	assertFooterLastLineNotContains(t, view, "PgUp/PgDn scroll")
+}
+func TestGitBranchUpdatedIgnoresStaleCwd(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.cwdPath = "/tmp/current"
+	next, _ := m.Update(gitBranchUpdatedMsg{cwd: "/tmp/old", branch: "old"})
+	m = next.(model)
+	if m.gitBranch != "" {
+		t.Fatalf("expected stale branch update to be ignored, got %q", m.gitBranch)
+	}
+
+	next, _ = m.Update(gitBranchUpdatedMsg{cwd: "/tmp/current", branch: "current"})
+	m = next.(model)
+	if m.gitBranch != "current" {
+		t.Fatalf("expected current branch update, got %q", m.gitBranch)
+	}
+}
+func TestDetectGitBranch(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	runGit(t, dir, "checkout", "-b", "feat/footer-branch")
+
+	if got := detectGitBranch(dir); got != "feat/footer-branch" {
+		t.Fatalf("expected branch %q, got %q", "feat/footer-branch", got)
+	}
+}
+func TestDetectGitBranchNonGitDirectory(t *testing.T) {
+	requireGit(t)
+	if got := detectGitBranch(t.TempDir()); got != "" {
+		t.Fatalf("expected no branch outside git repo, got %q", got)
+	}
+}
+func TestDetectGitBranchDetachedHead(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	runGit(t, dir, "checkout", "-B", "whale-test-base")
+	runGit(t, dir, "config", "user.email", "test@example.com")
+	runGit(t, dir, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	runGit(t, dir, "add", "README.md")
+	runGit(t, dir, "commit", "-m", "initial")
+	runGit(t, dir, "checkout", "--detach", "HEAD")
+
+	if got := detectGitBranch(dir); got != "" {
+		t.Fatalf("expected no branch in detached HEAD, got %q", got)
+	}
+}
+func TestChatTranscriptRetainsLocalCommandResultsAcrossSubmits(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.width = 80
+	m.height = 14
+	localInfo := func(text string) service.Event {
+		return service.Event{Kind: service.EventLocalSubmitResult, Status: "info", Text: text}
+	}
+	localDone := func() service.Event {
+		return service.Event{Kind: service.EventLocalSubmitDone, Metadata: map[string]any{service.EventMetadataLocalSubmit: true}}
+	}
+	next, _ := m.Update(svcMsg(localInfo("MCP\n\nconfig: /tmp/mcp.json servers: none")))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(localDone()))
+	m = next.(model)
+
+	m.input.SetValue("/status")
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	next, _ = m.Update(svcMsg(localInfo("Status\n\nsession: test-session")))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(localDone()))
+	m = next.(model)
+
+	got := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
+	for _, want := range []string{"config: /tmp/mcp.json", "/status", "session: test-session"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected transcript to retain %q:\n%s", want, got)
+		}
+	}
+}
+func TestNewSessionLocalResultRendersAsNotice(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.width = 80
+	m.height = 14
+	next, _ := m.Update(svcMsg(service.Event{
+		Kind:   service.EventLocalSubmitResult,
+		Status: "info",
+		Text:   "New session\n\nsession:  fresh\nprevious: old\nresume:   whale resume old\nmode:     agent",
+	}))
+	m = next.(model)
+	if len(m.transcript) < 1 {
+		t.Fatalf("expected session notice, got %+v", m.transcript)
+	}
+	got := m.transcript[len(m.transcript)-1]
+	if got.Role != "notice" || got.Kind != tuirender.KindNotice {
+		t.Fatalf("expected session notice kind, got role=%q kind=%q text=%q", got.Role, got.Kind, got.Text)
+	}
+}
+func TestStatusLocalResultRendersAsStructuredTranscriptEntry(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.width = 80
+	m.height = 14
+
+	m.input.SetValue("/status")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind:   service.EventLocalSubmitResult,
+		Status: "info",
+		Text:   "Status\n\n- session: test-session",
+		LocalResult: &app.LocalResult{
+			Kind:      "status",
+			Title:     "Status",
+			PlainText: "Status\n\n- session: test-session",
+			Fields: []app.LocalResultField{
+				{Label: "Session", Value: "test-session"},
+				{Label: "Mode", Value: "agent", Tone: "info"},
+			},
+		},
+	}))
+	m = next.(model)
+
+	if len(m.transcript) < 2 {
+		t.Fatalf("expected command echo and status result, got %+v", m.transcript)
+	}
+	got := m.transcript[len(m.transcript)-1]
+	if got.Kind != tuirender.KindLocalStatus || got.Role != "local_status" || got.Local == nil {
+		t.Fatalf("expected local status transcript entry, got role=%q kind=%q local=%+v", got.Role, got.Kind, got.Local)
+	}
+	rendered := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
+	for _, want := range []string{"/status", "Status", "Session", "test-session", "Mode", "agent"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected rendered status transcript to contain %q:\n%s", want, rendered)
+		}
+	}
+}
+func TestLocalCommandResultCommitsIdleAssemblerBeforeNextPrompt(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.width = 80
+	m.height = 14
+
+	next, _ := m.Update(svcMsg(service.Event{
+		Kind: service.EventInfo,
+		Text: "Startup notice",
+	}))
+	m = next.(model)
+	if got := len(m.assembler.Snapshot()); got == 0 {
+		t.Fatal("expected idle info event to leave live assembler content")
+	}
+
+	m.input.SetValue("/status")
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind:   service.EventLocalSubmitResult,
+		Status: "info",
+		Text:   "Status\n\nsession: test-session",
+	}))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind: service.EventLocalSubmitDone,
+		Metadata: map[string]any{
+			service.EventMetadataLocalSubmit: true,
+		},
+	}))
+	m = next.(model)
+	if got := len(m.assembler.Snapshot()); got != 0 {
+		t.Fatalf("expected local result to commit idle live assembler, got %d live entries", got)
+	}
+
+	m.input.SetValue("next prompt")
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+
+	rendered := strings.Join(tuirender.ChatLines(m.chatMessages(), 80), "\n")
+	noticeIx := strings.Index(rendered, "Startup notice")
+	statusIx := strings.Index(rendered, "session: test-session")
+	promptIx := strings.Index(rendered, "next prompt")
+	if noticeIx < 0 || statusIx < 0 || promptIx < 0 || !(noticeIx < statusIx && statusIx < promptIx) {
+		t.Fatalf("expected idle live content and local result before next prompt:\n%s", rendered)
+	}
+}
+func TestLocalCommandResultPreservesLiveTurnOrder(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.width = 80
+	m.height = 14
+	localInfo := service.Event{Kind: service.EventLocalSubmitResult, Status: "info", Text: "Stats\n\nusage summary"}
+
+	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventAssistantDelta, Text: "streamed answer"}))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(localInfo))
+	m = next.(model)
+
+	rendered := strings.Join(tuirender.ChatLines(m.chatMessages(), 80), "\n")
+	streamedIx := strings.Index(rendered, "streamed answer")
+	statsIx := strings.Index(rendered, "usage summary")
+	if streamedIx < 0 || statsIx < 0 || streamedIx > statsIx {
+		t.Fatalf("expected live assistant output before local result:\n%s", rendered)
+	}
+
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind:         service.EventTurnDone,
+		LastResponse: "streamed answer with final reconciliation",
+		Metadata:     map[string]any{service.EventMetadataAgentTurn: true},
+	}))
+	m = next.(model)
+	rendered = strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
+	streamedIx = strings.Index(rendered, "streamed answer")
+	statsIx = strings.Index(rendered, "usage summary")
+	tailIx := strings.Index(rendered, "with final reconciliation")
+	if streamedIx < 0 || statsIx < 0 || tailIx < 0 || !(streamedIx < statsIx && statsIx < tailIx) {
+		t.Fatalf("expected assistant prefix, local result, then recovered assistant tail:\n%s", rendered)
+	}
+	if got := len(m.assembler.Snapshot()); got != 0 {
+		t.Fatalf("expected local result to leave live assembler empty after reconciliation, got %+v", m.assembler.Snapshot())
+	}
+}
+func TestChatStartupHeaderPrintsCompactWhenShort(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 10})
+	m = next.(model)
+	if !m.startupHeaderPrinted {
+		t.Fatal("expected window size update to mark startup header printed")
+	}
+	view := m.View()
+	if strings.Contains(view, "WHALE") {
+		t.Fatalf("expected printed startup header not to repeat in live viewport:\n%s", view)
+	}
+	header := m.startupHeaderText()
+	if !strings.Contains(header, "WHALE") {
+		t.Fatalf("expected compact startup header text:\n%s", header)
+	}
+	if strings.Contains(header, "██╗") {
+		t.Fatalf("expected compact short-terminal header, got large logo:\n%s", header)
+	}
+	for _, want := range []string{"model: deepseek-v4-flash"} {
+		if !strings.Contains(header, want) {
+			t.Fatalf("expected startup header to contain %q:\n%s", want, header)
+		}
+	}
+	if got := countVisibleLines(view); got >= m.height {
+		t.Fatalf("expected compact header view to use natural height below terminal height %d, got %d:\n%s", m.height, got, view)
+	}
+}
+func TestChatStartupHeaderLeavesGapAboveComposer(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 24
+	view := m.View()
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	promptIdx := -1
+	for i, line := range lines {
+		if strings.Contains(line, "Type message or command") {
+			promptIdx = i
+			break
+		}
+	}
+	if promptIdx < 1 {
+		t.Fatalf("expected composer after startup header:\n%s", view)
+	}
+	if strings.TrimSpace(lines[promptIdx-1]) != "" {
+		t.Fatalf("expected blank line between startup header and composer, got %q in view:\n%s", lines[promptIdx-1], view)
+	}
+}
+func TestChatStartupHeaderGapDoesNotOverflowConstrainedHeight(t *testing.T) {
+	for _, height := range []int{5, 11} {
+		m := newModel(nil, "deepseek-v4-flash", "max", "off")
+		m.width = 80
+		m.height = height
+		view := m.View()
+		if got := countVisibleLines(view); got > height {
+			t.Fatalf("startup header view overflowed height %d with %d lines:\n%s", height, got, view)
+		}
+	}
+}
+func TestChatStartupHeaderPrintsLargeLogoWhenTall(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = next.(model)
+	if !m.startupHeaderPrinted {
+		t.Fatal("expected window size update to mark startup header printed")
+	}
+	header := m.startupHeaderText()
+	if !strings.Contains(header, "███████╗") {
+		t.Fatalf("expected large startup header:\n%s", header)
+	}
+	for _, want := range []string{"model:     deepseek-v4-flash", "effort:    max", "thinking:  off"} {
+		if !strings.Contains(header, want) {
+			t.Fatalf("expected startup header to contain %q:\n%s", want, header)
+		}
+	}
+}
+func TestChatStartupHeaderPrintCommandIsOneShot(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 24
+	cmd := m.startupHeaderPrintCmd()
+	if cmd == nil {
+		t.Fatal("expected startup header to be printed to native scrollback")
+	}
+	if !strings.Contains(fmt.Sprintf("%#v", cmd()), "███████") {
+		t.Fatal("expected startup header print command to emit the banner")
+	}
+	if !m.startupHeaderPrinted {
+		t.Fatal("expected startup header to be marked printed")
+	}
+	if cmd := m.startupHeaderPrintCmd(); cmd != nil {
+		t.Fatal("expected startup header print command to be one-shot")
+	}
+}
+func TestChatStartupHeaderStaysVisibleWithSmallTranscript(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = next.(model)
+
+	m.appendTranscript("info", tuirender.KindText, "first content")
+	view := m.View()
+	// Once printed to native scrollback the header must stay out of the
+	// live viewport so resize ticks cannot repaint it into the conversation.
+	if strings.Contains(view, "███████╗") {
+		t.Fatalf("expected printed startup header not to repeat in live viewport:\n%s", view)
+	}
+	if !strings.Contains(view, "first content") {
+		t.Fatalf("expected transcript content in view:\n%s", view)
+	}
+	if got := countVisibleLines(view); got >= m.height {
+		t.Fatalf("expected short transcript view to use natural height below terminal height %d, got %d:\n%s", m.height, got, view)
+	}
+}
+func TestChatStartupHeaderReturnsAfterNewSessionNotice(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 24
+	m.startupHeaderPrinted = true
+	m.appendTranscript("assistant", tuirender.KindText, "old content")
+
+	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventClearScreen}))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind: service.EventInfo,
+		Text: "New session\n\nsession: fresh",
+	}))
+	m = next.(model)
+
+	if !m.startupHeaderPrinted {
+		t.Fatal("expected clear screen to schedule a fresh startup header print")
+	}
+	view := m.View()
+	if strings.Contains(view, "old content") {
+		t.Fatalf("expected old content cleared after new session:\n%s", view)
+	}
+	if strings.Contains(view, "session: fresh") {
+		t.Fatalf("expected printed new session notice not to repeat in tail viewport:\n%s", view)
+	}
+}
+func TestChatHeaderOmittedWhenBodyTooShort(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = countVisibleLines(m.renderBottom(80)) + 2
+	view := m.View()
+	if strings.Contains(view, "╭") || strings.Contains(view, "╰") || strings.Contains(view, "WHALE") {
+		t.Fatalf("startup header should not render inside chat viewport:\n%s", view)
+	}
+	if got := countVisibleLines(view); got != countVisibleLines(m.renderBottom(80)) {
+		t.Fatalf("expected body to collapse when header cannot fit, got %d lines:\n%s", got, view)
+	}
+}
+func TestChatViewPinsBottomAfterContentExceedsScreen(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 12
+	m.transcript = nil
+	for i := 0; i < 40; i++ {
+		m.appendTranscript("info", tuirender.KindText, fmt.Sprintf("entry-%02d", i))
+	}
+
+	view := m.View()
+	if got := countVisibleLines(view); got != m.height {
+		t.Fatalf("expected overflowing chat view to occupy terminal height %d, got %d:\n%s", m.height, got, view)
+	}
+	assertFooterLastLine(t, view, "deepseek-v4-flash . max")
+	if !strings.Contains(view, "entry-39") {
+		t.Fatalf("expected overflowing chat view to follow latest content:\n%s", view)
+	}
+	if strings.Contains(view, "entry-00") {
+		t.Fatalf("expected overflowing chat view to scroll older content out of the visible frame:\n%s", view)
+	}
+}
+func TestComposerEditsDoNotRerenderChatWhenHeightIsStable(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 80
+	m.height = 10
+	m.transcript = nil
+	m.input.SetValue("seed\nline")
+	for i := 0; i < 60; i++ {
+		m.appendTranscript("info", tuirender.KindText, fmt.Sprintf("entry-%02d", i))
+	}
+	m.refreshViewportContentFollow(true)
+	initialGeneration := m.chat.generation
+	initialOffset := m.viewport.YOffset
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m = next.(model)
+	if got := m.input.Value(); got != "seed\nlinea" {
+		t.Fatalf("expected rune input to update composer, got %q", got)
+	}
+	if m.chat.generation != initialGeneration {
+		t.Fatalf("expected rune input not to rerender chat, gen=%d want=%d", m.chat.generation, initialGeneration)
+	}
+	if m.viewport.YOffset != initialOffset {
+		t.Fatalf("expected rune input not to move chat offset, got %d want %d", m.viewport.YOffset, initialOffset)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	m = next.(model)
+	if got := m.input.Value(); got != "seed\nline" {
+		t.Fatalf("expected backspace to update composer, got %q", got)
+	}
+	if m.chat.generation != initialGeneration {
+		t.Fatalf("expected backspace not to rerender chat, gen=%d want=%d", m.chat.generation, initialGeneration)
+	}
+	if m.viewport.YOffset != initialOffset {
+		t.Fatalf("expected backspace not to move chat offset, got %d want %d", m.viewport.YOffset, initialOffset)
+	}
+}
+func BenchmarkComposerEditCycleLongHistory(b *testing.B) {
+	for _, historyCount := range []int{500, 1000, 2000} {
+		b.Run(fmt.Sprintf("history-%d", historyCount), func(b *testing.B) {
+			m := newLongHistoryComposerModel(historyCount, "seed")
+			initialGeneration := m.chat.generation
+			initialItems := len(m.chat.items)
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+				m = next.(model)
+				next, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+				m = next.(model)
+			}
+			b.StopTimer()
+
+			if m.chat.generation != initialGeneration {
+				b.Fatalf("expected edit cycle not to rerender chat, gen=%d want=%d", m.chat.generation, initialGeneration)
+			}
+			if len(m.chat.items) != initialItems {
+				b.Fatalf("expected edit cycle to keep chat item count stable, got %d want %d", len(m.chat.items), initialItems)
+			}
+		})
+	}
+}
+func TestChatFooterShowsEffectiveThinkingAndEffort(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "high", "on")
+	m.width = 80
+	m.height = 24
+
+	view := m.View()
+	assertFooterLastLine(t, view, "deepseek-v4-flash . high")
+	assertFooterLastLine(t, view, "thinking: on")
+}
+func TestChatFooterUsesSemanticColorSegments(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	m := newModel(nil, "deepseek-v4-pro", "max", "on")
+	m.width = 100
+	m.height = 24
+	m.cwd = "~/Engineer/ai/dsk/whale-theme-colors"
+	m.viewMode = app.ViewModeFocus
+
+	view := m.View()
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	footer := lines[len(lines)-1]
+	if !strings.Contains(footer, "\x1b[") {
+		t.Fatalf("expected styled footer segments, got %q in view:\n%s", footer, view)
+	}
+	plain := xansi.Strip(footer)
+	for _, want := range []string{
+		"deepseek-v4-pro . max",
+		"thinking: on",
+		"whale-theme-colors",
+		"focus",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected stripped footer to contain %q, got %q", want, plain)
+		}
+	}
+}
+func TestModelSetRefreshesHeaderCache(t *testing.T) {
+	m := newModel(nil, "old-model", "high", "on")
+	next, cmd := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	m = next.(model)
+	if cmd == nil {
+		t.Fatal("expected startup header to be printed to native scrollback after first resize")
+	}
+	if header := m.startupHeaderText(); !strings.Contains(header, "model:     old-model") {
+		t.Fatalf("expected initial header model:\n%s", header)
+	}
+
+	next, _ = m.Update(svcMsg(service.Event{
+		Kind:   service.EventLocalSubmitResult,
+		Status: "info",
+		Text:   "model set: newer-model  effort: low  thinking: off",
+	}))
+	m = next.(model)
+
+	header := m.startupHeaderText()
+	if !strings.Contains(header, "model:     newer-model") {
+		t.Fatalf("expected refreshed header after model set:\n%s", header)
+	}
+	if strings.Contains(header, "model:     old-model") {
+		t.Fatalf("expected stale header model to disappear:\n%s", header)
+	}
+	view := m.View()
+	if strings.Contains(view, "model set: newer-model") {
+		t.Fatalf("expected printed model set result not to repeat in tail viewport:\n%s", view)
+	}
+	assertFooterLastLine(t, view, "newer-model . low")
+	assertFooterLastLine(t, view, "thinking: off")
+}
+func TestFormatElapsedCompact(t *testing.T) {
+	cases := []struct {
+		elapsed time.Duration
+		want    string
+	}{
+		{elapsed: 0, want: "0s"},
+		{elapsed: 12 * time.Second, want: "12s"},
+		{elapsed: time.Minute + 5*time.Second, want: "1m 05s"},
+		{elapsed: time.Hour + 2*time.Minute + 9*time.Second, want: "1h 02m 09s"},
+	}
+	for _, tc := range cases {
+		if got := formatElapsedCompact(tc.elapsed); got != tc.want {
+			t.Fatalf("formatElapsedCompact(%v) = %q, want %q", tc.elapsed, got, tc.want)
+		}
+	}
+}
+func TestClearScreenResetsStateAndShowsHeader(t *testing.T) {
+	m := model{
+		assembler: tuirender.NewAssembler(),
+		mode:      modeChat,
+		width:     80,
+		height:    24,
+		model:     "deepseek-v4-flash",
+		effort:    "high",
+		cwd:       "~/work",
+		version:   "v0.1.0",
+	}
+	// Add some state
+	m.assembler.AddNotice("old notice")
+	m.logs = []logEntry{{Kind: "info", Summary: "old"}}
+	m.diffs = []diffEntry{{Source: "x", Line: "old"}}
+	m.status = "ready"
+
+	next, cmd := m.Update(svcMsg(service.Event{Kind: service.EventClearScreen}))
+	m2 := next.(model)
+
+	if cmd == nil {
+		t.Fatal("expected clear screen to return a command")
+	}
+	if m2.status != "terminal cleared" {
+		t.Fatalf("expected status 'terminal cleared', got %q", m2.status)
+	}
+	if len(m2.logs) != 0 {
+		t.Fatalf("expected logs cleared, got %d", len(m2.logs))
+	}
+	if len(m2.diffs) != 0 {
+		t.Fatalf("expected diffs cleared, got %d", len(m2.diffs))
+	}
+	// The transcript is cleared; the header is rendered as the first chat item.
+	snap := m2.assembler.Snapshot()
+	if len(snap) != 0 {
+		t.Fatalf("expected empty live assembler, got %+v", snap)
+	}
+	if len(m2.transcript) != 0 {
+		t.Fatalf("expected empty transcript, got %d: %+v", len(m2.transcript), m2.transcript)
+	}
+	view := m2.View()
+	if strings.Contains(view, "WHALE") || strings.Contains(view, "██╗") {
+		t.Fatalf("expected startup header to be printed to scrollback, not the live viewport:\n%s", view)
+	}
+	if !m2.startupHeaderPrinted {
+		t.Fatal("expected clear screen to schedule startup header print")
+	}
+	if m2.nativeScrollbackPrinted != len(m2.transcript) {
+		t.Fatalf("expected clear screen to reset native scrollback cursor, got cursor %d for %d transcript items", m2.nativeScrollbackPrinted, len(m2.transcript))
+	}
+}
+func TestClearScreenInvalidatesRenderedChatCache(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "high", "on")
+	m.width = 80
+	m.height = 24
+	m.appendTranscript("assistant", tuirender.KindText, "old cached content")
+	if view := m.View(); !strings.Contains(view, "old cached content") {
+		t.Fatalf("expected old content before clear:\n%s", view)
+	}
+
+	next, _ := m.Update(svcMsg(service.Event{Kind: service.EventClearScreen}))
+	m = next.(model)
+	view := m.View()
+	if strings.Contains(view, "old cached content") {
+		t.Fatalf("expected first clear to remove cached content:\n%s", view)
+	}
+	if strings.Contains(view, "WHALE") || strings.Contains(view, "██╗") {
+		t.Fatalf("expected startup header to land in scrollback after clear, not the live viewport:\n%s", view)
+	}
+	if !m.startupHeaderPrinted {
+		t.Fatal("expected first clear to schedule startup header print")
+	}
+}
