@@ -9,6 +9,7 @@ import (
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/store"
 	"github.com/usewhale/whale/internal/tools"
+	"github.com/usewhale/whale/internal/workflow"
 	"strings"
 	"time"
 )
@@ -34,14 +35,17 @@ type appToolInit struct {
 }
 
 type appRuntimeInit struct {
-	cfg           Config
-	model         string
-	effort        string
-	thinking      bool
-	contextWindow int
-	apiKey        string
-	taskTools     []core.Tool
-	toolRegistry  *core.ToolRegistry
+	cfg             Config
+	model           string
+	effort          string
+	thinking        bool
+	contextWindow   int
+	apiKey          string
+	taskTools       []core.Tool
+	workflowTools   []core.Tool
+	workflowManager *workflow.RunManager
+	workflowRunner  *workflow.ScriptRunner
+	toolRegistry    *core.ToolRegistry
 }
 
 func loadNewConfig(cfg Config, workspaceRoot string) (Config, error) {

@@ -96,6 +96,10 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 		return m.handleHelpKey(msg), false, true
 	case modeWorktreeExit:
 		return m.handleWorktreeExitKey(msg), false, true
+	case modeWorkflowLaunch:
+		return m.handleWorkflowLaunchKey(msg), false, true
+	case modeWorkflowPanel:
+		return m.handleWorkflowPanelKey(msg), false, true
 	}
 	cmd, quit, handled := m.handleGlobalKey(msg)
 	if handled {

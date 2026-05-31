@@ -8,6 +8,7 @@ import (
 	"github.com/usewhale/whale/internal/agent"
 	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/session"
+	"github.com/usewhale/whale/internal/workflow"
 )
 
 func (a *App) RunUserPromptSubmitHook(input string) (blocked bool, output string, updatedInput string) {
@@ -66,6 +67,12 @@ func (a *App) ensureAgent() (*agent.Agent, error) {
 			}),
 			agent.WithHookRunner(a.hookRunner),
 			agent.WithExtraSystemBlocks(pluginBlocks...),
+			agent.WithDynamicSystemBlocks(func() string {
+				if a.workflowRunner == nil || a.workflowRunner.Library == nil {
+					return ""
+				}
+				return workflow.RenderPromptCatalog(context.Background(), a.workflowRunner.Library, workflow.DefaultPromptCatalogLimit)
+			}),
 			agent.WithProjectMemory(a.cfg.MemoryEnabled, a.cfg.MemoryMaxChars, parseCSVList(a.cfg.MemoryFileOrder), a.workspaceRoot),
 			agent.WithWorktreeContext(a.worktree.Path, a.worktree.OriginalWorkspace),
 			agent.WithMaxParallelSubagents(a.cfg.MaxParallelSubagents),

@@ -110,7 +110,7 @@ func (m *model) handleErrorEvent(ev protocol.Event) {
 	m.status = "error"
 }
 
-func (m *model) handleLocalSubmitResultEvent(ev protocol.Event) {
+func (m *model) handleLocalSubmitResultEvent(ev protocol.Event) tea.Cmd {
 	m.clearProviderRetryStatus()
 	role := ev.Status
 	if role == "" {
@@ -118,7 +118,18 @@ func (m *model) handleLocalSubmitResultEvent(ev protocol.Event) {
 	}
 	if !isEnvironmentInventoryBlock(ev.Text) {
 		m.appendLocalCommandEcho(m.popLocalSubmitCommand())
-		m.appendLocalSubmitResult(role, ev.Text, ev.LocalResult)
+		if ev.LocalResult != nil && ev.LocalResult.Kind == "workflow-launch" {
+			m.addLog(logEntry{Kind: role, Source: "system", Summary: ev.Text, Raw: ev.Text})
+			return m.openWorkflowLaunch(ev.LocalResult)
+		}
+		if ev.LocalResult != nil && ev.LocalResult.Kind == "workflow-run" {
+			m.appendLocalSubmitResult(role, ev.Text, nil)
+		} else if shouldOpenWorkflowPanelForLocalResult(ev.LocalResult) {
+			m.addLog(logEntry{Kind: role, Source: "system", Summary: ev.Text, Raw: ev.Text})
+			return m.openWorkflowPanel(ev.LocalResult)
+		} else {
+			m.appendLocalSubmitResult(role, ev.Text, ev.LocalResult)
+		}
 	} else {
 		m.addLog(logEntry{
 			Kind:    "env_summary",
@@ -136,6 +147,19 @@ func (m *model) handleLocalSubmitResultEvent(ev protocol.Event) {
 		m.syncModelEffortFromInfo(ev.Text)
 		m.refreshViewportContentFollow(true)
 	}
+	return nil
+}
+
+func (m *model) handleWorkflowTerminalEvent(ev protocol.Event) {
+	m.clearProviderRetryStatus()
+	if ev.LocalResult != nil {
+		m.appendLocalResult(ev.LocalResult)
+	} else if strings.TrimSpace(ev.Text) != "" {
+		m.appendTranscript("notice", tuirender.KindNotice, ev.Text)
+	}
+	m.addLog(logEntry{Kind: "workflow_terminal", Source: "workflow", Summary: truncateLine(ev.Text, 120), Raw: ev.Text})
+	m.status = "ready"
+	m.refreshViewportContentFollow(true)
 }
 
 func (m *model) handleDiffResultEvent(ev protocol.Event) {

@@ -88,6 +88,10 @@ func classifySlashFields(head string, fields []string, line string) SubmitClass 
 			return SubmitLocalReadOnly
 		}
 		return SubmitUsageError
+	case "/workflows":
+		return classifyWorkflowsFields(fields)
+	case "/deep-research":
+		return classifyDeepResearchFields(fields)
 	case "/model", "/permissions", "/skills", "/plugins", "/resume":
 		if len(fields) == 1 {
 			return SubmitLocalUI
@@ -179,6 +183,39 @@ func positiveInt(value string) bool {
 		}
 	}
 	return value != "0"
+}
+
+func classifyDeepResearchFields(fields []string) SubmitClass {
+	if len(fields) < 2 {
+		return SubmitUsageError
+	}
+	for i := 1; i < len(fields); i++ {
+		field := fields[i]
+		switch {
+		case field == "--resume":
+			i++
+			if i >= len(fields) || strings.TrimSpace(fields[i]) == "" || strings.HasPrefix(fields[i], "--") {
+				return SubmitUsageError
+			}
+		case strings.HasPrefix(field, "--resume="):
+			parts := strings.SplitN(field, "=", 2)
+			if len(parts) != 2 || strings.TrimSpace(parts[1]) == "" {
+				return SubmitUsageError
+			}
+		case strings.HasPrefix(field, "--"):
+			return SubmitUsageError
+		default:
+			return SubmitLocalMutating
+		}
+	}
+	return SubmitUsageError
+}
+
+func classifyWorkflowsFields(fields []string) SubmitClass {
+	if len(fields) == 1 {
+		return SubmitLocalReadOnly
+	}
+	return SubmitUsageError
 }
 
 func validStatsView(view string) bool {

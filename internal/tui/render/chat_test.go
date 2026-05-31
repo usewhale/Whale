@@ -662,6 +662,44 @@ func TestChatLines_LocalResultFieldsStayWithinNarrowCard(t *testing.T) {
 	assertVisibleWidthAtMost(t, lines, 20)
 }
 
+func TestChatLines_LocalResultMultilineMarkdownDoesNotExpandBlankLines(t *testing.T) {
+	entries := []UIMessage{{
+		Role: "local_workflow",
+		Kind: KindLocalStatus,
+		Text: "Workflow completed",
+		Local: &protocol.LocalResult{
+			Kind:  "workflow-terminal",
+			Title: "Workflow completed",
+			Sections: []protocol.LocalResultSection{{
+				Title: "Result",
+				Fields: []protocol.LocalResultField{{
+					Label: "decision",
+					Value: "## Release Decision\n\n| File | Purpose |\n|---|---|\n| `NewsletterSignup.vue` | Component |\n\nDO NOT SHIP",
+				}},
+			}},
+		},
+	}}
+	lines := ChatLines(entries, 80)
+	joined := joinedPlain(lines)
+	for _, want := range []string{"Release Decision", "| File | Purpose |", "DO NOT SHIP"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected multiline workflow result to contain %q, got:\n%s", want, joined)
+		}
+	}
+	blankRun := 0
+	for _, line := range strings.Split(joined, "\n") {
+		if strings.TrimSpace(strings.Trim(line, "┃╭╮╰╯─│ ")) == "" {
+			blankRun++
+			if blankRun > 3 {
+				t.Fatalf("workflow result rendered too many consecutive blank lines:\n%s", joined)
+			}
+			continue
+		}
+		blankRun = 0
+	}
+	assertVisibleWidthAtMost(t, lines, 80)
+}
+
 func TestChatLines_ContinuationIndent(t *testing.T) {
 	entries := []UIMessage{
 		{Role: "assistant", Kind: KindText, Text: "line1\n\nline2"},

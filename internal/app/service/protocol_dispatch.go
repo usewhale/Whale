@@ -26,6 +26,11 @@ func (s *Service) DispatchProtocol(in protocol.Intent) {
 		PluginEnabled:  in.PluginEnabled,
 		SkillBinding:   appSkillBinding(in.SkillBinding),
 		WorktreeAction: in.WorktreeAction,
+		WorkflowRunID:  in.WorkflowRunID,
+		WorkflowName:   in.WorkflowName,
+		WorkflowArgs:   in.WorkflowArgs,
+		WorkflowResume: in.WorkflowResume,
+		WorkflowTrust:  in.WorkflowTrust,
 	})
 }
 
@@ -77,6 +82,12 @@ func serviceIntentKind(kind protocol.IntentKind) IntentKind {
 		return IntentSetPluginEnabled
 	case protocol.IntentWorktreeExitChoice:
 		return IntentWorktreeExitChoice
+	case protocol.IntentRequestWorkflowPanel:
+		return IntentRequestWorkflowPanel
+	case protocol.IntentCancelWorkflowRun:
+		return IntentCancelWorkflowRun
+	case protocol.IntentStartWorkflow:
+		return IntentStartWorkflow
 	default:
 		return IntentKind(kind)
 	}

@@ -211,12 +211,18 @@ func appendToolResult(ctx context.Context, sc streamDispatchContext, results *[]
 func appendBlockedToolResults(ctx context.Context, sc streamDispatchContext, blocked []core.ToolResult, results *[]core.ToolResult) error {
 	for _, blockedRes := range blocked {
 		br := blockedRes
+		reasonCode := "storm_blocked"
+		if br.Metadata != nil {
+			if raw, ok := br.Metadata["blocked_reason_code"].(string); ok && strings.TrimSpace(raw) != "" {
+				reasonCode = strings.TrimSpace(raw)
+			}
+		}
 		if err := emitDispatchEvent(ctx, sc, AgentEvent{
 			Type: AgentEventTypeToolCallBlocked,
 			ToolBlocked: &ToolCallBlocked{
 				ToolCallID: br.ToolCallID,
 				ToolName:   br.Name,
-				ReasonCode: "storm_blocked",
+				ReasonCode: reasonCode,
 			},
 		}); err != nil {
 			return err

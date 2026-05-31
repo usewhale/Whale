@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,7 +25,9 @@ import (
 	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/store"
+	"github.com/usewhale/whale/internal/tasks"
 	"github.com/usewhale/whale/internal/telemetry"
+	"github.com/usewhale/whale/internal/workflow"
 )
 
 func TestResolveInitialSessionID(t *testing.T) {
@@ -1481,6 +1484,895 @@ func TestExecuteLocalMCPReturnsStructuredLocalResult(t *testing.T) {
 	}
 }
 
+func TestBuildWorkflowsLocalResultIncludesRecentRuns(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	app, err := New(t.Context(), cfg, StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer app.Close()
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-other", Type: workflow.EventRunStarted, Status: workflow.RunStatusRunning, Message: "other session", SessionID: "other-session"})
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-one", Type: workflow.EventRunStarted, Status: workflow.RunStatusRunning, Message: "audit repo", SessionID: app.SessionID()})
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-one", Type: workflow.EventPhaseStarted, Status: workflow.RunStatusRunning, Phase: "Explore", Message: "Explore"})
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-one", TaskID: "task-a", Type: workflow.EventTaskStarted, Status: workflow.TaskStatusRunning, Label: "scan"})
+
+	result := app.buildWorkflowsLocalResult("")
+	if result == nil || result.Kind != "workflows" || result.Title != "Workflows" {
+		t.Fatalf("unexpected workflows local result: %+v", result)
+	}
+	if !strings.Contains(result.PlainText, "run-one") || !strings.Contains(result.PlainText, "phase: Explore") {
+		t.Fatalf("expected workflow run in plain text, got:\n%s", result.PlainText)
+	}
+	if strings.Contains(result.PlainText, "run-other") || localResultSectionFieldValue(result, "run-other", "Status") != "" {
+		t.Fatalf("workflow list should be scoped to current session, got:\n%s", result.PlainText)
+	}
+	if got := localResultSectionFieldValue(result, "run-one", "Status"); got != workflow.RunStatusRunning {
+		t.Fatalf("unexpected run status field: %q", got)
+	}
+	if got := localResultSectionFieldValue(result, "run-one", "Phase"); got != "Explore" {
+		t.Fatalf("unexpected phase field: %q", got)
+	}
+}
+
+func TestBuildWorkflowsLocalResultIncludesAvailableWorkflows(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	workflowDir := filepath.Join(dir, ".whale", "workflows")
+	if err := os.MkdirAll(workflowDir, 0o755); err != nil {
+		t.Fatalf("mkdir workflow dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowDir, "project-review.js"), []byte(`export const meta = {
+  name: 'project-review',
+  description: 'Review project code',
+  whenToUse: 'when code changed',
+}
+log('ok')
+`), 0o600); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(cwd)
+	})
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	app, err := New(t.Context(), cfg, StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer app.Close()
+
+	result := app.buildWorkflowsLocalResult("")
+	if result == nil || result.Kind != "workflows" {
+		t.Fatalf("unexpected workflows local result: %+v", result)
+	}
+	if got := localResultFieldValue(result, "Available"); got != "2 ready" {
+		t.Fatalf("available field = %q", got)
+	}
+	if got := localResultSectionFieldValue(result, "Available workflows", "project-review"); !strings.Contains(got, "Review project code") || !strings.Contains(got, "when: when code changed") {
+		t.Fatalf("workflow definition field = %q", got)
+	}
+	if !strings.Contains(result.PlainText, "available workflows: 2 ready") {
+		t.Fatalf("expected available workflows in plain text, got:\n%s", result.PlainText)
+	}
+}
+
+func TestExecuteLocalWorkflowRunReturnsStructuredLocalResult(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	app, err := New(t.Context(), cfg, StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer app.Close()
+	startedAt := time.Date(2026, 5, 29, 10, 0, 0, 0, time.UTC)
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-detail", Type: workflow.EventRunStarted, Status: workflow.RunStatusRunning, Time: startedAt, Message: "detail run"})
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-detail", Type: workflow.EventScriptReady, Status: workflow.RunStatusRunning, Message: "detail", Data: map[string]any{
+		"name": "custom-review",
+		"phases": []any{
+			map[string]any{"title": "Scope"},
+			map[string]any{"title": "Research"},
+			map[string]any{"title": "Verify"},
+			map[string]any{"title": "Synthesize"},
+		},
+	}})
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-detail", Type: workflow.EventLog, Message: "checked contracts"})
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-detail", TaskID: "workflow-child", Type: workflow.EventWorkflowCompleted, Status: workflow.RunStatusCompleted, WorkflowName: "child-research", Message: "child done"})
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-detail", TaskID: "task-a", Type: workflow.EventTaskStarted, Status: workflow.TaskStatusRunning, Time: startedAt, Phase: "Research", Label: "search:docs", Message: "search docs prompt", Data: map[string]any{
+		"actor_kind": "subagent",
+		"model":      "deepseek-chat",
+	}})
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-detail", TaskID: "task-a", Type: workflow.EventTaskProgress, Status: workflow.TaskStatusRunning, Time: startedAt.Add(time.Second), Phase: "Research", Label: "search:docs", Message: "Searching web \"node permissions\"", Data: map[string]any{
+		"tool_name": "web_search",
+	}})
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-detail", TaskID: "task-a", Type: workflow.EventTaskProgress, Status: workflow.TaskStatusRunning, Time: startedAt.Add(2 * time.Second), Phase: "Research", Label: "search:docs", Message: "Fetched nodejs.org docs", Data: map[string]any{
+		"tool_name": "web_fetch",
+	}})
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-detail", TaskID: "task-a", Type: workflow.EventTaskCompleted, Status: workflow.TaskStatusCompleted, Time: startedAt.Add(3 * time.Second), Phase: "Research", Label: "search:docs", Message: "done", Data: map[string]any{
+		"duration_ms": int64(3200),
+		"tool_calls":  []any{"web_search", "web_fetch"},
+		"usage": map[string]any{
+			"prompt_tokens":             int64(1000),
+			"completion_tokens":         int64(531),
+			"total_usage_tokens":        int64(1531),
+			"prompt_cache_hit_tokens":   int64(700),
+			"prompt_cache_miss_tokens":  int64(300),
+			"reasoning_replay_tokens":   int64(120),
+			"tool_result_replay_tokens": int64(80),
+			"tool_result_raw_tokens":    int64(200),
+			"tool_result_tokens_saved":  int64(120),
+			"tool_results_compacted":    int64(1),
+		},
+	}})
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-detail", Type: workflow.EventBudgetUpdated, Status: workflow.RunStatusRunning, Message: "budget spent 7 / 20 completion tokens (13 remaining)", Data: map[string]any{
+		"spent_tokens":        int64(7),
+		"total_budget_tokens": int64(20),
+		"remaining_tokens":    int64(13),
+	}})
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-detail", Type: workflow.EventRunCompleted, Status: workflow.RunStatusCompleted, Time: startedAt.Add(10 * time.Second), Message: "final answer", Data: map[string]any{
+		"result": map[string]any{
+			"answer":  "final answer",
+			"sources": []any{"https://example.com/source"},
+			"caveats": []any{"limited evidence"},
+		},
+	}})
+
+	result := app.WorkflowPanelLocalResult("run-detail")
+	if result == nil || result.Kind != "workflow" {
+		t.Fatalf("expected structured workflow result, got %+v", result)
+	}
+	if localResultHasSectionField(result, "Events", "log") {
+		t.Fatalf("default workflow detail should not include full event section, got %+v", result.Sections)
+	}
+	if !strings.Contains(result.PlainText, "checked contracts") || strings.Contains(result.PlainText, "task_completed") {
+		t.Fatalf("expected compact workflow snapshot without full event stream, got:\n%s", result.PlainText)
+	}
+	if !strings.Contains(result.PlainText, "child-research") || !strings.Contains(result.PlainText, "child done") {
+		t.Fatalf("expected child workflow boundary in plain text, got:\n%s", result.PlainText)
+	}
+	if !strings.Contains(result.PlainText, "search:docs") || !strings.Contains(result.PlainText, "531 out · 2 tools · 3s") {
+		t.Fatalf("expected task metrics in plain text, got:\n%s", result.PlainText)
+	}
+	if got := localResultSectionFieldValue(result, "Research", "#2 done search:docs"); !strings.Contains(got, "531 out · 2 tools · 3s") {
+		t.Fatalf("expected task metrics in structured field, got %q", got)
+	}
+	if got := localResultSectionFieldValue(result, "Run", "Budget"); got != "7/20 completion tokens · 13 remaining" {
+		t.Fatalf("budget field = %q", got)
+	}
+	if !strings.Contains(result.PlainText, "budget: 7/20 completion tokens · 13 remaining") {
+		t.Fatalf("expected budget in plain text, got:\n%s", result.PlainText)
+	}
+	if got := localResultSectionFieldValue(result, "Result", "Answer"); got != "final answer" {
+		t.Fatalf("result answer = %q", got)
+	}
+	if got := localResultSectionFieldValue(result, "Result", "Sources"); got != "https://example.com/source" {
+		t.Fatalf("result sources = %q", got)
+	}
+	snapshot := result.WorkflowPanelSnapshot
+	if snapshot == nil {
+		t.Fatalf("expected workflow panel snapshot")
+	}
+	if snapshot.RunID != "run-detail" || snapshot.Status != workflow.RunStatusCompleted || snapshot.Summary != "final answer" {
+		t.Fatalf("unexpected snapshot header: %+v", snapshot)
+	}
+	if len(snapshot.Phases) < 4 || snapshot.Phases[0].Name != "Scope" || snapshot.Phases[1].Name != "Research" || snapshot.Phases[2].Name != "Verify" || snapshot.Phases[3].Name != "Synthesize" {
+		t.Fatalf("expected declared phases in snapshot, got %+v", snapshot.Phases)
+	}
+	if snapshot.Phases[0].Total != 0 || snapshot.Phases[2].Total != 0 || snapshot.Phases[3].Total != 0 {
+		t.Fatalf("expected not-started declared phases to remain empty, got %+v", snapshot.Phases)
+	}
+	var task *WorkflowPanelTask
+	for i := range snapshot.Phases[1].Tasks {
+		if snapshot.Phases[1].Tasks[i].ID == "task-a" {
+			task = &snapshot.Phases[1].Tasks[i]
+			break
+		}
+	}
+	if task == nil {
+		t.Fatalf("expected task-a in workflow panel snapshot: %+v", snapshot.Phases[1].Tasks)
+	}
+	if task.Prompt != "search docs prompt" {
+		t.Fatalf("task prompt was not preserved: %q", task.Prompt)
+	}
+	if task.Outcome != "done" || task.Message != "done" {
+		t.Fatalf("task outcome/message = %q/%q", task.Outcome, task.Message)
+	}
+	if task.Model != "deepseek-chat" || task.ActorKind != "subagent" {
+		t.Fatalf("task model/actor = %q/%q", task.Model, task.ActorKind)
+	}
+	if len(task.Activity) != 2 || task.Activity[0].ToolName != "web_search" || task.Activity[1].Message != "Fetched nodejs.org docs" {
+		t.Fatalf("unexpected task activity: %+v", task.Activity)
+	}
+	if task.ToolCalls != 2 || len(task.ToolCallNames) != 2 || task.ToolCallNames[0] != "web_search" {
+		t.Fatalf("unexpected task tools: calls=%d names=%+v", task.ToolCalls, task.ToolCallNames)
+	}
+	if task.TotalTokens != 1531 || task.CompletionTokens != 531 || task.PromptCacheHit != 700 || task.ReasoningReplay != 120 || task.ToolReplayTokens != 80 || task.DurationMS != 3200 {
+		t.Fatalf("unexpected task metrics: %+v", task)
+	}
+
+	terminal := app.BuildWorkflowTerminalLocalResult("run-detail")
+	if terminal == nil || terminal.Kind != "workflow-terminal" {
+		t.Fatalf("expected terminal workflow result, got %+v", terminal)
+	}
+	for _, want := range []string{
+		"Dynamic workflow \"custom-review\" completed",
+		"final answer",
+		"Full run details: open /workflows",
+		"Runtime: 2/2 completed · 10s · 531 out · 2 tool calls",
+	} {
+		if !strings.Contains(terminal.PlainText, want) {
+			t.Fatalf("expected terminal plain text to contain %q, got:\n%s", want, terminal.PlainText)
+		}
+	}
+	if strings.Contains(terminal.PlainText, "total") {
+		t.Fatalf("terminal plain text should not show total token accounting, got:\n%s", terminal.PlainText)
+	}
+	if got := localResultFieldValue(terminal, "Total tokens"); got != "" {
+		t.Fatalf("terminal fields should not show total tokens, got %q", got)
+	}
+	if got := localResultSectionFieldValue(terminal, "Runtime", "Details"); got != "" {
+		t.Fatalf("runtime section should not repeat details link, got %q", got)
+	}
+}
+
+func TestWorkflowResultDisplayFieldsFormatsGenericJSON(t *testing.T) {
+	fields := workflowResultDisplayFields(map[string]any{
+		"confirmed":      []any{},
+		"confirmedCount": float64(0),
+		"decision":       "## Release Decision\n\nDO NOT SHIP",
+		"reviews": []any{
+			map[string]any{"category": "ux", "shipBlocker": true},
+		},
+	})
+	result := &LocalResult{Fields: fields}
+	if got := localResultFieldValue(result, "reviews"); strings.Contains(got, "map[") || !strings.Contains(got, `"category": "ux"`) || !strings.Contains(got, `"shipBlocker": true`) {
+		t.Fatalf("generic workflow result should render nested values as pretty JSON, got %q", got)
+	}
+	if got := localResultFieldValue(result, "Decision"); !strings.Contains(got, "DO NOT SHIP") {
+		t.Fatalf("decision summary missing, got %q", got)
+	}
+	if got := localResultFieldValue(result, "confirmed"); got != "[]" {
+		t.Fatalf("empty array field = %q, want []", got)
+	}
+	if got := localResultFieldValue(result, "confirmedCount"); got != "0" {
+		t.Fatalf("numeric field = %q, want 0", got)
+	}
+}
+
+func TestWorkflowTerminalLocalResultDoesNotRepeatLongSummaryAsIdentity(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	app, err := New(t.Context(), cfg, StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer app.Close()
+
+	longSummary := strings.TrimSpace(strings.Repeat("Between Node.js v20 and v22, the Permission Model changed surprisingly little. ", 8))
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-summary", Type: workflow.EventRunStarted, Status: workflow.RunStatusRunning, Message: "starting"})
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-summary", Type: workflow.EventScriptReady, Status: workflow.RunStatusRunning, Data: map[string]any{
+		"description": "Deep research harness",
+	}})
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-summary", Type: workflow.EventRunCompleted, Status: workflow.RunStatusCompleted, Message: longSummary, Data: map[string]any{
+		"result": map[string]any{
+			"summary": longSummary,
+			"caveats": "verify exact minor versions",
+		},
+	}})
+
+	terminal := app.BuildWorkflowTerminalLocalResult("run-summary")
+	if terminal == nil || terminal.Kind != "workflow-terminal" {
+		t.Fatalf("expected terminal workflow result, got %+v", terminal)
+	}
+	if !strings.Contains(terminal.Title, `Dynamic workflow "run-summary" completed`) {
+		t.Fatalf("terminal title should use workflow identity, got %q", terminal.Title)
+	}
+	if got := localResultFieldValue(terminal, "Workflow"); got != "run-summary" {
+		t.Fatalf("workflow identity = %q, want run-summary", got)
+	}
+	if got := localResultFieldValue(terminal, "Summary"); got == "" || got == longSummary || len([]rune(got)) > 243 {
+		t.Fatalf("top-level summary should be compact, got %q", got)
+	}
+	if got := localResultSectionFieldValue(terminal, "Result", "Summary"); got != longSummary {
+		t.Fatalf("result summary should remain complete, got %q", got)
+	}
+	if strings.Count(terminal.PlainText, longSummary) != 1 {
+		t.Fatalf("plain text should include the full summary once, got:\n%s", terminal.PlainText)
+	}
+}
+
+func TestWorkflowRunLocalResultSurfacesFailureReason(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	app, err := New(t.Context(), cfg, StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer app.Close()
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-failed", Type: workflow.EventRunStarted, Status: workflow.RunStatusRunning, Message: "deep research"})
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-failed", TaskID: "task-scope", Type: workflow.EventTaskStarted, Status: workflow.TaskStatusRunning, Phase: "Scope", Label: "scope"})
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-failed", TaskID: "task-scope", Type: workflow.EventTaskFailed, Status: workflow.TaskStatusFailed, Phase: "Scope", Label: "scope", Message: "deepseek 402: Insufficient Balance"})
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-failed", Type: workflow.EventRunFailed, Status: workflow.RunStatusFailed, Message: "workflow script failed: Error: deepseek 402: Insufficient Balance"})
+
+	result := app.buildWorkflowRunLocalResult("run-failed")
+	if result == nil || result.Kind != "workflow" {
+		t.Fatalf("expected workflow detail result, got %+v", result)
+	}
+	if got := localResultFieldValue(result, "Error"); !strings.Contains(got, "Insufficient Balance") {
+		t.Fatalf("top-level error = %q", got)
+	}
+	if got := localResultSectionFieldValue(result, "Run", "Error"); !strings.Contains(got, "Insufficient Balance") {
+		t.Fatalf("run section error = %q", got)
+	}
+	if !strings.Contains(result.PlainText, "summary: workflow script failed: Error: deepseek 402: Insufficient Balance") {
+		t.Fatalf("plain text should keep failure summary, got:\n%s", result.PlainText)
+	}
+	terminal := app.BuildWorkflowTerminalLocalResult("run-failed")
+	if terminal == nil || terminal.Kind != "workflow-terminal" {
+		t.Fatalf("expected terminal failure result, got %+v", terminal)
+	}
+	if !strings.Contains(terminal.PlainText, "Dynamic workflow \"run-failed\" failed") || !strings.Contains(terminal.PlainText, "Failed subagents:") || !strings.Contains(terminal.PlainText, "scope: deepseek 402: Insufficient Balance") {
+		t.Fatalf("terminal failure should surface failed subagent, got:\n%s", terminal.PlainText)
+	}
+}
+
+func TestNewRegistersWorkflowToolAsWriteCapable(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	app, err := New(t.Context(), cfg, StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer app.Close()
+
+	spec, ok := app.toolRegistry.Spec("workflow")
+	if !ok {
+		t.Fatal("workflow tool was not registered")
+	}
+	if spec.ReadOnly {
+		t.Fatal("workflow tool should not be read-only")
+	}
+	if app.toolRegistry.Get("workflow") == nil {
+		t.Fatal("workflow tool implementation missing")
+	}
+}
+
+func TestRefreshMCPToolsKeepsWorkflowTool(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	app, err := New(t.Context(), cfg, StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer app.Close()
+
+	if err := app.refreshMCPTools(); err != nil {
+		t.Fatalf("refreshMCPTools: %v", err)
+	}
+	if app.toolRegistry.Get("workflow") == nil {
+		t.Fatal("workflow tool should survive MCP refresh")
+	}
+	if _, ok := app.toolRegistry.Spec("workflow"); !ok {
+		t.Fatal("workflow tool spec should survive MCP refresh")
+	}
+}
+
+func TestExecuteLocalWorkflowsReturnsUsageErrorForExtraArgs(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	app, err := New(t.Context(), cfg, StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer app.Close()
+
+	for _, input := range []string{"/workflows run-detail", "/workflows run extra", "/workflows events run-detail", "/workflows cancel run-detail"} {
+		_, err = app.ExecuteLocalCommand(input)
+		if err == nil || !strings.Contains(err.Error(), workflowsUsage) {
+			t.Fatalf("expected /workflows usage error for %q, got %v", input, err)
+		}
+	}
+}
+
+func TestCancelWorkflowRunCancelsActiveRun(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	spawner := &blockingWorkflowTestSpawner{started: make(chan struct{})}
+	app := newWorkflowTestApp(t, cfg.DataDir, spawner)
+
+	out, err := app.workflowRunner.StartWorkflow(context.Background(), app.sessionID, workflow.WorkflowInput{Script: `export const meta = { name: 'cancel-test', description: 'cancel test' }
+await agent('wait forever', { label: 'wait' })
+`})
+	if err != nil {
+		t.Fatalf("StartWorkflow: %v", err)
+	}
+	<-spawner.started
+	cancelOut, err := app.CancelWorkflowRun(string(out.RunID))
+	if err != nil {
+		t.Fatalf("CancelWorkflowRun: %v", err)
+	}
+	if cancelOut == nil || !strings.Contains(cancelOut.PlainText, "cancelling workflow") {
+		t.Fatalf("unexpected cancel result: %+v", cancelOut)
+	}
+	run := waitWorkflowRunStatus(t, app, out.RunID, workflow.RunStatusCancelled)
+	if countWorkflowEvents(run.Events, workflow.EventTaskCancelled) != 1 {
+		t.Fatalf("expected task_cancelled event, events=%+v", run.Events)
+	}
+}
+
+func TestExecuteLocalDeepResearchStartsBuiltinWorkflow(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	spawner := &deepResearchTestSpawner{}
+	app := newWorkflowTestApp(t, cfg.DataDir, spawner)
+
+	out, err := app.StartWorkflowFromConfirmation(workflow.BuiltinDeepResearchName, "marked v12 sanitize behavior", "", false)
+	if err != nil {
+		t.Fatalf("StartWorkflowFromConfirmation: %v", err)
+	}
+	if out == nil || out.Kind != "workflow-run" {
+		t.Fatalf("expected workflow-run local result, got %+v", out)
+	}
+	runID := localResultFieldValue(out, "Run")
+	if runID == "" {
+		t.Fatalf("missing run id: %+v", out)
+	}
+	for _, want := range []string{
+		"Workflow(dynamic workflow: deep-research)",
+		"/workflows to view dynamic workflow runs",
+		"The deep-research workflow is now running in the background.",
+		"✻ Waiting for 1 dynamic workflow to finish",
+	} {
+		if !strings.Contains(out.PlainText, want) {
+			t.Fatalf("expected launch text to contain %q, got:\n%s", want, out.PlainText)
+		}
+	}
+	for _, unwanted := range []string{"Status     async_launched", "Script     "} {
+		if strings.Contains(out.PlainText, unwanted) {
+			t.Fatalf("launch text should not render structured status/debug fields %q:\n%s", unwanted, out.PlainText)
+		}
+	}
+	run := waitWorkflowRunStatus(t, app, workflow.RunID(runID), workflow.RunStatusCompleted)
+	summary := workflowRunSummary(run)
+	if !strings.Contains(summary.Summary, "Supported answer") {
+		t.Fatalf("summary = %q events=%+v", summary.Summary, run.Events)
+	}
+	detail := app.buildWorkflowRunLocalResult(runID)
+	if got := localResultSectionFieldValue(detail, "Result", "Summary"); !strings.Contains(got, "Supported answer") {
+		t.Fatalf("summary field = %q", got)
+	}
+	spawner.mu.Lock()
+	requests := append([]tasks.SpawnSubagentRequest(nil), spawner.requests...)
+	spawner.mu.Unlock()
+	if len(requests) != 9 {
+		t.Fatalf("requests = %+v", requests)
+	}
+	if got := strings.Join(requests[0].Capabilities, ","); got != "" {
+		t.Fatalf("scope capabilities = %#v", requests[0].Capabilities)
+	}
+	if got := strings.Join(requests[1].Capabilities, ","); got != "web.search" {
+		t.Fatalf("search capabilities = %#v", requests[1].Capabilities)
+	}
+	if got := strings.Join(requests[4].Capabilities, ","); got != "web.fetch" {
+		t.Fatalf("fetch capabilities = %#v", requests[4].Capabilities)
+	}
+	if got := strings.Join(requests[5].Capabilities, ","); got != "web.search" {
+		t.Fatalf("verify capabilities = %#v", requests[5].Capabilities)
+	}
+	if got := strings.Join(requests[len(requests)-1].Capabilities, ","); got != "" {
+		t.Fatalf("synthesize capabilities = %#v", requests[len(requests)-1].Capabilities)
+	}
+	if requests[1].WorkflowName != workflow.BuiltinDeepResearchName || requests[1].WorkflowRunID == "" || requests[1].WorkflowPhase != "Search" {
+		t.Fatalf("missing workflow context on request: %+v", requests[1])
+	}
+}
+
+func TestExecuteLocalDeepResearchRunsProjectOverride(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	spawner := &deepResearchTestSpawner{}
+	app := newWorkflowTestApp(t, cfg.DataDir, spawner)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "deep-research.js"), []byte(`export const meta = {
+  name: 'deep-research',
+  description: 'project deep research',
+  phases: [{ title: 'Project' }],
+}
+log('project override ' + args)
+return { answer: 'project answer: ' + args }
+`), 0o600); err != nil {
+		t.Fatalf("write project workflow: %v", err)
+	}
+	app.workflowRunner.Library = workflow.NewLibraryWithRoots([]workflow.LibraryRoot{{Path: root, Source: "project", Rank: 0}})
+
+	out, err := app.StartWorkflowFromConfirmation(workflow.BuiltinDeepResearchName, "custom question", "", false)
+	if err != nil {
+		t.Fatalf("StartWorkflowFromConfirmation: %v", err)
+	}
+	if out == nil || out.Kind != "workflow-run" {
+		t.Fatalf("expected workflow-run local result, got %+v", out)
+	}
+	if !strings.Contains(out.PlainText, "The deep-research workflow is now running in the background.") {
+		t.Fatalf("unexpected launch text:\n%s", out.PlainText)
+	}
+	runID := localResultFieldValue(out, "Run")
+	run := waitWorkflowRunStatus(t, app, workflow.RunID(runID), workflow.RunStatusCompleted)
+	summary := workflowRunSummary(run)
+	if summary.Summary != "project answer: custom question" {
+		t.Fatalf("summary = %q; events=%+v", summary.Summary, run.Events)
+	}
+	if !hasWorkflowLog(run.Events, "project override custom question") {
+		t.Fatalf("missing project override log; events=%+v", run.Events)
+	}
+	spawner.mu.Lock()
+	defer spawner.mu.Unlock()
+	if len(spawner.requests) != 0 {
+		t.Fatalf("project override should not run builtin agents, got %+v", spawner.requests)
+	}
+}
+
+func TestExecuteLocalDeepResearchShowsLaunchConfirmation(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	spawner := &deepResearchTestSpawner{}
+	app := newWorkflowTestApp(t, cfg.DataDir, spawner)
+
+	out, err := app.ExecuteLocalCommand("/deep-research marked v12 sanitize behavior")
+	if err != nil {
+		t.Fatalf("ExecuteLocalCommand: %v", err)
+	}
+	if !out.Handled || out.Mutated || out.LocalResult == nil || out.LocalResult.Kind != "workflow-launch" {
+		t.Fatalf("expected workflow launch confirmation, got %+v", out)
+	}
+	if !strings.Contains(out.Text, "Run a dynamic workflow?") || strings.Contains(out.Text, "--yes") {
+		t.Fatalf("unexpected confirmation text:\n%s", out.Text)
+	}
+	spawner.mu.Lock()
+	defer spawner.mu.Unlock()
+	if len(spawner.requests) != 0 {
+		t.Fatalf("confirmation should not spawn agents, got %+v", spawner.requests)
+	}
+}
+
+func TestExecuteLocalDeepResearchRememberTrustsWorkflowInProjectConfig(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	spawner := &deepResearchTestSpawner{}
+	app := newWorkflowTestApp(t, cfg.DataDir, spawner)
+
+	first, err := app.StartWorkflowFromConfirmation(workflow.BuiltinDeepResearchName, "marked v12 sanitize behavior", "", true)
+	if err != nil {
+		t.Fatalf("first StartWorkflowFromConfirmation: %v", err)
+	}
+	if first == nil || first.Kind != "workflow-run" {
+		t.Fatalf("expected first command to start workflow, got %+v", first)
+	}
+	firstRunID := localResultFieldValue(first, "Run")
+	if firstRunID == "" {
+		t.Fatalf("missing first run id: %+v", first)
+	}
+	waitWorkflowRunStatus(t, app, workflow.RunID(firstRunID), workflow.RunStatusCompleted)
+	cfgFile, _, err := LoadConfigFile(ProjectLocalConfigPath(app.workspaceRoot))
+	if err != nil {
+		t.Fatalf("LoadConfigFile: %v", err)
+	}
+	trustKey, err := app.workflowTrustKey(workflow.BuiltinDeepResearchName)
+	if err != nil {
+		t.Fatalf("workflowTrustKey: %v", err)
+	}
+	if !containsString(cfgFile.Workflows.Trusted, trustKey) {
+		t.Fatalf("expected trusted workflow in project local config, got %+v", cfgFile.Workflows.Trusted)
+	}
+
+	second, err := app.ExecuteLocalCommand("/deep-research marked v12 sanitize behavior")
+	if err != nil {
+		t.Fatalf("second ExecuteLocalCommand: %v", err)
+	}
+	if !second.Mutated || second.LocalResult == nil || second.LocalResult.Kind != "workflow-run" {
+		t.Fatalf("trusted workflow should start without confirmation, got %+v", second)
+	}
+	secondRunID := localResultFieldValue(second.LocalResult, "Run")
+	if secondRunID == "" {
+		t.Fatalf("missing second run id: %+v", second.LocalResult)
+	}
+	waitWorkflowRunStatus(t, app, workflow.RunID(secondRunID), workflow.RunStatusCompleted)
+}
+
+func TestExecuteLocalDeepResearchTrustDoesNotCoverProjectOverride(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	spawner := &deepResearchTestSpawner{}
+	app := newWorkflowTestApp(t, cfg.DataDir, spawner)
+
+	first, err := app.StartWorkflowFromConfirmation(workflow.BuiltinDeepResearchName, "marked v12 sanitize behavior", "", true)
+	if err != nil {
+		t.Fatalf("first StartWorkflowFromConfirmation: %v", err)
+	}
+	firstRunID := localResultFieldValue(first, "Run")
+	waitWorkflowRunStatus(t, app, workflow.RunID(firstRunID), workflow.RunStatusCompleted)
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "deep-research.js"), []byte(`export const meta = {
+  name: 'deep-research',
+  description: 'project deep research',
+  phases: [{ title: 'Project' }],
+}
+return { answer: 'project answer: ' + args }
+`), 0o600); err != nil {
+		t.Fatalf("write project workflow: %v", err)
+	}
+	app.workflowRunner.Library = workflow.NewLibraryWithRoots([]workflow.LibraryRoot{{Path: root, Source: "project", Rank: 0}})
+
+	second, err := app.ExecuteLocalCommand("/deep-research custom question")
+	if err != nil {
+		t.Fatalf("second ExecuteLocalCommand: %v", err)
+	}
+	if !second.Handled || second.Mutated || second.LocalResult == nil || second.LocalResult.Kind != "workflow-launch" {
+		t.Fatalf("project override should require confirmation despite trusted builtin, got %+v", second)
+	}
+}
+
+func TestExecuteLocalDeepResearchTrustInvalidatesWhenProjectWorkflowChanges(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	spawner := &deepResearchTestSpawner{}
+	app := newWorkflowTestApp(t, cfg.DataDir, spawner)
+	root := t.TempDir()
+	workflowPath := filepath.Join(root, "deep-research.js")
+	if err := os.WriteFile(workflowPath, []byte(`export const meta = {
+  name: 'deep-research',
+  description: 'project deep research v1',
+  phases: [{ title: 'Project' }],
+}
+return { answer: 'project v1: ' + args }
+`), 0o600); err != nil {
+		t.Fatalf("write project workflow v1: %v", err)
+	}
+	app.workflowRunner.Library = workflow.NewLibraryWithRoots([]workflow.LibraryRoot{{Path: root, Source: "project", Rank: 0}})
+
+	first, err := app.StartWorkflowFromConfirmation(workflow.BuiltinDeepResearchName, "custom question", "", true)
+	if err != nil {
+		t.Fatalf("first StartWorkflowFromConfirmation: %v", err)
+	}
+	firstRunID := localResultFieldValue(first, "Run")
+	waitWorkflowRunStatus(t, app, workflow.RunID(firstRunID), workflow.RunStatusCompleted)
+
+	if err := os.WriteFile(workflowPath, []byte(`export const meta = {
+  name: 'deep-research',
+  description: 'project deep research v2',
+  phases: [{ title: 'Project' }],
+}
+return { answer: 'project v2: ' + args }
+`), 0o600); err != nil {
+		t.Fatalf("write project workflow v2: %v", err)
+	}
+
+	second, err := app.ExecuteLocalCommand("/deep-research custom question")
+	if err != nil {
+		t.Fatalf("second ExecuteLocalCommand: %v", err)
+	}
+	if !second.Handled || second.Mutated || second.LocalResult == nil || second.LocalResult.Kind != "workflow-launch" {
+		t.Fatalf("changed project workflow should require confirmation, got %+v", second)
+	}
+}
+
+func TestExecuteLocalDeepResearchRequiresConfirmationBeforeResume(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	spawner := &deepResearchTestSpawner{}
+	app := newWorkflowTestApp(t, cfg.DataDir, spawner)
+
+	first, err := app.StartWorkflowFromConfirmation(workflow.BuiltinDeepResearchName, "marked v12 sanitize behavior", "", false)
+	if err != nil {
+		t.Fatalf("first StartWorkflowFromConfirmation: %v", err)
+	}
+	sourceRunID := localResultFieldValue(first, "Run")
+	if sourceRunID == "" {
+		t.Fatalf("missing source run id: %+v", first)
+	}
+	waitWorkflowRunStatus(t, app, workflow.RunID(sourceRunID), workflow.RunStatusCompleted)
+	spawner.mu.Lock()
+	firstRequests := len(spawner.requests)
+	spawner.mu.Unlock()
+	if firstRequests != 9 {
+		t.Fatalf("first requests = %d, want 9", firstRequests)
+	}
+
+	second, err := app.ExecuteLocalCommand("/deep-research --resume " + sourceRunID + " marked v12 sanitize behavior")
+	if err != nil {
+		t.Fatalf("second ExecuteLocalCommand: %v", err)
+	}
+	if !second.Handled || second.Mutated || second.LocalResult == nil || second.LocalResult.Kind != "workflow-launch" {
+		t.Fatalf("resume should require launch confirmation, got %+v", second)
+	}
+	if !strings.Contains(second.Text, "Run a dynamic workflow?") {
+		t.Fatalf("unexpected resume confirmation text:\n%s", second.Text)
+	}
+	if got := localResultFieldValue(second.LocalResult, "Resume"); got != sourceRunID {
+		t.Fatalf("resume confirmation field = %q, want %q", got, sourceRunID)
+	}
+	spawner.mu.Lock()
+	afterConfirmationRequests := len(spawner.requests)
+	spawner.mu.Unlock()
+	if afterConfirmationRequests != firstRequests {
+		t.Fatalf("resume confirmation spawned agents: before=%d after=%d", firstRequests, afterConfirmationRequests)
+	}
+
+	confirmed, err := app.startDeepResearchWorkflow(deepResearchOptions{
+		Question:        "marked v12 sanitize behavior",
+		ResumeFromRunID: sourceRunID,
+		Confirmed:       true,
+	})
+	if err != nil {
+		t.Fatalf("confirmed resume start: %v", err)
+	}
+	second = CommandExecution{Handled: true, LocalResult: confirmed, Mutated: true}
+	if got := localResultFieldValue(second.LocalResult, "Resume"); got != sourceRunID {
+		t.Fatalf("resume field = %q, want %q", got, sourceRunID)
+	}
+	resumedRunID := localResultFieldValue(second.LocalResult, "Run")
+	waitWorkflowRunStatus(t, app, workflow.RunID(resumedRunID), workflow.RunStatusCompleted)
+	spawner.mu.Lock()
+	allRequests := len(spawner.requests)
+	spawner.mu.Unlock()
+	if allRequests != firstRequests {
+		t.Fatalf("resume spawned new agents: before=%d after=%d", firstRequests, allRequests)
+	}
+	detail := app.buildWorkflowRunLocalResult(resumedRunID)
+	if got := localResultSectionFieldValue(detail, "Run", "Tasks"); got != "0 running · 9 completed · 0 failed · 9 cached" {
+		t.Fatalf("tasks field = %q", got)
+	}
+}
+
+func TestExecuteLocalDeepResearchRequiresQuestion(t *testing.T) {
+	app := &App{}
+	_, err := app.ExecuteLocalCommand("/deep-research")
+	if err == nil || !strings.Contains(err.Error(), deepResearchUsage) {
+		t.Fatalf("expected usage error, got %v", err)
+	}
+}
+
+func TestExecuteLocalDeepResearchValidatesOptions(t *testing.T) {
+	app := &App{}
+	tests := []string{
+		"/deep-research --resume",
+		"/deep-research --budget nope question",
+		"/deep-research --budget 0 question",
+		"/deep-research --unknown question",
+	}
+	for _, line := range tests {
+		t.Run(line, func(t *testing.T) {
+			_, err := app.ExecuteLocalCommand(line)
+			if err == nil || !strings.Contains(err.Error(), deepResearchUsage) {
+				t.Fatalf("expected usage error, got %v", err)
+			}
+		})
+	}
+}
+
+func appendWorkflowTestEvent(t *testing.T, app *App, ev workflow.RunEvent) {
+	t.Helper()
+	if app == nil || app.workflowManager == nil || app.workflowManager.Store == nil {
+		t.Fatal("workflow store unavailable")
+	}
+	if err := app.workflowManager.Store.Append(t.Context(), ev); err != nil {
+		t.Fatalf("append workflow event: %v", err)
+	}
+}
+
+type deepResearchTestSpawner struct {
+	mu       sync.Mutex
+	requests []tasks.SpawnSubagentRequest
+}
+
+func (s *deepResearchTestSpawner) AllowedSubagentTools(req tasks.SpawnSubagentRequest) ([]string, error) {
+	out := make([]string, 0, len(req.Capabilities))
+	for _, cap := range req.Capabilities {
+		out = append(out, "allowed:"+cap)
+	}
+	return out, nil
+}
+
+func (s *deepResearchTestSpawner) SpawnSubagentWithProgress(_ context.Context, req tasks.SpawnSubagentRequest, _ func(core.ToolProgress)) (tasks.SpawnSubagentResponse, error) {
+	s.mu.Lock()
+	s.requests = append(s.requests, req)
+	s.mu.Unlock()
+	summary := `{"answer":"Supported answer","sources":["https://example.com/source"],"caveats":[]}`
+	switch {
+	case strings.Contains(req.Task, "Decompose this research question"):
+		summary = `{"question":"marked v12 sanitize behavior","summary":"check official sources","angles":[{"label":"official","query":"official docs"},{"label":"release","query":"release notes"},{"label":"source","query":"source code"}]}`
+	case strings.Contains(req.Task, "## Web Searcher"):
+		summary = `{"results":[{"url":"https://example.com/source","title":"Source","snippet":"relevant","relevance":"high"}]}`
+	case strings.Contains(req.Task, "## Source Extractor"):
+		summary = `{"sourceQuality":"primary","publishDate":"2026-01-01","claims":[{"claim":"Supported claim","quote":"source confirms it","importance":"central"}]}`
+	case strings.Contains(req.Task, "## Adversarial Claim Verifier"):
+		summary = `{"refuted":false,"evidence":"source confirms it","confidence":"high"}`
+	case strings.Contains(req.Task, "## Synthesis: research report"):
+		summary = `{"summary":"Supported answer","findings":[{"claim":"Supported claim","confidence":"high","sources":["https://example.com/source"],"evidence":"source confirms it","vote":"3-0"}],"caveats":"","openQuestions":[]}`
+	}
+	return tasks.SpawnSubagentResponse{
+		SessionID:  "child-test",
+		Status:     workflow.TaskStatusCompleted,
+		Summary:    summary,
+		ToolCalls:  []string{"web_search"},
+		DurationMS: 1,
+	}, nil
+}
+
+type blockingWorkflowTestSpawner struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingWorkflowTestSpawner) SpawnSubagentWithProgress(ctx context.Context, _ tasks.SpawnSubagentRequest, _ func(core.ToolProgress)) (tasks.SpawnSubagentResponse, error) {
+	s.once.Do(func() {
+		close(s.started)
+	})
+	<-ctx.Done()
+	return tasks.SpawnSubagentResponse{}, ctx.Err()
+}
+
+func newWorkflowTestApp(t *testing.T, dataDir string, spawner workflow.AgentSpawner) *App {
+	t.Helper()
+	store, err := workflow.NewFileRunEventStore(dataDir)
+	if err != nil {
+		t.Fatalf("NewFileRunEventStore: %v", err)
+	}
+	scheduler := workflow.NewTaskScheduler(store, spawner)
+	manager := workflow.NewRunManager(store, scheduler)
+	runner := workflow.NewScriptRunner(dataDir, manager)
+	runner.Library = workflow.NewLibraryWithRoots(nil)
+	return &App{
+		sessionID:       "session-test",
+		workspaceRoot:   t.TempDir(),
+		cfg:             DefaultConfig(),
+		workflowManager: manager,
+		workflowRunner:  runner,
+	}
+}
+
+func waitWorkflowRunStatus(t *testing.T, app *App, runID workflow.RunID, status string) workflow.Run {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		run, err := app.workflowManager.Store.LoadRun(context.Background(), runID)
+		if err != nil {
+			t.Fatalf("LoadRun: %v", err)
+		}
+		if run.Status == status {
+			return run
+		}
+		if run.Status == workflow.RunStatusFailed {
+			t.Fatalf("workflow failed: %+v", run)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	run, _ := app.workflowManager.Store.LoadRun(context.Background(), runID)
+	t.Fatalf("timed out waiting for %s, run=%+v", status, run)
+	return workflow.Run{}
+}
+
+func countWorkflowEvents(events []workflow.RunEvent, typ string) int {
+	n := 0
+	for _, ev := range events {
+		if ev.Type == typ {
+			n++
+		}
+	}
+	return n
+}
+
 func TestExecuteLocalStatsReturnsStructuredLocalResult(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.DataDir = t.TempDir()
@@ -1660,6 +2552,15 @@ func localResultSectionFieldValue(result *LocalResult, sectionTitle, fieldLabel 
 		}
 	}
 	return ""
+}
+
+func hasWorkflowLog(events []workflow.RunEvent, message string) bool {
+	for _, ev := range events {
+		if ev.Type == workflow.EventLog && ev.Message == message {
+			return true
+		}
+	}
+	return false
 }
 
 func TestStartupLinesIncludeEffectiveThinkingAndEffort(t *testing.T) {

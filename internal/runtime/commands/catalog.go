@@ -63,6 +63,8 @@ func DefaultSlashCommands() []SlashCommandSpec {
 			{Token: "profile", Description: "Profile recent sessions", AutoRun: true},
 			{Token: "all", Description: "Show all statistics", AutoRun: true},
 		}},
+		{Name: "/workflows", Description: "Open workflow runs and progress", AutoRun: true},
+		{Name: "/deep-research", Description: "Run source-backed multi-agent web research", ArgumentHint: "[--resume runId] <question>"},
 		{Name: "/mcp", Description: "Show MCP server status", AutoRun: true},
 		{Name: "/compact", Description: "Compact the current conversation", AutoRun: true},
 		{Name: "/init", Description: "Create AGENTS.md from repository context", AutoRun: true},

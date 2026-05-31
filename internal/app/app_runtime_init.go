@@ -2,15 +2,18 @@ package app
 
 import (
 	"fmt"
+	"path/filepath"
+	"strings"
+
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/defaults"
 	"github.com/usewhale/whale/internal/llm"
+	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/tasks"
-	"path/filepath"
-	"strings"
+	"github.com/usewhale/whale/internal/workflow"
 )
 
-func initAppRuntime(cfg Config, sessionInit appSessionInit, toolInit appToolInit, workspaceRoot string, parentSessionIDFunc func() string) (appRuntimeInit, error) {
+func initAppRuntime(cfg Config, sessionInit appSessionInit, toolInit appToolInit, workspaceRoot string, parentSessionIDFunc func() string, approvalFunc policy.ApprovalFunc) (appRuntimeInit, error) {
 	model := core.FirstNonEmpty(strings.TrimSpace(cfg.Model), defaults.DefaultModel)
 	effort := normalizeEffort(core.FirstNonEmpty(strings.TrimSpace(cfg.ReasoningEffort), defaults.DefaultReasoningEffort))
 	viewMode, err := NormalizeViewMode(cfg.ViewMode)
@@ -62,23 +65,37 @@ func initAppRuntime(cfg Config, sessionInit appSessionInit, toolInit appToolInit
 		DefaultMaxToolIters:  tasks.DefaultMaxToolIters,
 		SummaryMaxChars:      tasks.DefaultSummaryMaxChar,
 		UsageLogPath:         filepath.Join(cfg.DataDir, "usage.jsonl"),
+		ApprovalFunc:         approvalFunc,
 	})
 	taskTools := tasks.NewTools(taskRunner)
+	workflowStore, err := workflow.NewFileRunEventStore(cfg.DataDir)
+	if err != nil {
+		return appRuntimeInit{}, fmt.Errorf("init workflow event store failed: %w", err)
+	}
+	workflowScheduler := workflow.NewTaskScheduler(workflowStore, taskRunner)
+	workflowManager := workflow.NewRunManager(workflowStore, workflowScheduler)
+	workflowRunner := workflow.NewScriptRunner(cfg.DataDir, workflowManager)
+	workflowRunner.Library = workflow.NewLibrary(workspaceRoot)
+	workflowTools := []core.Tool{workflow.NewTool(workflowRunner, parentSessionIDFunc)}
 	registeredTools := append([]core.Tool{}, toolInit.baseTools...)
 	registeredTools = append(registeredTools, toolInit.pluginTools...)
 	registeredTools = append(registeredTools, taskTools...)
+	registeredTools = append(registeredTools, workflowTools...)
 	toolRegistry, err := core.NewToolRegistryChecked(registeredTools)
 	if err != nil {
 		return appRuntimeInit{}, fmt.Errorf("init tool registry failed: %w", err)
 	}
 	return appRuntimeInit{
-		cfg:           cfg,
-		model:         model,
-		effort:        effort,
-		thinking:      thinking,
-		contextWindow: contextWindow,
-		apiKey:        apiKey,
-		taskTools:     taskTools,
-		toolRegistry:  toolRegistry,
+		cfg:             cfg,
+		model:           model,
+		effort:          effort,
+		thinking:        thinking,
+		contextWindow:   contextWindow,
+		apiKey:          apiKey,
+		taskTools:       taskTools,
+		workflowTools:   workflowTools,
+		workflowManager: workflowManager,
+		workflowRunner:  workflowRunner,
+		toolRegistry:    toolRegistry,
 	}, nil
 }

@@ -54,6 +54,7 @@ const (
 	AgentEventTypeContextCompacted       AgentEventType = "context_compacted"
 	AgentEventTypePrefixDrift            AgentEventType = "prefix_drift"
 	AgentEventTypePrefixCacheMetrics     AgentEventType = "prefix_cache_metrics"
+	AgentEventTypeUsage                  AgentEventType = "usage"
 	AgentEventTypeBudgetWarning          AgentEventType = "budget_warning"
 	AgentEventTypeTurnCancelled          AgentEventType = "turn_cancelled"
 	AgentEventTypeForcedSummaryStarted   AgentEventType = "forced_summary_started"
@@ -142,6 +143,7 @@ type AgentEvent struct {
 	Compact        *CompactInfo
 	PrefixDrift    *PrefixDriftInfo
 	CacheMetrics   *PrefixCacheMetricsInfo
+	Usage          *UsageInfo
 	Budget         *BudgetWarningInfo
 	Hook           *HookEventInfo
 	Task           *TaskActivityInfo
@@ -224,6 +226,11 @@ type PrefixCacheMetricsInfo struct {
 	CacheHitRatio     float64
 }
 
+type UsageInfo struct {
+	Model string
+	Usage llm.Usage
+}
+
 type ToolRecoveryInfo struct {
 	ToolCallID     string
 	ToolName       string
@@ -262,6 +269,7 @@ type Agent struct {
 	disabledSkills         []string
 	extraSkills            []*skills.Skill
 	extraSystemBlocks      []string
+	dynamicSystemBlocks    []func() string
 	sessionRuntime         *memory.SessionRuntime
 	sessionsDir            string
 	budgetWarningUSD       float64
@@ -270,6 +278,7 @@ type Agent struct {
 	checkpoints            *checkpoint.Manager
 	budgetWarned80         sync.Map
 	maxToolIters           int
+	maxToolCalls           int
 	maxParallelSubagents   int
 	active                 sync.Map
 }
@@ -493,10 +502,24 @@ func WithExtraSystemBlocks(blocks ...string) AgentOption {
 	}
 }
 
+func WithDynamicSystemBlocks(blocks ...func() string) AgentOption {
+	return func(a *Agent) {
+		a.dynamicSystemBlocks = append([]func() string(nil), blocks...)
+	}
+}
+
 func WithMaxToolIters(maxIters int) AgentOption {
 	return func(a *Agent) {
 		if maxIters > 0 {
 			a.maxToolIters = maxIters
+		}
+	}
+}
+
+func WithMaxToolCalls(maxCalls int) AgentOption {
+	return func(a *Agent) {
+		if maxCalls > 0 {
+			a.maxToolCalls = maxCalls
 		}
 	}
 }

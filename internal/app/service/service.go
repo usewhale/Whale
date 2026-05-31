@@ -17,29 +17,32 @@ import (
 type IntentKind string
 
 const (
-	IntentSubmit              IntentKind = "submit"
-	IntentSubmitLocal         IntentKind = "submit_local"
-	IntentAllowTool           IntentKind = "allow_tool"
-	IntentAllowToolForSession IntentKind = "allow_tool_for_session"
-	IntentDenyTool            IntentKind = "deny_tool"
-	IntentCancelToolApproval  IntentKind = "cancel_tool_approval"
-	IntentSubmitUserInput     IntentKind = "submit_user_input"
-	IntentCancelUserInput     IntentKind = "cancel_user_input"
-	IntentSelectSession       IntentKind = "select_session"
-	IntentSelectRewindMessage IntentKind = "select_rewind_message"
-	IntentRequestSessions     IntentKind = "request_sessions"
-	IntentRequestExit         IntentKind = "request_exit"
-	IntentShutdown            IntentKind = "shutdown"
-	IntentSetModelAndEffort   IntentKind = "set_model_and_effort"
-	IntentSetApprovalMode     IntentKind = "set_approval_mode"
-	IntentSetViewMode         IntentKind = "set_view_mode"
-	IntentToggleMode          IntentKind = "toggle_mode"
-	IntentImplementPlan       IntentKind = "implement_plan"
-	IntentDeclinePlan         IntentKind = "decline_plan"
-	IntentRequestSkillsManage IntentKind = "request_skills_manage"
-	IntentSetSkillEnabled     IntentKind = "set_skill_enabled"
-	IntentSetPluginEnabled    IntentKind = "set_plugin_enabled"
-	IntentWorktreeExitChoice  IntentKind = "worktree_exit_choice"
+	IntentSubmit               IntentKind = "submit"
+	IntentSubmitLocal          IntentKind = "submit_local"
+	IntentAllowTool            IntentKind = "allow_tool"
+	IntentAllowToolForSession  IntentKind = "allow_tool_for_session"
+	IntentDenyTool             IntentKind = "deny_tool"
+	IntentCancelToolApproval   IntentKind = "cancel_tool_approval"
+	IntentSubmitUserInput      IntentKind = "submit_user_input"
+	IntentCancelUserInput      IntentKind = "cancel_user_input"
+	IntentSelectRewindMessage  IntentKind = "select_rewind_message"
+	IntentSelectSession        IntentKind = "select_session"
+	IntentRequestSessions      IntentKind = "request_sessions"
+	IntentRequestExit          IntentKind = "request_exit"
+	IntentShutdown             IntentKind = "shutdown"
+	IntentSetModelAndEffort    IntentKind = "set_model_and_effort"
+	IntentSetApprovalMode      IntentKind = "set_approval_mode"
+	IntentSetViewMode          IntentKind = "set_view_mode"
+	IntentToggleMode           IntentKind = "toggle_mode"
+	IntentImplementPlan        IntentKind = "implement_plan"
+	IntentDeclinePlan          IntentKind = "decline_plan"
+	IntentRequestSkillsManage  IntentKind = "request_skills_manage"
+	IntentSetSkillEnabled      IntentKind = "set_skill_enabled"
+	IntentSetPluginEnabled     IntentKind = "set_plugin_enabled"
+	IntentWorktreeExitChoice   IntentKind = "worktree_exit_choice"
+	IntentRequestWorkflowPanel IntentKind = "request_workflow_panel"
+	IntentCancelWorkflowRun    IntentKind = "cancel_workflow_run"
+	IntentStartWorkflow        IntentKind = "start_workflow"
 )
 
 type Intent struct {
@@ -61,6 +64,11 @@ type Intent struct {
 	PluginEnabled  bool
 	SkillBinding   *app.SkillBinding
 	WorktreeAction string
+	WorkflowRunID  string
+	WorkflowName   string
+	WorkflowArgs   string
+	WorkflowResume string
+	WorkflowTrust  bool
 }
 
 type EventKind = protocol.EventKind
@@ -112,6 +120,8 @@ const (
 	EventScreenClearRequested          = protocol.EventScreenClearRequested
 	EventSessionHydrated               = protocol.EventSessionHydrated
 	EventRewindMessagesListed          = protocol.EventRewindMessagesListed
+	EventWorkflowPanel                 = protocol.EventWorkflowPanel
+	EventWorkflowTerminal              = protocol.EventWorkflowTerminal
 )
 
 type Service struct {
@@ -136,6 +146,10 @@ type Service struct {
 	inputs  map[string]chan userInputDecision
 
 	btwNextID atomic.Int64
+
+	workflowWatchMu sync.Mutex
+	workflowWatches map[string]struct{}
+	workflowReports map[string]struct{}
 }
 
 type userInputDecision struct {
@@ -159,6 +173,8 @@ func New(ctx context.Context, cfg app.Config, start app.StartOptions) (*Service,
 		approvals:        map[string]chan policy.ApprovalDecision{},
 		sessionGrants:    map[string]map[string]bool{},
 		inputs:           map[string]chan userInputDecision{},
+		workflowWatches:  map[string]struct{}{},
+		workflowReports:  map[string]struct{}{},
 	}
 	a.SetApprovalFunc(s.awaitApproval)
 	a.SetUserInputFunc(s.awaitUserInput)

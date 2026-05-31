@@ -630,6 +630,38 @@ func TestTaskToolResultSummaries(t *testing.T) {
 		t.Fatalf("unexpected subagent summary: role=%q got=%q", role, got)
 	}
 }
+
+func TestWorkflowAsyncLaunchRendersAsRunningNotFailed(t *testing.T) {
+	raw := `{"ok":true,"success":true,"code":"ok","summary":"Find unreferenced symbols","data":{"runId":"run-123","status":"async_launched","summary":"Find unreferenced symbols"}}`
+	role, got := summarizeToolResultForChat("workflow", raw)
+	if role != "result_running" || got != "running in background · Find unreferenced symbols" {
+		t.Fatalf("unexpected workflow launch summary: role=%q got=%q", role, got)
+	}
+	if title := completedToolTitle("workflow", raw, "Running dead-code-scan"); title != "Started workflow: run-123" {
+		t.Fatalf("unexpected workflow title: %q", title)
+	}
+
+	m := newModel(nil, "", "", "")
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolCall, ToolCallID: "workflow-1", ToolName: "workflow", Text: `workflow: {"name":"dead-code-scan"}`}))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolResult, ToolCallID: "workflow-1", ToolName: "workflow", Text: raw}))
+	m = next.(model)
+	messages := append([]tuirender.UIMessage{}, m.transcript...)
+	if m.assembler != nil {
+		messages = append(messages, m.assembler.Snapshot()...)
+	}
+	rendered := strings.Join(tuirender.ChatLines(messages, 80), "\n")
+	plain := xansi.Strip(rendered)
+	if strings.Contains(plain, "✗") || strings.Contains(plain, "failed") {
+		t.Fatalf("workflow async launch should not render as failed:\n%s", plain)
+	}
+	for _, want := range []string{"Started workflow: run-123", "running in background", "Find unreferenced symbols"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected %q in rendered workflow launch:\n%s", want, plain)
+		}
+	}
+}
+
 func TestTaskActivityEventsUpdateStatusOnly(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat}
 	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventTaskStarted, ToolName: "spawn_subagent", Text: "spawn_subagent started · review"}))

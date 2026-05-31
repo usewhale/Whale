@@ -12,6 +12,12 @@ func (m model) renderBody(mainWidth, bodyHeight int) string {
 	if bodyHeight <= 0 {
 		return ""
 	}
+	if m.mode == modeWorkflowPanel {
+		return lipgloss.NewStyle().
+			Width(mainWidth).
+			Height(bodyHeight).
+			Render(m.renderWorkflowPanel())
+	}
 	if m.page == pageDiff {
 		m.ensureViewportContentForSize(mainWidth, bodyHeight)
 		return lipgloss.NewStyle().
@@ -45,7 +51,7 @@ func (m model) View() string {
 		bodyHeight = 0
 	}
 	bodyHeight = max(0, bodyHeight)
-	if m.page == pageChat {
+	if m.page == pageChat && m.mode == modeChat {
 		bodyHeight = m.chatBodyHeightForView(mainWidth, bodyHeight)
 	}
 	body := m.renderBody(mainWidth, bodyHeight)
@@ -160,6 +166,9 @@ func (m model) bottomPartsBeforeInput(mainWidth int) []string {
 	}
 	if m.mode == modeWorktreeExit {
 		bottomParts = append(bottomParts, m.renderWorktreeExit())
+	}
+	if m.mode == modeWorkflowLaunch {
+		bottomParts = append(bottomParts, m.renderWorkflowLaunch())
 	}
 	if m.mode == modeSessionPicker {
 		bottomParts = append(bottomParts, m.renderSessionPicker())

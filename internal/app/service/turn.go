@@ -148,6 +148,7 @@ func (s *Service) runTurnWith(start func(context.Context) (<-chan agent.AgentEve
 		case agent.AgentEventTypeToolResult:
 			if ev.Result != nil {
 				deltas.flushReliable()
+				s.maybeWatchWorkflowToolResult(ev.Result)
 				s.emit(Event{Kind: EventToolResult, ToolCallID: ev.Result.ToolCallID, ToolName: ev.Result.Name, Text: ev.Result.Content, Metadata: ev.Result.Metadata})
 			}
 		case agent.AgentEventTypeToolApprovalGranted:
@@ -312,6 +313,17 @@ func summarizeToolCall(call core.ToolCall) string {
 			return fmt.Sprintf("spawn_subagent: %s · %s", role, task)
 		}
 		return "spawn_subagent: " + role
+	case "workflow":
+		if path := strings.TrimSpace(core.AsString(body["scriptPath"])); path != "" {
+			return fmt.Sprintf("workflow: %s", path)
+		}
+		if name := strings.TrimSpace(core.AsString(body["name"])); name != "" {
+			return fmt.Sprintf("workflow: %s", name)
+		}
+		if script := core.FirstLine(strings.TrimSpace(core.AsString(body["script"]))); script != "" {
+			return fmt.Sprintf("workflow: %s", script)
+		}
+		return "workflow"
 	case "shell_run":
 		if cmd, _ := body["command"].(string); strings.TrimSpace(cmd) != "" {
 			return fmt.Sprintf("shell_run: %s", strings.TrimSpace(cmd))

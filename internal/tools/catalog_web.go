@@ -30,8 +30,9 @@ func (b *Toolset) webTools() []core.Tool {
 					"timeout_ms":  map[string]any{"type": "integer", "minimum": 1, "maximum": 60000},
 				},
 			},
-			readOnly: true,
-			fn:       b.webSearch,
+			readOnly:     true,
+			capabilities: []string{"web.search"},
+			fn:           b.webSearch,
 		},
 		toolFn{
 			name:        "fetch",
@@ -46,8 +47,9 @@ func (b *Toolset) webTools() []core.Tool {
 				},
 				"required": []string{"url", "prompt"},
 			},
-			readOnly: true,
-			fn:       b.fetch,
+			readOnly:     true,
+			capabilities: []string{"web.fetch"},
+			fn:           b.fetch,
 		},
 		toolFn{
 			name:        "web_fetch",
@@ -62,8 +64,9 @@ func (b *Toolset) webTools() []core.Tool {
 				},
 				"required": []string{"url", "prompt"},
 			},
-			readOnly: true,
-			fn:       b.webFetch,
+			readOnly:     true,
+			capabilities: []string{"web.fetch"},
+			fn:           b.webFetch,
 		},
 	}
 }

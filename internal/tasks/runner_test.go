@@ -3,6 +3,7 @@ package tasks
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -77,7 +78,7 @@ func TestParallelReasonCancellation(t *testing.T) {
 
 func TestReadOnlyRegistryFiltersMutatingAndTaskTools(t *testing.T) {
 	parent := core.NewToolRegistry([]core.Tool{
-		testTool{name: "read_file", readOnly: true},
+		testTool{name: "read_file", readOnly: true, capabilities: []string{CapabilityWorkspaceRead}},
 		testTool{name: "write", readOnly: false},
 		testTool{name: "apply_patch", readOnly: false},
 		testTool{name: "shell_run", readOnly: false, readOnlyCheck: func(args map[string]any) bool { return true }},
@@ -101,7 +102,7 @@ func TestReadOnlyRegistryFiltersMutatingAndTaskTools(t *testing.T) {
 
 func TestReadOnlyRegistryPreservesProgressRunner(t *testing.T) {
 	parent := core.NewToolRegistry([]core.Tool{
-		progressTool{testTool: testTool{name: "read_file", readOnly: true}},
+		progressTool{testTool: testTool{name: "read_file", readOnly: true, capabilities: []string{CapabilityWorkspaceRead}}},
 	})
 	child, err := BuildReadOnlyRegistry(parent)
 	if err != nil {
@@ -126,6 +127,50 @@ func TestReadOnlyRegistryPreservesProgressRunner(t *testing.T) {
 	}
 	if progress[0].ToolCallID != "read-1" || progress[0].ToolName != "read_file" || progress[0].Summary != "progress from child read" {
 		t.Fatalf("unexpected progress: %+v", progress[0])
+	}
+}
+
+func TestCapabilityRegistryFiltersByCapability(t *testing.T) {
+	parent := core.NewToolRegistry([]core.Tool{
+		testTool{name: "read_file", readOnly: true, capabilities: []string{CapabilityWorkspaceRead}},
+		testTool{name: "web_search", readOnly: true, capabilities: []string{CapabilityWebSearch}},
+		testTool{name: "web_fetch", readOnly: true, capabilities: []string{CapabilityWebFetch}},
+		testTool{name: "write", readOnly: false, capabilities: []string{CapabilityWorkspaceRead}},
+	})
+	child, err := BuildCapabilityRegistry(parent, []string{CapabilityWebSearch})
+	if err != nil {
+		t.Fatalf("BuildCapabilityRegistry: %v", err)
+	}
+	if child.Get("web_search") == nil {
+		t.Fatalf("expected web_search")
+	}
+	for _, name := range []string{"read_file", "web_fetch", "write"} {
+		if child.Get(name) != nil {
+			t.Fatalf("expected %s to be filtered", name)
+		}
+	}
+}
+
+func TestCapabilityRegistryEmptyCapabilitiesMeansModelOnly(t *testing.T) {
+	parent := core.NewToolRegistry([]core.Tool{
+		testTool{name: "read_file", readOnly: true, capabilities: []string{CapabilityWorkspaceRead}},
+	})
+	child, err := BuildCapabilityRegistry(parent, []string{})
+	if err != nil {
+		t.Fatalf("BuildCapabilityRegistry: %v", err)
+	}
+	if len(child.Tools()) != 0 {
+		t.Fatalf("expected no tools, got %d", len(child.Tools()))
+	}
+}
+
+func TestCapabilityRegistryRejectsUnknownCapability(t *testing.T) {
+	parent := core.NewToolRegistry([]core.Tool{
+		testTool{name: "read_file", readOnly: true, capabilities: []string{CapabilityWorkspaceRead}},
+	})
+	_, err := BuildCapabilityRegistry(parent, []string{"network.all"})
+	if err == nil || !strings.Contains(err.Error(), "unknown subagent capability") {
+		t.Fatalf("expected unknown capability error, got %v", err)
 	}
 }
 
@@ -221,7 +266,7 @@ func TestSpawnSubagentSummaryTruncation(t *testing.T) {
 			return out
 		}), nil
 	}
-	parent := core.NewToolRegistry([]core.Tool{testTool{name: "read_file", readOnly: true}})
+	parent := core.NewToolRegistry([]core.Tool{testTool{name: "read_file", readOnly: true, capabilities: []string{CapabilityWorkspaceRead}}})
 	r := NewRunner(RunnerConfig{ProviderFactory: factory, ParentTools: parent, SummaryMaxChars: 8})
 	res, err := r.SpawnSubagent(context.Background(), SpawnSubagentRequest{Task: "inspect"})
 	if err != nil {
@@ -246,7 +291,7 @@ func TestSpawnSubagentCompletionProgressUsesFinalSummary(t *testing.T) {
 			return out
 		}), nil
 	}
-	parent := core.NewToolRegistry([]core.Tool{testTool{name: "read_file", readOnly: true}})
+	parent := core.NewToolRegistry([]core.Tool{testTool{name: "read_file", readOnly: true, capabilities: []string{CapabilityWorkspaceRead}}})
 	r := NewRunner(RunnerConfig{ProviderFactory: factory, ParentTools: parent, SummaryMaxChars: 8})
 	var progress []core.ToolProgress
 	res, err := r.SpawnSubagentWithProgress(context.Background(), SpawnSubagentRequest{Task: "inspect"}, func(p core.ToolProgress) {
@@ -267,6 +312,209 @@ func TestSpawnSubagentCompletionProgressUsesFinalSummary(t *testing.T) {
 	}
 	if progress[0].Metadata["truncated"] != true {
 		t.Fatalf("expected truncated metadata, got %+v", progress[0].Metadata)
+	}
+}
+
+func TestSpawnSubagentCapturesStructuredOutputToolResult(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"answer": map[string]any{"type": "string"},
+		},
+		"required":             []any{"answer"},
+		"additionalProperties": false,
+	}
+	calls := 0
+	factory := func(_ string, _ int) (llm.Provider, error) {
+		return providerFunc(func(_ context.Context, _ []core.Message, tools []core.Tool) <-chan llm.ProviderEvent {
+			out := make(chan llm.ProviderEvent, 1)
+			go func() {
+				defer close(out)
+				calls++
+				if calls == 1 {
+					found := false
+					for _, tool := range tools {
+						if tool.Name() == structuredOutputToolName {
+							found = true
+							break
+						}
+					}
+					if !found {
+						t.Errorf("structured_output tool was not injected")
+					}
+					out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
+						FinishReason: core.FinishReasonToolUse,
+						ToolCalls: []core.ToolCall{{
+							ID:    "structured-1",
+							Name:  structuredOutputToolName,
+							Input: `{"answer":"done"}`,
+						}},
+					}}
+					return
+				}
+				out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
+					FinishReason: core.FinishReasonEndTurn,
+					Content:      "Here is the result in prose.",
+				}}
+			}()
+			return out
+		}), nil
+	}
+	parent := core.NewToolRegistry([]core.Tool{testTool{name: "read_file", readOnly: true, capabilities: []string{CapabilityWorkspaceRead}}})
+	r := NewRunner(RunnerConfig{ProviderFactory: factory, ParentTools: parent})
+	res, err := r.SpawnSubagent(context.Background(), SpawnSubagentRequest{Task: "inspect", OutputSchema: schema})
+	if err != nil {
+		t.Fatalf("SpawnSubagent: %v", err)
+	}
+	got, ok := res.StructuredResult.(map[string]any)
+	if !ok || got["answer"] != "done" {
+		t.Fatalf("structured result = %#v", res.StructuredResult)
+	}
+	if strings.Join(res.ToolCalls, ",") != "" {
+		t.Fatalf("structured_output should not be user-visible tool call, got %+v", res.ToolCalls)
+	}
+	if res.Summary != "Here is the result in prose." {
+		t.Fatalf("summary = %q", res.Summary)
+	}
+}
+
+func TestSpawnSubagentSchemaRequiresStructuredOutputToolCall(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"answer": map[string]any{"type": "string"},
+		},
+		"required":             []any{"answer"},
+		"additionalProperties": false,
+	}
+	factory := func(_ string, _ int) (llm.Provider, error) {
+		return providerFunc(func(_ context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
+			out := make(chan llm.ProviderEvent, 1)
+			go func() {
+				defer close(out)
+				out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
+					FinishReason: core.FinishReasonEndTurn,
+					Content:      `{"answer":"done"}`,
+				}}
+			}()
+			return out
+		}), nil
+	}
+	r := NewRunner(RunnerConfig{ProviderFactory: factory, ParentTools: core.NewToolRegistry(nil)})
+	_, err := r.SpawnSubagent(context.Background(), SpawnSubagentRequest{Task: "inspect", OutputSchema: schema})
+	var subErr *SpawnSubagentError
+	if !errors.As(err, &subErr) || subErr.Code != "structured_output_missing" {
+		t.Fatalf("error = %v, want structured_output_missing", err)
+	}
+}
+
+func TestSpawnSubagentRepairsMissingStructuredOutputToolCall(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"answer": map[string]any{"type": "string"},
+		},
+		"required":             []any{"answer"},
+		"additionalProperties": false,
+	}
+	calls := 0
+	var repairPrompt string
+	var repairToolNames []string
+	factory := func(_ string, _ int) (llm.Provider, error) {
+		return providerFunc(func(_ context.Context, messages []core.Message, tools []core.Tool) <-chan llm.ProviderEvent {
+			out := make(chan llm.ProviderEvent, 1)
+			go func() {
+				defer close(out)
+				calls++
+				switch calls {
+				case 1:
+					out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
+						FinishReason: core.FinishReasonEndTurn,
+						Content:      `{"answer":"done"}`,
+					}}
+				case 2:
+					repairPrompt = messages[len(messages)-1].Text
+					for _, tool := range tools {
+						repairToolNames = append(repairToolNames, tool.Name())
+					}
+					out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
+						FinishReason: core.FinishReasonToolUse,
+						ToolCalls: []core.ToolCall{{
+							ID:    "structured-repair",
+							Name:  structuredOutputToolName,
+							Input: `{"answer":"repaired"}`,
+						}},
+					}}
+				default:
+					out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
+						FinishReason: core.FinishReasonEndTurn,
+						Content:      "repaired",
+					}}
+				}
+			}()
+			return out
+		}), nil
+	}
+	r := NewRunner(RunnerConfig{ProviderFactory: factory, ParentTools: core.NewToolRegistry(nil)})
+	res, err := r.SpawnSubagent(context.Background(), SpawnSubagentRequest{Task: "inspect", OutputSchema: schema})
+	if err != nil {
+		t.Fatalf("SpawnSubagent: %v", err)
+	}
+	got, ok := res.StructuredResult.(map[string]any)
+	if !ok || got["answer"] != "repaired" {
+		t.Fatalf("structured result = %#v", res.StructuredResult)
+	}
+	if calls != 3 {
+		t.Fatalf("provider calls = %d, want repair tool call plus final", calls)
+	}
+	if !strings.Contains(repairPrompt, "did not satisfy the required structured output contract") {
+		t.Fatalf("repair prompt = %q", repairPrompt)
+	}
+	if strings.Join(repairToolNames, ",") != structuredOutputToolName {
+		t.Fatalf("repair tools = %+v, want only %s", repairToolNames, structuredOutputToolName)
+	}
+}
+
+func TestSpawnSubagentSchemaReportsInvalidStructuredOutput(t *testing.T) {
+	schema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"answer": map[string]any{"type": "string"},
+		},
+		"required":             []any{"answer"},
+		"additionalProperties": false,
+	}
+	calls := 0
+	factory := func(_ string, _ int) (llm.Provider, error) {
+		return providerFunc(func(_ context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
+			out := make(chan llm.ProviderEvent, 1)
+			go func() {
+				defer close(out)
+				calls++
+				if calls == 1 {
+					out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
+						FinishReason: core.FinishReasonToolUse,
+						ToolCalls: []core.ToolCall{{
+							ID:    "structured-1",
+							Name:  structuredOutputToolName,
+							Input: `{"answer":42}`,
+						}},
+					}}
+					return
+				}
+				out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
+					FinishReason: core.FinishReasonEndTurn,
+					Content:      "done",
+				}}
+			}()
+			return out
+		}), nil
+	}
+	r := NewRunner(RunnerConfig{ProviderFactory: factory, ParentTools: core.NewToolRegistry(nil)})
+	_, err := r.SpawnSubagent(context.Background(), SpawnSubagentRequest{Task: "inspect", OutputSchema: schema})
+	var subErr *SpawnSubagentError
+	if !errors.As(err, &subErr) || subErr.Code != "structured_output_invalid" {
+		t.Fatalf("error = %v, want structured_output_invalid", err)
 	}
 }
 
@@ -297,7 +545,7 @@ func TestSpawnSubagentReportsChildToolProgress(t *testing.T) {
 			return out
 		}), nil
 	}
-	parent := core.NewToolRegistry([]core.Tool{testTool{name: "read_file", readOnly: true}})
+	parent := core.NewToolRegistry([]core.Tool{testTool{name: "read_file", readOnly: true, capabilities: []string{CapabilityWorkspaceRead}}})
 	r := NewRunner(RunnerConfig{ProviderFactory: factory, ParentTools: parent})
 	var progress []core.ToolProgress
 	res, err := r.SpawnSubagentWithProgress(context.Background(), SpawnSubagentRequest{Task: "inspect", Role: "review"}, func(p core.ToolProgress) {
@@ -349,11 +597,11 @@ func TestSpawnSubagentAllowsReadOnlyMCPToolsWithoutApprovalPath(t *testing.T) {
 	}
 	ran := 0
 	parent := core.NewToolRegistry([]core.Tool{recordingTool{
-		testTool: testTool{name: "mcp__docs_search", readOnly: true},
+		testTool: testTool{name: "mcp__docs_search", readOnly: true, capabilities: []string{CapabilityMCPRead}},
 		ran:      &ran,
 	}})
 	r := NewRunner(RunnerConfig{ProviderFactory: factory, ParentTools: parent})
-	res, err := r.SpawnSubagent(context.Background(), SpawnSubagentRequest{Task: "look it up", Role: "explore"})
+	res, err := r.SpawnSubagent(context.Background(), SpawnSubagentRequest{Task: "look it up", Role: "explore", Capabilities: []string{CapabilityMCPRead}})
 	if err != nil {
 		t.Fatalf("SpawnSubagent: %v", err)
 	}
@@ -397,7 +645,7 @@ func TestSpawnSubagentInheritsAutoCompact(t *testing.T) {
 			Text:      strings.Repeat("large prior context ", 80),
 		})
 	}
-	parent := core.NewToolRegistry([]core.Tool{testTool{name: "read_file", readOnly: true}})
+	parent := core.NewToolRegistry([]core.Tool{testTool{name: "read_file", readOnly: true, capabilities: []string{CapabilityWorkspaceRead}}})
 	r := NewRunner(RunnerConfig{
 		ProviderFactory:      factory,
 		ParentTools:          parent,
@@ -469,7 +717,7 @@ func TestSpawnSubagentDerivesAutoCompactWindowFromChildModel(t *testing.T) {
 			Text:      strings.Repeat("large prior context ", 80),
 		})
 	}
-	parent := core.NewToolRegistry([]core.Tool{testTool{name: "read_file", readOnly: true}})
+	parent := core.NewToolRegistry([]core.Tool{testTool{name: "read_file", readOnly: true, capabilities: []string{CapabilityWorkspaceRead}}})
 	r := NewRunner(RunnerConfig{
 		ProviderFactory:      factory,
 		ParentTools:          parent,
@@ -528,7 +776,7 @@ func TestSpawnSubagentPersistsDurableChildSessionAndMeta(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewJSONLStore: %v", err)
 	}
-	parent := core.NewToolRegistry([]core.Tool{testTool{name: "read_file", readOnly: true}})
+	parent := core.NewToolRegistry([]core.Tool{testTool{name: "read_file", readOnly: true, capabilities: []string{CapabilityWorkspaceRead}}})
 	r := NewRunner(RunnerConfig{
 		ProviderFactory: factory,
 		ParentTools:     parent,
@@ -575,7 +823,7 @@ func TestSpawnSubagentToolFailureIncludesChildSessionID(t *testing.T) {
 			out := make(chan llm.ProviderEvent, 1)
 			go func() {
 				defer close(out)
-				out <- llm.ProviderEvent{Type: llm.EventError, Err: context.Canceled}
+				out <- llm.ProviderEvent{Type: llm.EventError, Err: errors.New("provider failed")}
 			}()
 			return out
 		}), nil
@@ -585,7 +833,7 @@ func TestSpawnSubagentToolFailureIncludesChildSessionID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewJSONLStore: %v", err)
 	}
-	parent := core.NewToolRegistry([]core.Tool{testTool{name: "read_file", readOnly: true}})
+	parent := core.NewToolRegistry([]core.Tool{testTool{name: "read_file", readOnly: true, capabilities: []string{CapabilityWorkspaceRead}}})
 	r := NewRunner(RunnerConfig{
 		ProviderFactory: factory,
 		ParentTools:     parent,
@@ -663,6 +911,19 @@ func TestChildToolProgressSummariesIncludeTargetsAndResultMetrics(t *testing.T) 
 	}
 }
 
+func TestWorkflowApprovalMetadataAddsWorkflowContext(t *testing.T) {
+	meta := workflowApprovalMetadata(map[string]any{"kind": "web"}, SpawnSubagentRequest{
+		WorkflowRunID:     "run-1",
+		WorkflowName:      "deep-research",
+		WorkflowPhase:     "Research",
+		WorkflowTaskID:    "task-1",
+		WorkflowTaskLabel: "search:official",
+	})
+	if meta["kind"] != "web" || meta["workflow_run_id"] != "run-1" || meta["workflow_name"] != "deep-research" || meta["workflow_phase"] != "Research" || meta["workflow_task_id"] != "task-1" || meta["workflow_task_label"] != "search:official" {
+		t.Fatalf("metadata = %+v", meta)
+	}
+}
+
 type providerFunc func(context.Context, []core.Message, []core.Tool) <-chan llm.ProviderEvent
 
 func (f providerFunc) StreamResponse(ctx context.Context, history []core.Message, tools []core.Tool) <-chan llm.ProviderEvent {
@@ -673,6 +934,7 @@ type testTool struct {
 	name          string
 	readOnly      bool
 	readOnlyCheck func(map[string]any) bool
+	capabilities  []string
 }
 
 func (t testTool) Name() string        { return t.name }
@@ -681,6 +943,9 @@ func (t testTool) Parameters() map[string]any {
 	return map[string]any{"type": "object", "additionalProperties": true}
 }
 func (t testTool) ReadOnly() bool { return t.readOnly }
+func (t testTool) Capabilities() []string {
+	return append([]string(nil), t.capabilities...)
+}
 func (t testTool) ReadOnlyCheck(args map[string]any) bool {
 	if t.readOnlyCheck == nil {
 		return t.readOnly

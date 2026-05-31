@@ -31,18 +31,41 @@ type toolDispatchOutcome struct {
 	PrimarySucceeded bool
 }
 
-func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, checkpointMessageID string, history []core.Message, rt *memory.RuntimeState, events chan<- AgentEvent, toolPolicy policy.ToolPolicy, tools *core.ToolRegistry) (core.Message, *core.Message, llm.Usage, string, bool, error) {
+func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, checkpointMessageID string, history []core.Message, rt *memory.RuntimeState, events chan<- AgentEvent, toolPolicy policy.ToolPolicy, tools *core.ToolRegistry, remainingToolCalls int) (core.Message, *core.Message, llm.Usage, string, bool, int, error) {
 	assistant, lastUsage, lastModel, err := a.collectAssistantStream(ctx, sessionID, rt, events, tools)
 	if err != nil {
-		return core.Message{}, nil, llm.Usage{}, "", false, err
+		return core.Message{}, nil, llm.Usage{}, "", false, 0, err
 	}
 
 	dispatchCalls, blocked, err := a.prepareToolDispatches(ctx, sessionID, lastModel, assistant, events, tools)
 	if err != nil {
-		return core.Message{}, nil, llm.Usage{}, "", false, err
+		return core.Message{}, nil, llm.Usage{}, "", false, 0, err
+	}
+	attemptedToolCalls := len(dispatchCalls)
+	if remainingToolCalls > 0 && len(dispatchCalls) > remainingToolCalls {
+		allowed := append([]core.ToolCall(nil), dispatchCalls[:remainingToolCalls]...)
+		for _, call := range dispatchCalls[remainingToolCalls:] {
+			blocked = append(blocked, toolCallCapBlockedResult(call))
+		}
+		dispatchCalls = allowed
 	}
 	if len(dispatchCalls) == 0 {
-		return assistant, nil, lastUsage, lastModel, false, nil
+		if len(blocked) == 0 {
+			return assistant, nil, lastUsage, lastModel, false, attemptedToolCalls, nil
+		}
+		toolMsg, abortTurn, err := a.dispatchToolCalls(ctx, streamDispatchContext{
+			SessionID:           sessionID,
+			Assistant:           assistant,
+			Model:               lastModel,
+			Policy:              toolPolicy,
+			Tools:               tools,
+			Events:              events,
+			CheckpointMessageID: checkpointMessageID,
+		}, nil, blocked)
+		if err != nil {
+			return core.Message{}, nil, llm.Usage{}, "", false, attemptedToolCalls, err
+		}
+		return assistant, toolMsg, lastUsage, lastModel, abortTurn, attemptedToolCalls, nil
 	}
 	toolMsg, abortTurn, err := a.dispatchToolCalls(ctx, streamDispatchContext{
 		SessionID:           sessionID,
@@ -54,9 +77,31 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, checkpoin
 		CheckpointMessageID: checkpointMessageID,
 	}, dispatchCalls, blocked)
 	if err != nil {
-		return core.Message{}, nil, llm.Usage{}, "", false, err
+		return core.Message{}, nil, llm.Usage{}, "", false, attemptedToolCalls, err
 	}
-	return assistant, toolMsg, lastUsage, lastModel, abortTurn, nil
+	return assistant, toolMsg, lastUsage, lastModel, abortTurn, attemptedToolCalls, nil
+}
+
+func toolCallCapBlockedResult(call core.ToolCall) core.ToolResult {
+	content, err := core.MarshalToolEnvelope(core.ToolEnvelope{
+		OK:      false,
+		Success: false,
+		Code:    "tool_call_cap_reached",
+		Error:   "tool call cap reached",
+		Message: "tool call cap reached",
+	})
+	if err != nil {
+		content = `{"success":false,"error":"tool call cap reached","code":"tool_call_cap_reached"}`
+	}
+	return core.ToolResult{
+		ToolCallID: call.ID,
+		Name:       call.Name,
+		Content:    content,
+		IsError:    true,
+		Metadata: map[string]any{
+			"blocked_reason_code": "tool_call_cap_reached",
+		},
+	}
 }
 
 func (a *Agent) flushPendingParallelSubagents(ctx context.Context, sessionID, assistantMessageID, model string, pending []preparedToolDispatch, events chan<- AgentEvent, results *[]core.ToolResult, tools *core.ToolRegistry) error {

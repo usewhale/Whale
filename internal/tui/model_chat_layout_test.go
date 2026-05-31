@@ -28,6 +28,27 @@ func TestCommitLiveTranscriptClearsAssembler(t *testing.T) {
 		t.Fatalf("expected committed transcript entry, got %+v", m.transcript)
 	}
 }
+
+func TestSubmitPromptCommitsIdleLiveNoticeBeforeUserEcho(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), width: 100, height: 30}
+	m.appendSystemNotice(&tuirender.SystemNotice{Kind: "approval_denied", Tone: "error", Action: "Denied", Subject: "request", Detail: "to use", Command: "search_files"})
+
+	_ = m.submitPrompt("run vue-newsletter workflow")
+
+	if got := len(m.assembler.Snapshot()); got != 0 {
+		t.Fatalf("expected previous live notice to be committed before new prompt, got %d live messages", got)
+	}
+	if len(m.transcript) < 2 {
+		t.Fatalf("expected denied notice and user prompt in transcript, got %+v", m.transcript)
+	}
+	if m.transcript[0].Kind != tuirender.KindNotice || !strings.Contains(m.transcript[0].Text, "Denied request to use search_files") {
+		t.Fatalf("first transcript entry should be previous denied notice, got %+v", m.transcript[0])
+	}
+	if m.transcript[1].Role != "you" || m.transcript[1].Text != "run vue-newsletter workflow" {
+		t.Fatalf("second transcript entry should be new user prompt, got %+v", m.transcript[1])
+	}
+}
+
 func TestAssistantDeltaKeepsMultilineBlockLiveUntilBoundary(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 80

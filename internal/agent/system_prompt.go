@@ -32,6 +32,14 @@ func (a *Agent) buildImmutableSystemBlocksWithTools(tools *core.ToolRegistry, op
 			systemBlocks = append(systemBlocks, trimmed)
 		}
 	}
+	for _, render := range a.dynamicSystemBlocks {
+		if render == nil {
+			continue
+		}
+		if trimmed := strings.TrimSpace(render()); trimmed != "" {
+			systemBlocks = append(systemBlocks, trimmed)
+		}
+	}
 	systemBlocks = append(systemBlocks, renderModeAuthorityBlock(a.mode))
 	if a.mode == session.ModePlan {
 		systemBlocks = append(systemBlocks, planning.ModeInstructions())

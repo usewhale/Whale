@@ -36,7 +36,7 @@ func summarizeToolResultForChat(toolName, raw string) (string, string) {
 			successBySignal = true
 		}
 	}
-	if env.status != "" && env.status != "ok" && env.status != "running" && env.status != "done" && env.status != "completed" && env.status != "success" && env.status != "exited" {
+	if env.status != "" && env.status != "ok" && env.status != "running" && env.status != "async_launched" && env.status != "done" && env.status != "completed" && env.status != "success" && env.status != "exited" {
 		successBySignal = false
 	}
 
@@ -49,11 +49,35 @@ func summarizeToolResultForChat(toolName, raw string) (string, string) {
 		return summarizeEditResult(toolName, env, successBySignal)
 	case "task":
 		return summarizeTaskResult(toolName, env, successBySignal)
+	case "workflow":
+		return summarizeWorkflowResult(env, successBySignal)
 	case "mcp":
 		return summarizeMCPResult(env, successBySignal)
 	default:
 		if !successBySignal {
 			return summarizeFailedResult(env, "tool failed")
+		}
+		return "result_ok", "✓"
+	}
+}
+
+func summarizeWorkflowResult(env toolResultEnvelope, successBySignal bool) (string, string) {
+	if !successBySignal {
+		return summarizeFailedResult(env, "workflow failed")
+	}
+	summary := firstNonEmptyLine(env.summary)
+	if summary == "" {
+		summary = firstNonEmptyLine(core.AsString(env.data["summary"]))
+	}
+	switch env.status {
+	case "async_launched", "running":
+		if summary != "" {
+			return "result_running", "running in background · " + summary
+		}
+		return "result_running", "running in background"
+	default:
+		if summary != "" {
+			return "result_ok", "✓ · " + summary
 		}
 		return "result_ok", "✓"
 	}

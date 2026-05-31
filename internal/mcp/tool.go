@@ -69,10 +69,13 @@ func (t *Tool) ReadOnly() bool {
 }
 
 func (t *Tool) Capabilities() []string {
-	if len(t.allowedDirs) == 0 {
-		return nil
+	out := []string{}
+	if t.ReadOnly() {
+		out = append(out, "mcp.read")
 	}
-	out := make([]string, 0, len(t.allowedDirs)+1)
+	if len(t.allowedDirs) == 0 {
+		return out
+	}
 	out = append(out, "mcp_filesystem")
 	for _, dir := range t.allowedDirs {
 		if dir = strings.TrimSpace(dir); dir != "" {

@@ -39,6 +39,8 @@ const (
 	modeRewindPicker
 	modeHelp
 	modeWorktreeExit
+	modeWorkflowLaunch
+	modeWorkflowPanel
 )
 
 type page int
@@ -111,6 +113,11 @@ type model struct {
 		metadata   map[string]any
 		selected   int
 	}
+	workflowLaunch struct {
+		result   *protocol.LocalResult
+		selected int
+	}
+	workflowPanel  workflowPanelState
 	resumeMenu     bool
 	sessionChoices []string
 	sessionIndex   int
@@ -437,6 +444,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.sequenceCmds(busyTickCmd())
 		}
 		return m, m.sequenceCmds()
+	case workflowPanelRefreshMsg:
+		return m, m.sequenceCmds(m.handleWorkflowPanelRefresh(msg))
 	case gitBranchUpdatedMsg:
 		if msg.cwd == m.cwdPath {
 			m.gitBranch = msg.branch

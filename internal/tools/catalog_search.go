@@ -19,8 +19,9 @@ func (b *Toolset) searchTools() []core.Tool {
 				},
 				"required": []string{"pattern"},
 			},
-			readOnly: true,
-			fn:       b.searchContent,
+			readOnly:     true,
+			capabilities: []string{"workspace.read"},
+			fn:           b.searchContent,
 		},
 		toolFn{
 			name:        "search_files",
@@ -35,8 +36,9 @@ func (b *Toolset) searchTools() []core.Tool {
 				},
 				"required": []string{"pattern"},
 			},
-			readOnly: true,
-			fn:       b.searchFiles,
+			readOnly:     true,
+			capabilities: []string{"workspace.read"},
+			fn:           b.searchFiles,
 		},
 	}
 }

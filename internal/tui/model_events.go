@@ -84,7 +84,11 @@ func (m *model) handleServiceEvent(ev protocol.Event) (tea.Cmd, bool, bool) {
 	case protocol.EventError:
 		m.handleErrorEvent(ev)
 	case protocol.EventLocalSubmitResult:
-		m.handleLocalSubmitResultEvent(ev)
+		return m.handleLocalSubmitResultEvent(ev), false, false
+	case protocol.EventWorkflowPanel:
+		return m.handleWorkflowPanelEvent(ev.LocalResult), false, false
+	case protocol.EventWorkflowTerminal:
+		m.handleWorkflowTerminalEvent(ev)
 	case protocol.EventDiffResult:
 		m.handleDiffResultEvent(ev)
 	case protocol.EventBtwStarted:

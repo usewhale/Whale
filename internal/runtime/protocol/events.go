@@ -43,6 +43,8 @@ const (
 	EventExitRequested        EventKind = "exit_requested"
 	EventSessionHydrated      EventKind = "session_hydrated"
 	EventRewindMessagesListed EventKind = "rewind_messages_listed"
+	EventWorkflowPanel        EventKind = "workflow_panel"
+	EventWorkflowTerminal     EventKind = "workflow_terminal"
 )
 
 const (
@@ -133,11 +135,13 @@ type ToolResult struct {
 }
 
 type LocalResult struct {
-	Kind      string               `json:"kind,omitempty"`
-	Title     string               `json:"title,omitempty"`
-	Fields    []LocalResultField   `json:"fields,omitempty"`
-	Sections  []LocalResultSection `json:"sections,omitempty"`
-	PlainText string               `json:"plain_text,omitempty"`
+	Kind                  string                 `json:"kind,omitempty"`
+	Title                 string                 `json:"title,omitempty"`
+	Fields                []LocalResultField     `json:"fields,omitempty"`
+	Sections              []LocalResultSection   `json:"sections,omitempty"`
+	Actions               []LocalResultAction    `json:"actions,omitempty"`
+	PlainText             string                 `json:"plain_text,omitempty"`
+	WorkflowPanelSnapshot *WorkflowPanelSnapshot `json:"workflow_panel_snapshot,omitempty"`
 }
 
 type LocalResultSection struct {
@@ -149,6 +153,82 @@ type LocalResultField struct {
 	Label string `json:"label,omitempty"`
 	Value string `json:"value,omitempty"`
 	Tone  string `json:"tone,omitempty"`
+}
+
+type LocalResultAction struct {
+	Label          string `json:"label,omitempty"`
+	Description    string `json:"description,omitempty"`
+	Command        string `json:"command,omitempty"`
+	Tone           string `json:"tone,omitempty"`
+	WorkflowName   string `json:"workflow_name,omitempty"`
+	WorkflowArgs   string `json:"workflow_args,omitempty"`
+	WorkflowResume string `json:"workflow_resume,omitempty"`
+	WorkflowTrust  bool   `json:"workflow_trust,omitempty"`
+}
+
+type WorkflowPanelSnapshot struct {
+	RunID        string               `json:"run_id,omitempty"`
+	Status       string               `json:"status,omitempty"`
+	Summary      string               `json:"summary,omitempty"`
+	Error        string               `json:"error,omitempty"`
+	Budget       string               `json:"budget,omitempty"`
+	CurrentPhase string               `json:"current_phase,omitempty"`
+	StartedAt    time.Time            `json:"started_at,omitempty"`
+	EndedAt      time.Time            `json:"ended_at,omitempty"`
+	ElapsedMS    int64                `json:"elapsed_ms,omitempty"`
+	Phases       []WorkflowPanelPhase `json:"phases,omitempty"`
+	Logs         []string             `json:"logs,omitempty"`
+	Result       any                  `json:"result,omitempty"`
+}
+
+type WorkflowPanelPhase struct {
+	Name      string              `json:"name,omitempty"`
+	Status    string              `json:"status,omitempty"`
+	Done      int                 `json:"done,omitempty"`
+	Running   int                 `json:"running,omitempty"`
+	Failed    int                 `json:"failed,omitempty"`
+	Cancelled int                 `json:"cancelled,omitempty"`
+	Cached    int                 `json:"cached,omitempty"`
+	Total     int                 `json:"total,omitempty"`
+	Tasks     []WorkflowPanelTask `json:"tasks,omitempty"`
+}
+
+type WorkflowPanelTask struct {
+	ID               string                  `json:"id,omitempty"`
+	Sequence         int                     `json:"sequence,omitempty"`
+	Phase            string                  `json:"phase,omitempty"`
+	Label            string                  `json:"label,omitempty"`
+	Status           string                  `json:"status,omitempty"`
+	Model            string                  `json:"model,omitempty"`
+	ActorKind        string                  `json:"actor_kind,omitempty"`
+	Prompt           string                  `json:"prompt,omitempty"`
+	Outcome          string                  `json:"outcome,omitempty"`
+	Error            string                  `json:"error,omitempty"`
+	Message          string                  `json:"message,omitempty"`
+	Cached           bool                    `json:"cached,omitempty"`
+	IsChild          bool                    `json:"is_child,omitempty"`
+	StartedAt        time.Time               `json:"started_at,omitempty"`
+	CompletedAt      time.Time               `json:"completed_at,omitempty"`
+	DurationMS       int64                   `json:"duration_ms,omitempty"`
+	PromptTokens     int64                   `json:"prompt_tokens,omitempty"`
+	CompletionTokens int64                   `json:"completion_tokens,omitempty"`
+	TotalTokens      int64                   `json:"total_tokens,omitempty"`
+	PromptCacheHit   int64                   `json:"prompt_cache_hit,omitempty"`
+	PromptCacheMiss  int64                   `json:"prompt_cache_miss,omitempty"`
+	ReasoningReplay  int64                   `json:"reasoning_replay,omitempty"`
+	ToolReplayTokens int64                   `json:"tool_replay_tokens,omitempty"`
+	ToolRawTokens    int64                   `json:"tool_raw_tokens,omitempty"`
+	ToolTokensSaved  int64                   `json:"tool_tokens_saved,omitempty"`
+	ToolCompacted    int64                   `json:"tool_compacted,omitempty"`
+	ToolCalls        int                     `json:"tool_calls,omitempty"`
+	ToolCallNames    []string                `json:"tool_call_names,omitempty"`
+	Activity         []WorkflowPanelActivity `json:"activity,omitempty"`
+}
+
+type WorkflowPanelActivity struct {
+	Time     time.Time `json:"time,omitempty"`
+	Message  string    `json:"message,omitempty"`
+	ToolName string    `json:"tool_name,omitempty"`
 }
 
 type SkillView struct {

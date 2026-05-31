@@ -789,6 +789,73 @@ func TestMCPLocalSubmitEmitsStructuredLocalResult(t *testing.T) {
 	}
 }
 
+func TestWorkflowsLocalSubmitEmitsStructuredLocalResult(t *testing.T) {
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+
+	svc.Dispatch(Intent{Kind: IntentSubmitLocal, Input: "/workflows"})
+	deadline := time.After(10 * time.Second)
+	for {
+		var ev Event
+		select {
+		case ev = <-svc.Events():
+		case <-deadline:
+			t.Fatal("timed out waiting for workflow panel event")
+		}
+		if ev.Kind != EventWorkflowPanel {
+			continue
+		}
+		if ev.LocalResult == nil || ev.LocalResult.Kind != "workflows" {
+			t.Fatalf("expected structured workflows local result, got %+v", ev)
+		}
+		if ev.Text == "" || ev.Text != ev.LocalResult.PlainText {
+			t.Fatalf("expected text fallback to match local result, text=%q local=%q", ev.Text, ev.LocalResult.PlainText)
+		}
+		return
+	}
+}
+
+func TestWorkflowsUnsupportedSubcommandsEmitUsageError(t *testing.T) {
+	for _, input := range []string{"/workflows events", "/workflows cancel", "/workflows events run-123", "/workflows cancel run-123"} {
+		t.Run(input, func(t *testing.T) {
+			cfg := app.DefaultConfig()
+			cfg.DataDir = t.TempDir()
+			svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			defer svc.Close()
+			waitForServiceEvent(t, svc, EventSessionHydrated)
+
+			svc.Dispatch(Intent{Kind: IntentSubmitLocal, Input: input})
+			deadline := time.After(10 * time.Second)
+			for {
+				select {
+				case ev := <-svc.Events():
+					if ev.Kind == EventWorkflowPanel {
+						t.Fatalf("%s should not open workflow panel: %+v", input, ev)
+					}
+					if ev.Kind != EventLocalSubmitResult {
+						continue
+					}
+					if ev.Status != "error" || !strings.Contains(ev.Text, "usage: /workflows") {
+						t.Fatalf("expected usage error, got %+v", ev)
+					}
+					return
+				case <-deadline:
+					t.Fatal("timed out waiting for usage error")
+				}
+			}
+		})
+	}
+}
+
 func TestRequestExitClearsUnreadableWorktreeAndQuits(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
 	oldwd, err := os.Getwd()
@@ -1616,6 +1683,13 @@ func TestSummarizeToolCall_TaskTools(t *testing.T) {
 	})
 	if got != "spawn_subagent: review · review internal/tasks" {
 		t.Fatalf("unexpected spawn_subagent summary: %q", got)
+	}
+	got = summarizeToolCall(core.ToolCall{
+		Name:  "workflow",
+		Input: `{"scriptPath":"/tmp/check-workflow.js"}`,
+	})
+	if got != "workflow: /tmp/check-workflow.js" {
+		t.Fatalf("unexpected workflow summary: %q", got)
 	}
 }
 

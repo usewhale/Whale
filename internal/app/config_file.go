@@ -33,6 +33,7 @@ type FileConfig struct {
 	ProjectDoc  FileProjectDocConfig          `toml:"project_doc,omitempty"`
 	Skills      FileSkillsConfig              `toml:"skills,omitempty"`
 	Plugins     FilePluginsConfig             `toml:"plugins,omitempty"`
+	Workflows   FileWorkflowsConfig           `toml:"workflows,omitempty"`
 	Hooks       map[string][]agent.HookConfig `toml:"hooks,omitempty"`
 }
 
@@ -97,6 +98,10 @@ type FileSkillsConfig struct {
 type FilePluginsConfig struct {
 	Enabled  []string `toml:"enabled,omitempty"`
 	Disabled []string `toml:"disabled,omitempty"`
+}
+
+type FileWorkflowsConfig struct {
+	Trusted []string `toml:"trusted,omitempty"`
 }
 
 type LoadedConfig struct {

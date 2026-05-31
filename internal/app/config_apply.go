@@ -123,6 +123,9 @@ func ApplyFileConfig(cfg *Config, file FileConfig) error {
 	if len(file.Plugins.Enabled) > 0 {
 		cfg.PluginsDisabled = removeNames(cfg.PluginsDisabled, file.Plugins.Enabled)
 	}
+	if len(file.Workflows.Trusted) > 0 {
+		cfg.TrustedWorkflows = mergeNames(cfg.TrustedWorkflows, file.Workflows.Trusted)
+	}
 	return nil
 }
 
@@ -218,6 +221,9 @@ func overlayExplicitConfig(dst *Config, src Config) {
 	}
 	if len(src.PluginsDisabled) > 0 {
 		dst.PluginsDisabled = trimList(src.PluginsDisabled)
+	}
+	if len(src.TrustedWorkflows) > 0 {
+		dst.TrustedWorkflows = trimList(src.TrustedWorkflows)
 	}
 }
 
