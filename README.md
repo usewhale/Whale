@@ -40,11 +40,29 @@
 
 ## 🚀 Quick Start
 
-| Platform | Install |
-|---|---|
-| macOS | `brew install usewhale/tap/whale` |
-| Linux | `curl -fsSL https://raw.githubusercontent.com/usewhale/DeepSeek-Code-Whale/main/scripts/install.sh | sh` |
-| Windows | `powershell -c "irm https://raw.githubusercontent.com/usewhale/DeepSeek-Code-Whale/main/scripts/install.ps1 | iex"` |
+macOS:
+
+```bash
+brew install usewhale/tap/whale
+```
+
+Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/usewhale/DeepSeek-Code-Whale/main/scripts/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/usewhale/DeepSeek-Code-Whale/main/scripts/install.ps1 | iex
+```
+
+Windows CMD:
+
+```cmd
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/usewhale/DeepSeek-Code-Whale/main/scripts/install.ps1 | iex"
+```
 
 ```bash
 # Set your DeepSeek API key
