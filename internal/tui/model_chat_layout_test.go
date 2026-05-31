@@ -243,6 +243,62 @@ func TestNewSessionLocalResultRendersAsNotice(t *testing.T) {
 		t.Fatalf("expected session notice kind, got role=%q kind=%q text=%q", got.Role, got.Kind, got.Text)
 	}
 }
+
+func TestNewSessionLocalResultSyncsFooterModeFromTrustedFields(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.width = 80
+	m.height = 14
+	m.chatMode = "plan"
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:   protocol.EventLocalSubmitResult,
+		Status: "info",
+		Text:   "New session\n\nsession:  fresh\nprevious: old\nresume:   whale resume old\nmode:     agent",
+		LocalResult: &protocol.LocalResult{
+			Kind:      "new_session",
+			Title:     "New session",
+			PlainText: "New session\n\nsession:  fresh\nprevious: old\nresume:   whale resume old\nmode:     agent",
+			Fields: []protocol.LocalResultField{
+				{Label: "Session", Value: "fresh"},
+				{Label: "Previous", Value: "old"},
+				{Label: "Mode", Value: "agent"},
+			},
+		},
+	}))
+	m = next.(model)
+	if m.chatMode != "agent" {
+		t.Fatalf("expected /new notice to sync footer mode to agent, got %q", m.chatMode)
+	}
+}
+
+func TestUntrustedLocalResultFieldsDoNotSyncFooterState(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.width = 80
+	m.height = 14
+	m.model = "deepseek-v4-flash"
+	m.chatMode = "plan"
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:   protocol.EventLocalSubmitResult,
+		Status: "info",
+		Text:   "local-indexer\n\nstatus: scaffold\nmodel: not installed\nmode: agent\njobs: none",
+		LocalResult: &protocol.LocalResult{
+			Kind:      "local_indexer",
+			Title:     "local-indexer",
+			PlainText: "local-indexer\n\nstatus: scaffold\nmodel: not installed\nmode: agent\njobs: none",
+			Fields: []protocol.LocalResultField{
+				{Label: "Status", Value: "scaffold"},
+				{Label: "Model", Value: "not installed"},
+				{Label: "Mode", Value: "agent"},
+			},
+		},
+	}))
+	m = next.(model)
+	if m.model != "deepseek-v4-flash" {
+		t.Fatalf("untrusted local result changed footer model to %q", m.model)
+	}
+	if m.chatMode != "plan" {
+		t.Fatalf("untrusted local result changed footer mode to %q", m.chatMode)
+	}
+}
 func TestStatusLocalResultRendersAsStructuredTranscriptEntry(t *testing.T) {
 	m, _ := newModelWithDispatchSpy()
 	m.width = 80

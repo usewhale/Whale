@@ -98,6 +98,7 @@ func (m *model) handleInfoEvent(ev protocol.Event) {
 	}
 	m.addLog(logEntry{Kind: "info", Source: "system", Summary: ev.Text, Raw: ev.Text})
 	m.status = "ready"
+	m.syncModelEffortFromLocalResult(ev.LocalResult)
 	m.syncModelEffortFromInfo(ev.Text)
 	m.refreshViewportContentFollow(true)
 }
@@ -131,6 +132,7 @@ func (m *model) handleLocalSubmitResultEvent(ev protocol.Event) {
 		m.status = "error"
 	}
 	if role == "info" {
+		m.syncModelEffortFromLocalResult(ev.LocalResult)
 		m.syncModelEffortFromInfo(ev.Text)
 		m.refreshViewportContentFollow(true)
 	}
