@@ -391,7 +391,7 @@ func TestHandleCommandModeSwitch(t *testing.T) {
 		t.Fatalf("unexpected /ask prompt result: %+v", res)
 	}
 
-	for _, old := range []string{"/step", "/checkpoint", "/continue", "/stop", "/revise add retry", "/context", "/memory"} {
+	for _, old := range []string{"/step", "/continue", "/stop", "/revise add retry", "/context", "/memory"} {
 		res, err = handleCommand(old, "cur", now)
 		if err != nil || res.Handled {
 			t.Fatalf("expected %s to be unhandled, got %+v err=%v", old, res, err)

@@ -12,6 +12,7 @@ const (
 	IntentSubmitUserInput     IntentKind = "submit_user_input"
 	IntentCancelUserInput     IntentKind = "cancel_user_input"
 	IntentSelectSession       IntentKind = "select_session"
+	IntentSelectRewindMessage IntentKind = "select_rewind_message"
 	IntentRequestSessions     IntentKind = "request_sessions"
 	IntentRequestExit         IntentKind = "request_exit"
 	IntentShutdown            IntentKind = "shutdown"
@@ -34,6 +35,7 @@ type Intent struct {
 	ToolCallID     string             `json:"tool_call_id,omitempty"`
 	UserInput      *UserInputResponse `json:"user_input,omitempty"`
 	SessionInput   string             `json:"session_input,omitempty"`
+	MessageID      string             `json:"message_id,omitempty"`
 	Model          string             `json:"model,omitempty"`
 	Effort         string             `json:"effort,omitempty"`
 	Thinking       string             `json:"thinking,omitempty"`

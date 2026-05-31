@@ -51,6 +51,14 @@ func metadataBool(v any) bool {
 	return ok && b
 }
 
+func metadataString(v any) string {
+	s, ok := v.(string)
+	if !ok {
+		return ""
+	}
+	return s
+}
+
 func (m *model) handleServiceEvent(ev protocol.Event) (tea.Cmd, bool, bool) {
 	if ev.AutoAcceptKnown {
 		m.autoAccept = ev.AutoAccept
@@ -107,6 +115,8 @@ func (m *model) handleServiceEvent(ev protocol.Event) (tea.Cmd, bool, bool) {
 		m.handleUserInputRequiredEvent(ev)
 	case protocol.EventSessionsListed:
 		m.handleSessionsListedEvent(ev)
+	case protocol.EventRewindMessagesListed:
+		m.handleRewindMessagesListedEvent(ev)
 	case protocol.EventLocalSubmitDone:
 		m.clearProviderRetryStatus()
 		return m.finishLocalSubmit(), false, false

@@ -149,6 +149,9 @@ func (m model) bottomPartsBeforeInput(mainWidth int) []string {
 	if m.mode == modeReviewBranchPicker || m.mode == modeReviewCommitPicker || m.mode == modeReviewPRPicker {
 		bottomParts = append(bottomParts, m.renderReviewTargetPicker())
 	}
+	if m.mode == modeRewindPicker {
+		bottomParts = append(bottomParts, m.renderRewindPicker())
+	}
 	if m.mode == modeHelp {
 		bottomParts = append(bottomParts, m.renderHelp())
 	}

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"github.com/usewhale/whale/internal/checkpoint"
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/policy"
 	"os"
@@ -64,6 +65,7 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 		mcpManager:            toolInit.mcpManager,
 		pluginManager:         toolInit.pluginManager,
 		pluginTools:           append([]core.Tool{}, toolInit.pluginTools...),
+		checkpoints:           checkpoint.NewManager(sessionInit.sessionsDir, workspaceRoot),
 		worktree:              start.Worktree,
 		apiKey:                runtimeInit.apiKey,
 		approvalFn:            defaultApprovalFunc(start.ApprovalFunc),

@@ -26,6 +26,7 @@ const (
 	IntentSubmitUserInput     IntentKind = "submit_user_input"
 	IntentCancelUserInput     IntentKind = "cancel_user_input"
 	IntentSelectSession       IntentKind = "select_session"
+	IntentSelectRewindMessage IntentKind = "select_rewind_message"
 	IntentRequestSessions     IntentKind = "request_sessions"
 	IntentRequestExit         IntentKind = "request_exit"
 	IntentShutdown            IntentKind = "shutdown"
@@ -48,6 +49,7 @@ type Intent struct {
 	ToolCallID     string
 	UserInput      *core.UserInputResponse
 	SessionInput   string
+	MessageID      string
 	Model          string
 	Effort         string
 	Thinking       string
@@ -109,6 +111,7 @@ const (
 	EventExitRequested                 = protocol.EventExitRequested
 	EventScreenClearRequested          = protocol.EventScreenClearRequested
 	EventSessionHydrated               = protocol.EventSessionHydrated
+	EventRewindMessagesListed          = protocol.EventRewindMessagesListed
 )
 
 type Service struct {

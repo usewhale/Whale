@@ -58,6 +58,7 @@ func (a *App) ensureAgent() (*agent.Agent, error) {
 			agent.WithSessionsDir(a.sessionsDir),
 			agent.WithBudgetWarningUSD(a.budgetWarningUSD),
 			agent.WithUsageLogPath(filepath.Join(a.cfg.DataDir, "usage.jsonl")),
+			agent.WithCheckpoints(a.checkpoints),
 			agent.WithAutoCompact(a.cfg.AutoCompact, a.cfg.AutoCompactThreshold, a.contextWindow),
 			agent.WithToolPolicy(a.permissionPolicy),
 			agent.WithToolRefresh(func(context.Context) error {

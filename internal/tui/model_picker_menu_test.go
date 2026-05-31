@@ -165,6 +165,88 @@ func TestSessionPickerEnterDispatchesSelectedSession(t *testing.T) {
 		t.Fatalf("expected session picker mode until async result, got %v", m.mode)
 	}
 }
+
+func TestRewindPickerRequiresConfirmationBeforeDispatch(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind: protocol.EventRewindMessagesListed,
+		Messages: []protocol.Message{
+			{ID: "m-1", Text: "first prompt"},
+			{ID: "m-2", Text: "second prompt"},
+		},
+	}))
+	m = next.(model)
+	if m.mode != modeRewindPicker {
+		t.Fatalf("expected rewind picker mode, got %v", m.mode)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if len(*intents) != 0 {
+		t.Fatalf("expected no intent before confirmation, got %+v", *intents)
+	}
+	if !m.rewindPicker.confirming {
+		t.Fatal("expected confirmation step after selecting rewind target")
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+
+	if len(*intents) != 1 {
+		t.Fatalf("expected one intent, got %+v", *intents)
+	}
+	got := (*intents)[0]
+	if got.Kind != protocol.IntentSelectRewindMessage || got.MessageID != "m-2" {
+		t.Fatalf("unexpected intent: %+v", got)
+	}
+	if m.mode != modeChat || m.status != "rewinding" {
+		t.Fatalf("expected chat rewinding state, mode=%v status=%q", m.mode, m.status)
+	}
+}
+
+func TestRewindPickerEscFromConfirmationReturnsToList(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:     protocol.EventRewindMessagesListed,
+		Messages: []protocol.Message{{ID: "m-1", Text: "first prompt"}},
+	}))
+	m = next.(model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if !m.rewindPicker.confirming {
+		t.Fatal("expected confirmation step")
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(model)
+	if m.rewindPicker.confirming || m.mode != modeRewindPicker {
+		t.Fatalf("expected esc to return to rewind list, mode=%v confirming=%v", m.mode, m.rewindPicker.confirming)
+	}
+	if len(*intents) != 0 {
+		t.Fatalf("expected no intent after esc, got %+v", *intents)
+	}
+}
+
+func TestRewindPickerUsesSegmentedPickerStyles(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	m := newModel(nil, "", "", "")
+	m.handleRewindMessagesListedEvent(protocol.Event{
+		Kind: protocol.EventRewindMessagesListed,
+		Messages: []protocol.Message{
+			{ID: "m-1", Text: "first prompt with enough text"},
+			{ID: "m-2", Text: "second prompt"},
+		},
+	})
+	assertStyledPickerContains(t, m.renderRewindPicker(), "Rewind", "Restore code and conversation to the point before", "> 1) first prompt", "  2) second prompt", "(up/down choose, enter select, esc cancel)")
+	m.rewindPicker.confirming = true
+	assertStyledPickerContains(t, m.renderRewindPicker(), "Confirm you want to restore", "This restores the conversation and Whale-tracked file edits.", "> Restore", "  Cancel", "(up/down choose, enter confirm, esc back)")
+}
+
 func TestSessionPickerUsesSegmentedPickerStyles(t *testing.T) {
 	oldProfile := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.ANSI256)

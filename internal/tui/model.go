@@ -36,6 +36,7 @@ const (
 	modeReviewBranchPicker
 	modeReviewCommitPicker
 	modeReviewPRPicker
+	modeRewindPicker
 	modeHelp
 	modeWorktreeExit
 )
@@ -167,6 +168,7 @@ type model struct {
 		selected int
 	}
 	reviewTargetPicker reviewTargetPickerState
+	rewindPicker       rewindPickerState
 	help               struct {
 		selected int
 		offset   int

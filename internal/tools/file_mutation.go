@@ -2,12 +2,15 @@ package tools
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync"
+
+	"github.com/usewhale/whale/internal/checkpoint"
 )
 
 type fileMutationLocks struct {
@@ -72,7 +75,7 @@ type fileCommitPlan struct {
 	remove         bool
 }
 
-func (b *Toolset) commitFilePlans(plans []fileCommitPlan) error {
+func (b *Toolset) commitFilePlans(ctx context.Context, plans []fileCommitPlan) error {
 	paths := make([]string, 0, len(plans))
 	for _, plan := range plans {
 		paths = append(paths, plan.abs)
@@ -83,6 +86,13 @@ func (b *Toolset) commitFilePlans(plans []fileCommitPlan) error {
 	if b.beforeFileCommit != nil {
 		for _, plan := range plans {
 			b.beforeFileCommit(plan.abs)
+		}
+	}
+	if recorder := checkpoint.RecorderFromContext(ctx); recorder != nil {
+		for _, plan := range plans {
+			if err := recorder.TrackFileBeforeMutation(plan.abs); err != nil {
+				return err
+			}
 		}
 	}
 	for _, plan := range plans {

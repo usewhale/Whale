@@ -11,13 +11,14 @@ import (
 )
 
 type CommandExecution struct {
-	Handled     bool
-	Text        string
-	LocalResult *LocalResult
-	Turn        *plugins.CommandTurn
-	ShouldExit  bool
-	ClearScreen bool
-	Mutated     bool
+	Handled        bool
+	Text           string
+	LocalResult    *LocalResult
+	Turn           *plugins.CommandTurn
+	ShouldExit     bool
+	ClearScreen    bool
+	Mutated        bool
+	HydrateSession bool
 }
 
 func (a *App) HandleSlash(line string) (handled bool, output string, synthetic string, shouldExit bool, clearScreen bool, err error) {
@@ -192,6 +193,9 @@ func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 	if trimmed == "/doctor" {
 		result := buildDoctorLocalResult(a)
 		return CommandExecution{Handled: true, Text: result.PlainText, LocalResult: result}, nil
+	}
+	if isRewindCommand(trimmed) {
+		return a.executeRewindCommand(trimmed)
 	}
 	if a.pluginManager != nil {
 		res, handled, err := a.pluginManager.HandleCommand(a.ctx, trimmed)

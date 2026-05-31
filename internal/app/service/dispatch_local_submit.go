@@ -94,6 +94,10 @@ func (s *Service) handleLocalSubmit(line string) {
 		s.emitLocalSessionChoices()
 		return
 	}
+	if line == "/rewind" || line == "/checkpoint" {
+		s.emitRewindMessages(false)
+		return
+	}
 	if strings.HasPrefix(line, "/model ") {
 		s.emit(localSubmitResultEvent("error", "usage: /model"))
 		return
@@ -122,7 +126,7 @@ func (s *Service) handleLocalSubmit(line string) {
 		if cmd.ShouldExit {
 			s.requestExit()
 		}
-		if s.app.SessionID() != prevSessionID {
+		if s.app.SessionID() != prevSessionID || cmd.HydrateSession {
 			s.emitSessionHydrated()
 		}
 		if cmd.Text != "" {
@@ -138,6 +142,9 @@ func (s *Service) handleLocalSubmit(line string) {
 		return
 	}
 	if cmd.Handled {
+		if cmd.HydrateSession {
+			s.emitSessionHydrated()
+		}
 		if cmd.Text != "" {
 			ev := localSubmitResultEvent("info", cmd.Text)
 			ev.LocalResult = protocolLocalResult(cmd.LocalResult)

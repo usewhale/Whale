@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"github.com/usewhale/whale/internal/agent"
+	"github.com/usewhale/whale/internal/checkpoint"
 	"github.com/usewhale/whale/internal/core"
 	whalemcp "github.com/usewhale/whale/internal/mcp"
 	"github.com/usewhale/whale/internal/plugins"
@@ -115,6 +116,7 @@ type App struct {
 	mcpManager            *whalemcp.Manager
 	pluginManager         *plugins.Manager
 	pluginTools           []core.Tool
+	checkpoints           *checkpoint.Manager
 	worktree              WorktreeSession
 	mcpInitMu             sync.Mutex
 	mcpInitStarted        bool

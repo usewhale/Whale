@@ -48,6 +48,8 @@ func DefaultSlashCommands() []SlashCommandSpec {
 		{Name: "/feedback", Description: "Open the Whale issue tracker", AutoRun: true},
 		{Name: "/new", Description: "Start a new session", ArgumentHint: "[id]", AutoRun: true},
 		{Name: "/fork", Description: "Fork the current session", ArgumentHint: "[name]", AutoRun: true},
+		{Name: "/rewind", Description: "Restore code and conversation to an earlier message", AutoRun: true},
+		{Name: "/checkpoint", Description: "Alias for /rewind", AutoRun: true},
 		{Name: "/resume", Description: "Open the resume picker", AutoRun: true},
 		{Name: "/clear", Description: "Clear the visible conversation", AutoRun: true},
 		{Name: "/status", Description: "Show session and configuration status", AutoRun: true},

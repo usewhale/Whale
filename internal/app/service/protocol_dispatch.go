@@ -14,6 +14,7 @@ func (s *Service) DispatchProtocol(in protocol.Intent) {
 		ToolCallID:     in.ToolCallID,
 		UserInput:      coreUserInputResponse(in.UserInput),
 		SessionInput:   in.SessionInput,
+		MessageID:      in.MessageID,
 		Model:          in.Model,
 		Effort:         in.Effort,
 		Thinking:       in.Thinking,
@@ -48,6 +49,8 @@ func serviceIntentKind(kind protocol.IntentKind) IntentKind {
 		return IntentCancelUserInput
 	case protocol.IntentSelectSession:
 		return IntentSelectSession
+	case protocol.IntentSelectRewindMessage:
+		return IntentSelectRewindMessage
 	case protocol.IntentRequestSessions:
 		return IntentRequestSessions
 	case protocol.IntentRequestExit:

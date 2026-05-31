@@ -29,6 +29,7 @@ func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolRe
 	}
 	warnings := b.shellRunWarnings(in.Command)
 	if in.Background {
+		mutationSnapshot := b.captureShellMutationSnapshot(ctx, workdir, in.Command)
 		requestedTimeoutMS := in.TimeoutMS
 		effectiveTimeoutMS := defaultBackgroundShellTimeoutMS
 		if requestedTimeoutMS > 0 {
@@ -49,7 +50,9 @@ func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolRe
 		go func() {
 			defer b.tasks.completed(task.ID)
 			defer cancel()
-			runShellBackground(cctx, workdir, in.Command, task)
+			runShellBackgroundWithAfter(cctx, workdir, in.Command, task, func() {
+				b.recordShellMutations(mutationSnapshot)
+			})
 		}()
 		return marshalToolResult(call, map[string]any{
 			"status": "running",
@@ -71,6 +74,7 @@ func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolRe
 	requestedTimeoutMS := in.TimeoutMS
 	policy := shellPolicy(in.Command, requestedTimeoutMS)
 	effectiveTimeoutMS := policy.ForegroundWaitMS
+	mutationSnapshot := b.captureShellMutationSnapshot(ctx, workdir, in.Command)
 	task := b.tasks.create(in.Command, relCWD)
 	task.setTimeoutContext(shellTimeoutContext{
 		Policy:             policy,
@@ -82,7 +86,9 @@ func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolRe
 	go func() {
 		defer b.tasks.completed(task.ID)
 		defer cancel()
-		runShellBackground(cctx, workdir, in.Command, task)
+		runShellBackgroundWithAfter(cctx, workdir, in.Command, task, func() {
+			b.recordShellMutations(mutationSnapshot)
+		})
 	}()
 
 	timer := time.NewTimer(time.Duration(effectiveTimeoutMS) * time.Millisecond)

@@ -7,7 +7,7 @@ import (
 	"github.com/usewhale/whale/internal/core"
 )
 
-func (b *Toolset) writeFile(_ context.Context, call core.ToolCall) (core.ToolResult, error) {
+func (b *Toolset) writeFile(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
 	var in struct {
 		FilePath string `json:"file_path"`
 		Content  string `json:"content"`
@@ -31,7 +31,7 @@ func (b *Toolset) writeFile(_ context.Context, call core.ToolCall) (core.ToolRes
 	}
 	existing := readErr == nil
 	before, after, content := prepareWriteFileContent(beforeBytes, in.Content, existing)
-	if err := b.commitFilePlans([]fileCommitPlan{{
+	if err := b.commitFilePlans(ctx, []fileCommitPlan{{
 		path:           in.FilePath,
 		abs:            abs,
 		expectedBytes:  beforeBytes,

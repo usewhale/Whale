@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/usewhale/whale/internal/checkpoint"
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/defaults"
 	"github.com/usewhale/whale/internal/llm"
@@ -266,6 +267,7 @@ type Agent struct {
 	budgetWarningUSD       float64
 	usageLogPath           string
 	toolResultArchiveDir   string
+	checkpoints            *checkpoint.Manager
 	budgetWarned80         sync.Map
 	maxToolIters           int
 	maxParallelSubagents   int
@@ -504,6 +506,12 @@ func WithMaxParallelSubagents(maxParallel int) AgentOption {
 		if maxParallel > 0 {
 			a.maxParallelSubagents = maxParallel
 		}
+	}
+}
+
+func WithCheckpoints(manager *checkpoint.Manager) AgentOption {
+	return func(a *Agent) {
+		a.checkpoints = manager
 	}
 }
 
