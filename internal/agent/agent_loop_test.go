@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -181,6 +182,84 @@ func TestStreamFallthroughPersistsPartialAssistant(t *testing.T) {
 	}
 	if asst.Text != "partial-answer" {
 		t.Fatalf("expected persisted partial text %q, got %q", "partial-answer", asst.Text)
+	}
+}
+
+type toolStartThenErrorProvider struct{}
+
+func (p *toolStartThenErrorProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	return eventStream(
+		ProviderEvent{Type: EventContentDelta, Content: "about to run"},
+		ProviderEvent{Type: EventToolArgsDelta, ToolArgsDelta: &llm.ToolArgsDelta{ToolCallIndex: 0, ToolName: "shell_run", ArgsDelta: `{"command":`, ArgsChars: len(`{"command":`)}},
+		ProviderEvent{Type: EventToolUseStart, ToolCall: &ToolCall{ID: "tc-partial", Name: "shell_run"}},
+		ProviderEvent{Type: EventError, Err: errors.New("stream timed out after progress")},
+	)
+}
+
+func TestStreamErrorDropsIncompleteToolCall(t *testing.T) {
+	store := NewInMemoryStore()
+	a := NewAgent(&toolStartThenErrorProvider{}, store, []Tool{echoTool{}})
+
+	events, err := a.RunStream(context.Background(), "s-incomplete-tool", "go")
+	if err != nil {
+		t.Fatalf("run stream failed: %v", err)
+	}
+	for range events {
+	}
+
+	all, err := store.List(context.Background(), "s-incomplete-tool")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected user+assistant, got %d: %+v", len(all), all)
+	}
+	asst := all[1]
+	if asst.Text != "about to run" {
+		t.Fatalf("expected partial assistant text to survive, got %q", asst.Text)
+	}
+	if asst.FinishReason != FinishReasonError {
+		t.Fatalf("expected error finish reason, got %q", asst.FinishReason)
+	}
+	if len(asst.ToolCalls) != 0 {
+		t.Fatalf("incomplete tool call persisted: %+v", asst.ToolCalls)
+	}
+}
+
+type toolOnlyThenErrorProvider struct{}
+
+func (p *toolOnlyThenErrorProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	return eventStream(
+		ProviderEvent{Type: EventToolArgsDelta, ToolArgsDelta: &llm.ToolArgsDelta{ToolCallIndex: 0, ToolName: "shell_run", ArgsDelta: `{"command":`, ArgsChars: len(`{"command":`)}},
+		ProviderEvent{Type: EventToolUseStart, ToolCall: &ToolCall{ID: "tc-empty", Name: "shell_run"}},
+		ProviderEvent{Type: EventError, Err: errors.New("stream timed out before final tool input")},
+	)
+}
+
+func TestStreamErrorWithOnlyIncompleteToolCallDoesNotPersistToolCall(t *testing.T) {
+	store := NewInMemoryStore()
+	a := NewAgent(&toolOnlyThenErrorProvider{}, store, []Tool{echoTool{}})
+
+	events, err := a.RunStream(context.Background(), "s-tool-only-error", "go")
+	if err != nil {
+		t.Fatalf("run stream failed: %v", err)
+	}
+	for range events {
+	}
+
+	all, err := store.List(context.Background(), "s-tool-only-error")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected user+assistant, got %d: %+v", len(all), all)
+	}
+	asst := all[1]
+	if asst.FinishReason != FinishReasonError {
+		t.Fatalf("expected error finish reason, got %q", asst.FinishReason)
+	}
+	if len(asst.ToolCalls) != 0 {
+		t.Fatalf("incomplete tool call persisted: %+v", asst.ToolCalls)
 	}
 }
 
