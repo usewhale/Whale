@@ -171,7 +171,43 @@ func TestShellRunTimeoutDiagnosesInteractivePrompt(t *testing.T) {
 	}
 }
 
-func TestShellRunFailureDiagnosesNetworkBlocked(t *testing.T) {
+func TestShellRunNonZeroExitReturnsExecFailed(t *testing.T) {
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command": "printf -- '---\n'; exit 1",
+	}))
+	if err != nil {
+		t.Fatalf("shell_run returned dispatch error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected non-zero command exit to remain exec_failed, got %+v", res)
+	}
+	env, ok := core.ParseToolEnvelope(res.Content)
+	if !ok {
+		t.Fatalf("parse tool envelope: %s", res.Content)
+	}
+	if env.Success || env.Code != "exec_failed" {
+		t.Fatalf("expected exec_failed tool envelope, got %+v", env)
+	}
+	if env.Data["status"] != "error" {
+		t.Fatalf("status = %#v, want error", env.Data["status"])
+	}
+	payload := env.Data["payload"].(map[string]any)
+	if payload["stdout"] != "---\n" {
+		t.Fatalf("stdout = %#v, want marker output", payload["stdout"])
+	}
+	metrics := env.Data["metrics"].(map[string]any)
+	if metrics["exit_code"].(float64) != 1 {
+		t.Fatalf("exit_code = %#v, want 1", metrics["exit_code"])
+	}
+}
+
+func TestShellRunExecFailedKeepsNetworkDiagnosis(t *testing.T) {
 	dir := t.TempDir()
 	ts, err := NewToolset(dir)
 	if err != nil {
@@ -191,12 +227,54 @@ func TestShellRunFailureDiagnosesNetworkBlocked(t *testing.T) {
 	if !ok {
 		t.Fatalf("parse tool envelope: %s", res.Content)
 	}
-	if env.Code != "exec_failed" {
-		t.Fatalf("code = %q, want exec_failed", env.Code)
+	if env.Success || env.Code != "exec_failed" || env.Data["status"] != "error" {
+		t.Fatalf("expected exec_failed envelope, got %+v", env)
 	}
 	diagnosis := env.Data["diagnosis"].(map[string]any)
 	if diagnosis["reason"] != "network_blocked" || diagnosis["suggested_next_action"] != "check_network" {
 		t.Fatalf("unexpected diagnosis: %#v", diagnosis)
+	}
+}
+
+func TestShellWaitNonZeroExitReturnsFailedResult(t *testing.T) {
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "printf nope; exit 7",
+		"background": true,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run background failed: err=%v res=%+v", err, startRes)
+	}
+	taskID := backgroundTaskID(t, startRes.Content)
+	waitRes, err := ts.shellWait(context.Background(), tc("shell_wait", map[string]any{
+		"task_id":    taskID,
+		"timeout_ms": 3000,
+	}))
+	if err != nil {
+		t.Fatalf("shell_wait dispatch failed: %v", err)
+	}
+	if waitRes.IsError {
+		t.Fatalf("non-zero background exit should not be a tool error: %+v", waitRes)
+	}
+	env, ok := core.ParseToolEnvelope(waitRes.Content)
+	if !ok {
+		t.Fatalf("parse wait envelope: %s", waitRes.Content)
+	}
+	if !env.Success || env.Code != "ok" || env.Data["status"] != "failed" {
+		t.Fatalf("expected failed wait envelope, got %+v", env)
+	}
+	payload := env.Data["payload"].(map[string]any)
+	if payload["stdout"] != "nope" {
+		t.Fatalf("stdout = %#v, want nope", payload["stdout"])
+	}
+	metrics := env.Data["metrics"].(map[string]any)
+	if metrics["exit_code"].(float64) != 7 {
+		t.Fatalf("exit_code = %#v, want 7", metrics["exit_code"])
 	}
 }
 
@@ -409,6 +487,10 @@ func TestShellWaitAutoBackgroundedFailureReturnsStructuredResult(t *testing.T) {
 	data := env.Data
 	if data["status"] != "failed" {
 		t.Fatalf("status = %#v, want failed", data["status"])
+	}
+	metrics := data["metrics"].(map[string]any)
+	if metrics["exit_code"].(float64) != 1 {
+		t.Fatalf("exit_code = %#v, want 1", metrics["exit_code"])
 	}
 }
 

@@ -14,10 +14,12 @@ func protocolLocalResult(result *app.LocalResult) *protocol.LocalResult {
 		return nil
 	}
 	out := &protocol.LocalResult{
-		Kind:      result.Kind,
-		Title:     result.Title,
-		PlainText: result.PlainText,
-		Fields:    protocolLocalResultFields(result.Fields),
+		Kind:                  result.Kind,
+		Title:                 result.Title,
+		PlainText:             result.PlainText,
+		Fields:                protocolLocalResultFields(result.Fields),
+		Actions:               protocolLocalResultActions(result.Actions),
+		WorkflowPanelSnapshot: protocolWorkflowPanelSnapshot(result.WorkflowPanelSnapshot),
 	}
 	if len(result.Sections) > 0 {
 		out.Sections = make([]protocol.LocalResultSection, 0, len(result.Sections))
@@ -25,6 +27,116 @@ func protocolLocalResult(result *app.LocalResult) *protocol.LocalResult {
 			out.Sections = append(out.Sections, protocol.LocalResultSection{
 				Title:  section.Title,
 				Fields: protocolLocalResultFields(section.Fields),
+			})
+		}
+	}
+	return out
+}
+
+func protocolLocalResultActions(actions []app.LocalResultAction) []protocol.LocalResultAction {
+	if len(actions) == 0 {
+		return nil
+	}
+	out := make([]protocol.LocalResultAction, 0, len(actions))
+	for _, action := range actions {
+		out = append(out, protocol.LocalResultAction{
+			Label:          action.Label,
+			Description:    action.Description,
+			Command:        action.Command,
+			Tone:           action.Tone,
+			WorkflowName:   action.WorkflowName,
+			WorkflowArgs:   action.WorkflowArgs,
+			WorkflowResume: action.WorkflowResume,
+			WorkflowTrust:  action.WorkflowTrust,
+		})
+	}
+	return out
+}
+
+func protocolWorkflowPanelSnapshot(snapshot *app.WorkflowPanelSnapshot) *protocol.WorkflowPanelSnapshot {
+	if snapshot == nil {
+		return nil
+	}
+	out := &protocol.WorkflowPanelSnapshot{
+		RunID:        snapshot.RunID,
+		Status:       snapshot.Status,
+		Summary:      snapshot.Summary,
+		Error:        snapshot.Error,
+		Budget:       snapshot.Budget,
+		CurrentPhase: snapshot.CurrentPhase,
+		StartedAt:    snapshot.StartedAt,
+		EndedAt:      snapshot.EndedAt,
+		ElapsedMS:    snapshot.ElapsedMS,
+		Logs:         append([]string(nil), snapshot.Logs...),
+		Result:       snapshot.Result,
+	}
+	if len(snapshot.Phases) > 0 {
+		out.Phases = make([]protocol.WorkflowPanelPhase, 0, len(snapshot.Phases))
+		for _, phase := range snapshot.Phases {
+			out.Phases = append(out.Phases, protocolWorkflowPanelPhase(phase))
+		}
+	}
+	return out
+}
+
+func protocolWorkflowPanelPhase(phase app.WorkflowPanelPhase) protocol.WorkflowPanelPhase {
+	out := protocol.WorkflowPanelPhase{
+		Name:      phase.Name,
+		Status:    phase.Status,
+		Done:      phase.Done,
+		Running:   phase.Running,
+		Failed:    phase.Failed,
+		Cancelled: phase.Cancelled,
+		Cached:    phase.Cached,
+		Total:     phase.Total,
+	}
+	if len(phase.Tasks) > 0 {
+		out.Tasks = make([]protocol.WorkflowPanelTask, 0, len(phase.Tasks))
+		for _, task := range phase.Tasks {
+			out.Tasks = append(out.Tasks, protocolWorkflowPanelTask(task))
+		}
+	}
+	return out
+}
+
+func protocolWorkflowPanelTask(task app.WorkflowPanelTask) protocol.WorkflowPanelTask {
+	out := protocol.WorkflowPanelTask{
+		ID:               task.ID,
+		Sequence:         task.Sequence,
+		Phase:            task.Phase,
+		Label:            task.Label,
+		Status:           task.Status,
+		Model:            task.Model,
+		ActorKind:        task.ActorKind,
+		Prompt:           task.Prompt,
+		Outcome:          task.Outcome,
+		Error:            task.Error,
+		Message:          task.Message,
+		Cached:           task.Cached,
+		IsChild:          task.IsChild,
+		StartedAt:        task.StartedAt,
+		CompletedAt:      task.CompletedAt,
+		DurationMS:       task.DurationMS,
+		PromptTokens:     task.PromptTokens,
+		CompletionTokens: task.CompletionTokens,
+		TotalTokens:      task.TotalTokens,
+		PromptCacheHit:   task.PromptCacheHit,
+		PromptCacheMiss:  task.PromptCacheMiss,
+		ReasoningReplay:  task.ReasoningReplay,
+		ToolReplayTokens: task.ToolReplayTokens,
+		ToolRawTokens:    task.ToolRawTokens,
+		ToolTokensSaved:  task.ToolTokensSaved,
+		ToolCompacted:    task.ToolCompacted,
+		ToolCalls:        task.ToolCalls,
+		ToolCallNames:    append([]string(nil), task.ToolCallNames...),
+	}
+	if len(task.Activity) > 0 {
+		out.Activity = make([]protocol.WorkflowPanelActivity, 0, len(task.Activity))
+		for _, activity := range task.Activity {
+			out.Activity = append(out.Activity, protocol.WorkflowPanelActivity{
+				Time:     activity.Time,
+				Message:  activity.Message,
+				ToolName: activity.ToolName,
 			})
 		}
 	}

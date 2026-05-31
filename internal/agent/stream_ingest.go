@@ -37,8 +37,8 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 			// Intentionally do not persist on every delta: rewriting the full
 			// session JSONL per token produced O(n·m) disk I/O and caused TUI
 			// stutter in long-context sessions (issue #22). The accumulated
-			// state is flushed by the EventToolUseStart / EventComplete /
-			// bestEffortUpdateAssistant paths below.
+			// state is flushed by the EventComplete / bestEffortUpdateAssistant
+			// paths below.
 		case llm.EventReasoningDelta:
 			assistant.Reasoning += ev.ReasoningDelta
 			rt.Scratch.Reasoning += ev.ReasoningDelta
@@ -61,12 +61,9 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 				}
 			}
 		case llm.EventToolUseStart:
-			if ev.ToolCall != nil {
-				assistant.ToolCalls = append(assistant.ToolCalls, *ev.ToolCall)
-				if err := a.store.Update(ctx, assistant); err != nil {
-					return core.Message{}, llm.Usage{}, "", err
-				}
-			}
+			// Tool-use start events arrive before streamed arguments are
+			// complete. Persisting them here leaves dangling or empty
+			// tool_calls behind if the stream fails before EventComplete.
 		case llm.EventToolUseStop:
 			// no-op in this minimal version
 		case llm.EventRetryScheduled:
@@ -134,6 +131,7 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 		case llm.EventError:
 			if ev.Err != nil {
 				assistant.FinishReason = core.FinishReasonError
+				assistant.ToolCalls = nil
 				a.bestEffortUpdateAssistant(assistant)
 				return core.Message{}, llm.Usage{}, "", ev.Err
 			}

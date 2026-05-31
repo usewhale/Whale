@@ -90,10 +90,16 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 		return m.handleReviewMenuKey(msg), false, true
 	case modeReviewBranchPicker, modeReviewCommitPicker, modeReviewPRPicker:
 		return m.handleReviewTargetPickerKey(msg), false, true
+	case modeRewindPicker:
+		return m.handleRewindPickerKey(msg), false, true
 	case modeHelp:
 		return m.handleHelpKey(msg), false, true
 	case modeWorktreeExit:
 		return m.handleWorktreeExitKey(msg), false, true
+	case modeWorkflowLaunch:
+		return m.handleWorkflowLaunchKey(msg), false, true
+	case modeWorkflowPanel:
+		return m.handleWorkflowPanelKey(msg), false, true
 	}
 	cmd, quit, handled := m.handleGlobalKey(msg)
 	if handled {

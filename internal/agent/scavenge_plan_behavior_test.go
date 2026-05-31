@@ -83,45 +83,61 @@ func TestPlanModeBlocksWriteTools(t *testing.T) {
 		t.Fatal("expected plan mode blocked tool result")
 	}
 	for _, want := range []string{
-		"proposed_plan",
-		"Only the user or UI can switch modes",
+		"retryable",
+		"false",
+		"do_not_retry_same_call",
+		"<proposed_plan>",
 	} {
 		if !strings.Contains(blockedContent, want) {
 			t.Fatalf("plan mode blocked result missing %q:\n%s", want, blockedContent)
 		}
 	}
-	for _, forbidden := range []string{"/agent", "Shift+Tab", "suggested_modes"} {
+	for _, forbidden := range []string{"/agent", "Shift+Tab", "suggested_modes", "Only the user or UI can switch modes"} {
 		if strings.Contains(blockedContent, forbidden) {
-			t.Fatalf("plan mode blocked result should not suggest assistant mode switching %q:\n%s", forbidden, blockedContent)
+			t.Fatalf("plan mode blocked result leaked noisy guidance %q:\n%s", forbidden, blockedContent)
 		}
 	}
 }
 
-func TestPlanModeBlockedDetailsGuideTowardProposedPlan(t *testing.T) {
+func TestPlanModeBlockedDetailsAreConciseAndNonRetryable(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		call core.ToolCall
+		name       string
+		call       core.ToolCall
+		wantAction string
 	}{
-		{name: "shell", call: core.ToolCall{Name: "shell_run"}},
-		{name: "write", call: core.ToolCall{Name: "write_file"}},
+		{name: "shell", call: core.ToolCall{Name: "shell_run"}, wantAction: "do_not_retry_same_command"},
+		{name: "write", call: core.ToolCall{Name: "write_file"}, wantAction: "do_not_retry_same_call"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			code, _, summary, data := modeBlockedDetailsForCall(session.ModePlan, tc.call)
 			if code != "plan_mode_blocked" {
 				t.Fatalf("expected plan_mode_blocked, got %q", code)
 			}
-			for _, want := range []string{"<proposed_plan>", "Only the user or UI can switch modes"} {
-				if !strings.Contains(summary, want) {
-					t.Fatalf("summary missing %q:\n%s", want, summary)
-				}
+			if !strings.Contains(summary, "do not retry") {
+				t.Fatalf("summary missing do-not-retry guidance:\n%s", summary)
 			}
-			for _, forbidden := range []string{"/agent", "Shift+Tab"} {
+			if tc.call.Name == "shell_run" && !strings.Contains(summary, "same shell operation with another shell command") {
+				t.Fatalf("shell summary missing same-shell-operation retry guidance:\n%s", summary)
+			}
+			if !strings.Contains(summary, "<proposed_plan>") {
+				t.Fatalf("summary missing proposed_plan guidance:\n%s", summary)
+			}
+			for _, forbidden := range []string{"/agent", "Shift+Tab", "Only the user or UI can switch modes"} {
 				if strings.Contains(summary, forbidden) {
-					t.Fatalf("summary should not suggest assistant mode switching %q:\n%s", forbidden, summary)
+					t.Fatalf("summary leaked noisy guidance %q:\n%s", forbidden, summary)
 				}
 			}
 			if got := data["current_mode"]; got != "plan" {
 				t.Fatalf("expected current_mode plan, got %#v", got)
+			}
+			if got := data["tool"]; got != tc.call.Name {
+				t.Fatalf("expected tool %q, got %#v", tc.call.Name, got)
+			}
+			if got := data["action"]; got != tc.wantAction {
+				t.Fatalf("expected action %q, got %#v", tc.wantAction, got)
+			}
+			if got := data["retryable"]; got != false {
+				t.Fatalf("expected retryable false, got %#v", got)
 			}
 			if _, ok := data["suggested_modes"]; ok {
 				t.Fatalf("plan mode blocked data should not suggest mode commands: %+v", data)

@@ -93,6 +93,18 @@ func TestApprovalMetadataIncludesShellRisk(t *testing.T) {
 	}
 }
 
+func TestApprovalMetadataIncludesGrantEffect(t *testing.T) {
+	call := core.ToolCall{ID: "read-1", Name: "read_file", Input: `{"file_path":"/outside/a.txt"}`}
+
+	got := ApprovalMetadata(call, []string{"grant:external_directory:/outside"}, nil)
+	if got["effect_kind"] != "external_directory" {
+		t.Fatalf("effect_kind = %v, metadata=%+v", got["effect_kind"], got)
+	}
+	if got["effect_scope"] != "/outside" || got["grant_pattern"] != "/outside" {
+		t.Fatalf("grant metadata = %+v, want /outside scope and pattern", got)
+	}
+}
+
 func TestApprovalKeysForDecisionUseExternalReadDirectoryScope(t *testing.T) {
 	decision := PolicyDecision{Permission: "external_directory", Pattern: "/repo/external", RequiresApproval: true}
 	calls := []core.ToolCall{
@@ -102,14 +114,71 @@ func TestApprovalKeysForDecisionUseExternalReadDirectoryScope(t *testing.T) {
 		{Name: "search_files", Input: `{"path":"../external","pattern":"a"}`},
 	}
 	for _, call := range calls {
-		if got, want := ApprovalKeysForDecision(call, decision), []string{"external_read:/repo/external"}; !reflect.DeepEqual(got, want) {
+		if got, want := ApprovalKeysForDecision(call, decision), []string{"grant:external_directory:/repo/external"}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("%s external read keys = %v, want %v", call.Name, got, want)
 		}
 	}
 
-	roots := ExternalReadApprovalRootsFromKeys([]string{"external_read:/repo/external"})
+	roots := ExternalReadApprovalRootsFromKeys([]string{"grant:external_directory:/repo/external"})
 	if !reflect.DeepEqual(roots, []string{"/repo/external"}) {
 		t.Fatalf("external read roots = %v", roots)
+	}
+}
+
+func TestApprovalKeysForDecisionDoNotReuseExternalDirectoryGrantForShell(t *testing.T) {
+	command := "echo x >/tmp/a"
+	call := core.ToolCall{Name: "shell_run", Input: `{"command":"` + command + `"}`}
+	decision := PolicyDecision{Permission: "external_directory", Pattern: "/tmp", RequiresApproval: true}
+
+	keys := ApprovalKeysForDecision(call, decision)
+	want := ShellApprovalKeys(command)
+	if !reflect.DeepEqual(keys, want) {
+		t.Fatalf("shell external directory keys = %v, want command-specific keys %v", keys, want)
+	}
+
+	cache := NewSessionApprovalCache()
+	cache.Grant("s", "grant:external_directory:/tmp")
+	if cache.HasAll("s", keys) {
+		t.Fatal("external directory grant must not approve shell commands")
+	}
+}
+
+func TestApprovalKeysForDecisionDoNotReuseExternalDirectoryGrantForMutatingFileTools(t *testing.T) {
+	decision := PolicyDecision{Permission: "external_directory", Pattern: "/tmp", RequiresApproval: true}
+	calls := []core.ToolCall{
+		{Name: "edit", Input: `{"file_path":"/tmp/a.txt","search":"old","replace":"new"}`},
+		{Name: "write", Input: `{"file_path":"/tmp/a.txt","content":"new"}`},
+		{Name: "apply_patch", Input: `{"patch":"*** Begin Patch\n*** Update File: /tmp/a.txt\n@@\n-old\n+new\n*** End Patch"}`},
+	}
+
+	cache := NewSessionApprovalCache()
+	cache.Grant("s", "grant:external_directory:/tmp")
+	for _, call := range calls {
+		keys := ApprovalKeysForDecision(call, decision)
+		want := ApprovalKeys(call)
+		if !reflect.DeepEqual(keys, want) {
+			t.Fatalf("%s external directory keys = %v, want file-specific keys %v", call.Name, keys, want)
+		}
+		if cache.HasAll("s", keys) {
+			t.Fatalf("external directory grant must not approve %s", call.Name)
+		}
+	}
+}
+
+func TestApprovalKeysForDecisionDoNotPersistExternalDirectoryGrantForMCPTools(t *testing.T) {
+	call := core.ToolCall{Name: "mcp__fs__read_file", Input: `{"path":"/tmp/a.txt"}`}
+	decision := PolicyDecision{Permission: "external_directory", Pattern: "/tmp", RequiresApproval: true}
+
+	keys := ApprovalKeysForDecision(call, decision)
+	want := ApprovalKeys(call)
+	if !reflect.DeepEqual(keys, want) {
+		t.Fatalf("MCP external directory keys = %v, want exact MCP approval keys %v", keys, want)
+	}
+
+	cache := NewSessionApprovalCache()
+	cache.Grant("s", "grant:external_directory:/tmp")
+	if cache.HasAll("s", keys) {
+		t.Fatal("external directory grant must not approve MCP tool keys")
 	}
 }
 
@@ -122,13 +191,13 @@ func TestApprovalKeysForDecisionPreserveReadRuleApprovalForExternalReads(t *test
 	}
 
 	keys := ApprovalKeysForDecision(call, decision)
-	want := []string{"external_read:/outside", `read_file|{"file_path":"/outside/.env"}`}
+	want := []string{"grant:external_directory:/outside", `read_file|{"file_path":"/outside/.env"}`}
 	if !reflect.DeepEqual(keys, want) {
 		t.Fatalf("external .env keys = %v, want %v", keys, want)
 	}
 
 	cache := NewSessionApprovalCache()
-	cache.Grant("s", "external_read:/outside")
+	cache.Grant("s", "grant:external_directory:/outside")
 	if cache.HasAll("s", keys) {
 		t.Fatal("external directory grant must not bypass the sensitive read approval key")
 	}
@@ -161,16 +230,38 @@ func TestExternalReadRootsForDecisionPreserveConfiguredAllowWithReadApproval(t *
 
 func TestSessionApprovalCacheReusesExternalReadParentRoots(t *testing.T) {
 	cache := NewSessionApprovalCache()
+	cache.Grant("s", "grant:external_directory:/outside")
+
+	if !cache.Has("s", "grant:external_directory:/outside/sub/file.go") {
+		t.Fatal("expected parent external_directory approval to cover descendant")
+	}
+	if cache.Has("s", "grant:external_directory:/outside-other/file.go") {
+		t.Fatal("external_directory approval must not cover sibling paths")
+	}
+	if cache.Has("s", "grant:external_directory:/out") {
+		t.Fatal("external_directory child approval must not imply parent approval")
+	}
+}
+
+func TestSessionApprovalCachePreservesLegacyExternalReadGrants(t *testing.T) {
+	cache := NewSessionApprovalCache()
 	cache.Grant("s", "external_read:/outside")
 
-	if !cache.Has("s", "external_read:/outside/sub/file.go") {
-		t.Fatal("expected parent external_read approval to cover descendant")
+	if !cache.Has("s", "grant:external_directory:/outside/sub/file.go") {
+		t.Fatal("expected legacy external_read approval to cover descendant external directory grant")
 	}
-	if cache.Has("s", "external_read:/outside-other/file.go") {
-		t.Fatal("external_read approval must not cover sibling paths")
+	if cache.Has("s", "grant:external_directory:/outside-other/file.go") {
+		t.Fatal("legacy external_read approval must not cover sibling paths")
 	}
-	if cache.Has("s", "external_read:/out") {
-		t.Fatal("external_read child approval must not imply parent approval")
+	if cache.Has("s", "shell_run|cmd:cat /outside/sub/file.go") {
+		t.Fatal("legacy external_read approval must not approve shell command keys")
+	}
+}
+
+func TestExternalReadRootsFromKeysPreservesLegacyExternalReadKeys(t *testing.T) {
+	roots := ExternalReadApprovalRootsFromKeys([]string{"external_read:/outside"})
+	if !reflect.DeepEqual(roots, []string{"/outside"}) {
+		t.Fatalf("legacy external read roots = %v, want /outside", roots)
 	}
 }
 

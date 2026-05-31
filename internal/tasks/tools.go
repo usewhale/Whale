@@ -69,7 +69,7 @@ type spawnSubagentTool struct {
 
 func (t spawnSubagentTool) Name() string { return "spawn_subagent" }
 func (t spawnSubagentTool) Description() string {
-	return "Run one bounded read-only child agent for exploration, research, or review when the subtask needs file/search/web tools. Subagents do not have shell access. This is inline, not a background worker; progress is streamed and the parent receives the final summary."
+	return "Run one bounded read-only child agent for exploration, research, or review. Omit capabilities for workspace read tools, pass web.search/web.fetch for web research, or [] for model-only synthesis. Subagents do not have shell access. This is inline, not a background worker; progress is streamed and the parent receives the final summary."
 }
 func (t spawnSubagentTool) Parameters() map[string]any {
 	return map[string]any{
@@ -80,6 +80,12 @@ func (t spawnSubagentTool) Parameters() map[string]any {
 			"role":           map[string]any{"type": "string", "enum": []string{"explore", "research", "review"}},
 			"model":          map[string]any{"type": "string", "description": "Optional model override. Defaults to the configured cheap model."},
 			"max_tool_iters": map[string]any{"type": "integer", "minimum": 1, "maximum": 64},
+			"max_tool_calls": map[string]any{"type": "integer", "minimum": 1, "maximum": 128},
+			"capabilities": map[string]any{
+				"type":        "array",
+				"description": "Optional least-privilege tool capabilities. Omit for workspace.read. Pass [] for model-only.",
+				"items":       map[string]any{"type": "string", "enum": []string{CapabilityWorkspaceRead, CapabilityWebSearch, CapabilityWebFetch, CapabilityMCPRead}},
+			},
 		},
 		"required": []string{"task"},
 	}
@@ -133,6 +139,7 @@ func (t spawnSubagentTool) RunWithProgress(ctx context.Context, call core.ToolCa
 			"summary":            res.Summary,
 			"truncated":          res.Truncated,
 			"tool_calls":         res.ToolCalls,
+			"capabilities":       req.Capabilities,
 			"duration_ms":        res.DurationMS,
 			"completed_at":       res.CompletedAt,
 		},

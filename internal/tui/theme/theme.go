@@ -106,6 +106,8 @@ func RoleBorder(role string) lipgloss.Color {
 		return Default.Result
 	case "result_ok", "shell_result_ok":
 		return Default.Success
+	case "result_nonzero", "shell_result_nonzero":
+		return Default.Warn
 	case "result_denied", "shell_result_denied":
 		return Default.ResultDenied
 	case "result_failed", "shell_result_failed", "error":

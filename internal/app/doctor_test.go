@@ -83,12 +83,6 @@ func TestRunDoctorFlagsBrokenFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte("[["), 0o600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(workspace, ".whale"), 0o755); err != nil {
-		t.Fatalf("mkdir .whale: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(workspace, ".whale", "settings.json"), []byte("{"), 0o600); err != nil {
-		t.Fatalf("write settings: %v", err)
-	}
 
 	report, err := RunDoctor(context.Background(), Config{DataDir: dataDir, MemoryFileOrder: "AGENTS.md"}, workspace)
 	if err != nil {
@@ -100,40 +94,8 @@ func TestRunDoctorFlagsBrokenFiles(t *testing.T) {
 	if got := findDoctorCheck(report.Checks, "config"); got.Level != DoctorFail {
 		t.Fatalf("config level: %+v", got)
 	}
-	if got := findDoctorCheck(report.Checks, "legacy config"); got.Level != DoctorWarn {
-		t.Fatalf("legacy config level: %+v", got)
-	}
-	if got := findDoctorCheck(report.Checks, "legacy config"); !strings.Contains(got.Detail, "v0.1.8-or-earlier") || !strings.Contains(got.Detail, "run `whale migrate-config`") {
-		t.Fatalf("legacy config detail: %+v", got)
-	}
 	if got := findDoctorCheck(report.Checks, "project doc"); got.Level != DoctorWarn {
 		t.Fatalf("project doc level: %+v", got)
-	}
-}
-
-func TestRunDoctorLegacyConfigIgnoredWhenConfigExists(t *testing.T) {
-	dataDir := t.TempDir()
-	workspace := t.TempDir()
-	if err := SaveConfigFile(GlobalConfigPath(dataDir), FileConfig{Model: "deepseek-v4-flash"}); err != nil {
-		t.Fatalf("SaveConfigFile: %v", err)
-	}
-	if err := os.WriteFile(preferencesPath(dataDir), []byte(`{"model":"deepseek-v4-pro"}`), 0o600); err != nil {
-		t.Fatalf("write preferences: %v", err)
-	}
-
-	report, err := RunDoctor(context.Background(), Config{DataDir: dataDir, MemoryFileOrder: "AGENTS.md"}, workspace)
-	if err != nil {
-		t.Fatalf("RunDoctor: %v", err)
-	}
-	got := findDoctorCheck(report.Checks, "legacy config")
-	if got.Level != DoctorWarn {
-		t.Fatalf("legacy config level: %+v", got)
-	}
-	if !strings.Contains(got.Detail, "v0.1.8-or-earlier") || !strings.Contains(got.Detail, "ignored") || !strings.Contains(got.Detail, "config.toml is active") || !strings.Contains(got.Detail, "no migration needed") {
-		t.Fatalf("legacy config detail: %+v", got)
-	}
-	if strings.Contains(got.Detail, "run `whale migrate-config`") {
-		t.Fatalf("legacy config should not suggest migration after config exists: %+v", got)
 	}
 }
 

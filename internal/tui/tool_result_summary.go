@@ -36,7 +36,7 @@ func summarizeToolResultForChat(toolName, raw string) (string, string) {
 			successBySignal = true
 		}
 	}
-	if env.status != "" && env.status != "ok" && env.status != "running" && env.status != "done" && env.status != "completed" && env.status != "success" && env.status != "exited" {
+	if env.status != "" && env.status != "ok" && env.status != "running" && env.status != "async_launched" && env.status != "done" && env.status != "completed" && env.status != "success" && env.status != "exited" {
 		successBySignal = false
 	}
 
@@ -49,11 +49,35 @@ func summarizeToolResultForChat(toolName, raw string) (string, string) {
 		return summarizeEditResult(toolName, env, successBySignal)
 	case "task":
 		return summarizeTaskResult(toolName, env, successBySignal)
+	case "workflow":
+		return summarizeWorkflowResult(env, successBySignal)
 	case "mcp":
 		return summarizeMCPResult(env, successBySignal)
 	default:
 		if !successBySignal {
 			return summarizeFailedResult(env, "tool failed")
+		}
+		return "result_ok", "✓"
+	}
+}
+
+func summarizeWorkflowResult(env toolResultEnvelope, successBySignal bool) (string, string) {
+	if !successBySignal {
+		return summarizeFailedResult(env, "workflow failed")
+	}
+	summary := firstNonEmptyLine(env.summary)
+	if summary == "" {
+		summary = firstNonEmptyLine(core.AsString(env.data["summary"]))
+	}
+	switch env.status {
+	case "async_launched", "running":
+		if summary != "" {
+			return "result_running", "running in background · " + summary
+		}
+		return "result_running", "running in background"
+	default:
+		if summary != "" {
+			return "result_ok", "✓ · " + summary
 		}
 		return "result_ok", "✓"
 	}
@@ -141,8 +165,13 @@ func summarizeShellResult(env toolResultEnvelope, successBySignal bool) (string,
 		return summarizeFailedShellResult(env)
 	}
 
-	_ = exitCode
-	_ = hasExitCode
+	if shellExitIsNoMatches(env) {
+		return summarizeNoMatchShellResult(env)
+	}
+	if hasExitCode && exitCode != 0 {
+		return summarizeNonZeroShellResult(env, exitCode, duration)
+	}
+
 	parts := []string{"✓"}
 	if duration != "" {
 		parts = append(parts, duration)
@@ -154,20 +183,33 @@ func summarizeShellResult(env toolResultEnvelope, successBySignal bool) (string,
 	return "result_ok", strings.Join(parts, " · ")
 }
 
+func summarizeNonZeroShellResult(env toolResultEnvelope, exitCode int, duration string) (string, string) {
+	parts := []string{fmt.Sprintf("exit %d", exitCode)}
+	if duration != "" {
+		parts = append(parts, duration)
+	}
+	if reason := shellDiagnosisLabel(core.AsString(env.diagnosis["reason"])); reason != "" {
+		parts = append(parts, reason)
+	}
+	output := summarizeShellOutput(shellPayloadOutput(env, true))
+	if output != "" {
+		return "result_nonzero", strings.Join(parts, " · ") + "\n" + output
+	}
+	if strings.TrimSpace(core.AsString(env.payload["stderr"])) == "" {
+		parts = append(parts, "stderr empty")
+	}
+	if strings.TrimSpace(core.AsString(env.payload["stdout"])) == "" {
+		parts = append(parts, "stdout empty")
+	}
+	return "result_nonzero", strings.Join(parts, " · ")
+}
+
 func summarizeFailedShellResult(env toolResultEnvelope) (string, string) {
+	if isModeBlockedCode(env.code) {
+		return "result_mode_hint", summarizeModeBlocked(env, true)
+	}
 	if shellFailureIsNoMatches(env) {
-		duration := formatDurationMS(asInt64(env.metrics["duration_ms"]))
-		output := summarizeShellOutput(core.AsString(env.payload["stdout"]))
-		if duration != "" {
-			if output != "" {
-				return "result_neutral", "No matches · " + duration + "\n" + output
-			}
-			return "result_neutral", "No matches · " + duration
-		}
-		if output != "" {
-			return "result_neutral", "No matches\n" + output
-		}
-		return "result_neutral", "No matches"
+		return summarizeNoMatchShellResult(env)
 	}
 	if shellFailureUsesGenericSummary(env) {
 		return summarizeFailedResult(env, "command failed")
@@ -199,10 +241,36 @@ func shellFailureIsNoMatches(env toolResultEnvelope) bool {
 	if env.code != "exec_failed" || !hasInt(env.metrics["exit_code"]) || asInt(env.metrics["exit_code"]) != 1 {
 		return false
 	}
+	return shellExitOneIsNoMatches(env)
+}
+
+func shellExitIsNoMatches(env toolResultEnvelope) bool {
+	if !hasInt(env.metrics["exit_code"]) || asInt(env.metrics["exit_code"]) != 1 {
+		return false
+	}
+	return shellExitOneIsNoMatches(env)
+}
+
+func shellExitOneIsNoMatches(env toolResultEnvelope) bool {
 	if strings.TrimSpace(core.AsString(env.payload["stderr"])) != "" {
 		return false
 	}
 	return shellCommandUsesSearchExitOne(core.AsString(env.payload["command"]))
+}
+
+func summarizeNoMatchShellResult(env toolResultEnvelope) (string, string) {
+	duration := formatDurationMS(asInt64(env.metrics["duration_ms"]))
+	output := summarizeShellOutput(core.AsString(env.payload["stdout"]))
+	if duration != "" {
+		if output != "" {
+			return "result_neutral", "No matches · " + duration + "\n" + output
+		}
+		return "result_neutral", "No matches · " + duration
+	}
+	if output != "" {
+		return "result_neutral", "No matches\n" + output
+	}
+	return "result_neutral", "No matches"
 }
 
 func shellCommandUsesSearchExitOne(command string) bool {
@@ -348,7 +416,7 @@ func summarizeFailedResult(env toolResultEnvelope, fallback string) (string, str
 	case "request_replan":
 		return "result_failed", summarizeReplanRequired(env)
 	case "ask_mode_blocked", "plan_mode_blocked", "mode_blocked":
-		return "result_mode_hint", summarizeModeBlocked(env)
+		return "result_mode_hint", summarizeModeBlocked(env, false)
 	case "fetch_failed", "web_fetch_failed":
 		if status := httpStatusSummary(env); status != "" {
 			return "result_http_error", status
@@ -414,20 +482,28 @@ func summarizeFailedResult(env toolResultEnvelope, fallback string) (string, str
 	return "result_failed", fmt.Sprintf("%s · %s", prefix, detail)
 }
 
-func summarizeModeBlocked(env toolResultEnvelope) string {
+func isModeBlockedCode(code string) bool {
+	return code == "ask_mode_blocked" || code == "plan_mode_blocked" || code == "mode_blocked"
+}
+
+func summarizeModeBlocked(env toolResultEnvelope, isShell bool) string {
 	mode := "Current mode"
 	switch env.code {
 	case "ask_mode_blocked":
 		mode = "Ask mode"
+		if isShell {
+			return mode + " · switch to /agent to run commands"
+		}
+		return mode + " · switch to /agent to edit"
 	case "plan_mode_blocked":
 		mode = "Plan mode"
+		if isShell {
+			return mode + " · shell command not confirmed read-only"
+		}
+		return mode + " · tool unavailable while planning"
 	}
-	summary := firstNonEmptyLine(core.FirstNonEmpty(env.summary, env.message, core.AsString(env.data["summary"])))
-	if strings.Contains(summary, "/agent") {
-		return mode + " · switch to /agent to edit"
-	}
-	if summary != "" {
-		return mode + " · " + summary
+	if isShell {
+		return mode + " · shell command unavailable"
 	}
 	return mode + " · tool unavailable"
 }

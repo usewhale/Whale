@@ -54,7 +54,7 @@ type patchFilePlan struct {
 	remove      bool
 }
 
-func (b *Toolset) applyPatch(_ context.Context, call core.ToolCall) (core.ToolResult, error) {
+func (b *Toolset) applyPatch(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
 	var in struct {
 		Patch string `json:"patch"`
 	}
@@ -86,7 +86,7 @@ func (b *Toolset) applyPatch(_ context.Context, call core.ToolCall) (core.ToolRe
 			remove:         plan.remove,
 		})
 	}
-	if err := b.commitFilePlans(commitPlans); err != nil {
+	if err := b.commitFilePlans(ctx, commitPlans); err != nil {
 		if isFileConflict(err) {
 			return marshalToolError(call, "patch_conflict", err.Error()+": read the file again before patching"), nil
 		}

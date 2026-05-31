@@ -3,28 +3,32 @@ package protocol
 type IntentKind string
 
 const (
-	IntentSubmit              IntentKind = "submit"
-	IntentSubmitLocal         IntentKind = "submit_local"
-	IntentAllowTool           IntentKind = "allow_tool"
-	IntentAllowToolForSession IntentKind = "allow_tool_for_session"
-	IntentDenyTool            IntentKind = "deny_tool"
-	IntentCancelToolApproval  IntentKind = "cancel_tool_approval"
-	IntentSubmitUserInput     IntentKind = "submit_user_input"
-	IntentCancelUserInput     IntentKind = "cancel_user_input"
-	IntentSelectSession       IntentKind = "select_session"
-	IntentRequestSessions     IntentKind = "request_sessions"
-	IntentRequestExit         IntentKind = "request_exit"
-	IntentShutdown            IntentKind = "shutdown"
-	IntentSetModelAndEffort   IntentKind = "set_model_and_effort"
-	IntentSetApprovalMode     IntentKind = "set_approval_mode"
-	IntentSetViewMode         IntentKind = "set_view_mode"
-	IntentToggleMode          IntentKind = "toggle_mode"
-	IntentImplementPlan       IntentKind = "implement_plan"
-	IntentDeclinePlan         IntentKind = "decline_plan"
-	IntentRequestSkillsManage IntentKind = "request_skills_manage"
-	IntentSetSkillEnabled     IntentKind = "set_skill_enabled"
-	IntentSetPluginEnabled    IntentKind = "set_plugin_enabled"
-	IntentWorktreeExitChoice  IntentKind = "worktree_exit_choice"
+	IntentSubmit               IntentKind = "submit"
+	IntentSubmitLocal          IntentKind = "submit_local"
+	IntentAllowTool            IntentKind = "allow_tool"
+	IntentAllowToolForSession  IntentKind = "allow_tool_for_session"
+	IntentDenyTool             IntentKind = "deny_tool"
+	IntentCancelToolApproval   IntentKind = "cancel_tool_approval"
+	IntentSubmitUserInput      IntentKind = "submit_user_input"
+	IntentCancelUserInput      IntentKind = "cancel_user_input"
+	IntentSelectRewindMessage  IntentKind = "select_rewind_message"
+	IntentSelectSession        IntentKind = "select_session"
+	IntentRequestSessions      IntentKind = "request_sessions"
+	IntentRequestExit          IntentKind = "request_exit"
+	IntentShutdown             IntentKind = "shutdown"
+	IntentSetModelAndEffort    IntentKind = "set_model_and_effort"
+	IntentSetApprovalMode      IntentKind = "set_approval_mode"
+	IntentSetViewMode          IntentKind = "set_view_mode"
+	IntentToggleMode           IntentKind = "toggle_mode"
+	IntentImplementPlan        IntentKind = "implement_plan"
+	IntentDeclinePlan          IntentKind = "decline_plan"
+	IntentRequestSkillsManage  IntentKind = "request_skills_manage"
+	IntentSetSkillEnabled      IntentKind = "set_skill_enabled"
+	IntentSetPluginEnabled     IntentKind = "set_plugin_enabled"
+	IntentWorktreeExitChoice   IntentKind = "worktree_exit_choice"
+	IntentRequestWorkflowPanel IntentKind = "request_workflow_panel"
+	IntentCancelWorkflowRun    IntentKind = "cancel_workflow_run"
+	IntentStartWorkflow        IntentKind = "start_workflow"
 )
 
 type Intent struct {
@@ -34,6 +38,7 @@ type Intent struct {
 	ToolCallID     string             `json:"tool_call_id,omitempty"`
 	UserInput      *UserInputResponse `json:"user_input,omitempty"`
 	SessionInput   string             `json:"session_input,omitempty"`
+	MessageID      string             `json:"message_id,omitempty"`
 	Model          string             `json:"model,omitempty"`
 	Effort         string             `json:"effort,omitempty"`
 	Thinking       string             `json:"thinking,omitempty"`
@@ -45,6 +50,11 @@ type Intent struct {
 	PluginEnabled  bool               `json:"plugin_enabled,omitempty"`
 	SkillBinding   *SkillBinding      `json:"skill_binding,omitempty"`
 	WorktreeAction string             `json:"worktree_action,omitempty"`
+	WorkflowRunID  string             `json:"workflow_run_id,omitempty"`
+	WorkflowName   string             `json:"workflow_name,omitempty"`
+	WorkflowArgs   string             `json:"workflow_args,omitempty"`
+	WorkflowResume string             `json:"workflow_resume,omitempty"`
+	WorkflowTrust  bool               `json:"workflow_trust,omitempty"`
 }
 
 type SkillBinding struct {

@@ -98,6 +98,7 @@ func (m *model) handleInfoEvent(ev protocol.Event) {
 	}
 	m.addLog(logEntry{Kind: "info", Source: "system", Summary: ev.Text, Raw: ev.Text})
 	m.status = "ready"
+	m.syncModelEffortFromLocalResult(ev.LocalResult)
 	m.syncModelEffortFromInfo(ev.Text)
 	m.refreshViewportContentFollow(true)
 }
@@ -109,7 +110,7 @@ func (m *model) handleErrorEvent(ev protocol.Event) {
 	m.status = "error"
 }
 
-func (m *model) handleLocalSubmitResultEvent(ev protocol.Event) {
+func (m *model) handleLocalSubmitResultEvent(ev protocol.Event) tea.Cmd {
 	m.clearProviderRetryStatus()
 	role := ev.Status
 	if role == "" {
@@ -117,7 +118,18 @@ func (m *model) handleLocalSubmitResultEvent(ev protocol.Event) {
 	}
 	if !isEnvironmentInventoryBlock(ev.Text) {
 		m.appendLocalCommandEcho(m.popLocalSubmitCommand())
-		m.appendLocalSubmitResult(role, ev.Text, ev.LocalResult)
+		if ev.LocalResult != nil && ev.LocalResult.Kind == "workflow-launch" {
+			m.addLog(logEntry{Kind: role, Source: "system", Summary: ev.Text, Raw: ev.Text})
+			return m.openWorkflowLaunch(ev.LocalResult)
+		}
+		if ev.LocalResult != nil && ev.LocalResult.Kind == "workflow-run" {
+			m.appendLocalSubmitResult(role, ev.Text, nil)
+		} else if shouldOpenWorkflowPanelForLocalResult(ev.LocalResult) {
+			m.addLog(logEntry{Kind: role, Source: "system", Summary: ev.Text, Raw: ev.Text})
+			return m.openWorkflowPanel(ev.LocalResult)
+		} else {
+			m.appendLocalSubmitResult(role, ev.Text, ev.LocalResult)
+		}
 	} else {
 		m.addLog(logEntry{
 			Kind:    "env_summary",
@@ -131,9 +143,23 @@ func (m *model) handleLocalSubmitResultEvent(ev protocol.Event) {
 		m.status = "error"
 	}
 	if role == "info" {
+		m.syncModelEffortFromLocalResult(ev.LocalResult)
 		m.syncModelEffortFromInfo(ev.Text)
 		m.refreshViewportContentFollow(true)
 	}
+	return nil
+}
+
+func (m *model) handleWorkflowTerminalEvent(ev protocol.Event) {
+	m.clearProviderRetryStatus()
+	if ev.LocalResult != nil {
+		m.appendLocalResult(ev.LocalResult)
+	} else if strings.TrimSpace(ev.Text) != "" {
+		m.appendTranscript("notice", tuirender.KindNotice, ev.Text)
+	}
+	m.addLog(logEntry{Kind: "workflow_terminal", Source: "workflow", Summary: truncateLine(ev.Text, 120), Raw: ev.Text})
+	m.status = "ready"
+	m.refreshViewportContentFollow(true)
 }
 
 func (m *model) handleDiffResultEvent(ev protocol.Event) {
@@ -434,6 +460,7 @@ func (m *model) handleClearScreenEvent() tea.Cmd {
 func (m *model) handleSessionHydratedEvent(ev protocol.Event) tea.Cmd {
 	m.mode = modeChat
 	m.resumeMenu = false
+	isRewind := metadataBool(ev.Metadata["rewind"])
 	prevSessionID := m.sessionID
 	if strings.TrimSpace(ev.SessionID) != "" {
 		m.sessionID = strings.TrimSpace(ev.SessionID)
@@ -452,9 +479,22 @@ func (m *model) handleSessionHydratedEvent(ev protocol.Event) tea.Cmd {
 	m.commitLiveTranscript(true)
 	m.trimHydratedTranscriptForDisplay(maxHydratedTranscriptLines)
 	var eventCmd tea.Cmd
-	if sessionChanged {
+	if sessionChanged || isRewind {
 		hadStartupHeaderPrinted = false
 		eventCmd = clearScreenCmd()
+	}
+	if isRewind {
+		m.input.SetValue(metadataString(ev.Metadata["restore_input"]))
+		m.input.SetCursorEnd()
+		m.historyIndex = -1
+		m.historyDraft = ""
+		m.lastHistoryText = ""
+		m.inHistoryNav = false
+		m.slash.matches = nil
+		m.slash.selected = 0
+		m.slash.argumentHint = ""
+		m.skills.matches = nil
+		m.skills.selected = 0
 	}
 	if len(m.transcript) > 0 || hadStartupHeaderPrinted {
 		m.startupHeaderPrinted = true

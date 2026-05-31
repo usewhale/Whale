@@ -2,7 +2,11 @@ package app
 
 import (
 	"context"
+	"sync"
+	"time"
+
 	"github.com/usewhale/whale/internal/agent"
+	"github.com/usewhale/whale/internal/checkpoint"
 	"github.com/usewhale/whale/internal/core"
 	whalemcp "github.com/usewhale/whale/internal/mcp"
 	"github.com/usewhale/whale/internal/plugins"
@@ -10,8 +14,7 @@ import (
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/store"
 	"github.com/usewhale/whale/internal/tools"
-	"sync"
-	"time"
+	"github.com/usewhale/whale/internal/workflow"
 )
 
 const (
@@ -48,6 +51,7 @@ type Config struct {
 	APIBaseURL               string
 	SkillsDisabled           []string
 	PluginsDisabled          []string
+	TrustedWorkflows         []string
 }
 
 type StartOptions struct {
@@ -99,6 +103,7 @@ type App struct {
 	toolset               *tools.Toolset
 	baseTools             []core.Tool
 	taskTools             []core.Tool
+	workflowTools         []core.Tool
 	hooks                 []agent.ResolvedHook
 	hookRunner            *agent.HookRunner
 	hookSources           []string
@@ -115,6 +120,9 @@ type App struct {
 	mcpManager            *whalemcp.Manager
 	pluginManager         *plugins.Manager
 	pluginTools           []core.Tool
+	checkpoints           *checkpoint.Manager
+	workflowManager       *workflow.RunManager
+	workflowRunner        *workflow.ScriptRunner
 	worktree              WorktreeSession
 	mcpInitMu             sync.Mutex
 	mcpInitStarted        bool

@@ -19,12 +19,13 @@ func (b *Toolset) searchTools() []core.Tool {
 				},
 				"required": []string{"pattern"},
 			},
-			readOnly: true,
-			fn:       b.searchContent,
+			readOnly:     true,
+			capabilities: []string{"workspace.read"},
+			fn:           b.searchContent,
 		},
 		toolFn{
 			name:        "search_files",
-			description: "Search file names and relative paths recursively. Workspace, git worktree, and discovered local skill paths are read directly; external paths request file access approval before searching. Omit path or pass an empty path to search the workspace root. Best for locating candidate files before read_file. Output is capped by limit; if results are truncated, refine path/pattern before retrying broad searches.",
+			description: "Search file names and relative paths recursively. Workspace, git worktree, and discovered local skill paths are read directly; external paths request file access approval before searching. Omit path or pass an empty path to search the workspace root. Best for locating candidate files before read_file. Does not support include; use grep with include to search content by file glob. Output is capped by limit; if results are truncated, refine path/pattern before retrying broad searches.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
@@ -35,8 +36,9 @@ func (b *Toolset) searchTools() []core.Tool {
 				},
 				"required": []string{"pattern"},
 			},
-			readOnly: true,
-			fn:       b.searchFiles,
+			readOnly:     true,
+			capabilities: []string{"workspace.read"},
+			fn:           b.searchFiles,
 		},
 	}
 }

@@ -369,9 +369,6 @@ func pathInsideTrustedTemp(clean string) bool {
 		clean == "/private/tmp" || strings.HasPrefix(clean, "/private/tmp/")
 }
 func pathInsideTrustedShellPath(clean string) bool {
-	if pathInsideTrustedTemp(clean) {
-		return true
-	}
 	return filepath.Clean(clean) == "/dev/null"
 }
 

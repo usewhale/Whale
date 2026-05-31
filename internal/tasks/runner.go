@@ -6,6 +6,7 @@ import (
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/defaults"
 	"github.com/usewhale/whale/internal/llm"
+	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/store"
 )
 
@@ -36,6 +37,7 @@ type RunnerConfig struct {
 	DefaultMaxToolIters  int
 	SummaryMaxChars      int
 	UsageLogPath         string
+	ApprovalFunc         policy.ApprovalFunc
 }
 
 type Runner struct {
@@ -56,6 +58,7 @@ type Runner struct {
 	defaultMaxToolIters  int
 	summaryMaxChars      int
 	usageLogPath         string
+	approvalFunc         policy.ApprovalFunc
 }
 
 func NewRunner(cfg RunnerConfig) *Runner {
@@ -93,5 +96,6 @@ func NewRunner(cfg RunnerConfig) *Runner {
 		defaultMaxToolIters:  maxToolIters,
 		summaryMaxChars:      summaryMaxChars,
 		usageLogPath:         strings.TrimSpace(cfg.UsageLogPath),
+		approvalFunc:         cfg.ApprovalFunc,
 	}
 }

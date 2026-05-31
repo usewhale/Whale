@@ -144,53 +144,6 @@ func newSetupCmd(opts *cliOptions) *cobra.Command {
 	}
 }
 
-func newMigrateConfigCmd(opts *cliOptions) *cobra.Command {
-	return &cobra.Command{
-		Use:   "migrate-config",
-		Short: "Migrate Whale v0.1.8-or-earlier config files to config.toml",
-		Long: strings.TrimSpace(`Migrate legacy Whale config files to config.toml.
-
-This is only needed if you used Whale v0.1.8 or earlier and have legacy
-preferences.json or settings.json files. If you started with Whale v0.1.9 or
-newer, you do not need to run this command.`),
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := rejectWorktreeFlag(cmd); err != nil {
-				return err
-			}
-			workspaceRoot, err := os.Getwd()
-			if err != nil {
-				return fmt.Errorf("get workspace: %w", err)
-			}
-			report, err := app.MigrateConfig(opts.cfg.DataDir, workspaceRoot)
-			if err != nil {
-				return err
-			}
-			out := cmd.OutOrStdout()
-			fmt.Fprintln(out, "migrate-config is only needed for Whale v0.1.8 or earlier legacy config files.")
-			if len(report.Written) == 0 {
-				if len(report.Skipped) == 0 {
-					fmt.Fprintln(out, "no legacy config to migrate")
-				} else {
-					fmt.Fprintln(out, "no config.toml changes needed")
-				}
-			} else {
-				fmt.Fprintln(out, "migrated config:")
-				for _, path := range report.Written {
-					fmt.Fprintf(out, "  %s\n", path)
-				}
-			}
-			if len(report.Skipped) > 0 {
-				fmt.Fprintln(out, "obsolete Whale v0.1.8-or-earlier files are no longer read:")
-				for _, path := range report.Skipped {
-					fmt.Fprintf(out, "  %s\n", path)
-				}
-			}
-			return nil
-		},
-	}
-}
-
 func runSetup(out io.Writer, in io.Reader, dataDir string) error {
 	reader := bufio.NewReader(in)
 	envKey := strings.TrimSpace(os.Getenv("DEEPSEEK_API_KEY"))

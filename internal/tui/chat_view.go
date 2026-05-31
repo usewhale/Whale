@@ -84,6 +84,10 @@ func (m *model) beginTurnTranscript() {
 	m.turnTranscriptStart = len(m.transcript)
 	m.visibleAssistantThisTurn = ""
 	m.resetBusyTokenEstimate()
+	// A new turn is starting, so the previous completed turn (held in the in-app
+	// viewport at the tail) may now sink to native scrollback; the next service
+	// flush will push it in order.
+	m.holdCompletedTurnInViewport = false
 }
 
 func (m *model) recordAssistantDelta(text string) {

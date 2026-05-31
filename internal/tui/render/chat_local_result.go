@@ -75,18 +75,44 @@ func renderLocalResultFields(fields []protocol.LocalResultField, width int) stri
 	for _, field := range fields {
 		label := truncatePlain(field.Label, labelWidth)
 		label = labelStyle.Width(labelWidth).Render(label)
-		value := localResultValueStyle(field.Tone).Render(field.Value)
-		wrapped := strings.Split(strings.TrimRight(hardWrapRendered(value, valueWidth), "\n"), "\n")
+		valueStyle := localResultValueStyle(field.Tone)
+		wrapped := wrapLocalResultFieldValue(field.Value, valueWidth)
 		if len(wrapped) == 0 {
 			lines = append(lines, label+separator)
 			continue
 		}
-		lines = append(lines, label+separator+wrapped[0])
+		lines = append(lines, label+separator+valueStyle.Render(wrapped[0]))
 		for _, line := range wrapped[1:] {
-			lines = append(lines, strings.Repeat(" ", labelWidth)+separator+line)
+			lines = append(lines, strings.Repeat(" ", labelWidth)+separator+valueStyle.Render(line))
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func wrapLocalResultFieldValue(value string, width int) []string {
+	value = strings.TrimRight(value, "\n")
+	if value == "" {
+		return []string{""}
+	}
+	out := []string{}
+	lastBlank := false
+	for _, raw := range strings.Split(value, "\n") {
+		if strings.TrimSpace(raw) == "" {
+			if !lastBlank {
+				out = append(out, "")
+				lastBlank = true
+			}
+			continue
+		}
+		lastBlank = false
+		wrapped := strings.Split(strings.TrimRight(hardWrapRendered(raw, width), "\n"), "\n")
+		if len(wrapped) == 0 {
+			out = append(out, "")
+			continue
+		}
+		out = append(out, wrapped...)
+	}
+	return out
 }
 
 func localResultFieldWidths(fields []protocol.LocalResultField, width int) (labelWidth int, valueWidth int, separator string) {

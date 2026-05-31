@@ -177,6 +177,35 @@ func TestConfigFileSupportsPlugins(t *testing.T) {
 	}
 }
 
+func TestConfigFileSupportsTrustedWorkflows(t *testing.T) {
+	dir := t.TempDir()
+	path := GlobalConfigPath(dir)
+	cfg := FileConfig{
+		Workflows: FileWorkflowsConfig{Trusted: []string{"deep-research"}},
+	}
+	if err := SaveConfigFile(path, cfg); err != nil {
+		t.Fatalf("SaveConfigFile: %v", err)
+	}
+	loaded, ok, err := LoadConfigFile(path)
+	if err != nil {
+		t.Fatalf("LoadConfigFile: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected config file")
+	}
+	if len(loaded.Workflows.Trusted) != 1 || loaded.Workflows.Trusted[0] != "deep-research" {
+		t.Fatalf("trusted workflows not loaded: %+v", loaded.Workflows)
+	}
+
+	appCfg := DefaultConfig()
+	if err := ApplyFileConfig(&appCfg, loaded); err != nil {
+		t.Fatalf("ApplyFileConfig: %v", err)
+	}
+	if len(appCfg.TrustedWorkflows) != 1 || appCfg.TrustedWorkflows[0] != "deep-research" {
+		t.Fatalf("trusted workflows not applied: %+v", appCfg.TrustedWorkflows)
+	}
+}
+
 func TestConfigNewAppLoadsGlobalConfig(t *testing.T) {
 	dir := t.TempDir()
 	enabled := false
@@ -639,8 +668,5 @@ func TestSetModelAndThinkingPersistToConfig(t *testing.T) {
 	}
 	if loaded.ThinkingEnabled == nil || *loaded.ThinkingEnabled {
 		t.Fatal("persisted thinking_enabled: want false")
-	}
-	if _, err := os.Stat(preferencesPath(dir)); !os.IsNotExist(err) {
-		t.Fatalf("preferences.json should not be created, err=%v", err)
 	}
 }

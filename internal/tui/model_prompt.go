@@ -39,6 +39,9 @@ func (m *model) submitPromptWithBinding(value string, binding *protocol.SkillBin
 		return m.submitLocalNoTurn(submit)
 	}
 	m.clearEphemeralMessages()
+	if m.assembler != nil && m.assembler.Len() > 0 {
+		m.commitLiveTranscript(false)
+	}
 	m.recordPromptHistory(value)
 	m.resetHistoryNavigation()
 	m.appendTranscript("you", tuirender.KindText, visibleSubmittedText(value))

@@ -122,6 +122,10 @@ func (s *Service) handleSubmitSlashCommand(state *submitState) bool {
 		s.emit(Event{Kind: EventTurnDone})
 		return true
 	}
+	if state.line == "/rewind" || state.line == "/checkpoint" {
+		s.emitRewindMessages(true)
+		return true
+	}
 	if strings.HasPrefix(state.line, "/model ") {
 		s.emit(Event{Kind: EventError, Text: "usage: /model"})
 		s.emit(Event{Kind: EventTurnDone})
@@ -150,7 +154,7 @@ func (s *Service) handleSubmitSlashCommand(state *submitState) bool {
 		if cmd.ShouldExit {
 			s.requestExit()
 		}
-		if s.app.SessionID() != state.prevSessionID {
+		if s.app.SessionID() != state.prevSessionID || cmd.HydrateSession {
 			s.emitSessionHydrated()
 		}
 		// Emit Info after session hydration so the text isn't
@@ -183,6 +187,9 @@ func (s *Service) handleSubmitLocalCommand(state *submitState) bool {
 		return true
 	}
 	if cmd.Handled {
+		if cmd.HydrateSession {
+			s.emitSessionHydrated()
+		}
 		if cmd.Text != "" {
 			s.emit(Event{Kind: EventInfo, Text: cmd.Text, LocalResult: protocolLocalResult(cmd.LocalResult)})
 		}

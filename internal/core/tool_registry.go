@@ -207,7 +207,7 @@ func (r *ToolRegistry) DispatchWithProgress(ctx context.Context, call ToolCall, 
 			return normalizeRegistryResult(ctx, call, ToolResult{
 				ToolCallID: call.ID,
 				Name:       call.Name,
-				Content:    fmt.Sprintf(`{"ok":false,"error":%q,"code":"invalid_input"}`, err.Error()),
+				Content:    invalidToolInputContent(call.Name, err),
 				IsError:    true,
 			}, maxResultChars, time.Since(start).Milliseconds()), nil
 		}
@@ -232,6 +232,36 @@ func (r *ToolRegistry) DispatchWithProgress(ctx context.Context, call ToolCall, 
 		}, maxResultChars, time.Since(start).Milliseconds()), nil
 	}
 	return normalizeRegistryResult(ctx, call, res, maxResultChars, time.Since(start).Milliseconds()), nil
+}
+
+func invalidToolInputContent(toolName string, err error) string {
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+	env := ToolEnvelope{
+		OK:      false,
+		Success: false,
+		Code:    "invalid_input",
+		Error:   msg,
+	}
+	if toolName == "search_files" {
+		switch msg {
+		case `unknown field "include"`:
+			hint := "search_files does not support include; retry with grep for content search or remove include."
+			env.Summary = hint
+			env.Data = map[string]any{"recovery": hint}
+		case `missing required field "pattern"`:
+			hint := "search_files requires pattern; provide pattern and path, or use grep for content search."
+			env.Summary = hint
+			env.Data = map[string]any{"recovery": hint}
+		}
+	}
+	content, marshalErr := MarshalToolEnvelope(env)
+	if marshalErr != nil {
+		return fmt.Sprintf(`{"ok":false,"error":%q,"code":"invalid_input"}`, msg)
+	}
+	return content
 }
 
 func normalizeRegistryResult(ctx context.Context, call ToolCall, res ToolResult, maxResultChars int, durationMS int64) ToolResult {

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,12 +14,13 @@ import (
 )
 
 type streamDispatchContext struct {
-	SessionID string
-	Assistant core.Message
-	Model     string
-	Policy    policy.ToolPolicy
-	Tools     *core.ToolRegistry
-	Events    chan<- AgentEvent
+	SessionID           string
+	Assistant           core.Message
+	Model               string
+	Policy              policy.ToolPolicy
+	Tools               *core.ToolRegistry
+	Events              chan<- AgentEvent
+	CheckpointMessageID string
 }
 
 type toolApprovalResult struct {
@@ -209,12 +211,18 @@ func appendToolResult(ctx context.Context, sc streamDispatchContext, results *[]
 func appendBlockedToolResults(ctx context.Context, sc streamDispatchContext, blocked []core.ToolResult, results *[]core.ToolResult) error {
 	for _, blockedRes := range blocked {
 		br := blockedRes
+		reasonCode := "storm_blocked"
+		if br.Metadata != nil {
+			if raw, ok := br.Metadata["blocked_reason_code"].(string); ok && strings.TrimSpace(raw) != "" {
+				reasonCode = strings.TrimSpace(raw)
+			}
+		}
 		if err := emitDispatchEvent(ctx, sc, AgentEvent{
 			Type: AgentEventTypeToolCallBlocked,
 			ToolBlocked: &ToolCallBlocked{
 				ToolCallID: br.ToolCallID,
 				ToolName:   br.Name,
-				ReasonCode: "storm_blocked",
+				ReasonCode: reasonCode,
 			},
 		}); err != nil {
 			return err
@@ -365,7 +373,7 @@ func (a *Agent) appendModeBlockedResult(ctx context.Context, sc streamDispatchCo
 		return false, err
 	}
 	blockedCode, blockedMsg, blockedSummary, blockedData := modeBlockedDetailsForCall(a.mode, call)
-	content, err := core.MarshalToolEnvelope(core.ToolEnvelope{
+	content, err := marshalTrustedModeBlockedEnvelope(core.ToolEnvelope{
 		OK:      false,
 		Success: false,
 		Code:    blockedCode,
@@ -404,6 +412,16 @@ func (a *Agent) appendModeBlockedResult(ctx context.Context, sc streamDispatchCo
 		Content:    content,
 		IsError:    true,
 	})
+}
+
+func marshalTrustedModeBlockedEnvelope(env core.ToolEnvelope) (string, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(env); err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(buf.String(), "\n"), nil
 }
 
 func (a *Agent) dispatchPreApprovalSpecialTool(ctx context.Context, sc streamDispatchContext, call core.ToolCall, results *[]core.ToolResult) (bool, error) {
@@ -533,7 +551,7 @@ func (a *Agent) dispatchPostApprovalSpecialTool(ctx context.Context, sc streamDi
 }
 
 func (a *Agent) dispatchStandardTool(ctx context.Context, sc streamDispatchContext, prepared preparedToolDispatch, results *[]core.ToolResult) error {
-	finalRes, ok, primarySucceeded := a.dispatchWithRecovery(ctx, sc.SessionID, sc.Assistant.ID, sc.Model, prepared.Call, prepared.ExternalReadRoots, sc.Events, sc.Tools)
+	finalRes, ok, primarySucceeded := a.dispatchWithRecovery(ctx, sc.SessionID, sc.Assistant.ID, sc.CheckpointMessageID, sc.Model, prepared.Call, prepared.ExternalReadRoots, sc.Events, sc.Tools)
 	if err := ctx.Err(); err != nil {
 		return err
 	}

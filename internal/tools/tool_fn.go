@@ -12,6 +12,7 @@ type toolFn struct {
 	parameters    map[string]any
 	readOnly      bool
 	readOnlyCheck func(args map[string]any) bool
+	capabilities  []string
 	fn            func(context.Context, core.ToolCall) (core.ToolResult, error)
 	preview       func(context.Context, core.ToolCall) (map[string]any, error)
 }
@@ -20,6 +21,7 @@ func (t toolFn) Name() string               { return t.name }
 func (t toolFn) Description() string        { return t.description }
 func (t toolFn) Parameters() map[string]any { return t.parameters }
 func (t toolFn) ReadOnly() bool             { return t.readOnly }
+func (t toolFn) Capabilities() []string     { return append([]string(nil), t.capabilities...) }
 func (t toolFn) ReadOnlyCheck(args map[string]any) bool {
 	if t.readOnlyCheck == nil {
 		return t.readOnly

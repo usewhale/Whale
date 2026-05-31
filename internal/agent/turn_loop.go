@@ -51,11 +51,21 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 		return nil, fmt.Errorf("%w: spent $%.6f >= cap $%.6f", ErrBudgetExceeded, spent, a.budgetWarningUSD)
 	}
 
+	createdMessages := make([]core.Message, 0, len(newMessages))
 	for _, msg := range newMessages {
 		msg.SessionID = sessionID
-		if _, err := a.store.Create(ctx, msg); err != nil {
+		created, err := a.store.Create(ctx, msg)
+		if err != nil {
 			a.active.Delete(sessionID)
 			return nil, fmt.Errorf("create user message: %w", err)
+		}
+		createdMessages = append(createdMessages, created)
+	}
+	checkpointMessageID := firstVisibleMessageID(createdMessages)
+	if checkpointMessageID != "" && a.checkpoints != nil {
+		if err := a.checkpoints.CreateSnapshot(sessionID, checkpointMessageID); err != nil {
+			a.active.Delete(sessionID)
+			return nil, fmt.Errorf("create checkpoint: %w", err)
 		}
 	}
 
@@ -80,6 +90,7 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 		rt := memory.HydrateRuntime(memory.NewImmutablePrefix(a.buildImmutableSystemBlocksWithTools(toolSnapshot, opts)), history)
 		expectedPrefixFingerprint := rt.Prefix.Fingerprint()
 		toolIters := 0
+		toolCalls := 0
 		if a.repairer != nil {
 			a.repairer.resetStorm()
 		}
@@ -152,7 +163,11 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 					}
 				}
 			}
-			assistant, toolMsg, usage, modelName, abortTurn, sErr := a.streamAndHandle(ctx, sessionID, history, rt, out, turnPolicy, toolSnapshot)
+			remainingToolCalls := 0
+			if a.maxToolCalls > 0 {
+				remainingToolCalls = a.maxToolCalls - toolCalls
+			}
+			assistant, toolMsg, usage, modelName, abortTurn, attemptedToolCalls, sErr := a.streamAndHandle(ctx, sessionID, checkpointMessageID, history, rt, out, turnPolicy, toolSnapshot, remainingToolCalls)
 			if sErr != nil {
 				if errors.Is(sErr, context.Canceled) || errors.Is(sErr, context.DeadlineExceeded) {
 					a.persistInterruptedTurnMarker(sessionID)
@@ -163,6 +178,9 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 				return
 			}
 			turnCost := a.recordTurnCost(sessionID, usage, modelName, rt.Prefix.Fingerprint())
+			if !emit(AgentEvent{Type: AgentEventTypeUsage, Usage: &UsageInfo{Model: modelName, Usage: usage}}) {
+				return
+			}
 			if m := buildPrefixCacheMetrics(modelName, usage, rt.Prefix.Fingerprint()); m != nil {
 				if !emit(AgentEvent{Type: AgentEventTypePrefixCacheMetrics, CacheMetrics: m}) {
 					return
@@ -184,9 +202,28 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 			}
 			if assistant.FinishReason == core.FinishReasonToolUse && toolMsg != nil {
 				toolIters++
+				toolCalls += attemptedToolCalls
 				rt.Log.Append(assistant)
 				rt.Log.Append(*toolMsg)
 				history = append(history, assistant, *toolMsg)
+				if a.maxToolCalls > 0 && toolCalls >= a.maxToolCalls {
+					if !emit(AgentEvent{Type: AgentEventTypeForcedSummaryStarted, Content: "tool call cap reached"}) {
+						return
+					}
+					sum, serr := a.forceSummary(ctx, sessionID, history, "tool call cap reached")
+					if serr != nil {
+						if !emit(AgentEvent{Type: AgentEventTypeForcedSummaryFailed, Content: serr.Error()}) {
+							return
+						}
+						emit(AgentEvent{Type: AgentEventTypeError, Err: serr})
+						return
+					}
+					if !emit(AgentEvent{Type: AgentEventTypeForcedSummaryDone, Content: "forced summary completed"}) {
+						return
+					}
+					emit(AgentEvent{Type: AgentEventTypeDone, Message: &sum})
+					return
+				}
 				if a.maxToolIters > 0 && toolIters >= a.maxToolIters {
 					if !emit(AgentEvent{Type: AgentEventTypeForcedSummaryStarted, Content: "tool iteration cap reached"}) {
 						return
@@ -213,4 +250,18 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 	}()
 
 	return out, nil
+}
+
+func firstVisibleMessageID(msgs []core.Message) string {
+	for _, msg := range msgs {
+		if !msg.Hidden && msg.ID != "" {
+			return msg.ID
+		}
+	}
+	for _, msg := range msgs {
+		if msg.ID != "" {
+			return msg.ID
+		}
+	}
+	return ""
 }

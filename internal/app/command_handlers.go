@@ -8,16 +8,18 @@ import (
 
 	"github.com/usewhale/whale/internal/plugins"
 	"github.com/usewhale/whale/internal/session"
+	"github.com/usewhale/whale/internal/workflow"
 )
 
 type CommandExecution struct {
-	Handled     bool
-	Text        string
-	LocalResult *LocalResult
-	Turn        *plugins.CommandTurn
-	ShouldExit  bool
-	ClearScreen bool
-	Mutated     bool
+	Handled        bool
+	Text           string
+	LocalResult    *LocalResult
+	Turn           *plugins.CommandTurn
+	ShouldExit     bool
+	ClearScreen    bool
+	Mutated        bool
+	HydrateSession bool
 }
 
 func (a *App) HandleSlash(line string) (handled bool, output string, synthetic string, shouldExit bool, clearScreen bool, err error) {
@@ -159,6 +161,36 @@ func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 		mcp := a.buildMCPLocalResult()
 		return CommandExecution{Handled: true, Text: mcp.PlainText, LocalResult: mcp}, nil
 	}
+	if trimmed == "/workflows" || strings.HasPrefix(trimmed, "/workflows ") {
+		fields := strings.Fields(trimmed)
+		if len(fields) != 1 {
+			return CommandExecution{Handled: true}, errors.New(workflowsUsage)
+		}
+		res := a.buildWorkflowsLocalResult("")
+		return CommandExecution{Handled: true, Text: res.PlainText, LocalResult: res}, nil
+	}
+	if trimmed == "/deep-research" || strings.HasPrefix(trimmed, "/deep-research ") {
+		opts, err := parseDeepResearchOptions(strings.TrimSpace(strings.TrimPrefix(trimmed, "/deep-research")))
+		if err != nil {
+			return CommandExecution{Handled: true}, err
+		}
+		trusted, err := a.workflowTrusted(workflow.BuiltinDeepResearchName)
+		if err != nil {
+			return CommandExecution{Handled: true}, err
+		}
+		if !opts.Confirmed && !trusted {
+			res, err := a.buildWorkflowLaunchConfirmation(workflow.BuiltinDeepResearchName, opts)
+			if err != nil {
+				return CommandExecution{Handled: true}, err
+			}
+			return CommandExecution{Handled: true, Text: res.PlainText, LocalResult: res}, nil
+		}
+		res, err := a.startDeepResearchWorkflow(opts)
+		if err != nil {
+			return CommandExecution{Handled: true}, err
+		}
+		return CommandExecution{Handled: true, Text: res.PlainText, LocalResult: res, Mutated: true}, nil
+	}
 	if trimmed == "/help" {
 		help := buildHelpLocalResult()
 		return CommandExecution{Handled: true, Text: help.PlainText, LocalResult: help}, nil
@@ -174,6 +206,9 @@ func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 	}
 	if strings.HasPrefix(trimmed, "/diff ") {
 		return CommandExecution{Handled: true}, errors.New("usage: /diff")
+	}
+	if trimmed == "/copy" || strings.HasPrefix(trimmed, "/copy ") {
+		return a.executeCopyCommand(trimmed)
 	}
 	if trimmed == "/focus" {
 		mode, err := a.ToggleViewMode()
@@ -192,6 +227,9 @@ func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 	if trimmed == "/doctor" {
 		result := buildDoctorLocalResult(a)
 		return CommandExecution{Handled: true, Text: result.PlainText, LocalResult: result}, nil
+	}
+	if isRewindCommand(trimmed) {
+		return a.executeRewindCommand(trimmed)
 	}
 	if a.pluginManager != nil {
 		res, handled, err := a.pluginManager.HandleCommand(a.ctx, trimmed)

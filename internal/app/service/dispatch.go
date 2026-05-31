@@ -45,6 +45,18 @@ func (s *Service) Dispatch(in Intent) {
 		} else {
 			s.emitSessionChoices()
 		}
+	case IntentSelectRewindMessage:
+		restoreInput, err := s.app.RewindToMessage(s.ctx, in.MessageID)
+		if err != nil {
+			s.emit(Event{Kind: EventError, Text: err.Error()})
+			s.emit(Event{Kind: EventTurnDone})
+			return
+		}
+		s.emitSessionHydratedWithMetadata(map[string]any{
+			"rewind":        true,
+			"restore_input": restoreInput,
+		})
+		s.emit(Event{Kind: EventTurnDone})
 	case IntentShutdown:
 		s.cancelMu.Lock()
 		if s.cancel != nil {
@@ -54,6 +66,12 @@ func (s *Service) Dispatch(in Intent) {
 		s.cancelPendingInteractions()
 	case IntentWorktreeExitChoice:
 		s.handleWorktreeExitChoice(in.WorktreeAction)
+	case IntentRequestWorkflowPanel:
+		s.emitWorkflowPanel(in.WorkflowRunID)
+	case IntentCancelWorkflowRun:
+		s.cancelWorkflowRun(in.WorkflowRunID)
+	case IntentStartWorkflow:
+		s.startWorkflow(in.WorkflowName, in.WorkflowArgs, in.WorkflowResume, in.WorkflowTrust)
 	case IntentSetModelAndEffort:
 		if err := s.app.SetModelAndEffort(in.Model, in.Effort); err != nil {
 			s.emit(Event{Kind: EventError, Text: err.Error()})

@@ -51,6 +51,14 @@ func metadataBool(v any) bool {
 	return ok && b
 }
 
+func metadataString(v any) string {
+	s, ok := v.(string)
+	if !ok {
+		return ""
+	}
+	return s
+}
+
 func (m *model) handleServiceEvent(ev protocol.Event) (tea.Cmd, bool, bool) {
 	if ev.AutoAcceptKnown {
 		m.autoAccept = ev.AutoAccept
@@ -76,7 +84,11 @@ func (m *model) handleServiceEvent(ev protocol.Event) (tea.Cmd, bool, bool) {
 	case protocol.EventError:
 		m.handleErrorEvent(ev)
 	case protocol.EventLocalSubmitResult:
-		m.handleLocalSubmitResultEvent(ev)
+		return m.handleLocalSubmitResultEvent(ev), false, false
+	case protocol.EventWorkflowPanel:
+		return m.handleWorkflowPanelEvent(ev.LocalResult), false, false
+	case protocol.EventWorkflowTerminal:
+		m.handleWorkflowTerminalEvent(ev)
 	case protocol.EventDiffResult:
 		m.handleDiffResultEvent(ev)
 	case protocol.EventBtwStarted:
@@ -107,6 +119,8 @@ func (m *model) handleServiceEvent(ev protocol.Event) (tea.Cmd, bool, bool) {
 		m.handleUserInputRequiredEvent(ev)
 	case protocol.EventSessionsListed:
 		m.handleSessionsListedEvent(ev)
+	case protocol.EventRewindMessagesListed:
+		m.handleRewindMessagesListedEvent(ev)
 	case protocol.EventLocalSubmitDone:
 		m.clearProviderRetryStatus()
 		return m.finishLocalSubmit(), false, false
@@ -170,13 +184,33 @@ func (m *model) handleTurnDone(ev protocol.Event) tea.Cmd {
 		m.unfreezeChatViewport()
 		m.refreshViewportContentFollow(false)
 	}
-	// ...but always emit the completed turn into the terminal's native
-	// scrollback, even when scrolled up. The normal flush in handleServiceUpdate
-	// is gated on followTail/!frozen and would otherwise defer this until the
-	// next keystroke, leaving the final answer hidden (the "看起来突然停下来"
-	// symptom). Flushing here keeps the in-app position untouched while making
-	// the finished answer immediately reachable via terminal scroll.
-	turnScrollbackCmd := m.flushCompletedTurnToNativeScrollbackCmd()
+	// Decide where the just-finished answer lives until the next user turn.
+	//
+	// At the tail (not frozen/scrolled) we keep the completed turn in the in-app
+	// viewport instead of immediately sinking it to native scrollback. View()
+	// renders only transcript[nativeScrollbackPrinted:], so flushing here would
+	// make the finished answer vanish from the screen and survive ONLY in the
+	// terminal's native scrollback (tea.Println). When inline Println is
+	// unreliable (Windows conpty / some tmux) the answer then disappears
+	// entirely — the user's "任务执行着就忽然结束了 / 终答没渲染" report. Holding it
+	// in-app keeps it visible regardless of Println; beginTurnTranscript clears
+	// the hold so the next turn sinks it to scrollback in order.
+	//
+	// When the user scrolled up (frozen), we keep the existing behavior: flush
+	// immediately to native scrollback (reachable by terminal scroll) while
+	// preserving their scroll position — we must NOT yank them back to the tail.
+	keepInViewport := !wasFrozen && m.followTail && m.sawAssistantThisTurn
+	var turnScrollbackCmd tea.Cmd
+	if keepInViewport {
+		m.holdCompletedTurnInViewport = true
+		// Remember where the held turn starts so a resize-driven replay can
+		// rebuild the sunk history below it while keeping the held turn in the
+		// in-app viewport. nativeScrollbackPrinted currently points exactly at
+		// the start of the just-committed answer (+ duration notice).
+		m.heldTurnStart = m.nativeScrollbackPrinted
+	} else {
+		turnScrollbackCmd = m.flushCompletedTurnToNativeScrollbackCmd()
+	}
 	m.addLog(logEntry{Kind: "turn_done", Source: "assistant", Summary: truncateLine(ev.LastResponse, 120), Raw: ev.LastResponse})
 	m.status = "ready"
 	queuedTurnStarted := false

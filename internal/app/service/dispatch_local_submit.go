@@ -86,12 +86,25 @@ func (s *Service) handleLocalSubmit(line string) {
 		s.emit(Event{Kind: EventPluginsManagerUpdated, Plugins: protocolPlugins(s.PluginsForManager())})
 		return
 	}
+	if line == "/workflows" || strings.HasPrefix(line, "/workflows ") {
+		fields := strings.Fields(line)
+		if len(fields) == 1 {
+			s.emitWorkflowPanel("")
+		} else {
+			s.emit(localSubmitResultEvent("error", "usage: /workflows"))
+		}
+		return
+	}
 	if line == "/review" {
 		s.emit(Event{Kind: EventReviewRequested})
 		return
 	}
 	if s.app.IsResumeMenu(line) {
 		s.emitLocalSessionChoices()
+		return
+	}
+	if line == "/rewind" || line == "/checkpoint" {
+		s.emitRewindMessages(false)
 		return
 	}
 	if strings.HasPrefix(line, "/model ") {
@@ -122,10 +135,11 @@ func (s *Service) handleLocalSubmit(line string) {
 		if cmd.ShouldExit {
 			s.requestExit()
 		}
-		if s.app.SessionID() != prevSessionID {
+		if s.app.SessionID() != prevSessionID || cmd.HydrateSession {
 			s.emitSessionHydrated()
 		}
 		if cmd.Text != "" {
+			s.maybeWatchWorkflowRun(cmd.LocalResult)
 			ev := localSubmitResultEvent("info", cmd.Text)
 			ev.LocalResult = protocolLocalResult(cmd.LocalResult)
 			s.emit(ev)
@@ -138,7 +152,11 @@ func (s *Service) handleLocalSubmit(line string) {
 		return
 	}
 	if cmd.Handled {
+		if cmd.HydrateSession {
+			s.emitSessionHydrated()
+		}
 		if cmd.Text != "" {
+			s.maybeWatchWorkflowRun(cmd.LocalResult)
 			ev := localSubmitResultEvent("info", cmd.Text)
 			ev.LocalResult = protocolLocalResult(cmd.LocalResult)
 			s.emit(ev)
@@ -152,4 +170,46 @@ func (s *Service) handleLocalSubmit(line string) {
 		s.emit(localSubmitResultEvent("error", fmt.Sprintf("• Unrecognized command %q. Type \"/\" for a list of supported commands.", line)))
 		return
 	}
+}
+
+func (s *Service) emitWorkflowPanel(runID string) {
+	if strings.TrimSpace(runID) == "" {
+		out, err := s.app.ExecuteLocalCommand("/workflows")
+		if err != nil {
+			s.emit(Event{Kind: EventError, Text: err.Error()})
+			return
+		}
+		s.emit(Event{Kind: EventWorkflowPanel, Text: out.Text, LocalResult: protocolLocalResult(out.LocalResult)})
+		return
+	}
+	out := s.app.WorkflowPanelLocalResult(strings.TrimSpace(runID))
+	s.emit(Event{Kind: EventWorkflowPanel, Text: out.PlainText, LocalResult: protocolLocalResult(out)})
+}
+
+func (s *Service) cancelWorkflowRun(runID string) {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		s.emit(Event{Kind: EventError, Text: "workflow run id is required"})
+		return
+	}
+	out, err := s.app.CancelWorkflowRun(runID)
+	if err != nil {
+		s.emit(Event{Kind: EventError, Text: err.Error()})
+		return
+	}
+	s.emit(Event{Kind: EventWorkflowPanel, Text: out.PlainText, LocalResult: protocolLocalResult(out)})
+}
+
+func (s *Service) startWorkflow(name, args, resumeFromRunID string, trust bool) {
+	out, err := s.app.StartWorkflowFromConfirmation(name, args, resumeFromRunID, trust)
+	if err != nil {
+		s.emit(localSubmitResultEvent("error", err.Error()))
+		s.emit(localSubmitDoneEvent())
+		return
+	}
+	s.maybeWatchWorkflowRun(out)
+	ev := localSubmitResultEvent("info", out.PlainText)
+	ev.LocalResult = protocolLocalResult(out)
+	s.emit(ev)
+	s.emit(localSubmitDoneEvent())
 }

@@ -1,6 +1,9 @@
 package core
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestToolEnvelopeRoundTrip(t *testing.T) {
 	content, err := MarshalToolEnvelope(NewToolSuccessEnvelope(map[string]any{
@@ -19,6 +22,24 @@ func TestToolEnvelopeRoundTrip(t *testing.T) {
 	payload, _ := got.Data["payload"].(map[string]any)
 	if payload["stdout"] != "ok" {
 		t.Fatalf("unexpected payload: %+v", got.Data)
+	}
+}
+
+func TestToolEnvelopeKeepsDefaultEscapingForPromptTags(t *testing.T) {
+	content, err := MarshalToolEnvelope(ToolEnvelope{
+		OK:      false,
+		Success: false,
+		Code:    "plan_mode_blocked",
+		Summary: "output the final plan in a <proposed_plan> block",
+	})
+	if err != nil {
+		t.Fatalf("marshal envelope: %v", err)
+	}
+	if strings.Contains(content, "<proposed_plan>") {
+		t.Fatalf("generic envelope should keep default JSON escaping, got %s", content)
+	}
+	if !strings.Contains(content, `\u003cproposed_plan\u003e`) {
+		t.Fatalf("expected prompt tag to be escaped in generic envelope, got %s", content)
 	}
 }
 

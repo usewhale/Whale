@@ -292,6 +292,37 @@ func TestSessionHydrationCommitsTranscriptAndClearsLiveAssembler(t *testing.T) {
 		t.Fatalf("expected hydrated messages in transcript:\n%s", got)
 	}
 }
+
+func TestRewindHydrationClearsVisibleTranscriptAndRestoresInput(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 80, height: 24}
+	m.append("you", "a")
+	m.append("you", "b")
+	m.append("you", "c")
+	m.commitLiveTranscript(true)
+
+	next, cmd := m.Update(svcMsg(protocol.Event{
+		Kind: protocol.EventSessionHydrated,
+		Messages: protocolMessagesForTest([]core.Message{
+			{Role: core.RoleUser, Text: "a"},
+		}),
+		Metadata: map[string]any{
+			"rewind":        true,
+			"restore_input": "b",
+		},
+	}))
+	m = next.(model)
+	if cmd == nil {
+		t.Fatal("expected rewind hydration to request a screen clear")
+	}
+	rendered := strings.Join(tuirender.ChatLines(m.chatMessages(), 80), "\n")
+	if !strings.Contains(rendered, "a") || strings.Contains(rendered, "c") {
+		t.Fatalf("expected rewind view to show only messages before target:\n%s", rendered)
+	}
+	if got := m.input.Value(); got != "b" {
+		t.Fatalf("expected target prompt restored to composer, got %q", got)
+	}
+}
+
 func TestSessionHydratedUpdatesAutoAcceptFooterState(t *testing.T) {
 	m := newModel(nil, "deepseek-v4-pro", "high", "on")
 	m.width = 100

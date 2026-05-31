@@ -2,9 +2,26 @@ package tasks
 
 import (
 	"context"
+	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/usewhale/whale/internal/core"
 )
+
+const (
+	CapabilityWorkspaceRead = "workspace.read"
+	CapabilityWebSearch     = "web.search"
+	CapabilityWebFetch      = "web.fetch"
+	CapabilityMCPRead       = "mcp.read"
+)
+
+var knownSubagentCapabilities = map[string]bool{
+	CapabilityWorkspaceRead: true,
+	CapabilityWebSearch:     true,
+	CapabilityWebFetch:      true,
+	CapabilityMCPRead:       true,
+}
 
 var excludedChildTools = map[string]bool{
 	"parallel_reason":    true,
@@ -24,12 +41,43 @@ var excludedChildTools = map[string]bool{
 }
 
 func BuildReadOnlyRegistry(parent *core.ToolRegistry) (*core.ToolRegistry, error) {
-	return core.NewToolRegistryChecked(ReadOnlyTools(parent))
+	return BuildCapabilityRegistry(parent, nil)
+}
+
+func BuildCapabilityRegistry(parent *core.ToolRegistry, capabilities []string) (*core.ToolRegistry, error) {
+	tools, err := CapabilityTools(parent, capabilities)
+	if err != nil {
+		return nil, err
+	}
+	return core.NewToolRegistryChecked(tools)
+}
+
+func AllowedCapabilityToolNames(parent *core.ToolRegistry, capabilities []string) ([]string, error) {
+	tools, err := CapabilityTools(parent, capabilities)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		if tool != nil {
+			out = append(out, tool.Name())
+		}
+	}
+	return out, nil
 }
 
 func ReadOnlyTools(parent *core.ToolRegistry) []core.Tool {
+	tools, _ := CapabilityTools(parent, nil)
+	return tools
+}
+
+func CapabilityTools(parent *core.ToolRegistry, capabilities []string) ([]core.Tool, error) {
 	if parent == nil {
-		return nil
+		return nil, nil
+	}
+	capSet, err := normalizeCapabilities(capabilities)
+	if err != nil {
+		return nil, err
 	}
 	out := []core.Tool{}
 	for _, tool := range parent.Tools() {
@@ -43,9 +91,50 @@ func ReadOnlyTools(parent *core.ToolRegistry) []core.Tool {
 		if !spec.ReadOnly && spec.ReadOnlyCheck == nil {
 			continue
 		}
+		if !capabilityAllowed(spec, capSet) {
+			continue
+		}
 		out = append(out, guardedReadOnlyTool{tool: tool, spec: spec})
 	}
-	return out
+	return out, nil
+}
+
+func normalizeCapabilities(capabilities []string) (map[string]bool, error) {
+	if capabilities == nil {
+		capabilities = []string{CapabilityWorkspaceRead}
+	}
+	out := map[string]bool{}
+	for _, cap := range capabilities {
+		cap = strings.TrimSpace(cap)
+		if cap == "" {
+			continue
+		}
+		if !knownSubagentCapabilities[cap] {
+			known := []string{CapabilityWorkspaceRead, CapabilityWebSearch, CapabilityWebFetch, CapabilityMCPRead}
+			return nil, fmt.Errorf("unknown subagent capability %q; allowed: %s", cap, strings.Join(known, ", "))
+		}
+		out[cap] = true
+	}
+	return out, nil
+}
+
+func capabilityAllowed(spec core.ToolSpec, capSet map[string]bool) bool {
+	if len(capSet) == 0 {
+		return false
+	}
+	for _, cap := range spec.Capabilities {
+		if capSet[strings.TrimSpace(cap)] {
+			return true
+		}
+	}
+	// Compatibility for read-only MCP tools that predate the explicit mcp.read
+	// capability marker.
+	if capSet[CapabilityMCPRead] && spec.ReadOnly && slices.ContainsFunc(spec.Capabilities, func(cap string) bool {
+		return strings.HasPrefix(cap, "mcp_") || strings.HasPrefix(cap, "mcp.")
+	}) {
+		return true
+	}
+	return false
 }
 
 type guardedReadOnlyTool struct {

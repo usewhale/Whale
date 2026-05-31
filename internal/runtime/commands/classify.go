@@ -65,6 +65,14 @@ func classifySlashFields(head string, fields []string, line string) SubmitClass 
 			return SubmitLocalReadOnly
 		}
 		return SubmitUsageError
+	case "/copy":
+		if len(fields) == 1 {
+			return SubmitLocalReadOnly
+		}
+		if len(fields) == 2 && positiveInt(fields[1]) {
+			return SubmitLocalReadOnly
+		}
+		return SubmitUsageError
 	case "/memory":
 		return classifyMemoryFields(fields)
 	case "/stats":
@@ -80,6 +88,10 @@ func classifySlashFields(head string, fields []string, line string) SubmitClass 
 			return SubmitLocalReadOnly
 		}
 		return SubmitUsageError
+	case "/workflows":
+		return classifyWorkflowsFields(fields)
+	case "/deep-research":
+		return classifyDeepResearchFields(fields)
 	case "/model", "/permissions", "/skills", "/plugins", "/resume":
 		if len(fields) == 1 {
 			return SubmitLocalUI
@@ -131,6 +143,11 @@ func classifySlashFields(head string, fields []string, line string) SubmitClass 
 			return SubmitLocalMutating
 		}
 		return SubmitUsageError
+	case "/rewind", "/checkpoint":
+		if len(fields) == 1 {
+			return SubmitLocalUI
+		}
+		return SubmitUsageError
 	case "/clear":
 		if len(fields) == 1 {
 			return SubmitLocalMutating
@@ -154,6 +171,51 @@ func classifySlashFields(head string, fields []string, line string) SubmitClass 
 	default:
 		return SubmitUsageError
 	}
+}
+
+func positiveInt(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return value != "0"
+}
+
+func classifyDeepResearchFields(fields []string) SubmitClass {
+	if len(fields) < 2 {
+		return SubmitUsageError
+	}
+	for i := 1; i < len(fields); i++ {
+		field := fields[i]
+		switch {
+		case field == "--resume":
+			i++
+			if i >= len(fields) || strings.TrimSpace(fields[i]) == "" || strings.HasPrefix(fields[i], "--") {
+				return SubmitUsageError
+			}
+		case strings.HasPrefix(field, "--resume="):
+			parts := strings.SplitN(field, "=", 2)
+			if len(parts) != 2 || strings.TrimSpace(parts[1]) == "" {
+				return SubmitUsageError
+			}
+		case strings.HasPrefix(field, "--"):
+			return SubmitUsageError
+		default:
+			return SubmitLocalMutating
+		}
+	}
+	return SubmitUsageError
+}
+
+func classifyWorkflowsFields(fields []string) SubmitClass {
+	if len(fields) == 1 {
+		return SubmitLocalReadOnly
+	}
+	return SubmitUsageError
 }
 
 func validStatsView(view string) bool {

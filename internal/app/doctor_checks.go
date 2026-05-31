@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"github.com/usewhale/whale/internal/agent"
 	"github.com/usewhale/whale/internal/memory"
-	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -78,45 +76,6 @@ func doctorCheckConfig(loaded LoadedConfig, err error) DoctorCheck {
 		Label:  "config",
 		Level:  DoctorOK,
 		Detail: strings.Join(sources, ", "),
-	}
-}
-
-func doctorCheckLegacyConfig(dataDir, workspaceRoot string, hasActiveConfig bool) DoctorCheck {
-	paths := []string{
-		preferencesPath(dataDir),
-		filepath.Join(dataDir, "settings.json"),
-		filepath.Join(workspaceRoot, ".whale", "settings.json"),
-	}
-	found := make([]string, 0, len(paths))
-	for _, path := range paths {
-		if _, err := os.Stat(path); err == nil {
-			found = append(found, path)
-		} else if err != nil && !os.IsNotExist(err) {
-			return DoctorCheck{
-				Label:  "legacy config",
-				Level:  DoctorFail,
-				Detail: fmt.Sprintf("%s unreadable — %v", path, err),
-			}
-		}
-	}
-	if len(found) == 0 {
-		return DoctorCheck{
-			Label:  "legacy config",
-			Level:  DoctorOK,
-			Detail: "no obsolete config files found",
-		}
-	}
-	if hasActiveConfig {
-		return DoctorCheck{
-			Label:  "legacy config",
-			Level:  DoctorWarn,
-			Detail: fmt.Sprintf("%d obsolete Whale v0.1.8-or-earlier file(s) ignored — config.toml is active; no migration needed", len(found)),
-		}
-	}
-	return DoctorCheck{
-		Label:  "legacy config",
-		Level:  DoctorWarn,
-		Detail: fmt.Sprintf("%d obsolete Whale v0.1.8-or-earlier file(s) found — run `whale migrate-config` if you used those versions", len(found)),
 	}
 }
 

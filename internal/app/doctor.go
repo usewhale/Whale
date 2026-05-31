@@ -69,7 +69,6 @@ func RunDoctor(ctx context.Context, cfg Config, workspaceRoot string, opts ...Do
 	credsCheck := doctorCheckCredentials(dataDir)
 	loadedConfig, configErr := LoadConfigFiles(dataDir, workspaceRoot)
 	configCheck := doctorCheckConfig(loadedConfig, configErr)
-	legacyCheck := doctorCheckLegacyConfig(dataDir, workspaceRoot, len(ConfigSources(loadedConfig)) > 0)
 	dataDirCheck := doctorCheckDataDir(dataDir)
 	dataDirOverrideCheck := doctorCheckDataDirOverride(runtime.GOOS, os.Getenv, dataDir)
 	dataDirACLCheck := doctorCheckDataDirACL(runtime.GOOS, dataDir)
@@ -93,7 +92,6 @@ func RunDoctor(ctx context.Context, cfg Config, workspaceRoot string, opts ...Do
 		apiKeyCheck,
 		credsCheck,
 		configCheck,
-		legacyCheck,
 		dataDirCheck,
 	}
 	if dataDirOverrideCheck.Level != "" {

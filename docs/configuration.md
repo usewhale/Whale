@@ -1,309 +1,194 @@
-# Configuration
+# 配置
 
-## Credentials
+## 🚀 快速配置
 
-Whale uses the DeepSeek API.
-
-- `whale setup` saves a key to `~/.whale/credentials.json`
-- `DEEPSEEK_API_KEY` takes precedence over the saved credential
-
-Example:
+最快的方式：
 
 ```bash
 whale setup
-DEEPSEEK_API_KEY=... whale
 ```
 
-## Local state
+这会把你的 DeepSeek API Key 保存到 `~/.whale/credentials.json`。
 
-Whale stores local state under `~/.whale/`, including:
-
-- `credentials.json`
-- `config.toml`
-- `mcp.json`
-- `sessions/`
-- `usage.jsonl`
-
-On Windows, the default global state directory is `%USERPROFILE%\.whale`.
-Set `WHALE_HOME` to use a custom global state directory on any platform.
-Run `whale doctor` to confirm the active data directory.
-
-Do not commit these files.
-
-## Config files
-
-Whale reads user-editable configuration from:
-
-- global: `~/.whale/config.toml`
-- project shared: `./.whale/config.toml`
-- project local: `./.whale/config.local.toml`
-
-Configuration is merged in this order:
-
-```text
-defaults < global < project shared < project local < CLI flags/env
-```
-
-Use `./.whale/config.toml` for settings that are safe to share with the repo.
-Use `./.whale/config.local.toml` for personal overrides in this project, and do
-not commit it. The `--model` CLI flag can override the configured model for one
-run.
-
-Whale also supports one-time CLI overrides for reasoning settings:
+也可以用环境变量（优先级更高）：
 
 ```bash
-whale --thinking=false
-whale exec --effort=max "summarize this repo"
-whale resume <session-id> --thinking=true --effort=high
+DEEPSEEK_API_KEY=sk-... whale
 ```
 
-`--thinking`, `--effort`, and `--dangerously-skip-permissions` are runtime-only
-overrides. Whale applies them after merging default, global, project shared, and
-project local config for the current process, and it does not write them back to
-config files.
+任何时候想确认当前配置，运行 `whale doctor`。
 
-`--dangerously-skip-permissions` enables permission auto-accept for the current
-process. It does not write back to config files. Use it only in a trusted
-workspace or an external sandbox; Whale permissions are UX guardrails, not OS
-sandboxing.
+---
 
-Example:
+## 常见操作
+
+### 使用其他模型或 endpoint
 
 ```toml
-model = "deepseek-v4-flash"
-reasoning_effort = "high"
-thinking_enabled = true
+# .whale/config.toml（项目级）或 ~/.whale/config.toml（全局）
+[model]
+provider = "openai-compatible"
+model = "deepseek-chat"
+base_url = "https://api.deepseek.com/v1"
+```
+
+Whale 是 DeepSeek 原生的，但可以指向任何兼容 OpenAI 的 endpoint。
+其他模型可能不支持全部功能（工具调用、长上下文）。
+
+### 设置代理
+
+```toml
+[model]
+http_proxy = "http://127.0.0.1:7890"
+https_proxy = "http://127.0.0.1:7890"
+```
+
+Whale 也支持 `$HTTP_PROXY` 和 `$HTTPS_PROXY` 环境变量。
+
+### 自定义系统提示词
+
+```toml
+[settings]
+prompt = "你是一个偏爱 Rust 而非 Go 的编程助手。"
+```
+
+这个提示词会在每个新会话的开头注入。
+
+### 项目级配置
+
+```toml
+# .whale/config.toml — 可以提交到 git，团队共享
+[model]
+model = "deepseek-chat"
+```
+
+```toml
+# .whale/config.local.toml — 个人覆盖，不要提交
+[model]
+model = "deepseek-reasoner"
+```
+
+配置文件合并顺序：`默认值 < 全局 < 项目共享 < 项目本地 < CLI 标志/环境变量`
+
+### 禁用特定工具
+
+```toml
+[disabled_tools]
+tools = ["web_search", "web_fetch"]
+```
+
+---
+
+## 参考
+
+### 配置文件路径
+
+| 路径 | 范围 | 是否提交？ |
+|---|---|---|
+| `~/.whale/config.toml` | 全局 — 所有项目 | 否 |
+| `.whale/config.toml` | 项目 — 团队共享 | 是 |
+| `.whale/config.local.toml` | 项目 — 个人覆盖 | 否 |
+
+Windows 上默认全局目录是 `%USERPROFILE%\\.whale`。
+设置 `WHALE_HOME` 可自定义目录。
+
+### 所有配置项（`config.toml`）
+
+```toml
+[model]
+provider = "deepseek"                  # 或 "openai-compatible"
+model = "deepseek-chat"                # 或 "deepseek-reasoner"
+base_url = "https://api.deepseek.com/v1"
+http_proxy = ""                        # API 调用代理
+https_proxy = ""
+
+[settings]
+prompt = ""                            # 自定义系统提示词前缀
+max_tokens = 4096                      # 最大响应 token 数
 
 [permissions]
-default = "allow"
-auto_accept = false
-
-[permissions.read]
-"*" = "allow"
-"*.env" = "ask"
-"*.env.*" = "ask"
-"*.env.example" = "allow"
-
-[permissions.edit]
-"*" = "allow"
-
-[permissions.shell]
-"*" = "allow"
-"rm *" = "ask"
-"rm -r*" = "deny"
-"rm -R*" = "deny"
-"rm -f -r*" = "deny"
-"rm -r -f*" = "deny"
-"rm -fr*" = "deny"
-"rm --force -r*" = "deny"
-"rm --force -R*" = "deny"
-"git push*" = "ask"
-"gh pr merge*" = "ask"
-"npm install*" = "ask"
-"pnpm install*" = "ask"
-"yarn add*" = "ask"
-"git reset*" = "ask"
-"git restore*" = "ask"
-"git rm*" = "ask"
-"git clean*" = "ask"
-"sudo *" = "ask"
-"dd *" = "ask"
-"mkfs*" = "deny"
-"diskutil erase*" = "deny"
-"curl *" = "ask"
-"wget *" = "ask"
-"rm -rf*" = "deny"
-
-[permissions.external_directory]
-"*" = "ask"
+allowed_directories = []               # 限制文件访问目录
 
 [permissions.mcp]
-"*" = "ask"
-"mcp__fs__*" = "deny"
-"mcp__github__create_issue" = "ask"
+fs = "allow"                           # "allow" | "ask" | "deny" 按 MCP 服务器设置
 
-[permissions.memory]
-"*" = "ask"
-
-[permissions.mutating_tool]
-"*" = "ask"
-
-[api]
-base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-
-[retry]
-max_attempts = 4
-stream_max_attempts = 6
-stream_idle_timeout = "90s"
-max_delay = "60s"
-
-[tasks]
-max_parallel_subagents = 4
-
-[budget]
-session_limit_usd = 1.0
+[disabled_tools]
+tools = []                             # 按名称隐藏内置工具
 
 [mcp]
-config_path = "~/.whale/mcp.json"
+config_path = ""                       # 自定义 MCP 配置路径
 
-[ui]
-view_mode = "default" # "default" or "focus"
-show_reasoning = false
-
-[context]
-auto_compact = true
-compact_threshold = 0.85
+[workflows]
+max_concurrency = 3                    # 并行 agent 数
 
 [skills]
-disabled = ["legacy-review"]
+disabled = []                          # 禁用的技能
+enabled = []                           # 强制启用的技能
 
 [plugins]
-disabled = []
+disabled = []                          # 禁用的插件
+enabled = []                           # 强制启用的插件
 
-[project_doc]
-enabled = true
-max_bytes = 8000
-fallback_filenames = ["AGENTS.md", ".claude/instructions.md", "CLAUDE.md"]
+[hooks]
+pre_tool = [""]                        # 每次工具调用前执行的 shell 命令
+post_tool = [""]                       # 每次工具调用后执行的 shell 命令
+
+[logging]
+level = "info"                         # debug | info | warn | error
 ```
 
-**Context window** is automatically inferred from the model name. `deepseek-v4-flash`
-and `deepseek-v4-pro` get 1,000,000 tokens (1M); other models default to 128K. No
-manual configuration is needed.
+### 环境变量
 
-## Migrating old config
+| 变量 | 覆盖内容 |
+|---|---|
+| `DEEPSEEK_API_KEY` | `~/.whale/credentials.json` 中的凭据 |
+| `WHALE_HOME` | 全局数据目录（`~/.whale`） |
+| `HTTP_PROXY` / `HTTPS_PROXY` | 配置中的代理设置 |
+| `WHALE_MCP_CONFIG` | MCP 配置文件路径 |
 
-Whale v0.1.8 and earlier used `preferences.json` and `settings.json`. New
-builds no longer read those files.
+### Shell 钩子
 
-Run this once only if you used Whale v0.1.8 or earlier and still have those
-legacy files:
+在每次工具调用前后执行 shell 命令：
 
-```bash
-whale migrate-config
+```toml
+[hooks]
+pre_tool = ["echo '即将执行: $TOOL_NAME'"]
+post_tool = ["echo '工具执行完毕: $TOOL_NAME'"]
 ```
 
-If you started with Whale v0.1.9 or newer, you do not need this command.
+钩子可以通过 stdout 返回 JSON，包含 `decision`、`reason`、`updated_input` 等字段来影响 Whale 的行为。
 
-## Runtime notes
+### 工作目录（Worktree）
 
-- `whale exec` and the interactive TUI use the same underlying tool loop.
-- Normal approval behavior still applies in headless mode.
-- `whale exec --dangerously-skip-permissions "prompt"` auto-accepts permission
-  prompts for that one headless run.
-- `reasoning_effort` and `thinking_enabled` in `config.toml` remain the
-  long-term defaults when `--effort` or `--thinking` are not passed.
-- `DEEPSEEK_BASE_URL` overrides `[api].base_url`; if neither is set, Whale uses
-  `https://api.deepseek.com`.
-- `[retry]` controls transient API retries. Whale retries 429, 500, 502, 503,
-  504, and network errors with an internal 1s exponential backoff, 10% jitter,
-  and `Retry-After` support. `max_attempts` counts request attempts before
-  streaming starts; set it to `0` to send one request and disable request
-  retries. `stream_max_attempts` counts full stream attempts when the provider
-  disconnects before producing model output. `stream_idle_timeout` bounds how
-  long Whale waits without any streamed model output before surfacing a stall.
-- `[tasks].max_parallel_subagents` limits how many eligible `spawn_subagent`
-  calls can run at once in a parallel batch. If unset, Whale uses an internal
-  CPU-based default, and each batch is still capped by the number of calls in
-  that batch. Progress events from different tool call IDs may interleave;
-  final tool results and post-tool hooks are processed in original tool-call
-  order.
-- `[ui].view_mode = "focus"` starts the TUI in focus view. `/focus` toggles this
-  global preference and hides thinking/tool detail while keeping prompts, tool
-  summaries, and final responses visible.
-- `[ui].show_reasoning = true` shows complete thinking blocks in the normal TUI
-  view. The default is `false`, which keeps the shorter reasoning preview.
-  Focus view still hides thinking.
-- Skill enable/disable choices are stored in project local config under
-  `[skills].enabled` and `[skills].disabled`. A project local enabled entry
-  overrides a shared project disabled entry.
-- Official plugin enable/disable choices are stored in project local config
-  under `[plugins].enabled` and `[plugins].disabled`. A project local enabled
-  entry overrides a shared project disabled entry. The current built-in plugin
-  ID is `"memory"`. Use `/plugins` in the TUI to inspect installed plugins and
-  press Space to enable or disable them.
-
-## Shell behavior
-
-Whale exposes shell execution through the `shell_run` tool. Commands run from
-the current workspace root by default. Use relative paths, or pass the `cwd`
-parameter to run from a workspace subdirectory.
-
-By default, Whale allows normal workspace shell commands and ships explicit
-default shell rules for common prompts and blocks. The default shell table asks
-for patterns such as `rm *`, `git push*`, `gh pr merge*`, package installation,
-`curl *`, and `wget *`. It denies literal recursive remove patterns such as
-`rm -rf*`, `rm -fr*`, `rm -r -f*`, and `rm -R*`.
-
-These shell rules are normal permission patterns, not an OS sandbox or a deep
-shell-language safety boundary. A user or project config can override them with
-later `[permissions.shell]` entries, including `"*" = "allow"`. Write explicit
-rules for the shell forms you want to prompt or block.
-
-Whale evaluates `[permissions.external_directory]` when read-only file tools
-(`read_file`, `list_dir`, `grep`, `search_files`) target paths outside the
-workspace/worktree boundary. It also evaluates the same permission for common
-shell file commands such as `cat`, `ls`, `cp`, `mv`, `rm`, `stat`, and `du`
-when path operands point outside the workspace or temp directories. Shell
-redirection targets are also checked, so a command like `echo x > ../file`
-cannot silently write outside the workspace.
-
-File edits (`edit`, `write`, `apply_patch`) inside the workspace are allowed by
-default; set `[permissions.edit]` to `"ask"` to review edits before they apply,
-or to `"deny"` to block them. Reading files is allowed by default except for
-`.env` files, which ask. Custom or plugin tools that advertise a `mutates_state`
-capability are evaluated under `[permissions.mutating_tool]` and ask by default.
-
-MCP rules match the registered MCP tool name, such as
-`mcp__server__tool`. Whale does not inspect MCP tool arguments for filesystem
-paths; configure filesystem limits in the MCP server and use `[permissions.mcp]`
-or `disabled_tools` to allow, ask, or deny MCP tools.
-If you previously relied on Whale-side path rules for filesystem MCP tools,
-configure allowed directories in the MCP server's own arguments instead.
-`disabled_tools` entries use the original MCP tool name, for example
-`write_file`, not `mcp__fs__write_file`.
-
-## Worktrees
-
-`--worktree` creates or reuses an isolated git worktree before Whale loads
-project config, hooks, skills, MCP state, or tools:
+Whale 支持 git worktree 进行隔离开发：
 
 ```bash
-whale --worktree feature-x
-whale exec --worktree feature-x "run this task in isolation"
 whale --worktree
+whale exec --worktree
 ```
 
-Worktrees live under `./.whale/worktrees/<name>`, with branches named
-`worktree-<name>`. Names may contain `/`; Whale stores those paths and branches
-with `/` flattened to `+`. If no name is passed, Whale generates
-`session-YYYYMMDD-HHMMSS`.
+退出时，Whale 会自动清理干净的 worktree。有未提交的改动时会询问是否保留。
 
-When Whale creates a worktree, it best-effort copies only
-`./.whale/config.local.toml` into the new checkout. It does not copy
-`settings.json`, credentials, MCP private config, session logs, usage logs, or
-the whole `./.whale` directory.
+---
 
-Worktree startup is supported for `whale --worktree` and
-`whale exec --worktree`. `doctor`, `setup`, `migrate-config`, and `resume`
-reject `--worktree`.
+## 本地状态存在哪里？
 
-When exiting an interactive session from a worktree, Whale removes a clean
-worktree automatically. If the worktree has uncommitted files or commits after
-the original checkout head, Whale prompts you to keep or remove it. Removing a
-worktree discards that checkout and its uncommitted changes, but it does not
-delete the conversation. After a worktree session exits, `whale resume
-<session-id>` resumes the conversation from the original workspace rather than
-re-entering the exited worktree.
+```
+~/.whale/
+├── credentials.json    # API key
+├── config.toml         # 全局配置
+├── mcp.json            # MCP 服务器配置
+├── sessions/           # 会话历史
+└── usage.jsonl         # 使用量日志
+```
 
-The current worktree implementation still does not include tmux, stale sweeps,
-or sparse checkout.
+不要提交这些文件。
 
-On macOS and Linux, `shell_run` runs commands through `/bin/sh`. On Windows,
-Whale first tries `pwsh`; if it is not available, it falls back to `ComSpec`
-and then `cmd.exe`. Write shell rules to match the shell syntax used on the
-target platform.
+---
 
-Configured shell hooks and official plugin hooks run through the same hook
-pipeline. Shell hooks can keep using exit codes, or return JSON on stdout with
-fields such as `decision`, `reason`, `additional_context`, `updated_input`, and
-`metadata`.
+## 需要帮助？
+
+```bash
+whale doctor     # 检查当前配置
+whale --help     # CLI 参考
+```

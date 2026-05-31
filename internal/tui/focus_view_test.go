@@ -78,6 +78,33 @@ func TestProjectFocusMessagesKeepsSingleShellCommandVisible(t *testing.T) {
 	}
 }
 
+func TestProjectFocusMessagesShowsNonZeroShellExitWithoutOutput(t *testing.T) {
+	messages := []tuirender.UIMessage{
+		{Role: "shell_result_nonzero", Kind: tuirender.KindToolCall, ToolName: "shell_run", Text: "Ran false (exit 1)\nexit 1 · 33ms\nhidden-output"},
+	}
+
+	projected := projectFocusMessages(messages)
+	if len(projected) != 1 {
+		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
+	}
+	rendered := projected[0].Text
+	for _, want := range []string{"Ran shell: false (exit 1)", "(1 exited non-zero)", "(ctrl+o to expand)"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("focus view missing non-zero shell detail %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "hidden-output") || strings.Contains(rendered, "33ms") {
+		t.Fatalf("focus view should hide non-zero shell output details:\n%s", rendered)
+	}
+	if projected[0].FocusSummary == nil {
+		t.Fatalf("expected structured focus summary")
+	}
+	got := projected[0].FocusSummary.Parts
+	if len(got) != 1 || got[0].Kind != "shell" || got[0].State != "nonzero" || got[0].Detail != "false (exit 1)" {
+		t.Fatalf("unexpected focus summary parts: %+v", got)
+	}
+}
+
 func TestProjectFocusMessagesShowsRecoveredShellRetryCost(t *testing.T) {
 	messages := []tuirender.UIMessage{
 		{Role: "shell_result_failed", Kind: tuirender.KindToolCall, ToolName: "shell_run", Text: "Ran gh pr create"},
@@ -771,14 +798,14 @@ func TestProjectFocusMessagesUsesModeHintLanguage(t *testing.T) {
 
 func TestProjectFocusMessagesUsesModeHintLanguageForShell(t *testing.T) {
 	messages := []tuirender.UIMessage{
-		{Role: "shell_result_mode_hint", Kind: tuirender.KindToolCall, ToolName: "shell_run", Text: "Ran rm -rf tmp\nAsk mode · switch to /agent to edit"},
+		{Role: "shell_result_mode_hint", Kind: tuirender.KindToolCall, ToolName: "shell_run", Text: "Ran rm -rf tmp\nAsk mode · switch to /agent to run commands"},
 	}
 
 	projected := projectFocusMessages(messages)
 	if len(projected) != 1 {
 		t.Fatalf("expected one focus summary, got %d: %+v", len(projected), projected)
 	}
-	want := "Ask mode: switch to /agent to edit (1 mode hint) (ctrl+o to expand)"
+	want := "Ask mode: switch to /agent to run commands (1 mode hint) (ctrl+o to expand)"
 	if got := projected[0].Text; got != want {
 		t.Fatalf("unexpected shell mode hint summary:\nwant: %q\n got: %q", want, got)
 	}
@@ -790,7 +817,7 @@ func TestProjectFocusMessagesUsesModeHintLanguageForShell(t *testing.T) {
 func TestProjectFocusMessagesKeepsStandaloneSemanticResultDetail(t *testing.T) {
 	messages := []tuirender.UIMessage{
 		{Role: "result_blocked", Kind: tuirender.KindToolResult, ToolName: "read_file", Text: "Access blocked · ../src/Tool.ts"},
-		{Role: "result_mode_hint", Kind: tuirender.KindToolResult, ToolName: "shell_run", Text: "Ask mode · switch to /agent to edit"},
+		{Role: "result_mode_hint", Kind: tuirender.KindToolResult, ToolName: "shell_run", Text: "Ask mode · switch to /agent to run commands"},
 	}
 
 	projected := projectFocusMessages(messages)
@@ -799,7 +826,7 @@ func TestProjectFocusMessagesKeepsStandaloneSemanticResultDetail(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Access blocked: ../src/Tool.ts",
-		"Ask mode: switch to /agent to edit",
+		"Ask mode: switch to /agent to run commands",
 	} {
 		if !strings.Contains(projected[0].Text, want) {
 			t.Fatalf("standalone semantic result missing %q:\n%s", want, projected[0].Text)

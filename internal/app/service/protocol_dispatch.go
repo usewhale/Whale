@@ -14,6 +14,7 @@ func (s *Service) DispatchProtocol(in protocol.Intent) {
 		ToolCallID:     in.ToolCallID,
 		UserInput:      coreUserInputResponse(in.UserInput),
 		SessionInput:   in.SessionInput,
+		MessageID:      in.MessageID,
 		Model:          in.Model,
 		Effort:         in.Effort,
 		Thinking:       in.Thinking,
@@ -25,6 +26,11 @@ func (s *Service) DispatchProtocol(in protocol.Intent) {
 		PluginEnabled:  in.PluginEnabled,
 		SkillBinding:   appSkillBinding(in.SkillBinding),
 		WorktreeAction: in.WorktreeAction,
+		WorkflowRunID:  in.WorkflowRunID,
+		WorkflowName:   in.WorkflowName,
+		WorkflowArgs:   in.WorkflowArgs,
+		WorkflowResume: in.WorkflowResume,
+		WorkflowTrust:  in.WorkflowTrust,
 	})
 }
 
@@ -48,6 +54,8 @@ func serviceIntentKind(kind protocol.IntentKind) IntentKind {
 		return IntentCancelUserInput
 	case protocol.IntentSelectSession:
 		return IntentSelectSession
+	case protocol.IntentSelectRewindMessage:
+		return IntentSelectRewindMessage
 	case protocol.IntentRequestSessions:
 		return IntentRequestSessions
 	case protocol.IntentRequestExit:
@@ -74,6 +82,12 @@ func serviceIntentKind(kind protocol.IntentKind) IntentKind {
 		return IntentSetPluginEnabled
 	case protocol.IntentWorktreeExitChoice:
 		return IntentWorktreeExitChoice
+	case protocol.IntentRequestWorkflowPanel:
+		return IntentRequestWorkflowPanel
+	case protocol.IntentCancelWorkflowRun:
+		return IntentCancelWorkflowRun
+	case protocol.IntentStartWorkflow:
+		return IntentStartWorkflow
 	default:
 		return IntentKind(kind)
 	}

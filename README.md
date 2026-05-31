@@ -10,285 +10,148 @@
 
 <p align="center">
   <a href="https://github.com/usewhale/DeepSeek-Code-Whale/releases"><img src="https://img.shields.io/github/v/release/usewhale/DeepSeek-Code-Whale?label=release" alt="release"></a>
-  <a href="https://github.com/usewhale/DeepSeek-Code-Whale/actions/workflows/ci.yml"><img src="https://github.com/usewhale/DeepSeek-Code-Whale/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/usewhale/DeepSeek-Code-Whale/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/usewhale/DeepSeek-Code-Whale/ci.yml?label=CI" alt="CI"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/github/license/usewhale/DeepSeek-Code-Whale" alt="license"></a>
   <a href="https://github.com/usewhale/DeepSeek-Code-Whale/stargazers"><img src="https://img.shields.io/github/stars/usewhale/DeepSeek-Code-Whale?style=flat&logo=github&label=stars" alt="GitHub stars"></a>
+  <a href="https://discord.gg/7Fw7j7Kf"><img src="https://img.shields.io/badge/chat-Discord-5865f2?logo=discord&logoColor=white" alt="Discord"></a>
 </p>
 
 <p align="center">
-  <strong>Whale is an unofficial DeepSeek CLI / DeepSeek coding agent for the terminal.</strong><br>
-  It can read code, edit files, run commands, and extend the agent with MCP and Skills.
+  <b>A terminal-native coding agent built for DeepSeek.</b><br>
+  Persistent sessions, long context, tools, and programmable workflows —<br>
+  all in your terminal, no IDE required.
 </p>
-
-<p align="center">
-  <strong>90% live prefix-cache hit</strong> · <strong>~30x cheaper per task vs Claude Code</strong> · terminal-first · open source
-</p>
-
-<p align="center"><a href="./ROADMAP.md">📋 Roadmap · View current direction and available tasks</a></p>
 
 ---
 
-## Quick Start
+## ✨ At a Glance
 
-Install with the script:
+| What | Why it matters |
+|---|---|
+| 🐋 **DeepSeek-native** | Built for DeepSeek's long context (1M tokens), tool calling, and cost efficiency — no generic multi-model wrapper |
+| 💬 **Persistent sessions** | Come back days later, context is still there. Search, branch, resume. |
+| 🎛️ **TUI + CLI + Headless** | Interactive TUI, one-shot CLI commands, or headless automation — pick your mode |
+| ⚙️ **Tools & MCP** | Read/edit files, run commands, search web — and plug in 1,000+ MCP servers |
+| 🧩 **Skills + Plugins** | Install community skills (code review, git workflows, etc.) or write your own |
+| 🔁 **Dynamic Workflows** | Write JavaScript scripts that orchestrate multiple agents — fan-out research, multi-perspective review, pipelines. Claude Code compatible. |
+| 💰 **Cost-efficient** | DeepSeek's aggressive pricing paired with prompt caching makes AI-assisted coding affordable at scale |
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/usewhale/DeepSeek-Code-Whale/main/scripts/install.sh | sh
-```
+---
 
-Install with Homebrew:
+## 🚀 Quick Start
+
+macOS:
 
 ```bash
 brew install usewhale/tap/whale
 ```
 
-**Windows PowerShell:**
+Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/usewhale/DeepSeek-Code-Whale/main/scripts/install.sh | sh
+```
+
+Windows PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/usewhale/DeepSeek-Code-Whale/main/scripts/install.ps1 | iex
 ```
 
-**Windows CMD (Command Prompt):**
+Windows CMD:
 
 ```cmd
 powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/usewhale/DeepSeek-Code-Whale/main/scripts/install.ps1 | iex"
 ```
 
-The installer prefers the Windows x64 or ARM64 package for your system and adds `whale.exe` to the current user's `PATH`. If an older release does not include an ARM64 package, it falls back to x64 emulation. You can also download the matching Windows zip manually from [GitHub Releases](https://github.com/usewhale/DeepSeek-Code-Whale/releases).
-
-First run:
-
 ```bash
+# Set your DeepSeek API key
 whale setup
-whale doctor
+
+# Launch the interactive TUI
 whale
 ```
 
-Upgrade:
+That's it. Type your question and Whale starts working — reading files, running commands,
+editing code, searching the web.
 
-```bash
-brew upgrade usewhale/tap/whale
-# or rerun the install script
-```
-
-Whale currently uses the DeepSeek API. Before running Whale, create an API key in the [DeepSeek Platform](https://platform.deepseek.com/). See the [DeepSeek API docs](https://api-docs.deepseek.com/) for API details.
-
-> **Platform support:** Whale currently supports **macOS**, **Linux**, and **Windows**.
-
-You can also run a one-shot prompt:
-
-```bash
-whale exec "Explain what this repository does"
-printf 'Summarize the current directory\n' | whale exec
-```
+> Need a different model provider, proxy, or custom config? See [Configuration](docs/configuration.en.md).
 
 ---
 
-## How It Compares
+## 🔁 Dynamic Workflows
 
-|                          | Whale | Claude Code | Codex CLI | Cursor | Aider |
-|--------------------------|-------|-------------|-----------|--------|-------|
-| Primary interface        | Terminal TUI/CLI | Terminal agent | Terminal agent | IDE | CLI |
-| Default backend          | DeepSeek | Anthropic | OpenAI | Multi-model | Multi-model |
-| DeepSeek optimized       | yes | no | no | no | limited |
-| Prefix-cache friendly    | yes | n/a | n/a | model-dependent | limited |
-| Local code read/write    | yes | yes | yes | yes | yes |
-| Shell / test execution   | yes | yes | yes | partial | yes |
-| `/ask` read-only mode    | yes | partial | partial | n/a | partial |
-| `/plan` planning mode    | yes | yes | yes | n/a | partial |
-| MCP                      | yes | yes | version-dependent | partial | partial |
-| Skills / reusable workflows | yes | yes | yes | partial | limited |
-| Open source              | yes | no | yes | no | yes |
+Whale's **Dynamic Workflows** let you script multi-agent orchestration in JavaScript:
 
-Whale is not trying to support every model. Its focus is turning the DeepSeek API into a stable, low-cost local coding agent that can stay open for long development sessions.
+```js
+// .whale/workflows/research.js
+const results = await parallel([
+  () => agent("Search for best practices in Go error handling"),
+  () => agent("Find common Go error handling mistakes"),
+]);
+return agent("Synthesize both findings into a concise guide");
+```
 
-<details>
-<summary><strong>Why DeepSeek-only?</strong></summary>
+**Fan-out research · Multi-perspective review · Pipeline processing · Adversarial validation**
 
-DeepSeek's low token price is only part of the story. The real advantage for long-running coding agents is prefix caching.
+> ✅ **Claude Code compatible** — workflow scripts written for Claude Code work as-is in Whale.
 
-DeepSeek's prefix cache is sensitive to byte stability. Whale's loop is designed around that constraint: append-only turns, stable context ordering, and recoverable session records help long tasks keep benefiting from cached prefixes.
-
-That is why Whale is not rushing toward a generic provider abstraction. Claude, OpenAI, and DeepSeek differ in cache mechanics, tool-call behavior, and reasoning controls. A generic wrapper usually hides the DeepSeek-specific parts that matter most.
-
-Whale includes DeepSeek-specific handling for:
-
-| Generic agent assumption | What DeepSeek can do | Whale's handling |
-|--------------------------|----------------------|------------------|
-| Tool-call JSON is stable | Payloads can be malformed, escaped, or mixed into reasoning | schema-guided repair / scavenge paths |
-| Deep tool schemas survive intact | Some nested parameters may be dropped | flatter tool parameters |
-| Failed tools should always trigger replan | Some failures should pass through to the model | finer failure classification and recovery |
-| User cancellation is just another tool failure | Cancellation should not continue recovery or replanning | dedicated interrupt path |
-| Reasoning depth is prompt-only | DeepSeek exposes `reasoning_effort` | runtime effort control |
-
-Whale validates tool inputs against the schema first, then repairs common recoverable shape errors only on failing paths: `null` optional fields, stringified arrays, bare strings for array fields, markdown-autolink paths, and `read_file` calls that provide only offset or limit. Repair and invalid-input counts are visible in `/stats`.
-
-Whale's goal is to make DeepSeek's pricing, cache behavior, and coding capability usable in a real terminal workflow.
-
-</details>
+Learn more: [Workflow Overview](docs/workflows.en.md) · [Custom Workflow Guide](docs/custom-workflows.en.md)
 
 ---
 
-## What Whale Can Do
+## 🧰 MCP, Skills & Plugins
 
-- **Understand codebases**: read files, search code, and summarize project structure.
-- **Modify code**: generate patches, edit files, add tests, fix bugs, and handle local refactors.
-- **Run commands**: execute shell commands, tests, builds, and diagnostic scripts, then bring results back into the conversation.
-- **Work interactively**: use the local TUI, persist sessions, and resume with `whale resume`.
-- **Reference local paths quickly**: type `@` in the TUI composer to search and insert workspace file or directory paths.
-- **Ask read-only questions**: use `/ask` when you want analysis without file edits.
-- **Plan before execution**: use `/plan` to review a plan before letting the agent implement it.
-- **Extend tools**: connect external tools with MCP and reuse workflows with Skills.
-- **Run headlessly**: use `whale exec` from scripts, CI, or one-shot tasks.
-- **1M context window**: DeepSeek V4 models automatically use 1M token context with no manual config.
-
-## Common Commands
-
-| Command | Purpose |
-|---------|---------|
-| `whale` | Start the interactive TUI |
-| `whale setup` | Save a DeepSeek API key |
-| `whale doctor` | Run health checks |
-| `whale exec "prompt"` | Run one prompt non-interactively |
-| `whale --worktree [name]` | Create or reuse an isolated git worktree for this interactive session |
-| `whale exec --worktree [name] "prompt"` | Run one prompt inside an isolated git worktree |
-| `whale --dangerously-skip-permissions` | Skip tool approval prompts for this run; suitable for external sandboxes or fully trusted repos |
-| `whale migrate-config` | Migrate Whale v0.1.8-or-earlier config files to `config.toml` |
-| `whale resume` | Open the session picker |
-| `whale resume --last` | Resume the most recent session |
-| `whale resume <id>` | Resume a specific session |
-| `/model` | Change model, reasoning effort, and thinking |
-| `/permissions` | Adjust tool approval mode |
-| `/focus` | Toggle focused view to hide thinking and tool details |
-| `/ask [prompt]` | Read-only question mode |
-| `/plan [prompt]` | Plan first, then decide whether to execute |
-| `/review [target]` | Build a code-review prompt for local changes, branches, PRs, or commits |
-| `/status` | Show current session, mode, model, and config status |
-| `/compact` | Compact the current conversation context |
-| `/init` | Generate AGENTS.md for the current repository |
-| `/skills` | Open the Skills menu to list, insert, or enable/disable local skills |
-| `/plugins` | Open the built-in plugin manager to enable or disable official plugins |
-| `/memory` | View or manage long-term memory saved by the official memory plugin |
-| `/mcp` | Show MCP server status |
-
-## MCP
-
-Whale can load external tools from MCP servers.
-
-See [docs/mcp.md](docs/mcp.md) for setup and supported features.
-
-## Skills
-
-Whale supports local Agent Skills for reusable workflows, team conventions, or tool-specific guidance.
-
-In the TUI, type `$` to search and insert a `$skill-name`. You can also run `/skills`: `List skills` opens the same `$` picker and inserts the selected skill into the composer, while `Enable/Disable Skills` opens a searchable toggle manager.
-
-See [docs/skills.md](docs/skills.md) for details.
-
-## Plugins / Memory
-
-Whale currently ships with the official memory plugin for saving and recalling long-term memory. Use `/memory` to view or manage memories, and `/plugins` to open the plugin manager and press Space to enable or disable plugins.
-
-See [docs/plugins.md](docs/plugins.md) for details.
-
-## Configuration
-
-Whale uses `~/.whale/config.toml` for global settings, `./.whale/config.toml` for shared project settings, and `./.whale/config.local.toml` for private project-local overrides. On Windows, the global directory is `%USERPROFILE%\.whale`. Set `WHALE_HOME` to use a custom global Whale data directory. Config loads in this order:
-
-```text
-defaults < global < project shared < project local < CLI flags/env
-```
-
-Run this only if you used Whale v0.1.8 or earlier and have local
-`preferences.json` or `settings.json` files:
-
-```bash
-whale migrate-config
-```
-
-If you started with Whale v0.1.9 or newer, you do not need this command.
-
-See [docs/configuration.md](docs/configuration.md) for details.
-
-## Worktrees
-
-In a git repository, use `--worktree` to create or reuse an isolated worktree for the current run:
-
-```bash
-whale --worktree feature-x
-whale exec --worktree feature-x "implement and test this change"
-```
-
-Whale stores managed worktrees under `./.whale/worktrees/<name>` and uses branches named `worktree-<name>`. If you omit the name, Whale generates a `session-*` name. On creation, Whale best-effort copies only `./.whale/config.local.toml`; it does not copy session logs, API keys, private MCP config, or the whole `./.whale` directory.
-
-When you exit an interactive worktree session, Whale removes a clean worktree automatically. If the worktree has uncommitted files or commits after the original checkout head, Whale prompts you to keep or remove it. Removing a worktree discards that checkout and its uncommitted changes, but it does not delete the conversation — `whale resume <id>` resumes from the original workspace.
-
-`whale exec --worktree` runs non-interactively and leaves its worktree on disk. To review and clean it up, re-enter it interactively with `whale --worktree <name>` and exit, which runs the same cleanup prompt. This version does not yet include tmux or stale sweeping.
-
-## Coding Plan Support
-
-Yes. Whale connects to Coding Plan / third-party DeepSeek-compatible endpoints via a custom API endpoint that supports `/chat/completions`.
-
-For Alibaba Cloud Bailian, configure `~/.whale/config.toml`:
-
-```toml
-model = "deepseek-v4-flash"
-reasoning_effort = "high"
-thinking_enabled = true
-
-[api]
-base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-```
-
-Then set the corresponding API key:
-
-```bash
-DEEPSEEK_API_KEY=sk-... whale
-```
-
-Or run:
-
-```bash
-whale setup
-```
-
-Notes:
-
-- `base_url` should be the root endpoint — do not include `/chat/completions`. Whale appends it automatically.
-- The `DEEPSEEK_BASE_URL` environment variable overrides `[api].base_url` in `~/.whale/config.toml`.
-- Whale still prioritizes DeepSeek-native models, streaming, thinking, tool calls, and prefix-cache workflows. Full compatibility with third-party endpoints depends on server-side support.
+| Extension | What it does | Get started |
+|---|---|---|
+| **MCP Servers** | Connect to 1,000+ tools (databases, APIs, browser automation) | [docs/mcp.en.md](docs/mcp.en.md) |
+| **Skills** | Load domain expertise — code review, git-worktree, and more | [docs/skills.en.md](docs/skills.en.md) |
+| **Plugins** | Extend Whale's runtime with custom logic | [docs/plugins.en.md](docs/plugins.en.md) |
 
 ---
 
-## Non-goals
+## 📸 How It Works
 
-- **Not a generic multi-model wrapper.** Whale is DeepSeek-only for now and prioritizes DeepSeek's cache, tool-call, and cost advantages.
-- **Not an IDE.** Whale is terminal-first and works with your shell, git, and test commands instead of replacing IDEs like Cursor.
+Whale runs in three modes:
 
-## Project Status
+| Mode | When to use |
+|---|---|
+| **`whale`** (TUI) | Interactive coding sessions — chat, review, iterate with full context |
+| **`whale ask "..."`** (CLI) | One-shot questions, quick code reviews, single commands |
+| **`whale --headless`** | CI/CD, automated PR reviews, scheduled tasks |
 
-Whale is moving quickly. It is best used first on personal projects, experimental repositories, or workflows where changes can be reviewed and rolled back.
+---
+
+## 🎯 Non-goals
+
+- **Multi-model shell.** Whale is DeepSeek-first — optimized for DeepSeek's caching, tools, and pricing.
+- **IDE replacement.** Whale works in your terminal alongside your shell, git, and test commands.
+
+## 📦 Project Status
+
+Whale is in active development. Best suited for personal projects, experimental repositories,
+and workflows where changes can be reviewed and rolled back.
 
 > **Disclaimer:** This project is not affiliated with DeepSeek Inc. It is an independent open-source community project.
 
-## Contributing
+---
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for cloning, local development, testing, issues, and pull requests.
+## 🤝 Contributing
 
-Current development direction and available tasks are listed in [ROADMAP.md](ROADMAP.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) for local development, testing, issues, and PRs.
 
-## Security
+Current direction and available tasks: [ROADMAP.md](ROADMAP.md).
 
-For security-sensitive issues, see [SECURITY.md](SECURITY.md).
+Security issues: [SECURITY.md](SECURITY.md).
 
 ---
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=DeepSeek-Code-Whale%2FDeepSeek-Code-Whale%2Cusewhale%2FDeepSeek-Code-Whale&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=usewhale%2FDeepSeek-Code-Whale&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=DeepSeek-Code-Whale/DeepSeek-Code-Whale%2Cusewhale/DeepSeek-Code-Whale&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=DeepSeek-Code-Whale/DeepSeek-Code-Whale%2Cusewhale/DeepSeek-Code-Whale&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=DeepSeek-Code-Whale/DeepSeek-Code-Whale%2Cusewhale/DeepSeek-Code-Whale&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=usewhale/DeepSeek-Code-Whale&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=usewhale/DeepSeek-Code-Whale&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=usewhale/DeepSeek-Code-Whale&type=date&legend=top-left" />
  </picture>
 </a>

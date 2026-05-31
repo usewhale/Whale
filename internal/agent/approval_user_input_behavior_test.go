@@ -606,7 +606,7 @@ func TestApprovalAllowForSessionCachesExternalReadDirectory(t *testing.T) {
 		WithToolPolicy(RulePolicy{Default: PermissionAllow, Rules: DefaultRules(), WorkspaceRoot: workspace}),
 		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
 			asked++
-			if got, want := req.Keys, []string{"external_read:" + filepath.ToSlash(external)}; !reflect.DeepEqual(got, want) {
+			if got, want := req.Keys, []string{"grant:external_directory:" + filepath.ToSlash(external)}; !reflect.DeepEqual(got, want) {
 				t.Fatalf("external read approval keys = %v, want %v", got, want)
 			}
 			if req.Metadata["permission_kind"] != "external_directory" {
@@ -624,6 +624,84 @@ func TestApprovalAllowForSessionCachesExternalReadDirectory(t *testing.T) {
 	}
 	if asked != 1 {
 		t.Fatalf("expected external read approval to be cached by directory, got %d prompts", asked)
+	}
+}
+
+type externalReadToolsApprovalProvider struct {
+	dir   string
+	file  string
+	calls int
+}
+
+func (p *externalReadToolsApprovalProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	p.calls++
+	switch p.calls {
+	case 1:
+		return eventStream(toolUseEvent(toolCall("tc-read", "read_file", `{"file_path":`+strconv.Quote(p.file)+`}`)))
+	case 2:
+		return eventStream(toolUseEvent(toolCall("tc-grep", "grep", `{"path":`+strconv.Quote(p.dir)+`,"pattern":"approved","literal_text":true}`)))
+	case 3:
+		return eventStream(toolUseEvent(toolCall("tc-search", "search_files", `{"path":`+strconv.Quote(p.dir)+`,"pattern":"guide"}`)))
+	case 4:
+		return eventStream(toolUseEvent(toolCall("tc-list", "list_dir", `{"path":`+strconv.Quote(p.dir)+`}`)))
+	default:
+		return eventStream(endTurnEvent("done"))
+	}
+}
+
+func TestApprovalAllowForSessionReusesExternalDirectoryGrantAcrossReadTools(t *testing.T) {
+	home, err := os.MkdirTemp(".", "whale-agent-ext-read-tools-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, err = filepath.Abs(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(home) })
+
+	workspace := filepath.Join(home, "workspace")
+	external := filepath.Join(home, "external")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(external, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	externalFile := filepath.Join(external, "guide.txt")
+	if err := os.WriteFile(externalFile, []byte("approved external read\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	toolset, err := whaletools.NewToolset(workspace)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	store := NewInMemoryStore()
+	prov := &externalReadToolsApprovalProvider{dir: external, file: externalFile}
+	asked := 0
+	a := NewAgentWithRegistry(
+		prov,
+		store,
+		NewToolRegistry(toolset.Tools()),
+		WithProjectMemory(false, 0, nil, workspace),
+		WithToolPolicy(RulePolicy{Default: PermissionAllow, Rules: DefaultRules(), WorkspaceRoot: workspace}),
+		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
+			asked++
+			if got, want := req.Keys, []string{"grant:external_directory:" + filepath.ToSlash(external)}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("external directory approval keys = %v, want %v", got, want)
+			}
+			return ApprovalAllowForSession
+		}),
+	)
+
+	for i := 0; i < 4; i++ {
+		if _, err := a.RunSession(context.Background(), "s-external-read-tools", "read"); err != nil {
+			t.Fatalf("run %d failed: %v", i+1, err)
+		}
+	}
+	if asked != 1 {
+		t.Fatalf("expected one external directory approval across read tools, got %d prompts", asked)
 	}
 }
 

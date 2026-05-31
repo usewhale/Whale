@@ -2127,6 +2127,29 @@ func TestSearchToolSchemasDocumentDefaultRoot(t *testing.T) {
 	}
 }
 
+func TestSearchFilesSchemaDocumentsIncludeIsUnsupported(t *testing.T) {
+	ts, err := NewToolset(t.TempDir())
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	for _, tool := range ts.Tools() {
+		if tool.Name() != "search_files" {
+			continue
+		}
+		spec := core.DescribeTool(tool)
+		for _, want := range []string{
+			"Does not support include",
+			"use grep with include",
+		} {
+			if !strings.Contains(spec.Description, want) {
+				t.Fatalf("search_files description missing %q: %s", want, spec.Description)
+			}
+		}
+		return
+	}
+	t.Fatal("search_files not registered")
+}
+
 func TestWriteSchemaDocumentsRegularFilePermissions(t *testing.T) {
 	ts, err := NewToolset(t.TempDir())
 	if err != nil {

@@ -15,6 +15,7 @@ func (m *model) resetTranscript() {
 	}
 	*m.startupHeaderOnce = false
 	m.nativeScrollbackPrinted = 0
+	m.holdCompletedTurnInViewport = false
 	m.turnTranscriptStart = len(m.transcript)
 	m.visibleAssistantThisTurn = ""
 	m.resetBusyTokenEstimate()

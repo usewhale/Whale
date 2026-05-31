@@ -117,22 +117,6 @@ func TestDoctorBadge(t *testing.T) {
 	}
 }
 
-func TestMigrateConfigHelpExplainsVersionBoundary(t *testing.T) {
-	opts := &cliOptions{cfg: app.DefaultConfig()}
-	root := newRootCmd(opts)
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	root.SetArgs([]string{"migrate-config", "--help"})
-	if err := root.Execute(); err != nil {
-		t.Fatalf("migrate-config help: %v", err)
-	}
-	help := out.String()
-	if !strings.Contains(help, "v0.1.8 or earlier") || !strings.Contains(help, "v0.1.9") || !strings.Contains(help, "newer") {
-		t.Fatalf("expected version boundary in help, got:\n%s", help)
-	}
-}
-
 func TestAppServerCommandRunsStdioProtocol(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
 	t.Setenv("HOME", t.TempDir())
@@ -161,34 +145,6 @@ func TestAppServerCommandRunsStdioProtocol(t *testing.T) {
 	if !strings.Contains(got, `"type":"`+string(protocol.ServerMessageReady)+`"`) ||
 		!strings.Contains(got, `"type":"`+string(protocol.ServerMessageClosed)+`"`) {
 		t.Fatalf("expected ready and closed messages, got:\n%s", got)
-	}
-}
-
-func TestMigrateConfigOutputExplainsVersionBoundary(t *testing.T) {
-	dataDir := t.TempDir()
-	workspace := t.TempDir()
-	oldwd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd: %v", err)
-	}
-	if err := os.Chdir(workspace); err != nil {
-		t.Fatalf("Chdir: %v", err)
-	}
-	defer func() { _ = os.Chdir(oldwd) }()
-
-	opts := &cliOptions{cfg: app.DefaultConfig()}
-	opts.cfg.DataDir = dataDir
-	root := newRootCmd(opts)
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&out)
-	root.SetArgs([]string{"migrate-config"})
-	if err := root.Execute(); err != nil {
-		t.Fatalf("migrate-config: %v", err)
-	}
-	got := out.String()
-	if !strings.Contains(got, "v0.1.8 or earlier") || !strings.Contains(got, "no legacy config to migrate") {
-		t.Fatalf("expected version boundary in output, got:\n%s", got)
 	}
 }
 
@@ -510,7 +466,6 @@ func TestUnsupportedSubcommandsRejectWorktree(t *testing.T) {
 		{"doctor", "--worktree=x"},
 		{"resume", "--worktree=x"},
 		{"setup", "--worktree=x"},
-		{"migrate-config", "--worktree=x"},
 	} {
 		opts := &cliOptions{cfg: app.DefaultConfig()}
 		root := newRootCmd(opts)

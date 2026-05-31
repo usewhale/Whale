@@ -36,8 +36,11 @@ const (
 	modeReviewBranchPicker
 	modeReviewCommitPicker
 	modeReviewPRPicker
+	modeRewindPicker
 	modeHelp
 	modeWorktreeExit
+	modeWorkflowLaunch
+	modeWorkflowPanel
 )
 
 type page int
@@ -110,6 +113,11 @@ type model struct {
 		metadata   map[string]any
 		selected   int
 	}
+	workflowLaunch struct {
+		result   *protocol.LocalResult
+		selected int
+	}
+	workflowPanel  workflowPanelState
 	resumeMenu     bool
 	sessionChoices []string
 	sessionIndex   int
@@ -167,6 +175,7 @@ type model struct {
 		selected int
 	}
 	reviewTargetPicker reviewTargetPickerState
+	rewindPicker       rewindPickerState
 	help               struct {
 		selected int
 		offset   int
@@ -206,6 +215,8 @@ type model struct {
 	inHistoryNav                   bool
 	queuedPrompts                  []queuedPrompt
 	nativeScrollbackPrinted        int
+	holdCompletedTurnInViewport    bool
+	heldTurnStart                  int
 	pendingMouseCSIFragment        bool
 	windowsPaste                   windowsPasteFallbackState
 	viewCache                      *modelViewCache
@@ -435,6 +446,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.sequenceCmds(busyTickCmd())
 		}
 		return m, m.sequenceCmds()
+	case workflowPanelRefreshMsg:
+		return m, m.sequenceCmds(m.handleWorkflowPanelRefresh(msg))
 	case gitBranchUpdatedMsg:
 		if msg.cwd == m.cwdPath {
 			m.gitBranch = msg.branch

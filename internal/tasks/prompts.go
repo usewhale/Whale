@@ -1,6 +1,9 @@
 package tasks
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
 
 func validRole(role string) bool {
 	switch strings.TrimSpace(role) {
@@ -43,4 +46,43 @@ You are a Whale read-only exploration subagent.
 - Return a concise final summary with the most relevant facts, paths, and open questions.
 `)
 	}
+}
+
+func outputSchemaSystemBlock(schema map[string]any) string {
+	if len(schema) == 0 {
+		return ""
+	}
+	b, err := json.MarshalIndent(schema, "", "  ")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(`
+This task requires structured output.
+
+- Your final structured result must be submitted by calling the ` + structuredOutputToolName + ` tool.
+- Call ` + structuredOutputToolName + ` exactly once after any research or tool use is complete.
+- Do not use a prose or Markdown final answer as a substitute for this tool call.
+- The tool input must match this JSON Schema exactly.
+
+Schema:
+` + string(b))
+}
+
+func structuredOutputRepairPrompt(lastErr, previousSummary string) string {
+	var b strings.Builder
+	b.WriteString("Your previous response did not satisfy the required structured output contract.\n\n")
+	if strings.TrimSpace(lastErr) != "" {
+		b.WriteString("Last structured_output error:\n")
+		b.WriteString(strings.TrimSpace(lastErr))
+		b.WriteString("\n\n")
+	}
+	if strings.TrimSpace(previousSummary) != "" {
+		b.WriteString("Previous response summary:\n")
+		b.WriteString(strings.TrimSpace(previousSummary))
+		b.WriteString("\n\n")
+	}
+	b.WriteString("Do not do more research or call any source/tool other than structured_output. ")
+	b.WriteString("Use the information already gathered in this subagent session and call structured_output exactly once now. ")
+	b.WriteString("If a field cannot be supported from the existing context, use the schema's empty or conservative value instead of adding unsupported claims.")
+	return b.String()
 }

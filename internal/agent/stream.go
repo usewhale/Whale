@@ -31,31 +31,77 @@ type toolDispatchOutcome struct {
 	PrimarySucceeded bool
 }
 
-func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, history []core.Message, rt *memory.RuntimeState, events chan<- AgentEvent, toolPolicy policy.ToolPolicy, tools *core.ToolRegistry) (core.Message, *core.Message, llm.Usage, string, bool, error) {
+func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, checkpointMessageID string, history []core.Message, rt *memory.RuntimeState, events chan<- AgentEvent, toolPolicy policy.ToolPolicy, tools *core.ToolRegistry, remainingToolCalls int) (core.Message, *core.Message, llm.Usage, string, bool, int, error) {
 	assistant, lastUsage, lastModel, err := a.collectAssistantStream(ctx, sessionID, rt, events, tools)
 	if err != nil {
-		return core.Message{}, nil, llm.Usage{}, "", false, err
+		return core.Message{}, nil, llm.Usage{}, "", false, 0, err
 	}
 
 	dispatchCalls, blocked, err := a.prepareToolDispatches(ctx, sessionID, lastModel, assistant, events, tools)
 	if err != nil {
-		return core.Message{}, nil, llm.Usage{}, "", false, err
+		return core.Message{}, nil, llm.Usage{}, "", false, 0, err
+	}
+	attemptedToolCalls := len(dispatchCalls)
+	if remainingToolCalls > 0 && len(dispatchCalls) > remainingToolCalls {
+		allowed := append([]core.ToolCall(nil), dispatchCalls[:remainingToolCalls]...)
+		for _, call := range dispatchCalls[remainingToolCalls:] {
+			blocked = append(blocked, toolCallCapBlockedResult(call))
+		}
+		dispatchCalls = allowed
 	}
 	if len(dispatchCalls) == 0 {
-		return assistant, nil, lastUsage, lastModel, false, nil
+		if len(blocked) == 0 {
+			return assistant, nil, lastUsage, lastModel, false, attemptedToolCalls, nil
+		}
+		toolMsg, abortTurn, err := a.dispatchToolCalls(ctx, streamDispatchContext{
+			SessionID:           sessionID,
+			Assistant:           assistant,
+			Model:               lastModel,
+			Policy:              toolPolicy,
+			Tools:               tools,
+			Events:              events,
+			CheckpointMessageID: checkpointMessageID,
+		}, nil, blocked)
+		if err != nil {
+			return core.Message{}, nil, llm.Usage{}, "", false, attemptedToolCalls, err
+		}
+		return assistant, toolMsg, lastUsage, lastModel, abortTurn, attemptedToolCalls, nil
 	}
 	toolMsg, abortTurn, err := a.dispatchToolCalls(ctx, streamDispatchContext{
-		SessionID: sessionID,
-		Assistant: assistant,
-		Model:     lastModel,
-		Policy:    toolPolicy,
-		Tools:     tools,
-		Events:    events,
+		SessionID:           sessionID,
+		Assistant:           assistant,
+		Model:               lastModel,
+		Policy:              toolPolicy,
+		Tools:               tools,
+		Events:              events,
+		CheckpointMessageID: checkpointMessageID,
 	}, dispatchCalls, blocked)
 	if err != nil {
-		return core.Message{}, nil, llm.Usage{}, "", false, err
+		return core.Message{}, nil, llm.Usage{}, "", false, attemptedToolCalls, err
 	}
-	return assistant, toolMsg, lastUsage, lastModel, abortTurn, nil
+	return assistant, toolMsg, lastUsage, lastModel, abortTurn, attemptedToolCalls, nil
+}
+
+func toolCallCapBlockedResult(call core.ToolCall) core.ToolResult {
+	content, err := core.MarshalToolEnvelope(core.ToolEnvelope{
+		OK:      false,
+		Success: false,
+		Code:    "tool_call_cap_reached",
+		Error:   "tool call cap reached",
+		Message: "tool call cap reached",
+	})
+	if err != nil {
+		content = `{"success":false,"error":"tool call cap reached","code":"tool_call_cap_reached"}`
+	}
+	return core.ToolResult{
+		ToolCallID: call.ID,
+		Name:       call.Name,
+		Content:    content,
+		IsError:    true,
+		Metadata: map[string]any{
+			"blocked_reason_code": "tool_call_cap_reached",
+		},
+	}
 }
 
 func (a *Agent) flushPendingParallelSubagents(ctx context.Context, sessionID, assistantMessageID, model string, pending []preparedToolDispatch, events chan<- AgentEvent, results *[]core.ToolResult, tools *core.ToolRegistry) error {
@@ -68,7 +114,7 @@ func (a *Agent) flushPendingParallelSubagents(ctx context.Context, sessionID, as
 	var outcomes []toolDispatchOutcome
 	if len(groups) != 1 || groups[0].Start != pending[0].Index || len(groups[0].Calls) != len(pending) {
 		for _, prepared := range pending {
-			finalRes, ok, primarySucceeded := a.dispatchWithRecovery(ctx, sessionID, assistantMessageID, model, prepared.Call, prepared.ExternalReadRoots, events, tools)
+			finalRes, ok, primarySucceeded := a.dispatchWithRecovery(ctx, sessionID, assistantMessageID, "", model, prepared.Call, prepared.ExternalReadRoots, events, tools)
 			if err := ctx.Err(); err != nil {
 				return err
 			}
@@ -110,7 +156,7 @@ func (a *Agent) dispatchParallelSubagentsWithRecovery(ctx context.Context, sessi
 	for i := 0; i < limit; i++ {
 		go func() {
 			for prepared := range workCh {
-				finalRes, ok, primarySucceeded := a.dispatchWithRecovery(ctx, sessionID, assistantMessageID, model, prepared.Call, prepared.ExternalReadRoots, events, tools)
+				finalRes, ok, primarySucceeded := a.dispatchWithRecovery(ctx, sessionID, assistantMessageID, "", model, prepared.Call, prepared.ExternalReadRoots, events, tools)
 				// outcomeCh is buffered for every pending call so a worker that
 				// already started can report without blocking after parent
 				// cancellation. The actual stop still depends on
@@ -241,40 +287,56 @@ func modeBlockedDetailsForCall(mode session.Mode, call core.ToolCall) (code, mes
 	case session.ModeAsk:
 		if call.Name == "shell_run" {
 			return "ask_mode_blocked",
-				"shell command is not classified as safe read-only",
-				"Current mode: ask. Ask mode allows only safe read-only shell commands. This shell command is not classified as safe read-only; switch to agent mode with /agent or Shift+Tab to execute commands with side effects.",
+				"shell command not confirmed read-only in ask mode",
+				"Ask mode blocked this shell command; do not retry the same shell operation with another shell command in this mode.",
 				map[string]any{
 					"current_mode":    "ask",
+					"tool":            call.Name,
+					"action":          "do_not_retry_same_command",
+					"retryable":       false,
 					"suggested_modes": []string{"/agent", "/plan", "Shift+Tab"},
 				}
 		}
 		return "ask_mode_blocked",
 			"tool unavailable in ask mode",
-			"Current mode: ask. Ask mode only allows read-only tools. To execute or modify files, switch to agent mode with /agent or Shift+Tab. To propose a reviewed approach first, switch to plan mode with /plan or Shift+Tab.",
+			"Ask mode blocked this tool call; do not retry the same call in this mode.",
 			map[string]any{
 				"current_mode":    "ask",
+				"tool":            call.Name,
+				"action":          "do_not_retry_same_call",
+				"retryable":       false,
 				"suggested_modes": []string{"/agent", "/plan", "Shift+Tab"},
 			}
 	case session.ModePlan:
 		if call.Name == "shell_run" {
 			return "plan_mode_blocked",
-				"shell command is not classified as safe read-only",
-				"Current mode: plan. Plan mode allows only safe read-only shell commands. This shell command is not classified as safe read-only; stay here to refine the plan and produce a <proposed_plan> block for review. Only the user or UI can switch modes.",
+				"shell command not confirmed read-only in plan mode",
+				"Plan mode blocked this shell command; do not retry the same shell operation with another shell command in this mode. Continue with allowed read-only tools, or output the final plan in a <proposed_plan> block.",
 				map[string]any{
 					"current_mode": "plan",
+					"tool":         call.Name,
+					"action":       "do_not_retry_same_command",
+					"retryable":    false,
 				}
 		}
 		return "plan_mode_blocked",
 			"tool unavailable in plan mode",
-			"Current mode: plan. Plan mode is read-only until the plan is approved. Stay here to refine the plan and produce a <proposed_plan> block for review. Only the user or UI can switch modes.",
+			"Plan mode blocked this tool call; do not retry the same call in this mode. Continue with allowed read-only tools, or output the final plan in a <proposed_plan> block.",
 			map[string]any{
 				"current_mode": "plan",
+				"tool":         call.Name,
+				"action":       "do_not_retry_same_call",
+				"retryable":    false,
 			}
 	default:
 		return "mode_blocked",
 			"tool unavailable in current mode",
-			"Tool unavailable in the current mode.",
-			map[string]any{}
+			"Current mode blocked this tool call; do not retry the same call in this mode.",
+			map[string]any{
+				"tool":      call.Name,
+				"action":    "do_not_retry_same_call",
+				"retryable": false,
+			}
 	}
 }
 

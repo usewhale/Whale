@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -19,6 +20,71 @@ func (m *mockProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) 
 		return eventStream(toolUseEvent(toolCall("tc-1", "echo", "hi")))
 	}
 	return eventStream(endTurnEvent("done"))
+}
+
+type tooManyToolsProvider struct{}
+
+func (p *tooManyToolsProvider) StreamResponse(_ context.Context, _ []Message, tools []Tool) <-chan ProviderEvent {
+	if len(tools) == 0 {
+		return eventStream(endTurnEvent("forced summary"))
+	}
+	return eventStream(toolUseEvent(
+		toolCall("tc-1", "echo", `{"n":1}`),
+		toolCall("tc-2", "echo", `{"n":2}`),
+		toolCall("tc-3", "echo", `{"n":3}`),
+	))
+}
+
+func TestAgentMaxToolCallsDropsExcessAndForcesSummary(t *testing.T) {
+	store := NewInMemoryStore()
+	a := NewAgent(&tooManyToolsProvider{}, store, []Tool{echoTool{}})
+	WithMaxToolCalls(2)(a)
+
+	events, err := a.RunStream(context.Background(), "s-tool-cap", "go")
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+	var blocked int
+	var forced bool
+	for ev := range events {
+		switch ev.Type {
+		case AgentEventTypeToolCallBlocked:
+			if ev.ToolBlocked != nil && ev.ToolBlocked.ReasonCode == "tool_call_cap_reached" {
+				blocked++
+			}
+		case AgentEventTypeForcedSummaryStarted:
+			if ev.Content == "tool call cap reached" {
+				forced = true
+			}
+		case AgentEventTypeError:
+			t.Fatalf("unexpected error: %v", ev.Err)
+		}
+	}
+	if blocked != 1 {
+		t.Fatalf("blocked tool calls = %d, want 1", blocked)
+	}
+	if !forced {
+		t.Fatal("expected forced summary when tool call cap was reached")
+	}
+	all, err := store.List(context.Background(), "s-tool-cap")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var executed int
+	var capped int
+	for _, msg := range all {
+		for _, res := range msg.ToolResults {
+			if res.Name == "echo" && !res.IsError {
+				executed++
+			}
+			if res.Name == "echo" && res.IsError && res.ToolCallID == "tc-3" {
+				capped++
+			}
+		}
+	}
+	if executed != 2 || capped != 1 {
+		t.Fatalf("executed/capped = %d/%d, want 2/1", executed, capped)
+	}
 }
 
 func TestAgentLoopWithToolRoundTrip(t *testing.T) {
@@ -116,6 +182,84 @@ func TestStreamFallthroughPersistsPartialAssistant(t *testing.T) {
 	}
 	if asst.Text != "partial-answer" {
 		t.Fatalf("expected persisted partial text %q, got %q", "partial-answer", asst.Text)
+	}
+}
+
+type toolStartThenErrorProvider struct{}
+
+func (p *toolStartThenErrorProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	return eventStream(
+		ProviderEvent{Type: EventContentDelta, Content: "about to run"},
+		ProviderEvent{Type: EventToolArgsDelta, ToolArgsDelta: &llm.ToolArgsDelta{ToolCallIndex: 0, ToolName: "shell_run", ArgsDelta: `{"command":`, ArgsChars: len(`{"command":`)}},
+		ProviderEvent{Type: EventToolUseStart, ToolCall: &ToolCall{ID: "tc-partial", Name: "shell_run"}},
+		ProviderEvent{Type: EventError, Err: errors.New("stream timed out after progress")},
+	)
+}
+
+func TestStreamErrorDropsIncompleteToolCall(t *testing.T) {
+	store := NewInMemoryStore()
+	a := NewAgent(&toolStartThenErrorProvider{}, store, []Tool{echoTool{}})
+
+	events, err := a.RunStream(context.Background(), "s-incomplete-tool", "go")
+	if err != nil {
+		t.Fatalf("run stream failed: %v", err)
+	}
+	for range events {
+	}
+
+	all, err := store.List(context.Background(), "s-incomplete-tool")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected user+assistant, got %d: %+v", len(all), all)
+	}
+	asst := all[1]
+	if asst.Text != "about to run" {
+		t.Fatalf("expected partial assistant text to survive, got %q", asst.Text)
+	}
+	if asst.FinishReason != FinishReasonError {
+		t.Fatalf("expected error finish reason, got %q", asst.FinishReason)
+	}
+	if len(asst.ToolCalls) != 0 {
+		t.Fatalf("incomplete tool call persisted: %+v", asst.ToolCalls)
+	}
+}
+
+type toolOnlyThenErrorProvider struct{}
+
+func (p *toolOnlyThenErrorProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	return eventStream(
+		ProviderEvent{Type: EventToolArgsDelta, ToolArgsDelta: &llm.ToolArgsDelta{ToolCallIndex: 0, ToolName: "shell_run", ArgsDelta: `{"command":`, ArgsChars: len(`{"command":`)}},
+		ProviderEvent{Type: EventToolUseStart, ToolCall: &ToolCall{ID: "tc-empty", Name: "shell_run"}},
+		ProviderEvent{Type: EventError, Err: errors.New("stream timed out before final tool input")},
+	)
+}
+
+func TestStreamErrorWithOnlyIncompleteToolCallDoesNotPersistToolCall(t *testing.T) {
+	store := NewInMemoryStore()
+	a := NewAgent(&toolOnlyThenErrorProvider{}, store, []Tool{echoTool{}})
+
+	events, err := a.RunStream(context.Background(), "s-tool-only-error", "go")
+	if err != nil {
+		t.Fatalf("run stream failed: %v", err)
+	}
+	for range events {
+	}
+
+	all, err := store.List(context.Background(), "s-tool-only-error")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("expected user+assistant, got %d: %+v", len(all), all)
+	}
+	asst := all[1]
+	if asst.FinishReason != FinishReasonError {
+		t.Fatalf("expected error finish reason, got %q", asst.FinishReason)
+	}
+	if len(asst.ToolCalls) != 0 {
+		t.Fatalf("incomplete tool call persisted: %+v", asst.ToolCalls)
 	}
 }
 

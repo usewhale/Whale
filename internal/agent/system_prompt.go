@@ -32,6 +32,14 @@ func (a *Agent) buildImmutableSystemBlocksWithTools(tools *core.ToolRegistry, op
 			systemBlocks = append(systemBlocks, trimmed)
 		}
 	}
+	for _, render := range a.dynamicSystemBlocks {
+		if render == nil {
+			continue
+		}
+		if trimmed := strings.TrimSpace(render()); trimmed != "" {
+			systemBlocks = append(systemBlocks, trimmed)
+		}
+	}
 	systemBlocks = append(systemBlocks, renderModeAuthorityBlock(a.mode))
 	if a.mode == session.ModePlan {
 		systemBlocks = append(systemBlocks, planning.ModeInstructions())
@@ -42,6 +50,7 @@ Ask mode is active.
 - Answer questions about the codebase, architecture, behavior, bugs, and possible changes.
 - You may use read-only tools, including file reads/search, read-only shell commands, and web lookup/fetch tools, when they help answer the question.
 - Do not modify files, do not call mutating tools, and do not act as though you are implementing changes right now.
+- If any tool result has code ask_mode_blocked, do not retry the same tool call or the same shell operation with another shell command in ASK mode. Briefly report the block and continue only with clearly allowed read-only alternatives.
 - If code changes are needed, explain them, summarize them, or outline them briefly instead of attempting to make them.
 `))
 	} else {

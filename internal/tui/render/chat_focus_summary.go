@@ -72,7 +72,7 @@ func focusSummaryActionStyle(part FocusSummaryPart) lipgloss.Style {
 		return style.Foreground(tuitheme.Default.Error)
 	case "denied":
 		return style.Foreground(tuitheme.Default.ResultDenied)
-	case "blocked", "mode_hint", "http_error", "usage_hint":
+	case "blocked", "mode_hint", "http_error", "usage_hint", "nonzero":
 		return style.Foreground(tuitheme.Default.Warn)
 	case "running":
 		return style.Foreground(tuitheme.Default.ResultRunning)
@@ -83,7 +83,7 @@ func focusSummaryActionStyle(part FocusSummaryPart) lipgloss.Style {
 
 func focusSummaryState(part FocusSummaryPart) string {
 	switch strings.TrimSpace(part.State) {
-	case "done", "running", "failed", "denied", "blocked", "mode_hint", "http_error", "usage_hint":
+	case "done", "running", "failed", "denied", "blocked", "mode_hint", "http_error", "usage_hint", "nonzero":
 		return strings.TrimSpace(part.State)
 	}
 	status := strings.TrimSpace(part.Status)
@@ -98,6 +98,8 @@ func focusSummaryState(part FocusSummaryPart) string {
 		return "mode_hint"
 	case strings.Contains(status, "HTTP error"):
 		return "http_error"
+	case strings.Contains(status, "exited non-zero"):
+		return "nonzero"
 	case strings.Contains(status, "usage hint"):
 		return "usage_hint"
 	case strings.Contains(status, "running"):
@@ -146,7 +148,7 @@ func focusSummaryStatusStyle(part FocusSummaryPart) lipgloss.Style {
 		return style.Foreground(tuitheme.Default.Error).Bold(true)
 	case "denied":
 		return style.Foreground(tuitheme.Default.ResultDenied).Bold(true)
-	case "blocked", "mode_hint", "http_error", "usage_hint":
+	case "blocked", "mode_hint", "http_error", "usage_hint", "nonzero":
 		return style.Foreground(tuitheme.Default.Warn).Bold(true)
 	case "running":
 		return style.Foreground(tuitheme.Default.ResultRunning).Bold(true)

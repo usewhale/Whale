@@ -106,7 +106,7 @@ func (s *Service) sessionGrantAllLocked(sessionID string, keys []string) bool {
 		return false
 	}
 	for _, key := range keys {
-		if key == "" || !bySession[key] {
+		if key == "" || !policy.ApprovalGrantKeysAllowAll(bySession, []string{key}) {
 			return false
 		}
 	}

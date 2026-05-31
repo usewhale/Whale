@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/policy/effects"
 	"github.com/usewhale/whale/internal/policy/shellrisk"
 )
 
@@ -90,20 +91,14 @@ func approvalKeyGranted(granted map[string]bool, key string) bool {
 	if granted[key] {
 		return true
 	}
-	root, ok := strings.CutPrefix(key, "external_read:")
-	if !ok {
-		return false
-	}
-	target := filepath.Clean(filepath.FromSlash(root))
 	for grantedKey, allowed := range granted {
 		if !allowed {
 			continue
 		}
-		grantedRoot, ok := strings.CutPrefix(strings.TrimSpace(grantedKey), "external_read:")
-		if !ok {
-			continue
+		if effects.GrantAllowsKey(grantedKey, key) {
+			return true
 		}
-		if pathInsideOrFalse(target, filepath.Clean(filepath.FromSlash(grantedRoot))) {
+		if legacyExternalReadGrantAllows(grantedKey, key) {
 			return true
 		}
 	}
@@ -208,8 +203,19 @@ func ApprovalKeys(call core.ToolCall) []string {
 }
 
 func ApprovalKeysForDecision(call core.ToolCall, decision PolicyDecision) []string {
-	if decision.Permission == "external_directory" && strings.TrimSpace(decision.Pattern) != "" && readOnlyFilesystemTool(call.Name) {
-		keys := []string{externalReadApprovalKey(decision.Pattern)}
+	if !readOnlyFilesystemTool(call.Name) {
+		return ApprovalKeys(call)
+	}
+	var keys []string
+	for _, req := range decision.ApprovalRequirements {
+		if req.Permission == "external_directory" && strings.TrimSpace(req.Pattern) != "" {
+			keys = append(keys, externalDirectoryGrantKey(req.Pattern))
+		}
+	}
+	if decision.Permission == "external_directory" && strings.TrimSpace(decision.Pattern) != "" {
+		keys = append(keys, externalDirectoryGrantKey(decision.Pattern))
+	}
+	if len(keys) > 0 {
 		if decisionRequiresNonExternalApproval(decision) {
 			keys = append(keys, ApprovalKeys(call)...)
 		}
@@ -230,8 +236,12 @@ func decisionRequiresNonExternalApproval(decision PolicyDecision) bool {
 func ExternalReadApprovalRootsFromKeys(keys []string) []string {
 	var roots []string
 	for _, key := range compactApprovalKeys(keys) {
-		if root, ok := strings.CutPrefix(key, "external_read:"); ok && strings.TrimSpace(root) != "" {
-			roots = append(roots, filepath.Clean(filepath.FromSlash(root)))
+		if grant, ok := effects.ParseGrantKey(key); ok && grant.Kind == effects.ExternalDirectory && strings.TrimSpace(grant.Pattern) != "" {
+			roots = append(roots, filepath.Clean(filepath.FromSlash(grant.Pattern)))
+			continue
+		}
+		if root, ok := legacyExternalReadRoot(key); ok {
+			roots = append(roots, root)
 		}
 	}
 	return roots
@@ -259,8 +269,41 @@ func readOnlyFilesystemTool(name string) bool {
 	}
 }
 
-func externalReadApprovalKey(path string) string {
-	return "external_read:" + filepath.ToSlash(filepath.Clean(strings.TrimSpace(path)))
+func externalDirectoryGrantKey(path string) string {
+	return effects.GrantKey(effects.ExternalDirectory, path)
+}
+
+func legacyExternalReadGrantAllows(grantedKey, requestedKey string) bool {
+	grantedRoot, ok := legacyExternalReadRoot(grantedKey)
+	if !ok {
+		return false
+	}
+	requested, ok := effects.ParseGrantKey(requestedKey)
+	if !ok || requested.Kind != effects.ExternalDirectory || strings.TrimSpace(requested.Pattern) == "" {
+		return false
+	}
+	target := filepath.Clean(filepath.FromSlash(requested.Pattern))
+	return pathInsideOrFalse(target, grantedRoot)
+}
+
+func legacyExternalReadRoot(key string) (string, bool) {
+	root, ok := strings.CutPrefix(strings.TrimSpace(key), "external_read:")
+	if !ok || strings.TrimSpace(root) == "" {
+		return "", false
+	}
+	return filepath.Clean(filepath.FromSlash(root)), true
+}
+
+func ApprovalGrantKeysAllowAll(granted map[string]bool, keys []string) bool {
+	if len(keys) == 0 {
+		return false
+	}
+	for _, key := range keys {
+		if strings.TrimSpace(key) == "" || !approvalKeyGranted(granted, key) {
+			return false
+		}
+	}
+	return true
 }
 
 func memoryWritePayloadHash(body map[string]any) string {
@@ -386,6 +429,16 @@ func ApprovalMetadata(call core.ToolCall, keys []string, metadata map[string]any
 	}
 	if compact := compactApprovalKeys(keys); len(compact) > 0 {
 		out["approval_keys"] = compact
+		for _, key := range compact {
+			grant, ok := effects.ParseGrantKey(key)
+			if !ok {
+				continue
+			}
+			out["effect_kind"] = string(grant.Kind)
+			out["effect_scope"] = grant.Pattern
+			out["grant_pattern"] = grant.Pattern
+			break
+		}
 	}
 	if files := ApprovalFiles(call); len(files) > 0 {
 		out["approval_files"] = files

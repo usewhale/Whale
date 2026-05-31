@@ -117,6 +117,48 @@ func TestStreamResponseParsesToolCallAndContent(t *testing.T) {
 	}
 }
 
+func TestStreamResponseErrorsAfterPartialToolCallWithoutComplete(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"preparing\"}}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"shell_run\",\"arguments\":\"{\\\"command\\\":\"}}]}}]}\n\n")
+	}))
+	defer srv.Close()
+
+	c, err := New(WithAPIKey("test-key"), WithBaseURL(srv.URL), WithHTTPClient(srv.Client()))
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	events := c.StreamResponse(context.Background(), []core.Message{{Role: core.RoleUser, Text: "hi"}}, []core.Tool{fakeTool{"shell_run"}})
+	var sawToolProgress bool
+	var sawComplete bool
+	var sawError bool
+	for ev := range events {
+		switch ev.Type {
+		case llm.EventToolArgsDelta:
+			sawToolProgress = true
+		case llm.EventComplete:
+			sawComplete = true
+		case llm.EventError:
+			sawError = true
+			var progressErr *streamProgressError
+			if !errors.As(ev.Err, &progressErr) {
+				t.Fatalf("expected stream progress error, got %T: %v", ev.Err, ev.Err)
+			}
+		}
+	}
+	if !sawToolProgress {
+		t.Fatal("missing partial tool progress")
+	}
+	if sawComplete {
+		t.Fatal("partial tool call stream must not emit complete")
+	}
+	if !sawError {
+		t.Fatal("missing stream error")
+	}
+}
+
 func TestStreamResponseParsesReasoningDelta(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

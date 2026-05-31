@@ -179,24 +179,11 @@ func (p RulePolicy) requestsFor(spec core.ToolSpec, call core.ToolCall) []permis
 		return []permissionRequest{{Kind: "mutating_tool", Pattern: spec.Name}}
 	}
 	requests := []permissionRequest{{Kind: kind, Pattern: target}}
-	switch spec.Name {
-	case "shell_run":
+	if spec.Name == "shell_run" {
 		cmd := shellCommandFromInput(call.Input)
 		requests[0].Pattern = cmd
-		for _, dir := range p.externalDirs(cmd) {
-			requests = append(requests, permissionRequest{Kind: "external_directory", Pattern: dir})
-		}
-	case "read_file", "list_dir", "grep", "search_files":
-		for _, dir := range p.externalDirsFromReadInput(call) {
-			requests = append(requests, permissionRequest{Kind: "external_directory", Pattern: dir})
-		}
-	default:
-		if strings.HasPrefix(spec.Name, "mcp__") && mcpFilesystemTool(spec) {
-			for _, dir := range p.externalDirsFromMCPInput(call.Input) {
-				requests = append(requests, permissionRequest{Kind: "external_directory", Pattern: dir})
-			}
-		}
 	}
+	requests = append(requests, permissionRequestsFromEffects(p.effectPlanFor(spec, call))...)
 	switch spec.Name {
 	case "grep", "search_files":
 		// These read-scoped tools carry a search regex/glob in their non-path

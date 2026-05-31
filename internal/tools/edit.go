@@ -8,7 +8,7 @@ import (
 	"github.com/usewhale/whale/internal/core"
 )
 
-func (b *Toolset) editFile(_ context.Context, call core.ToolCall) (core.ToolResult, error) {
+func (b *Toolset) editFile(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
 	var in struct {
 		FilePath string `json:"file_path"`
 		Search   string `json:"search"`
@@ -54,7 +54,7 @@ func (b *Toolset) editFile(_ context.Context, call core.ToolCall) (core.ToolResu
 		after = strings.Replace(before, resolved.search, resolved.replace, 1)
 	}
 	afterBytes := restoreTextFileBytes(after, lineEndings)
-	if err := b.commitFilePlans([]fileCommitPlan{{
+	if err := b.commitFilePlans(ctx, []fileCommitPlan{{
 		path:           in.FilePath,
 		abs:            abs,
 		expectedBytes:  data,

@@ -692,6 +692,77 @@ func TestStatsLocalSubmitEmitsStructuredLocalResult(t *testing.T) {
 	}
 }
 
+func TestRewindLocalSubmitListsMessages(t *testing.T) {
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+
+	st, err := store.NewJSONLStore(filepath.Join(cfg.DataDir, "sessions"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	if _, err := st.Create(t.Context(), core.Message{SessionID: svc.app.SessionID(), Role: core.RoleUser, Text: "rewind target"}); err != nil {
+		t.Fatalf("create message: %v", err)
+	}
+
+	svc.Dispatch(Intent{Kind: IntentSubmitLocal, Input: "/rewind"})
+	for {
+		ev := nextServiceEvent(t, svc)
+		if ev.Kind != EventRewindMessagesListed {
+			continue
+		}
+		if len(ev.Messages) != 1 || ev.Messages[0].Text != "rewind target" {
+			t.Fatalf("unexpected rewind messages: %+v", ev.Messages)
+		}
+		return
+	}
+}
+
+func TestSelectRewindMessageRestoresSession(t *testing.T) {
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+
+	st, err := store.NewJSONLStore(filepath.Join(cfg.DataDir, "sessions"))
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	target, err := st.Create(t.Context(), core.Message{SessionID: svc.app.SessionID(), Role: core.RoleUser, Text: "redo this"})
+	if err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+	if _, err := st.Create(t.Context(), core.Message{SessionID: svc.app.SessionID(), Role: core.RoleAssistant, Text: "remove"}); err != nil {
+		t.Fatalf("create assistant: %v", err)
+	}
+
+	svc.Dispatch(Intent{Kind: IntentSelectRewindMessage, MessageID: target.ID})
+	for {
+		ev := nextServiceEvent(t, svc)
+		if ev.Kind == EventSessionHydrated {
+			if ev.Metadata["rewind"] != true {
+				t.Fatalf("expected rewind hydration metadata, got %+v", ev.Metadata)
+			}
+			if got, _ := ev.Metadata["restore_input"].(string); got != "redo this" {
+				t.Fatalf("restore input metadata = %q", got)
+			}
+			if len(ev.Messages) != 0 {
+				t.Fatalf("expected messages before target only, got %+v", ev.Messages)
+			}
+			return
+		}
+	}
+}
+
 func TestMCPLocalSubmitEmitsStructuredLocalResult(t *testing.T) {
 	cfg := app.DefaultConfig()
 	cfg.DataDir = t.TempDir()
@@ -715,6 +786,73 @@ func TestMCPLocalSubmitEmitsStructuredLocalResult(t *testing.T) {
 			t.Fatalf("expected text fallback to match local result, text=%q local=%q", ev.Text, ev.LocalResult.PlainText)
 		}
 		return
+	}
+}
+
+func TestWorkflowsLocalSubmitEmitsStructuredLocalResult(t *testing.T) {
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+
+	svc.Dispatch(Intent{Kind: IntentSubmitLocal, Input: "/workflows"})
+	deadline := time.After(10 * time.Second)
+	for {
+		var ev Event
+		select {
+		case ev = <-svc.Events():
+		case <-deadline:
+			t.Fatal("timed out waiting for workflow panel event")
+		}
+		if ev.Kind != EventWorkflowPanel {
+			continue
+		}
+		if ev.LocalResult == nil || ev.LocalResult.Kind != "workflows" {
+			t.Fatalf("expected structured workflows local result, got %+v", ev)
+		}
+		if ev.Text == "" || ev.Text != ev.LocalResult.PlainText {
+			t.Fatalf("expected text fallback to match local result, text=%q local=%q", ev.Text, ev.LocalResult.PlainText)
+		}
+		return
+	}
+}
+
+func TestWorkflowsUnsupportedSubcommandsEmitUsageError(t *testing.T) {
+	for _, input := range []string{"/workflows events", "/workflows cancel", "/workflows events run-123", "/workflows cancel run-123"} {
+		t.Run(input, func(t *testing.T) {
+			cfg := app.DefaultConfig()
+			cfg.DataDir = t.TempDir()
+			svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			defer svc.Close()
+			waitForServiceEvent(t, svc, EventSessionHydrated)
+
+			svc.Dispatch(Intent{Kind: IntentSubmitLocal, Input: input})
+			deadline := time.After(10 * time.Second)
+			for {
+				select {
+				case ev := <-svc.Events():
+					if ev.Kind == EventWorkflowPanel {
+						t.Fatalf("%s should not open workflow panel: %+v", input, ev)
+					}
+					if ev.Kind != EventLocalSubmitResult {
+						continue
+					}
+					if ev.Status != "error" || !strings.Contains(ev.Text, "usage: /workflows") {
+						t.Fatalf("expected usage error, got %+v", ev)
+					}
+					return
+				case <-deadline:
+					t.Fatal("timed out waiting for usage error")
+				}
+			}
+		})
 	}
 }
 
@@ -1545,6 +1683,13 @@ func TestSummarizeToolCall_TaskTools(t *testing.T) {
 	})
 	if got != "spawn_subagent: review · review internal/tasks" {
 		t.Fatalf("unexpected spawn_subagent summary: %q", got)
+	}
+	got = summarizeToolCall(core.ToolCall{
+		Name:  "workflow",
+		Input: `{"scriptPath":"/tmp/check-workflow.js"}`,
+	})
+	if got != "workflow: /tmp/check-workflow.js" {
+		t.Fatalf("unexpected workflow summary: %q", got)
 	}
 }
 

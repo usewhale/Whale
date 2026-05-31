@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"github.com/usewhale/whale/internal/checkpoint"
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/policy"
 	"os"
@@ -31,6 +32,16 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 			return appRef.sessionID
 		}
 		return sessionInit.sessionID
+	}, func(req policy.ApprovalRequest) policy.ApprovalDecision {
+		if appRef == nil {
+			return policy.ApprovalAllow
+		}
+		appRef.approvalMu.Lock()
+		defer appRef.approvalMu.Unlock()
+		if appRef.autoAcceptPermissions {
+			return policy.ApprovalAllow
+		}
+		return appRef.approvalFn(req)
 	})
 	if err != nil {
 		return nil, err
@@ -48,6 +59,7 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 		toolset:               toolInit.toolset,
 		baseTools:             append([]core.Tool{}, toolInit.baseTools...),
 		taskTools:             append([]core.Tool{}, runtimeInit.taskTools...),
+		workflowTools:         append([]core.Tool{}, runtimeInit.workflowTools...),
 		hooks:                 toolInit.hooks,
 		hookRunner:            toolInit.hookRunner,
 		hookSources:           toolInit.hookSources,
@@ -64,6 +76,9 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 		mcpManager:            toolInit.mcpManager,
 		pluginManager:         toolInit.pluginManager,
 		pluginTools:           append([]core.Tool{}, toolInit.pluginTools...),
+		checkpoints:           checkpoint.NewManager(sessionInit.sessionsDir, workspaceRoot),
+		workflowManager:       runtimeInit.workflowManager,
+		workflowRunner:        runtimeInit.workflowRunner,
 		worktree:              start.Worktree,
 		apiKey:                runtimeInit.apiKey,
 		approvalFn:            defaultApprovalFunc(start.ApprovalFunc),

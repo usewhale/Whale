@@ -55,7 +55,16 @@ func (m *model) redrawTranscriptForFocusToggleCmd() tea.Cmd {
 		return nil
 	}
 	m.nativeScrollbackPrinted = 0
-	printCmd := m.flushNativeScrollbackCmd()
+	// If a completed turn is held in the in-app viewport, keep it there: replay
+	// only the sunk history below the held boundary (same as resize) so the
+	// held answer is never pushed back onto the unreliable native-print path
+	// and trimmed out of View(). Otherwise re-emit the whole transcript.
+	var printCmd tea.Cmd
+	if m.holdCompletedTurnInViewport {
+		printCmd = m.replayNativeScrollbackCmd()
+	} else {
+		printCmd = m.flushNativeScrollbackCmd()
+	}
 	m.refreshViewportContentFollow(true)
 	if printCmd == nil {
 		return nil
@@ -177,6 +186,7 @@ type focusSummaryBucket struct {
 	blocked int
 	mode    int
 	http    int
+	nonzero int
 	details []string
 	entries []focusSummaryEntry
 }
@@ -249,7 +259,7 @@ func (s focusToolSummary) summary() *tuirender.FocusSummary {
 	recoveredShell, remainingShell := s.shell.splitRecovered()
 	recoveredShell = recoveredShell.withDisambiguatedShellCWD()
 	remainingShell = remainingShell.withDisambiguatedShellCWD()
-	for _, state := range []string{"denied", "blocked", "mode_hint", "http_error", "usage_hint", "failed", "running", "done"} {
+	for _, state := range []string{"denied", "blocked", "mode_hint", "http_error", "usage_hint", "failed", "running", "nonzero", "done"} {
 		add(focusStateHintSummaryPart("search", s.search, state, "Searching for", "Searched for", "Denied", "Failed", "pattern", "patterns", focusQuoteHint))
 		add(focusStateHintSummaryPart("read", s.read, state, "Reading", "Read", "Denied", "Failed", "file", "files", focusPlainHint))
 		add(focusStateHintSummaryPart("web", s.web, state, "Fetching", "Fetched", "Denied", "Failed", "URL", "URLs", focusPlainHint))
@@ -284,6 +294,8 @@ func (b *focusSummaryBucket) add(state, detail, identity string) {
 		b.mode++
 	case "http_error":
 		b.http++
+	case "nonzero":
+		b.nonzero++
 	case "usage_hint":
 		b.blocked++
 	}
@@ -305,7 +317,7 @@ func (b focusSummaryBucket) allDenied() bool {
 }
 
 func (b focusSummaryBucket) succeeded() int {
-	return b.count - b.running - b.failed - b.denied - b.blocked - b.mode - b.http
+	return b.count - b.running - b.failed - b.denied - b.blocked - b.mode - b.http - b.nonzero
 }
 
 func (b focusSummaryBucket) splitRecovered() (focusSummaryBucket, focusSummaryBucket) {
@@ -400,7 +412,10 @@ func (b focusSummaryBucket) statusSuffix() string {
 	if b.http > 0 {
 		status = append(status, fmt.Sprintf("%d HTTP error", b.http))
 	}
-	if succeeded := b.succeeded(); succeeded > 0 && (b.running > 0 || b.failed > 0 || b.denied > 0 || b.blocked > 0 || b.mode > 0 || b.http > 0) {
+	if b.nonzero > 0 {
+		status = append(status, fmt.Sprintf("%d exited non-zero", b.nonzero))
+	}
+	if succeeded := b.succeeded(); succeeded > 0 && (b.running > 0 || b.failed > 0 || b.denied > 0 || b.blocked > 0 || b.mode > 0 || b.http > 0 || b.nonzero > 0) {
 		status = append(status, fmt.Sprintf("%d succeeded", succeeded))
 	}
 	if b.denied > 0 {
@@ -428,6 +443,8 @@ func focusBucketState(b focusSummaryBucket) string {
 		return "failed"
 	case b.running > 0:
 		return "running"
+	case b.nonzero > 0:
+		return "nonzero"
 	default:
 		return "done"
 	}
@@ -745,6 +762,8 @@ func focusToolState(msg tuirender.UIMessage) string {
 		return "mode_hint"
 	case "result_http_error", "shell_result_http_error":
 		return "http_error"
+	case "result_nonzero", "shell_result_nonzero":
+		return "nonzero"
 	case "result_usage_hint", "shell_result_usage_hint":
 		return "usage_hint"
 	default:

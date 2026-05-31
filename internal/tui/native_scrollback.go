@@ -48,10 +48,19 @@ func (m *model) replayNativeScrollbackCmd() tea.Cmd {
 	if m.page != pageChat {
 		return nil
 	}
-	start := min(max(m.nativeScrollbackPrinted, 0), len(m.transcript))
+	// When a completed turn is being held in the in-app viewport, replay only
+	// the history below it and stop at its boundary — otherwise the resize
+	// replay would sink the held answer into native scrollback (and advance the
+	// print cursor past it), trimming it out of View() and re-exposing the
+	// vanishing-final-answer behavior on terminals where tea.Println is flaky.
+	end := len(m.transcript)
+	if m.holdCompletedTurnInViewport && m.heldTurnStart >= 0 && m.heldTurnStart <= end {
+		end = m.heldTurnStart
+	}
+	start := min(max(m.nativeScrollbackPrinted, 0), end)
 	text := ""
-	if start < len(m.transcript) {
-		text = m.scrollbackText(m.transcript[start:])
+	if start < end {
+		text = m.scrollbackText(m.transcript[start:end])
 	}
 	if start == 0 && (m.startupHeaderOnce == nil || !*m.startupHeaderOnce) {
 		if header := strings.TrimSpace(m.startupHeaderText()); header != "" {
@@ -67,7 +76,7 @@ func (m *model) replayNativeScrollbackCmd() tea.Cmd {
 			*m.startupHeaderOnce = true
 		}
 	}
-	m.nativeScrollbackPrinted = len(m.transcript)
+	m.nativeScrollbackPrinted = end
 	if strings.TrimSpace(text) == "" {
 		return nil
 	}
@@ -75,7 +84,7 @@ func (m *model) replayNativeScrollbackCmd() tea.Cmd {
 }
 
 func (m *model) flushNativeScrollbackCmd() tea.Cmd {
-	if m.viewportFrozen || !m.followTail {
+	if m.viewportFrozen || !m.followTail || m.holdCompletedTurnInViewport {
 		return nil
 	}
 	return m.emitNativeScrollbackCmd()

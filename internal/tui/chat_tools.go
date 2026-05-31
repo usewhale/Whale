@@ -350,6 +350,12 @@ func completedToolTitle(toolName, raw, previous string) string {
 		if !toolEnvelopeSucceeded(env) && env.code == "exec_failed" && !shellFailureIsNoMatches(env) {
 			return shellFailureLabel(env) + ": " + cmd
 		}
+		if hasInt(env.metrics["exit_code"]) {
+			exitCode := asInt(env.metrics["exit_code"])
+			if exitCode != 0 && toolEnvelopeSucceeded(env) {
+				return fmt.Sprintf("Ran %s (exit %d)", cmd, exitCode)
+			}
+		}
 		return "Ran " + cmd
 	case "explore":
 		return "Explored\n" + explorationLine(toolName, previousToolActionLine(previous), env)
@@ -361,6 +367,9 @@ func completedToolTitle(toolName, raw, previous string) string {
 		}
 		role := core.FirstNonEmpty(core.AsString(env.data["role"]), "explore")
 		return "Subagent " + role
+	case "workflow":
+		name := core.FirstNonEmpty(core.AsString(env.data["workflow"]), core.AsString(env.data["name"]), core.AsString(env.data["runId"]), "workflow")
+		return "Started workflow: " + name
 	case "plan":
 		return "Updated plan"
 	case "todo":
@@ -382,6 +391,8 @@ func shellResultRole(role string) string {
 		return "shell_result_ok"
 	case "result_neutral":
 		return "shell_result_neutral"
+	case "result_nonzero":
+		return "shell_result_nonzero"
 	case "result_failed":
 		return "shell_result_failed"
 	case "result_timeout":
@@ -431,6 +442,8 @@ func toolDisplayKind(toolName string) string {
 		return "edit"
 	case "parallel_reason", "spawn_subagent":
 		return "task"
+	case "workflow":
+		return "workflow"
 	case "update_plan":
 		return "plan"
 	case "todo_add", "todo_list", "todo_update", "todo_remove", "todo_clear_done":
@@ -475,6 +488,7 @@ func toolCallDetail(text string) string {
 				core.AsString(body["pattern"]),
 				core.AsString(body["query"]),
 				core.AsString(body["url"]),
+				core.AsString(body["name"]),
 				core.AsString(body["task_id"]),
 				core.AsString(body["text"]),
 				core.AsString(body["id"]),

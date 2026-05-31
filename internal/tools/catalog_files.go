@@ -44,8 +44,9 @@ func (b *Toolset) fileDiscoveryTools() []core.Tool {
 				},
 				"required": []string{"file_path"},
 			},
-			readOnly: true,
-			fn:       b.readFile,
+			readOnly:     true,
+			capabilities: []string{"workspace.read"},
+			fn:           b.readFile,
 		},
 		toolFn{
 			name:        "load_skill",
@@ -59,8 +60,9 @@ func (b *Toolset) fileDiscoveryTools() []core.Tool {
 				},
 				"required": []string{"name"},
 			},
-			readOnly: true,
-			fn:       b.loadSkill,
+			readOnly:     true,
+			capabilities: []string{"workspace.read"},
+			fn:           b.loadSkill,
 		},
 		toolFn{
 			name:        "list_dir",
@@ -73,8 +75,9 @@ func (b *Toolset) fileDiscoveryTools() []core.Tool {
 					"ignore": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Deprecated compatibility field. Accepted but ignored; list_dir always returns the full directory listing."},
 				},
 			},
-			readOnly: true,
-			fn:       b.listDir,
+			readOnly:     true,
+			capabilities: []string{"workspace.read"},
+			fn:           b.listDir,
 		},
 	}
 }
