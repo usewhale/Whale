@@ -143,6 +143,45 @@ func TestApprovalKeysForDecisionDoNotReuseExternalDirectoryGrantForShell(t *test
 	}
 }
 
+func TestApprovalKeysForDecisionDoNotReuseExternalDirectoryGrantForMutatingFileTools(t *testing.T) {
+	decision := PolicyDecision{Permission: "external_directory", Pattern: "/tmp", RequiresApproval: true}
+	calls := []core.ToolCall{
+		{Name: "edit", Input: `{"file_path":"/tmp/a.txt","search":"old","replace":"new"}`},
+		{Name: "write", Input: `{"file_path":"/tmp/a.txt","content":"new"}`},
+		{Name: "apply_patch", Input: `{"patch":"*** Begin Patch\n*** Update File: /tmp/a.txt\n@@\n-old\n+new\n*** End Patch"}`},
+	}
+
+	cache := NewSessionApprovalCache()
+	cache.Grant("s", "grant:external_directory:/tmp")
+	for _, call := range calls {
+		keys := ApprovalKeysForDecision(call, decision)
+		want := ApprovalKeys(call)
+		if !reflect.DeepEqual(keys, want) {
+			t.Fatalf("%s external directory keys = %v, want file-specific keys %v", call.Name, keys, want)
+		}
+		if cache.HasAll("s", keys) {
+			t.Fatalf("external directory grant must not approve %s", call.Name)
+		}
+	}
+}
+
+func TestApprovalKeysForDecisionDoNotPersistExternalDirectoryGrantForMCPTools(t *testing.T) {
+	call := core.ToolCall{Name: "mcp__fs__read_file", Input: `{"path":"/tmp/a.txt"}`}
+	decision := PolicyDecision{Permission: "external_directory", Pattern: "/tmp", RequiresApproval: true}
+
+	keys := ApprovalKeysForDecision(call, decision)
+	want := ApprovalKeys(call)
+	if !reflect.DeepEqual(keys, want) {
+		t.Fatalf("MCP external directory keys = %v, want exact MCP approval keys %v", keys, want)
+	}
+
+	cache := NewSessionApprovalCache()
+	cache.Grant("s", "grant:external_directory:/tmp")
+	if cache.HasAll("s", keys) {
+		t.Fatal("external directory grant must not approve MCP tool keys")
+	}
+}
+
 func TestApprovalKeysForDecisionPreserveReadRuleApprovalForExternalReads(t *testing.T) {
 	p := RulePolicy{Default: PermissionAllow, Rules: DefaultRules(), WorkspaceRoot: "/repo"}
 	call := core.ToolCall{Name: "read_file", Input: `{"file_path":"/outside/.env"}`}

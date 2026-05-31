@@ -610,6 +610,14 @@ func TestRulePolicyExternalDirectoryRedirectionRequiresApprovalByDefault(t *test
 	}
 }
 
+func TestRulePolicyTempRedirectionRequiresApprovalByDefault(t *testing.T) {
+	p := RulePolicy{Default: PermissionAllow, Rules: DefaultRules(), WorkspaceRoot: "/repo"}
+	got := p.Decide(core.ToolSpec{Name: "shell_run"}, core.ToolCall{Name: "shell_run", Input: `{"command":"echo hello > /tmp/whale-test.txt"}`})
+	if !got.Allow || !got.RequiresApproval || got.Permission != "external_directory" || got.Pattern != "/tmp" {
+		t.Fatalf("temp redirection = %+v, want external_directory /tmp approval", got)
+	}
+}
+
 func TestRulePolicyDynamicRedirectionRequiresApproval(t *testing.T) {
 	p := RulePolicy{Default: PermissionAllow, Rules: DefaultRules(), WorkspaceRoot: "/repo"}
 	spec := core.ToolSpec{Name: "shell_run"}
@@ -739,7 +747,10 @@ func TestRulePolicyPathSpecificRecursiveRemoveAllowOverridesDeny(t *testing.T) {
 }
 
 func TestRulePolicyUserShellWildcardAllowOverridesDefaultShellPatterns(t *testing.T) {
-	rules := append(DefaultRules(), PermissionRule{Permission: "shell", Pattern: "*", Action: PermissionAllow})
+	rules := append(DefaultRules(),
+		PermissionRule{Permission: "external_directory", Pattern: "/tmp", Action: PermissionAllow},
+		PermissionRule{Permission: "shell", Pattern: "*", Action: PermissionAllow},
+	)
 	p := RulePolicy{Default: PermissionAllow, Rules: rules, WorkspaceRoot: "/repo"}
 
 	got := p.Decide(
