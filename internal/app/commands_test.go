@@ -180,6 +180,8 @@ func TestClassifySubmitSlashCommands(t *testing.T) {
 		{line: "/mcp", want: appcommands.SubmitLocalReadOnly},
 		{line: "/feedback", want: appcommands.SubmitLocalReadOnly},
 		{line: "/help", want: appcommands.SubmitLocalReadOnly},
+		{line: "/copy", want: appcommands.SubmitLocalReadOnly},
+		{line: "/copy 2", want: appcommands.SubmitLocalReadOnly},
 		{line: "/model", want: appcommands.SubmitLocalUI},
 		{line: "/permissions", want: appcommands.SubmitLocalUI},
 		{line: "/focus", want: appcommands.SubmitLocalUI},
@@ -231,6 +233,9 @@ func TestClassifySubmitSlashCommands(t *testing.T) {
 		{line: "/stats bad", want: appcommands.SubmitUsageError},
 		{line: "/feedback now", want: appcommands.SubmitUsageError},
 		{line: "/help now", want: appcommands.SubmitUsageError},
+		{line: "/copy 0", want: appcommands.SubmitUsageError},
+		{line: "/copy latest", want: appcommands.SubmitUsageError},
+		{line: "/copy 1 extra", want: appcommands.SubmitUsageError},
 		{line: "/worktree", want: appcommands.SubmitUsageError},
 		{line: "/worktree list", want: appcommands.SubmitUsageError},
 		{line: "/compact bad", want: appcommands.SubmitUsageError},
@@ -284,6 +289,9 @@ func TestClassifyBtwBusyImmediate(t *testing.T) {
 func TestCommandsHelpMarksBtwQuestionRequired(t *testing.T) {
 	if !strings.Contains(CommandsHelp, "/btw <question>") {
 		t.Fatalf("expected /btw to advertise a required question: %s", CommandsHelp)
+	}
+	if !strings.Contains(CommandsHelp, "/copy [N]") {
+		t.Fatalf("expected /copy to advertise optional index: %s", CommandsHelp)
 	}
 }
 

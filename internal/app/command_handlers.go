@@ -175,6 +175,9 @@ func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 	if strings.HasPrefix(trimmed, "/diff ") {
 		return CommandExecution{Handled: true}, errors.New("usage: /diff")
 	}
+	if trimmed == "/copy" || strings.HasPrefix(trimmed, "/copy ") {
+		return a.executeCopyCommand(trimmed)
+	}
 	if trimmed == "/focus" {
 		mode, err := a.ToggleViewMode()
 		if err != nil {

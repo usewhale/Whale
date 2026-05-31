@@ -30,6 +30,7 @@ func DefaultSlashCommands() []SlashCommandSpec {
 		{Name: "/btw", Description: "Ask a side question without changing the conversation", ArgumentHint: "<question>"},
 		{Name: "/focus", Description: "Toggle focus view", AutoRun: true},
 		{Name: "/diff", Description: "Show current git diff", AutoRun: true},
+		{Name: "/copy", Description: "Copy Whale's last response to clipboard (or /copy N for the Nth-latest)", ArgumentHint: "[N]", AutoRun: true},
 		{Name: "/open", Description: "Open a file or directory in your editor", ArgumentHint: "[path]", AutoRun: true},
 		{Name: "/review", Description: "Open review mode or review a target", ArgumentHint: "[local|branch|pr|commit|<instructions>]", AutoRun: true, Options: []SlashCommandOption{
 			{Token: "local", Description: "Review staged, unstaged, and relevant untracked files", AutoRun: true},

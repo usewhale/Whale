@@ -65,6 +65,14 @@ func classifySlashFields(head string, fields []string, line string) SubmitClass 
 			return SubmitLocalReadOnly
 		}
 		return SubmitUsageError
+	case "/copy":
+		if len(fields) == 1 {
+			return SubmitLocalReadOnly
+		}
+		if len(fields) == 2 && positiveInt(fields[1]) {
+			return SubmitLocalReadOnly
+		}
+		return SubmitUsageError
 	case "/memory":
 		return classifyMemoryFields(fields)
 	case "/stats":
@@ -154,6 +162,18 @@ func classifySlashFields(head string, fields []string, line string) SubmitClass 
 	default:
 		return SubmitUsageError
 	}
+}
+
+func positiveInt(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return value != "0"
 }
 
 func validStatsView(view string) bool {
