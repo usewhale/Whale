@@ -55,16 +55,7 @@ func (m *model) redrawTranscriptForFocusToggleCmd() tea.Cmd {
 		return nil
 	}
 	m.nativeScrollbackPrinted = 0
-	// If a completed turn is held in the in-app viewport, keep it there: replay
-	// only the sunk history below the held boundary (same as resize) so the
-	// held answer is never pushed back onto the unreliable native-print path
-	// and trimmed out of View(). Otherwise re-emit the whole transcript.
-	var printCmd tea.Cmd
-	if m.holdCompletedTurnInViewport {
-		printCmd = m.replayNativeScrollbackCmd()
-	} else {
-		printCmd = m.flushNativeScrollbackCmd()
-	}
+	printCmd := m.flushNativeScrollbackCmd()
 	m.refreshViewportContentFollow(true)
 	if printCmd == nil {
 		return nil
