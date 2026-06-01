@@ -152,7 +152,16 @@ func (m *model) handleLocalSubmitResultEvent(ev protocol.Event) tea.Cmd {
 
 func (m *model) handleWorkflowTerminalEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
-	if ev.LocalResult != nil {
+	if m.assembler != nil && m.assembler.Len() > 0 {
+		if ev.LocalResult != nil {
+			m.appendLiveLocalResult(ev.LocalResult)
+		} else if strings.TrimSpace(ev.Text) != "" {
+			m.appendNotice(ev.Text)
+		}
+		if !m.hasPendingToolCalls() {
+			m.commitLiveTranscript(false)
+		}
+	} else if ev.LocalResult != nil {
 		m.appendLocalResult(ev.LocalResult)
 	} else if strings.TrimSpace(ev.Text) != "" {
 		m.appendTranscript("notice", tuirender.KindNotice, ev.Text)

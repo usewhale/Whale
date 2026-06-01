@@ -49,7 +49,7 @@ func (m *model) submitApprovalDecision(kind protocol.IntentKind, logKind, summar
 	m.mode = modeChat
 	m.status = status
 	m.appendSystemNotice(m.approvalNotice(notice))
-	return m.flushNativeScrollbackCmd()
+	return nil
 }
 
 func (m *model) removePendingApprovalToolCall(toolCallID string) {
