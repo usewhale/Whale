@@ -32,6 +32,8 @@ const (
 	modeSkillsMenu
 	modeSkillsManager
 	modePluginsManager
+	modeHooksManager
+	modeHooksStartupReview
 	modeReviewMenu
 	modeReviewBranchPicker
 	modeReviewCommitPicker
@@ -136,10 +138,11 @@ type model struct {
 	logFilterInput textinput.Model
 	logFilter      string
 	slash          struct {
-		all          []appcommands.SlashCommandSpec
-		matches      []slashSuggestion
-		selected     int
-		argumentHint string
+		all            []appcommands.SlashCommandSpec
+		commandClasses map[string]appcommands.SubmitClass
+		matches        []slashSuggestion
+		selected       int
+		argumentHint   string
 	}
 	skills struct {
 		all      []skillSuggestion
@@ -170,8 +173,11 @@ type model struct {
 		all      []pluginManagerItem
 		matches  []int
 		selected int
+		detail   bool
+		offset   int
 	}
-	reviewMenu struct {
+	hooksManager hooksManagerState
+	reviewMenu   struct {
 		selected int
 	}
 	reviewTargetPicker reviewTargetPickerState
@@ -215,8 +221,6 @@ type model struct {
 	inHistoryNav                   bool
 	queuedPrompts                  []queuedPrompt
 	nativeScrollbackPrinted        int
-	holdCompletedTurnInViewport    bool
-	heldTurnStart                  int
 	pendingMouseCSIFragment        bool
 	windowsPaste                   windowsPasteFallbackState
 	viewCache                      *modelViewCache

@@ -1483,8 +1483,8 @@ func TestRuntimePostToolHookWarnEmitsWarning(t *testing.T) {
 	if counting.calls != 1 {
 		t.Fatalf("expected tool dispatch before post-hook warn, got %d", counting.calls)
 	}
-	if !sawHookWarned || !sawHookCompleted {
-		t.Fatalf("expected hook warned/completed events, got warned=%v completed=%v", sawHookWarned, sawHookCompleted)
+	if !sawHookWarned || sawHookCompleted {
+		t.Fatalf("expected single hook warned terminal event, got warned=%v completed=%v", sawHookWarned, sawHookCompleted)
 	}
 }
 

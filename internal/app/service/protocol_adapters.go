@@ -1,6 +1,7 @@
 package service
 
 import (
+	"github.com/usewhale/whale/internal/agent"
 	"github.com/usewhale/whale/internal/app"
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/plugins"
@@ -206,6 +207,8 @@ func protocolPlugins(statuses []plugins.PluginStatus) []protocol.PluginStatus {
 			Commands:    protocolPluginCommands(status.Commands),
 			Tools:       append([]string(nil), status.Tools...),
 			Skills:      append([]string(nil), status.Skills...),
+			Agents:      append([]string(nil), status.Agents...),
+			Rules:       append([]string(nil), status.Rules...),
 			Hooks:       append([]string(nil), status.Hooks...),
 			Services:    protocolPluginServices(status.Services),
 			Diagnostics: protocolPluginDiagnostics(status.Diagnostics),
@@ -213,6 +216,47 @@ func protocolPlugins(statuses []plugins.PluginStatus) []protocol.PluginStatus {
 		})
 	}
 	return out
+}
+
+func protocolHooks(entries []agent.HookListEntry) *protocol.HooksManagerState {
+	state := &protocol.HooksManagerState{}
+	for _, info := range agent.HookEvents() {
+		summary := protocol.HookEventSummary{Event: string(info.Event), Description: info.Description}
+		for _, entry := range entries {
+			if entry.Event != info.Event {
+				continue
+			}
+			summary.Installed++
+			if entry.Active {
+				summary.Active++
+			}
+			if agent.HookNeedsReview(entry) {
+				summary.Review++
+				state.ReviewNeededCount++
+			}
+		}
+		state.Events = append(state.Events, summary)
+	}
+	for _, entry := range entries {
+		state.Entries = append(state.Entries, protocol.HookEntry{
+			Key:         entry.Key,
+			Event:       string(entry.Event),
+			Type:        entry.Type,
+			Name:        entry.Name,
+			Source:      entry.Source,
+			Match:       entry.Match,
+			Command:     entry.Command,
+			Description: entry.Description,
+			TimeoutSec:  entry.TimeoutSec,
+			CWD:         entry.CWD,
+			Hash:        entry.Hash,
+			Enabled:     entry.Enabled,
+			Managed:     entry.Managed,
+			Active:      entry.Active,
+			Trust:       string(entry.Trust),
+		})
+	}
+	return state
 }
 
 func protocolPluginManifest(manifest plugins.Manifest) protocol.PluginManifest {
@@ -247,6 +291,7 @@ func protocolPluginCommands(commands []plugins.SlashCommand) []protocol.PluginCo
 			Usage:       command.Usage,
 			Description: command.Description,
 			Class:       string(command.Class),
+			StartsTurn:  command.StartsTurn,
 		})
 	}
 	return out

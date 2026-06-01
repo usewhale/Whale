@@ -174,8 +174,22 @@ func TestTaskGrepReadEditFlow(t *testing.T) {
 				{
 					Steps: []StepSpec{
 						{ID: "grep", ToolName: "grep", Input: `{"pattern":"hello whale","path":".","literal_text":true}`},
-						{ID: "read", ToolName: "read_file", Input: `{"file_path":"pkg/banner.go","offset":0,"limit":20}`},
-						{ID: "edit", ToolName: "edit", Input: `{"file_path":"pkg/banner.go","search":"hello whale","replace":"hello eval"}`},
+						{ID: "read", ToolName: "read_file", Input: `{"file_path":"pkg/banner.go"}`},
+					},
+				},
+				{
+					Steps: []StepSpec{
+						{
+							ID:       "edit",
+							ToolName: "edit",
+							InputFunc: func(history []core.Message) (string, error) {
+								snapshotID, err := snapshotIDFromHistory(history, "read_file")
+								if err != nil {
+									return "", err
+								}
+								return fmt.Sprintf(`{"file_path":"pkg/banner.go","snapshot_id":%q,"search":"hello whale","replace":"hello eval"}`, snapshotID), nil
+							},
+						},
 					},
 				},
 			},

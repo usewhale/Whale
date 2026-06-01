@@ -17,58 +17,66 @@ import (
 type IntentKind string
 
 const (
-	IntentSubmit               IntentKind = "submit"
-	IntentSubmitLocal          IntentKind = "submit_local"
-	IntentAllowTool            IntentKind = "allow_tool"
-	IntentAllowToolForSession  IntentKind = "allow_tool_for_session"
-	IntentDenyTool             IntentKind = "deny_tool"
-	IntentCancelToolApproval   IntentKind = "cancel_tool_approval"
-	IntentSubmitUserInput      IntentKind = "submit_user_input"
-	IntentCancelUserInput      IntentKind = "cancel_user_input"
-	IntentSelectRewindMessage  IntentKind = "select_rewind_message"
-	IntentSelectSession        IntentKind = "select_session"
-	IntentRequestSessions      IntentKind = "request_sessions"
-	IntentRequestExit          IntentKind = "request_exit"
-	IntentShutdown             IntentKind = "shutdown"
-	IntentSetModelAndEffort    IntentKind = "set_model_and_effort"
-	IntentSetApprovalMode      IntentKind = "set_approval_mode"
-	IntentSetViewMode          IntentKind = "set_view_mode"
-	IntentToggleMode           IntentKind = "toggle_mode"
-	IntentImplementPlan        IntentKind = "implement_plan"
-	IntentDeclinePlan          IntentKind = "decline_plan"
-	IntentRequestSkillsManage  IntentKind = "request_skills_manage"
-	IntentSetSkillEnabled      IntentKind = "set_skill_enabled"
-	IntentSetPluginEnabled     IntentKind = "set_plugin_enabled"
-	IntentWorktreeExitChoice   IntentKind = "worktree_exit_choice"
-	IntentRequestWorkflowPanel IntentKind = "request_workflow_panel"
-	IntentCancelWorkflowRun    IntentKind = "cancel_workflow_run"
-	IntentStartWorkflow        IntentKind = "start_workflow"
+	IntentSubmit                    IntentKind = "submit"
+	IntentSubmitLocal               IntentKind = "submit_local"
+	IntentAllowTool                 IntentKind = "allow_tool"
+	IntentAllowToolForSession       IntentKind = "allow_tool_for_session"
+	IntentDenyTool                  IntentKind = "deny_tool"
+	IntentCancelToolApproval        IntentKind = "cancel_tool_approval"
+	IntentSubmitUserInput           IntentKind = "submit_user_input"
+	IntentCancelUserInput           IntentKind = "cancel_user_input"
+	IntentSelectRewindMessage       IntentKind = "select_rewind_message"
+	IntentSelectSession             IntentKind = "select_session"
+	IntentRequestSessions           IntentKind = "request_sessions"
+	IntentRequestExit               IntentKind = "request_exit"
+	IntentShutdown                  IntentKind = "shutdown"
+	IntentSetModelAndEffort         IntentKind = "set_model_and_effort"
+	IntentSetApprovalMode           IntentKind = "set_approval_mode"
+	IntentSetViewMode               IntentKind = "set_view_mode"
+	IntentToggleMode                IntentKind = "toggle_mode"
+	IntentImplementPlan             IntentKind = "implement_plan"
+	IntentDeclinePlan               IntentKind = "decline_plan"
+	IntentRequestSkillsManage       IntentKind = "request_skills_manage"
+	IntentSetSkillEnabled           IntentKind = "set_skill_enabled"
+	IntentSetPluginEnabled          IntentKind = "set_plugin_enabled"
+	IntentRequestHooksManage        IntentKind = "request_hooks_manage"
+	IntentSetHookEnabled            IntentKind = "set_hook_enabled"
+	IntentTrustHook                 IntentKind = "trust_hook"
+	IntentTrustHooks                IntentKind = "trust_hooks"
+	IntentResolveHooksStartupReview IntentKind = "resolve_hooks_startup_review"
+	IntentWorktreeExitChoice        IntentKind = "worktree_exit_choice"
+	IntentRequestWorkflowPanel      IntentKind = "request_workflow_panel"
+	IntentCancelWorkflowRun         IntentKind = "cancel_workflow_run"
+	IntentStartWorkflow             IntentKind = "start_workflow"
 )
 
 type Intent struct {
-	Kind           IntentKind
-	Input          string
-	HiddenInput    bool
-	ToolCallID     string
-	UserInput      *core.UserInputResponse
-	SessionInput   string
-	MessageID      string
-	Model          string
-	Effort         string
-	Thinking       string
-	ApprovalMode   string
-	ViewMode       string
-	SkillName      string
-	SkillEnabled   bool
-	PluginID       string
-	PluginEnabled  bool
-	SkillBinding   *app.SkillBinding
-	WorktreeAction string
-	WorkflowRunID  string
-	WorkflowName   string
-	WorkflowArgs   string
-	WorkflowResume string
-	WorkflowTrust  bool
+	Kind              IntentKind
+	Input             string
+	HiddenInput       bool
+	ToolCallID        string
+	UserInput         *core.UserInputResponse
+	SessionInput      string
+	MessageID         string
+	Model             string
+	Effort            string
+	Thinking          string
+	ApprovalMode      string
+	ViewMode          string
+	SkillName         string
+	SkillEnabled      bool
+	PluginID          string
+	PluginEnabled     bool
+	HookKey           string
+	HookEnabled       bool
+	HooksReviewAction string
+	SkillBinding      *app.SkillBinding
+	WorktreeAction    string
+	WorkflowRunID     string
+	WorkflowName      string
+	WorkflowArgs      string
+	WorkflowResume    string
+	WorkflowTrust     bool
 }
 
 type EventKind = protocol.EventKind
@@ -90,6 +98,8 @@ const (
 	EventProviderRetry                 = protocol.EventProviderRetry
 	EventToolCall                      = protocol.EventToolCall
 	EventToolResult                    = protocol.EventToolResult
+	EventHookStarted                   = protocol.EventHookStarted
+	EventHookCompleted                 = protocol.EventHookCompleted
 	EventTaskStarted                   = protocol.EventTaskStarted
 	EventTaskProgress                  = protocol.EventTaskProgress
 	EventTaskCompleted                 = protocol.EventTaskCompleted
@@ -112,6 +122,8 @@ const (
 	EventSkillsSelectionRequested      = protocol.EventSkillsSelectionRequested
 	EventSkillsManagerUpdated          = protocol.EventSkillsManagerUpdated
 	EventPluginsManagerUpdated         = protocol.EventPluginsManagerUpdated
+	EventHooksManagerUpdated           = protocol.EventHooksManagerUpdated
+	EventHooksStartupReviewRequested   = protocol.EventHooksStartupReviewRequested
 	EventReviewRequested               = protocol.EventReviewRequested
 	EventViewModeChanged               = protocol.EventViewModeChanged
 	EventSkillLoaded                   = protocol.EventSkillLoaded
@@ -147,9 +159,10 @@ type Service struct {
 
 	btwNextID atomic.Int64
 
-	workflowWatchMu sync.Mutex
-	workflowWatches map[string]struct{}
-	workflowReports map[string]struct{}
+	workflowWatchMu      sync.Mutex
+	workflowWatches      map[string]struct{}
+	workflowReports      map[string]struct{}
+	sessionStartHooksRan atomic.Bool
 }
 
 type userInputDecision struct {
@@ -187,10 +200,39 @@ func New(ctx context.Context, cfg app.Config, start app.StartOptions) (*Service,
 		for _, line := range a.StartupLines() {
 			s.emit(Event{Kind: EventInfo, Text: line})
 		}
+		if a.HooksNeedReview() {
+			s.emit(Event{Kind: EventHooksStartupReviewRequested, Hooks: protocolHooks(a.HookEntries())})
+		} else {
+			s.runSessionStartHooksIfNeeded()
+		}
 		s.emitSessionHydrated()
 	}
 	s.startMCPStartup()
 	return s, nil
+}
+
+func (s *Service) runSessionStartHooksIfNeeded() {
+	if s.sessionStartHooksRan.Swap(true) {
+		return
+	}
+	if out := s.app.RunSessionStartHook(s.hookObserver()); out != "" {
+		s.emit(Event{Kind: EventInfo, Text: out})
+	}
+}
+
+func (s *Service) resolveHooksStartupReview(action string) {
+	switch action {
+	case "trust_all":
+		if _, err := s.app.TrustHooks(nil); err != nil {
+			s.emit(Event{Kind: EventError, Text: err.Error()})
+			return
+		}
+		s.emitHooksManagerUpdated()
+	case "review":
+		s.emitHooksManagerUpdated()
+		return
+	}
+	s.runSessionStartHooksIfNeeded()
 }
 
 // goTracked runs fn in a goroutine and tracks it on bgWG so Close can wait

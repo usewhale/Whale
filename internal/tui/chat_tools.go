@@ -360,7 +360,7 @@ func completedToolTitle(toolName, raw, previous string) string {
 	case "explore":
 		return "Explored\n" + explorationLine(toolName, previousToolActionLine(previous), env)
 	case "edit":
-		return editLine(toolName, "", env)
+		return editLine(toolName, toolCallDetail(previousToolActionLine(previous)), env)
 	case "task":
 		if toolName == "parallel_reason" {
 			return "Parallel reasoning"
@@ -673,9 +673,13 @@ func editLine(toolName, fallback string, env toolResultEnvelope) string {
 	data := env.data
 	switch toolName {
 	case "write_file", "write":
-		return "Edited " + core.FirstNonEmpty(core.AsString(payload["file_path"]), core.AsString(data["file_path"]), fallback, "file")
+		return "Edited " + core.FirstNonEmpty(core.AsString(payload["file_path"]), core.AsString(data["file_path"]), actionDetailFallback(fallback, "Edited"), "file")
 	case "edit_file", "edit":
-		return "Edited " + core.FirstNonEmpty(core.AsString(payload["file_path"]), core.AsString(data["file_path"]), fallback, "file")
+		path := core.FirstNonEmpty(core.AsString(payload["file_path"]), core.AsString(data["file_path"]), actionDetailFallback(fallback, "Edited"), actionDetailFallback(fallback, "Edit failed"), "file")
+		if !toolEnvelopeSucceeded(env) {
+			return "Edit failed " + path
+		}
+		return "Edited " + path
 	case "apply_patch":
 		files := stringSlice(firstNonEmptyAny(payload["files_changed"], data["files_changed"]))
 		if len(files) == 1 {

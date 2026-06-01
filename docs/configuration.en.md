@@ -77,6 +77,10 @@ Config files are merged: `defaults < global < project shared < project local < C
 tools = ["web_search", "web_fetch"]
 ```
 
+### Add Hooks
+
+Need to run scripts when a session starts, when the user submits a prompt, before or after tools run, or before Whale ends a turn? See [Hooks](hooks.en.md).
+
 ---
 
 ## Reference
@@ -125,13 +129,8 @@ max_concurrency = 3                    # parallel agent limit
 disabled = []                          # skills to hide
 enabled = []                           # force-enable even if project disables
 
-[plugins]
-disabled = []                          # plugins to disable
-enabled = []                           # force-enable
-
-[hooks]
-pre_tool = [""]                        # shell commands before every tool call
-post_tool = [""]                       # shell commands after every tool call
+[plugins.memory]
+enabled = true                         # configure each plugin by id
 
 [logging]
 level = "info"                         # debug | info | warn | error
@@ -145,19 +144,6 @@ level = "info"                         # debug | info | warn | error
 | `WHALE_HOME` | Global data directory (`~/.whale`) |
 | `HTTP_PROXY` / `HTTPS_PROXY` | Proxy settings in config |
 | `WHALE_MCP_CONFIG` | MCP config file path |
-
-### Shell hooks
-
-Hooks run shell commands before/after every tool call:
-
-```toml
-[hooks]
-pre_tool = ["echo 'about to run: $TOOL_NAME'"]
-post_tool = ["echo 'tool finished: $TOOL_NAME'"]
-```
-
-Hooks can return JSON on stdout with fields like `decision`, `reason`, or `updated_input`
-to influence Whale's behavior.
 
 ### Worktrees
 

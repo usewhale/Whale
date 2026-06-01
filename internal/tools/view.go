@@ -48,6 +48,7 @@ func (b *Toolset) readFile(ctx context.Context, call core.ToolCall) (core.ToolRe
 		return marshalToolError(call, "read_failed", err.Error()), nil
 	}
 	text, _ := normalizeTextFileBytes(data)
+	snapshotText := text
 	lines := strings.Split(text, "\n")
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
@@ -83,7 +84,10 @@ func (b *Toolset) readFile(ctx context.Context, call core.ToolCall) (core.ToolRe
 	if !explicitRange && totalBytes <= defaultReadFileFullMaxBytes {
 		content := strings.Join(lines, "\n")
 		result := readFileResult(rel, "full", total, totalBytes, len(lines), len([]byte(content)), 0, total, false, "", 0, false, false, content, "")
+		snapshot := b.createFileSnapshot(abs, snapshotText)
+		attachReadFileSnapshot(result, snapshot.ID)
 		if readFileFullResultFitsRegistryEnvelope(call.Name, result) {
+			b.storeFileSnapshot(snapshot)
 			return marshalToolResult(call, result)
 		}
 	}
@@ -112,6 +116,14 @@ func (b *Toolset) readFile(ctx context.Context, call core.ToolCall) (core.ToolRe
 	}
 	result := readFileResult(rel, "range", total, totalBytes, len(selected), returnedBytes, start, end, autoTruncated, truncatedBy, truncatedLines, start > 0, end < total, content, note)
 	return marshalToolResult(call, result)
+}
+
+func attachReadFileSnapshot(result map[string]any, snapshotID string) {
+	payload, ok := result["payload"].(map[string]any)
+	if !ok {
+		return
+	}
+	payload["snapshot_id"] = snapshotID
 }
 
 func readFileResult(rel string, mode string, totalLines int, totalBytes int, returnedLines int, returnedBytes int, start int, end int, truncated bool, truncatedBy string, truncatedLines int, hasMoreBefore bool, hasMoreAfter bool, content string, note string) map[string]any {

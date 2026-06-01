@@ -133,6 +133,8 @@ If both staged and unstaged diffs are empty but the branch has committed changes
 Review rules:
 - Focus on correctness, security, hidden behavior changes, missing tests, and meaningful maintainability issues.
 - Prefer project conventions over generic style rules.
+- Do not fix findings, edit files, create commits, push branches, or open/update pull requests.
+- If the user later asks to commit, push, or create a PR, do not infer that review findings should be fixed first unless the user explicitly asks to address them.
 - Do not report speculative issues. If evidence is weak, omit the finding.
 - Do not include praise sections by default.
 - Shell commands already run from the workspace root. Do not prefix commands with cd; use the shell_run cwd parameter for subdirectories.

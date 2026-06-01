@@ -99,7 +99,7 @@ func classifyToolFailure(res core.ToolResult, dispatchErr error) FailureClass {
 			return FailureClassMCPToolError
 		case "parse_failed", "invalid_args", "invalid_plan_update":
 			return FailureClassParseFailed
-		case "not_found", "read_failed", "permission_denied":
+		case "not_found", "read_failed", "permission_denied", "read_required", "snapshot_mismatch", "stale_read", "search_not_found":
 			return ""
 		case "policy_denied", "read_only_turn_denied":
 			return FailureClassPolicyDenied

@@ -17,11 +17,11 @@ func (a *Agent) CompactSession(ctx context.Context, sessionID string) (CompactIn
 	if err != nil {
 		return CompactInfo{}, fmt.Errorf("list messages: %w", err)
 	}
-	_, info, err := a.compactHistory(ctx, sessionID, history, false)
+	_, info, err := a.compactHistory(ctx, sessionID, history, false, nil)
 	return info, err
 }
 
-func (a *Agent) compactHistory(ctx context.Context, sessionID string, history []core.Message, auto bool) ([]core.Message, CompactInfo, error) {
+func (a *Agent) compactHistory(ctx context.Context, sessionID string, history []core.Message, auto bool, observer HookRunObserver) ([]core.Message, CompactInfo, error) {
 	info := CompactInfo{
 		Auto:           auto,
 		MessagesBefore: len(history),
@@ -39,7 +39,15 @@ func (a *Agent) compactHistory(ctx context.Context, sessionID string, history []
 	if !ok {
 		return nil, info, errors.New("session store does not support compact rewrite")
 	}
-	summary, err := a.generateCompactSummary(ctx, sessionID, history)
+	preContext := ""
+	if a.hooks != nil && !a.hooks.Empty() {
+		report := a.hooks.RunHookWithObserver(ctx, NewPreCompactPayload(sessionID, a.workspaceRoot, len(history)), observer)
+		if report.Blocked {
+			return nil, info, errors.New("blocked by PreCompact hook")
+		}
+		preContext = strings.TrimSpace(report.AdditionalContext)
+	}
+	summary, err := a.generateCompactSummary(ctx, sessionID, history, preContext)
 	if err != nil {
 		return nil, info, err
 	}
@@ -59,6 +67,12 @@ func (a *Agent) compactHistory(ctx context.Context, sessionID string, history []
 	info.Compacted = true
 	info.MessagesAfter = len(replacement)
 	info.AfterEstimate = compact.EstimateMessagesTokens(replacement)
+	if a.hooks != nil && !a.hooks.Empty() {
+		report := a.hooks.RunHookWithObserver(ctx, NewPostCompactPayload(sessionID, a.workspaceRoot, summary, len(history), len(replacement)), observer)
+		if report.Blocked {
+			return nil, info, errors.New("blocked by PostCompact hook")
+		}
+	}
 	return replacement, info, nil
 }
 
@@ -68,7 +82,7 @@ func isCompactSummaryMessage(msg core.Message) bool {
 		strings.TrimSpace(msg.Text) == "compact summary"
 }
 
-func (a *Agent) generateCompactSummary(ctx context.Context, sessionID string, history []core.Message) (string, error) {
+func (a *Agent) generateCompactSummary(ctx context.Context, sessionID string, history []core.Message, hookContext string) (string, error) {
 	prompt := strings.TrimSpace(`Summarize the conversation so far so another assistant can continue from the compacted context.
 
 Preserve:
@@ -79,6 +93,9 @@ Preserve:
 - constraints, preferences, and open questions
 
 Do not call tools. Output only the summary.`)
+	if strings.TrimSpace(hookContext) != "" {
+		prompt += "\n\nAdditional context from PreCompact hooks:\n" + strings.TrimSpace(hookContext)
+	}
 	tmpHistory := append(append([]core.Message(nil), history...), core.Message{SessionID: sessionID, Role: core.RoleUser, Text: prompt})
 	ch := a.provider.StreamResponse(ctx, tmpHistory, nil)
 	var summary strings.Builder

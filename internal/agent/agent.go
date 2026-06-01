@@ -195,8 +195,11 @@ type UserInputRequest struct {
 type UserInputFunc func(req UserInputRequest) (core.UserInputResponse, bool)
 
 type HookEventInfo struct {
+	ID         string
 	Name       string
 	Event      HookEvent
+	Source     string
+	Command    string
 	Decision   HookDecision
 	ExitCode   int
 	Message    string

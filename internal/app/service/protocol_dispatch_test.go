@@ -33,6 +33,11 @@ func TestServiceIntentKindMapsProtocolKinds(t *testing.T) {
 		{protocol.IntentRequestSkillsManage, IntentRequestSkillsManage},
 		{protocol.IntentSetSkillEnabled, IntentSetSkillEnabled},
 		{protocol.IntentSetPluginEnabled, IntentSetPluginEnabled},
+		{protocol.IntentRequestHooksManage, IntentRequestHooksManage},
+		{protocol.IntentSetHookEnabled, IntentSetHookEnabled},
+		{protocol.IntentTrustHook, IntentTrustHook},
+		{protocol.IntentTrustHooks, IntentTrustHooks},
+		{protocol.IntentResolveHooksStartupReview, IntentResolveHooksStartupReview},
 		{protocol.IntentWorktreeExitChoice, IntentWorktreeExitChoice},
 	}
 	for _, tt := range tests {

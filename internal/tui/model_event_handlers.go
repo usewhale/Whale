@@ -152,7 +152,16 @@ func (m *model) handleLocalSubmitResultEvent(ev protocol.Event) tea.Cmd {
 
 func (m *model) handleWorkflowTerminalEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
-	if ev.LocalResult != nil {
+	if m.assembler != nil && m.assembler.Len() > 0 {
+		if ev.LocalResult != nil {
+			m.appendLiveLocalResult(ev.LocalResult)
+		} else if strings.TrimSpace(ev.Text) != "" {
+			m.appendNotice(ev.Text)
+		}
+		if !m.hasPendingToolCalls() {
+			m.commitLiveTranscript(false)
+		}
+	} else if ev.LocalResult != nil {
 		m.appendLocalResult(ev.LocalResult)
 	} else if strings.TrimSpace(ev.Text) != "" {
 		m.appendTranscript("notice", tuirender.KindNotice, ev.Text)
@@ -231,6 +240,38 @@ func (m *model) handleToolResultEvent(ev protocol.Event) tea.Cmd {
 		return detectGitBranchCmd(m.cwdPath)
 	}
 	return nil
+}
+
+func (m *model) handleHookStartedEvent(ev protocol.Event) {
+	m.clearProviderRetryStatus()
+	m.status = ev.Text
+	m.addLog(logEntry{Kind: "hook_started", Source: hookLogSource(ev), Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Hook)})
+}
+
+func (m *model) handleHookCompletedEvent(ev protocol.Event) {
+	m.clearProviderRetryStatus()
+	m.status = ev.Text
+	if shouldAppendHookNotice(ev) {
+		m.appendNotice(ev.Text)
+	}
+	m.addLog(logEntry{Kind: "hook_completed", Source: hookLogSource(ev), Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Hook)})
+}
+
+func shouldAppendHookNotice(ev protocol.Event) bool {
+	if ev.Hook == nil {
+		return strings.TrimSpace(ev.Text) != ""
+	}
+	return ev.Hook.Status == "blocked" || ev.Hook.Status == "failed" || ev.Hook.Status == "warning" || strings.TrimSpace(ev.Hook.Message) != ""
+}
+
+func hookLogSource(ev protocol.Event) string {
+	if ev.Hook == nil {
+		return "hook"
+	}
+	if strings.TrimSpace(ev.Hook.Event) != "" {
+		return ev.Hook.Event
+	}
+	return "hook"
 }
 
 func (m *model) handleTaskStartedEvent(ev protocol.Event) {
@@ -380,6 +421,10 @@ func (m *model) handleSkillsManagerEvent(ev protocol.Event) {
 }
 
 func (m *model) handlePluginsManagerEvent(ev protocol.Event) {
+	m.setPluginsManagerItems(ev.Plugins)
+	if !ev.Open && m.mode != modePluginsManager {
+		return
+	}
 	m.clearProviderRetryStatus()
 	m.stopBusy()
 	m.stopping = false
@@ -389,7 +434,6 @@ func (m *model) handlePluginsManagerEvent(ev protocol.Event) {
 	m.slash.argumentHint = ""
 	m.skills.matches = nil
 	m.skills.selected = 0
-	m.setPluginsManagerItems(ev.Plugins)
 	m.status = "plugins"
 }
 
@@ -458,6 +502,8 @@ func (m *model) handleClearScreenEvent() tea.Cmd {
 }
 
 func (m *model) handleSessionHydratedEvent(ev protocol.Event) tea.Cmd {
+	m.setPluginSlashCommands(ev.Plugins)
+	preserveHooksStartupReview := m.mode == modeHooksStartupReview || (m.mode == modeHooksManager && m.hooksManager.startupReviewOpen)
 	m.mode = modeChat
 	m.resumeMenu = false
 	isRewind := metadataBool(ev.Metadata["rewind"])
@@ -504,6 +550,9 @@ func (m *model) handleSessionHydratedEvent(ev protocol.Event) tea.Cmd {
 		*m.startupHeaderOnce = true
 	}
 	m.status = "ready"
+	if preserveHooksStartupReview {
+		m.mode = modeHooksStartupReview
+	}
 	return eventCmd
 }
 

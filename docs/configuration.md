@@ -77,6 +77,10 @@ model = "deepseek-reasoner"
 tools = ["web_search", "web_fetch"]
 ```
 
+### 接入 Hooks
+
+需要在会话开始、用户提交 prompt、工具执行前后或结束前运行脚本？见 [Hooks 文档](hooks.md)。
+
 ---
 
 ## 参考
@@ -125,13 +129,8 @@ max_concurrency = 3                    # 并行 agent 数
 disabled = []                          # 禁用的技能
 enabled = []                           # 强制启用的技能
 
-[plugins]
-disabled = []                          # 禁用的插件
-enabled = []                           # 强制启用的插件
-
-[hooks]
-pre_tool = [""]                        # 每次工具调用前执行的 shell 命令
-post_tool = [""]                       # 每次工具调用后执行的 shell 命令
+[plugins.memory]
+enabled = true                         # 每个插件单独配置启用状态
 
 [logging]
 level = "info"                         # debug | info | warn | error
@@ -145,18 +144,6 @@ level = "info"                         # debug | info | warn | error
 | `WHALE_HOME` | 全局数据目录（`~/.whale`） |
 | `HTTP_PROXY` / `HTTPS_PROXY` | 配置中的代理设置 |
 | `WHALE_MCP_CONFIG` | MCP 配置文件路径 |
-
-### Shell 钩子
-
-在每次工具调用前后执行 shell 命令：
-
-```toml
-[hooks]
-pre_tool = ["echo '即将执行: $TOOL_NAME'"]
-post_tool = ["echo '工具执行完毕: $TOOL_NAME'"]
-```
-
-钩子可以通过 stdout 返回 JSON，包含 `decision`、`reason`、`updated_input` 等字段来影响 Whale 的行为。
 
 ### 工作目录（Worktree）
 

@@ -83,7 +83,15 @@ func (s *Service) handleLocalSubmit(line string) {
 		return
 	}
 	if line == "/plugins" {
-		s.emit(Event{Kind: EventPluginsManagerUpdated, Plugins: protocolPlugins(s.PluginsForManager())})
+		s.emit(Event{Kind: EventPluginsManagerUpdated, Plugins: protocolPlugins(s.PluginsForManager()), Open: true})
+		return
+	}
+	if line == "/hooks" {
+		s.emitHooksManagerUpdated()
+		return
+	}
+	if strings.HasPrefix(line, "/hooks ") {
+		s.handleHooksLocalSubmit(line)
 		return
 	}
 	if line == "/workflows" || strings.HasPrefix(line, "/workflows ") {
@@ -169,6 +177,24 @@ func (s *Service) handleLocalSubmit(line string) {
 	if appcommands.LooksLikeSlashCommand(line) {
 		s.emit(localSubmitResultEvent("error", fmt.Sprintf("• Unrecognized command %q. Type \"/\" for a list of supported commands.", line)))
 		return
+	}
+}
+
+func (s *Service) handleHooksLocalSubmit(line string) {
+	cmd, err := s.app.ExecuteLocalCommand(line)
+	if err != nil {
+		s.emit(localSubmitResultEvent("error", err.Error()))
+		return
+	}
+	if !cmd.Handled {
+		s.emit(localSubmitResultEvent("error", fmt.Sprintf("• Unrecognized command %q. Type \"/\" for a list of supported commands.", line)))
+		return
+	}
+	if cmd.Text != "" {
+		s.emit(localSubmitResultEvent("info", cmd.Text))
+	}
+	if cmd.Mutated {
+		s.emitHooksManagerUpdated()
 	}
 }
 

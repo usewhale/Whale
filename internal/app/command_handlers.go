@@ -220,6 +220,26 @@ func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 	if strings.HasPrefix(trimmed, "/plugins ") {
 		return CommandExecution{Handled: true}, errors.New("usage: /plugins")
 	}
+	if trimmed == "/hooks" {
+		hooks := a.buildHooksLocalResult()
+		return CommandExecution{Handled: true, Text: hooks.PlainText, LocalResult: hooks}, nil
+	}
+	if strings.HasPrefix(trimmed, "/hooks ") {
+		fields := strings.Fields(trimmed)
+		if len(fields) >= 3 && fields[1] == "trust" {
+			keys := fields[2:]
+			if len(keys) == 1 && keys[0] == "all" {
+				keys = nil
+			}
+			text, err := a.TrustHooks(keys)
+			return CommandExecution{Handled: true, Text: text, Mutated: err == nil}, err
+		}
+		if len(fields) >= 3 && (fields[1] == "enable" || fields[1] == "disable") {
+			text, err := a.SetHookEnabled(fields[2:], fields[1] == "enable")
+			return CommandExecution{Handled: true, Text: text, Mutated: err == nil}, err
+		}
+		return CommandExecution{Handled: true}, errors.New("usage: /hooks [trust all|trust <hook-key>...|enable <hook-key>...|disable <hook-key>...]")
+	}
 	if trimmed == "/stats" {
 		stats := a.buildStatsLocalResult("overview")
 		return CommandExecution{Handled: true, Text: stats.PlainText, LocalResult: stats}, nil

@@ -11,6 +11,7 @@ import (
 	"github.com/usewhale/whale/internal/app"
 	"github.com/usewhale/whale/internal/core"
 	llmretry "github.com/usewhale/whale/internal/llm/retry"
+	"github.com/usewhale/whale/internal/runtime/protocol"
 )
 
 func (s *Service) runTurn(line string, hiddenInput bool) {
@@ -151,11 +152,29 @@ func (s *Service) runTurnWith(start func(context.Context) (<-chan agent.AgentEve
 				s.maybeWatchWorkflowToolResult(ev.Result)
 				s.emit(Event{Kind: EventToolResult, ToolCallID: ev.Result.ToolCallID, ToolName: ev.Result.Name, Text: ev.Result.Content, Metadata: ev.Result.Metadata})
 			}
+		case agent.AgentEventTypeHookStarted:
+			if ev.Hook != nil {
+				deltas.flushReliable()
+				s.emit(hookLifecycleEvent(EventHookStarted, ev.Hook))
+			}
+		case agent.AgentEventTypeHookBlocked, agent.AgentEventTypeHookWarned, agent.AgentEventTypeHookFailed, agent.AgentEventTypeHookCompleted:
+			if ev.Hook != nil {
+				if ev.Type == agent.AgentEventTypeHookCompleted && ev.Hook.Decision != "" && ev.Hook.Decision != agent.HookDecisionPass {
+					continue
+				}
+				deltas.flushReliable()
+				s.emit(hookLifecycleEvent(EventHookCompleted, ev.Hook))
+			}
 		case agent.AgentEventTypeToolApprovalGranted:
 			s.syncApprovalGrant(ev.ApprovalGrant)
 		case agent.AgentEventTypeParallelReasonStarted, agent.AgentEventTypeSubagentStarted:
 			if ev.Task != nil {
 				deltas.flushReliable()
+				if ev.Type == agent.AgentEventTypeSubagentStarted {
+					if out := s.app.RunSubagentHook(agent.HookEventSubagentStart, ev.Task, s.hookObserver()); out != "" {
+						s.emit(Event{Kind: EventInfo, Text: out})
+					}
+				}
 				s.emit(taskActivityEvent(EventTaskStarted, ev.Task))
 			}
 		case agent.AgentEventTypeTaskProgress:
@@ -166,6 +185,11 @@ func (s *Service) runTurnWith(start func(context.Context) (<-chan agent.AgentEve
 		case agent.AgentEventTypeParallelReasonDone, agent.AgentEventTypeSubagentDone:
 			if ev.Task != nil {
 				deltas.flushReliable()
+				if ev.Type == agent.AgentEventTypeSubagentDone {
+					if out := s.app.RunSubagentHook(agent.HookEventSubagentStop, ev.Task, s.hookObserver()); out != "" {
+						s.emit(Event{Kind: EventInfo, Text: out})
+					}
+				}
 				s.emit(taskActivityEvent(EventTaskCompleted, ev.Task))
 			}
 		case agent.AgentEventTypeUserInputRequired:
@@ -188,7 +212,7 @@ func (s *Service) runTurnWith(start func(context.Context) (<-chan agent.AgentEve
 	}
 	deltas.flushReliable()
 	_ = s.app.FinalizeTurn(last)
-	if out := s.app.RunStopHook(last, 0); out != "" {
+	if out := s.app.RunStopHookWithObserver(last, 0, s.hookObserver()); out != "" {
 		s.emit(Event{Kind: EventInfo, Text: out})
 	}
 	s.emit(Event{
@@ -196,6 +220,70 @@ func (s *Service) runTurnWith(start func(context.Context) (<-chan agent.AgentEve
 		LastResponse: last,
 		Metadata:     map[string]any{EventMetadataAgentTurn: true},
 	})
+}
+
+func (s *Service) hookObserver() agent.HookRunObserver {
+	return func(stage agent.HookRunStage, info agent.HookEventInfo) {
+		kind := EventHookCompleted
+		if stage == agent.HookRunStarted {
+			kind = EventHookStarted
+		}
+		s.emit(hookLifecycleEvent(kind, &info))
+	}
+}
+
+func hookLifecycleEvent(kind EventKind, info *agent.HookEventInfo) Event {
+	if info == nil {
+		return Event{Kind: kind}
+	}
+	status := "completed"
+	if kind == EventHookStarted {
+		status = "running"
+	} else {
+		switch info.Decision {
+		case agent.HookDecisionBlock, agent.HookDecisionHalt:
+			status = "blocked"
+		case agent.HookDecisionError, agent.HookDecisionTimeout:
+			status = "failed"
+		case agent.HookDecisionWarn:
+			status = "warning"
+		}
+	}
+	text := summarizeHookRun(status, info)
+	return Event{
+		Kind:       kind,
+		Text:       text,
+		Status:     status,
+		DurationMS: info.DurationMS,
+		Hook: &protocol.HookRun{
+			ID:         info.ID,
+			Event:      string(info.Event),
+			Name:       info.Name,
+			Source:     info.Source,
+			Command:    info.Command,
+			Status:     status,
+			Decision:   string(info.Decision),
+			ExitCode:   info.ExitCode,
+			Message:    info.Message,
+			DurationMS: info.DurationMS,
+			Truncated:  info.Truncated,
+		},
+	}
+}
+
+func summarizeHookRun(status string, info *agent.HookEventInfo) string {
+	name := strings.TrimSpace(info.Name)
+	if name == "" {
+		name = strings.TrimSpace(info.Command)
+	}
+	if name == "" {
+		name = string(info.Event)
+	}
+	base := fmt.Sprintf("%s hook %s · %s", info.Event, status, name)
+	if strings.TrimSpace(info.Message) != "" && status != "running" {
+		base += ": " + strings.TrimSpace(info.Message)
+	}
+	return base
 }
 
 func providerRetryEvent(info *llmretry.Info) Event {

@@ -5,6 +5,25 @@ import (
 	"strings"
 )
 
+func (a *Agent) hookRunObserver(ctx context.Context, events chan<- AgentEvent) HookRunObserver {
+	return func(stage HookRunStage, info HookEventInfo) {
+		var typ AgentEventType
+		switch stage {
+		case HookRunStarted:
+			typ = AgentEventTypeHookStarted
+		case HookRunBlocked:
+			typ = AgentEventTypeHookBlocked
+		case HookRunWarned:
+			typ = AgentEventTypeHookWarned
+		case HookRunFailed:
+			typ = AgentEventTypeHookFailed
+		default:
+			typ = AgentEventTypeHookCompleted
+		}
+		_ = sendAgentEvent(ctx, events, AgentEvent{Type: typ, Hook: &info})
+	}
+}
+
 func (a *Agent) emitHookReport(ctx context.Context, events chan<- AgentEvent, report HookReport) bool {
 	for _, oc := range report.Outcomes {
 		if !sendAgentEvent(ctx, events, AgentEvent{

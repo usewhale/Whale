@@ -75,7 +75,7 @@ func (r *Runner) ParallelReason(ctx context.Context, req ParallelReasonRequest) 
 }
 
 func (r *Runner) runOneReasoningQuery(ctx context.Context, model string, maxTokens int, prompt string) (string, llm.Usage, error) {
-	provider, err := r.providerFactory(model, maxTokens)
+	provider, err := r.providerFactory(model, r.defaultEffort, maxTokens)
 	if err != nil {
 		return "", llm.Usage{}, err
 	}

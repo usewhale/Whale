@@ -135,7 +135,7 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 			if a.autoCompact {
 				before := compact.EstimateMessagesTokens(rt.BuildProviderHistory())
 				if float64(before)/float64(max(1, a.contextWindow)) > a.compactThresh {
-					replacement, info, err := a.compactHistory(ctx, sessionID, history, true)
+					replacement, info, err := a.compactHistory(ctx, sessionID, history, true, a.hookRunObserver(ctx, out))
 					if err != nil {
 						emit(AgentEvent{Type: AgentEventTypeError, Err: err})
 						return

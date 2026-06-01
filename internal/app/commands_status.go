@@ -12,7 +12,7 @@ func (a *App) buildStatus() string {
 		"",
 		fmt.Sprintf("- session: %s", a.sessionID),
 		fmt.Sprintf("- mode: %s", modeDisplay(a.currentMode)),
-		fmt.Sprintf("- permissions.default: %s", a.permissionPolicy.Default),
+		fmt.Sprintf("- auto-accept: %s", OnOff(a.AutoAcceptPermissions())),
 		fmt.Sprintf("- model: %s", a.model),
 		fmt.Sprintf("- effort: %s", a.reasoningEffort),
 		fmt.Sprintf("- thinking: %s", OnOff(a.thinkingEnabled)),
@@ -29,7 +29,7 @@ func (a *App) buildStatusLocalResult() *LocalResult {
 	fields := []LocalResultField{
 		{Label: "Session", Value: a.sessionID},
 		{Label: "Mode", Value: modeDisplay(a.currentMode), Tone: "info"},
-		{Label: "Permissions", Value: string(a.permissionPolicy.Default)},
+		{Label: "Auto-accept", Value: OnOff(a.AutoAcceptPermissions())},
 		{Label: "Model", Value: a.model, Tone: "info"},
 		{Label: "Effort", Value: a.reasoningEffort},
 		{Label: "Thinking", Value: OnOff(a.thinkingEnabled)},

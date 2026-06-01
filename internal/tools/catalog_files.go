@@ -33,7 +33,7 @@ func (b *Toolset) fileDiscoveryTools() []core.Tool {
 	return []core.Tool{
 		toolFn{
 			name:        "read_file",
-			description: "Read file content. Workspace, git worktree, and discovered local skill paths are read directly; external paths request file access approval before reading. Use this before edit/write to confirm exact text. Files up to 32KB return full content by default; larger files return an outline with head lines and continuation hints. Use offset/limit to read bounded ranges.",
+			description: "Read file content. Workspace, git worktree, and discovered local skill paths are read directly; external paths request file access approval before reading. Use this before edit/write to confirm exact text. Full results include snapshot_id required by edit. Files up to 32KB return full content by default; larger files return an outline with head lines and continuation hints. Use offset/limit to read bounded ranges.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
@@ -86,20 +86,22 @@ func (b *Toolset) fileMutationTools() []core.Tool {
 	return []core.Tool{
 		toolFn{
 			name:        "edit",
-			description: "Apply SEARCH/REPLACE edits to an existing file. Requires exact search text; returns error when search is not found. Prefer this for surgical changes over full-file rewrites.",
+			description: "Apply SEARCH/REPLACE edits to an existing file. Requires snapshot_id from a prior full read_file result for the same file. Requires exact search text; returns search_not_found when search is not found. Prefer this for small surgical changes. For large files or multi-file context edits, prefer apply_patch.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
 				"properties": map[string]any{
-					"file_path": map[string]any{"type": "string", "description": "Target file path relative to workspace, or an absolute path inside the workspace root"},
-					"search":    map[string]any{"type": "string", "description": "Exact text to replace"},
-					"replace":   map[string]any{"type": "string", "description": "Replacement text"},
-					"all":       map[string]any{"type": "boolean", "description": "Replace all occurrences"},
+					"file_path":   map[string]any{"type": "string", "description": "Target file path relative to workspace, or an absolute path inside the workspace root"},
+					"snapshot_id": map[string]any{"type": "string", "description": "Snapshot id returned by a prior full read_file result for this exact file"},
+					"search":      map[string]any{"type": "string", "description": "Exact text to replace, copied from the read_file content"},
+					"replace":     map[string]any{"type": "string", "description": "Replacement text"},
+					"all":         map[string]any{"type": "boolean", "description": "Replace all occurrences"},
 				},
 				"required": []string{"file_path", "search", "replace"},
 			},
-			fn:      b.editFile,
-			preview: b.previewEditFile,
+			capabilities: []string{"workspace.write"},
+			fn:           b.editFile,
+			preview:      b.previewEditFile,
 		},
 		toolFn{
 			name:        "write",
@@ -113,8 +115,9 @@ func (b *Toolset) fileMutationTools() []core.Tool {
 				},
 				"required": []string{"file_path", "content"},
 			},
-			fn:      b.writeFile,
-			preview: b.previewWriteFile,
+			capabilities: []string{"workspace.write"},
+			fn:           b.writeFile,
+			preview:      b.previewWriteFile,
 		},
 		toolFn{
 			name:        "apply_patch",
@@ -127,8 +130,9 @@ func (b *Toolset) fileMutationTools() []core.Tool {
 				},
 				"required": []string{"patch"},
 			},
-			fn:      b.applyPatch,
-			preview: b.previewApplyPatch,
+			capabilities: []string{"workspace.write"},
+			fn:           b.applyPatch,
+			preview:      b.previewApplyPatch,
 		},
 	}
 }

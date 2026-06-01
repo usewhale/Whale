@@ -31,15 +31,16 @@ func initAppRuntime(cfg Config, sessionInit appSessionInit, toolInit appToolInit
 		APIKey:  apiKey,
 		BaseURL: cfg.APIBaseURL,
 	}))
-	providerFactory := func(model string, maxTokens int) (llm.Provider, error) {
+	providerFactory := func(model string, requestEffort string, maxTokens int) (llm.Provider, error) {
 		if strings.TrimSpace(model) == "" {
 			model = defaults.DefaultModel
 		}
+		effectiveEffort := normalizeEffort(core.FirstNonEmpty(strings.TrimSpace(requestEffort), effort))
 		return newDeepSeekProvider(providerOptions{
 			APIKey:            apiKey,
 			BaseURL:           cfg.APIBaseURL,
 			Model:             model,
-			ReasoningEffort:   effort,
+			ReasoningEffort:   effectiveEffort,
 			ThinkingEnabled:   thinking,
 			MaxTokens:         maxTokens,
 			RetryPolicy:       retryPolicyFromConfig(cfg),
@@ -61,11 +62,14 @@ func initAppRuntime(cfg Config, sessionInit appSessionInit, toolInit appToolInit
 		AutoCompact:          cfg.AutoCompact,
 		AutoCompactThreshold: cfg.AutoCompactThreshold,
 		DefaultModel:         defaults.DefaultModel,
+		DefaultEffort:        effort,
 		DefaultMaxTokens:     tasks.DefaultMaxTokens,
 		DefaultMaxToolIters:  tasks.DefaultMaxToolIters,
 		SummaryMaxChars:      tasks.DefaultSummaryMaxChar,
 		UsageLogPath:         filepath.Join(cfg.DataDir, "usage.jsonl"),
 		ApprovalFunc:         approvalFunc,
+		ParentPolicy:         policy.RulePolicy{Default: cfg.PermissionDefault, Rules: append([]policy.PermissionRule{}, cfg.PermissionRules...), WorkspaceRoot: workspaceRoot},
+		AgentDefinitions:     taskAgentDefinitions(toolInit.pluginAgents),
 	})
 	taskTools := tasks.NewTools(taskRunner)
 	workflowStore, err := workflow.NewFileRunEventStore(cfg.DataDir)

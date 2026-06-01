@@ -136,6 +136,7 @@ func (focusEditSummaryProvider) Match(input focusToolSummaryInput) bool {
 		return true
 	}
 	return strings.HasPrefix(input.Text, "Edited ") ||
+		strings.HasPrefix(input.Text, "Edit failed ") ||
 		strings.HasPrefix(input.Text, "Created ") ||
 		strings.HasPrefix(input.Text, "Deleted ") ||
 		strings.HasPrefix(input.Text, "Wrote ")
@@ -266,6 +267,8 @@ func focusEditActionDetail(text string) string {
 		switch {
 		case strings.HasPrefix(line, "Edited "):
 			return strings.TrimSpace(strings.TrimPrefix(line, "Edited "))
+		case strings.HasPrefix(line, "Edit failed "):
+			return strings.TrimSpace(strings.TrimPrefix(line, "Edit failed "))
 		case strings.HasPrefix(line, "Created "):
 			return strings.TrimSpace(strings.TrimPrefix(line, "Created "))
 		case strings.HasPrefix(line, "Deleted "):
@@ -450,6 +453,8 @@ func focusActionDetail(text string) string {
 		return strings.TrimSpace(strings.TrimPrefix(line, "Fetch "))
 	case strings.HasPrefix(line, "Edited "):
 		return strings.TrimSpace(strings.TrimPrefix(line, "Edited "))
+	case strings.HasPrefix(line, "Edit failed "):
+		return strings.TrimSpace(strings.TrimPrefix(line, "Edit failed "))
 	case strings.HasPrefix(line, "Created "):
 		return strings.TrimSpace(strings.TrimPrefix(line, "Created "))
 	case strings.HasPrefix(line, "Deleted "):

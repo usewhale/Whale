@@ -12,10 +12,14 @@ import (
 )
 
 func (a *App) RunUserPromptSubmitHook(input string) (blocked bool, output string, updatedInput string) {
+	return a.RunUserPromptSubmitHookWithObserver(input, nil)
+}
+
+func (a *App) RunUserPromptSubmitHookWithObserver(input string, observer agent.HookRunObserver) (blocked bool, output string, updatedInput string) {
 	if a.hookRunner.Empty() {
 		return false, "", input
 	}
-	report := a.hookRunner.RunHook(a.ctx, agent.NewUserPromptSubmitPayload(a.sessionID, a.workspaceRoot, input))
+	report := a.hookRunner.RunHookWithObserver(a.ctx, agent.NewUserPromptSubmitPayload(a.sessionID, a.workspaceRoot, input), observer)
 	lines := renderHookReport(report)
 	if report.Blocked {
 		lines = append(lines, "assistant> blocked by UserPromptSubmit hook")
@@ -28,10 +32,44 @@ func (a *App) RunUserPromptSubmitHook(input string) (blocked bool, output string
 }
 
 func (a *App) RunStopHook(lastAssistantText string, turn int) string {
+	return a.RunStopHookWithObserver(lastAssistantText, turn, nil)
+}
+
+func (a *App) RunStopHookWithObserver(lastAssistantText string, turn int, observer agent.HookRunObserver) string {
 	if a.hookRunner.Empty() {
 		return ""
 	}
-	report := a.hookRunner.RunHook(a.ctx, agent.NewStopPayload(a.sessionID, a.workspaceRoot, lastAssistantText, turn))
+	report := a.hookRunner.RunHookWithObserver(a.ctx, agent.NewStopPayload(a.sessionID, a.workspaceRoot, lastAssistantText, turn), observer)
+	return strings.Join(renderHookReport(report), "\n")
+}
+
+func (a *App) RunSessionStartHook(observer agent.HookRunObserver) string {
+	if a == nil || a.hookRunner == nil || a.hookRunner.Empty() {
+		return ""
+	}
+	report := a.hookRunner.RunHookWithObserver(a.ctx, agent.NewSessionStartPayload(a.sessionID, a.workspaceRoot), observer)
+	return strings.Join(renderHookReport(report), "\n")
+}
+
+func (a *App) RunPermissionRequestHook(req policy.ApprovalRequest, observer agent.HookRunObserver) (blocked bool, output string) {
+	if a == nil || a.hookRunner == nil || a.hookRunner.Empty() {
+		return false, ""
+	}
+	payload := agent.NewPermissionRequestPayload(req.SessionID, a.workspaceRoot, req.ToolCall, req.Reason, req.Code)
+	report := a.hookRunner.RunHookWithObserver(a.ctx, payload, observer)
+	lines := renderHookReport(report)
+	if report.Blocked {
+		lines = append(lines, "assistant> blocked by PermissionRequest hook")
+	}
+	return report.Blocked, strings.Join(lines, "\n")
+}
+
+func (a *App) RunSubagentHook(event agent.HookEvent, info *agent.TaskActivityInfo, observer agent.HookRunObserver) string {
+	if a == nil || a.hookRunner == nil || a.hookRunner.Empty() || info == nil {
+		return ""
+	}
+	payload := agent.NewSubagentHookPayload(event, a.sessionID, a.workspaceRoot, info.Role, info.Model, info.Summary)
+	report := a.hookRunner.RunHookWithObserver(a.ctx, payload, observer)
 	return strings.Join(renderHookReport(report), "\n")
 }
 

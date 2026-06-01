@@ -20,6 +20,8 @@ const (
 	EventProviderRetry        EventKind = "provider_retry"
 	EventToolCall             EventKind = "tool_call"
 	EventToolResult           EventKind = "tool_result"
+	EventHookStarted          EventKind = "hook_started"
+	EventHookCompleted        EventKind = "hook_completed"
 	EventTaskStarted          EventKind = "task_started"
 	EventTaskProgress         EventKind = "task_progress"
 	EventTaskCompleted        EventKind = "task_completed"
@@ -53,6 +55,8 @@ const (
 	EventSkillsSelectionRequested      EventKind = "skills_selection_requested"
 	EventSkillsManagerUpdated          EventKind = "skills_manager_updated"
 	EventPluginsManagerUpdated         EventKind = "plugins_manager_updated"
+	EventHooksManagerUpdated           EventKind = "hooks_manager_updated"
+	EventHooksStartupReviewRequested   EventKind = "hooks_startup_review_requested"
 	EventReviewRequested               EventKind = "review_requested"
 	EventScreenClearRequested          EventKind = "screen_clear_requested"
 )
@@ -81,11 +85,60 @@ type Event struct {
 	AutoAcceptKnown  bool                 `json:"auto_accept_known,omitempty"`
 	ViewMode         string               `json:"view_mode,omitempty"`
 	LocalResult      *LocalResult         `json:"local_result,omitempty"`
+	Hook             *HookRun             `json:"hook,omitempty"`
 	Skills           []SkillView          `json:"skills,omitempty"`
 	Plugins          []PluginStatus       `json:"plugins,omitempty"`
+	Open             bool                 `json:"open,omitempty"`
+	Hooks            *HooksManagerState   `json:"hooks,omitempty"`
 	WorktreeExit     *WorktreeExitSummary `json:"worktree_exit,omitempty"`
 	SessionID        string               `json:"session_id,omitempty"`
 	Messages         []Message            `json:"messages,omitempty"`
+}
+
+type HooksManagerState struct {
+	Entries           []HookEntry        `json:"entries,omitempty"`
+	Events            []HookEventSummary `json:"events,omitempty"`
+	ReviewNeededCount int                `json:"review_needed_count,omitempty"`
+}
+
+type HookEventSummary struct {
+	Event       string `json:"event"`
+	Description string `json:"description,omitempty"`
+	Installed   int    `json:"installed"`
+	Active      int    `json:"active"`
+	Review      int    `json:"review"`
+}
+
+type HookEntry struct {
+	Key         string `json:"key"`
+	Event       string `json:"event"`
+	Type        string `json:"type,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Source      string `json:"source,omitempty"`
+	Match       string `json:"match,omitempty"`
+	Command     string `json:"command,omitempty"`
+	Description string `json:"description,omitempty"`
+	TimeoutSec  int    `json:"timeout_sec,omitempty"`
+	CWD         string `json:"cwd,omitempty"`
+	Hash        string `json:"hash,omitempty"`
+	Enabled     bool   `json:"enabled"`
+	Managed     bool   `json:"managed"`
+	Active      bool   `json:"active"`
+	Trust       string `json:"trust,omitempty"`
+}
+
+type HookRun struct {
+	ID         string `json:"id,omitempty"`
+	Event      string `json:"event,omitempty"`
+	Name       string `json:"name,omitempty"`
+	Source     string `json:"source,omitempty"`
+	Command    string `json:"command,omitempty"`
+	Status     string `json:"status,omitempty"`
+	Decision   string `json:"decision,omitempty"`
+	ExitCode   int    `json:"exit_code,omitempty"`
+	Message    string `json:"message,omitempty"`
+	DurationMS int64  `json:"duration_ms,omitempty"`
+	Truncated  bool   `json:"truncated,omitempty"`
 }
 
 type ProgressStep struct {
@@ -255,6 +308,8 @@ type PluginStatus struct {
 	Commands    []PluginCommand    `json:"commands,omitempty"`
 	Tools       []string           `json:"tools,omitempty"`
 	Skills      []string           `json:"skills,omitempty"`
+	Agents      []string           `json:"agents,omitempty"`
+	Rules       []string           `json:"rules,omitempty"`
 	Hooks       []string           `json:"hooks,omitempty"`
 	Services    []PluginService    `json:"services,omitempty"`
 	Diagnostics []PluginDiagnostic `json:"diagnostics,omitempty"`
@@ -277,6 +332,7 @@ type PluginCommand struct {
 	Usage       string `json:"usage,omitempty"`
 	Description string `json:"description,omitempty"`
 	Class       string `json:"class,omitempty"`
+	StartsTurn  bool   `json:"starts_turn,omitempty"`
 }
 
 type PluginService struct {

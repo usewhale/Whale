@@ -12,7 +12,7 @@ func buildHelpLocalResult() *LocalResult {
 		{Title: "Mode", Fields: helpFields("/agent", "/ask", "/plan")},
 		{Title: "Session", Fields: helpFields("/new", "/fork", "/resume", "/clear", "/compact", "/exit")},
 		{Title: "Local info", Fields: helpFields("/status", "/stats", "/mcp", "/diff", "/copy", "/help")},
-		{Title: "Tools and management", Fields: helpFields("/model", "/permissions", "/skills", "/plugins", "/memory", "/open", "/feedback")},
+		{Title: "Tools and management", Fields: helpFields("/model", "/permissions", "/skills", "/plugins", "/open", "/feedback")},
 		{Title: "Workflow", Fields: helpFields("/review", "/btw", "/focus", "/init")},
 	}
 	return &LocalResult{

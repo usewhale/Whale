@@ -54,6 +54,111 @@ func TestRunSetupRejectsInvalidKey(t *testing.T) {
 	}
 }
 
+func TestPluginCLIInstallListInspectUninstall(t *testing.T) {
+	dataDir := t.TempDir()
+	workspace := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+	pluginDir := t.TempDir()
+	writeCLIFile(t, filepath.Join(pluginDir, "skills", "demo", "SKILL.md"), []byte("# Demo\n"))
+	writeCLIFile(t, filepath.Join(pluginDir, "whale-plugin.toml"), []byte(`id = "demo-cli"
+name = "Demo CLI"
+version = "0.1.0"
+description = "CLI installed plugin."
+authors = ["Whale"]
+
+[components]
+skills = "./skills"
+`))
+	cfg := app.DefaultConfig()
+	cfg.DataDir = dataDir
+
+	var out bytes.Buffer
+	if err := runPluginInstall(&out, cfg, pluginDir); err != nil {
+		t.Fatalf("runPluginInstall: %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "installed plugin: demo-cli@0.1.0") {
+		t.Fatalf("unexpected install output:\n%s", got)
+	}
+
+	out.Reset()
+	if err := runPluginList(&out, cfg); err != nil {
+		t.Fatalf("runPluginList: %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "memory") || !strings.Contains(got, "demo-cli") || !strings.Contains(got, "disabled") {
+		t.Fatalf("unexpected list output:\n%s", got)
+	}
+
+	out.Reset()
+	if err := runPluginSetEnabled(&out, cfg, "demo-cli", true); err != nil {
+		t.Fatalf("runPluginSetEnabled(true): %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "enabled plugin: demo-cli") {
+		t.Fatalf("unexpected enable output:\n%s", got)
+	}
+
+	out.Reset()
+	cfg, err = app.LoadAndApplyConfig(app.Config{DataDir: dataDir}, workspace)
+	if err != nil {
+		t.Fatalf("LoadAndApplyConfig: %v", err)
+	}
+	if err := runPluginList(&out, cfg); err != nil {
+		t.Fatalf("runPluginList after enable: %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "demo-cli") || !strings.Contains(got, "enabled") {
+		t.Fatalf("unexpected enabled list output:\n%s", got)
+	}
+
+	out.Reset()
+	if err := runPluginSetEnabled(&out, cfg, "demo-cli", false); err != nil {
+		t.Fatalf("runPluginSetEnabled(false): %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "disabled plugin: demo-cli") {
+		t.Fatalf("unexpected disable output:\n%s", got)
+	}
+	cfg, err = app.LoadAndApplyConfig(app.Config{DataDir: dataDir}, workspace)
+	if err != nil {
+		t.Fatalf("LoadAndApplyConfig after disable: %v", err)
+	}
+
+	out.Reset()
+	if err := runPluginInspect(&out, cfg, "demo-cli"); err != nil {
+		t.Fatalf("runPluginInspect: %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "Demo CLI") || !strings.Contains(got, "components:") || !strings.Contains(got, "skills: ./skills") {
+		t.Fatalf("unexpected inspect output:\n%s", got)
+	}
+	if got := out.String(); !strings.Contains(got, "status: disabled") {
+		t.Fatalf("expected disabled inspect status after disable:\n%s", got)
+	}
+
+	out.Reset()
+	if err := runPluginUninstall(&out, cfg, "demo-cli"); err != nil {
+		t.Fatalf("runPluginUninstall: %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "uninstalled plugin: demo-cli") {
+		t.Fatalf("unexpected uninstall output:\n%s", got)
+	}
+	if err := runPluginInspect(&out, cfg, "demo-cli"); err == nil || !strings.Contains(err.Error(), "not installed") {
+		t.Fatalf("expected inspect failure after uninstall, got %v", err)
+	}
+}
+
+func TestPluginCLIRejectsBuiltinUninstall(t *testing.T) {
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	var out bytes.Buffer
+	if err := runPluginUninstall(&out, cfg, "memory"); err == nil || !strings.Contains(err.Error(), "built-in") {
+		t.Fatalf("expected built-in uninstall error, got %v", err)
+	}
+}
+
 func TestRunDoctorReturnsExitErrorOnFailures(t *testing.T) {
 	dir := t.TempDir()
 	workspace := t.TempDir()

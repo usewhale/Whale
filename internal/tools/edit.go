@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 
@@ -10,10 +11,11 @@ import (
 
 func (b *Toolset) editFile(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
 	var in struct {
-		FilePath string `json:"file_path"`
-		Search   string `json:"search"`
-		Replace  string `json:"replace"`
-		All      bool   `json:"all"`
+		FilePath   string `json:"file_path"`
+		SnapshotID string `json:"snapshot_id"`
+		Search     string `json:"search"`
+		Replace    string `json:"replace"`
+		All        bool   `json:"all"`
 	}
 	if err := decodeInput(call.Input, &in); err != nil {
 		return marshalToolError(call, "invalid_args", err.Error()), nil
@@ -36,6 +38,9 @@ func (b *Toolset) editFile(ctx context.Context, call core.ToolCall) (core.ToolRe
 		b.afterFileRead(abs)
 	}
 	before, lineEndings := normalizeTextFileBytes(data)
+	if code, msg := b.validateFileSnapshot(abs, in.SnapshotID, before); code != "" {
+		return marshalToolError(call, code, msg), nil
+	}
 	if in.Search == "" {
 		return marshalToolError(call, "invalid_args", "search is required"), nil
 	}
@@ -79,10 +84,11 @@ func (b *Toolset) editFile(ctx context.Context, call core.ToolCall) (core.ToolRe
 
 func (b *Toolset) previewEditFile(_ context.Context, call core.ToolCall) (map[string]any, error) {
 	var in struct {
-		FilePath string `json:"file_path"`
-		Search   string `json:"search"`
-		Replace  string `json:"replace"`
-		All      bool   `json:"all"`
+		FilePath   string `json:"file_path"`
+		SnapshotID string `json:"snapshot_id"`
+		Search     string `json:"search"`
+		Replace    string `json:"replace"`
+		All        bool   `json:"all"`
 	}
 	if err := decodeInput(call.Input, &in); err != nil {
 		return nil, err
@@ -99,6 +105,9 @@ func (b *Toolset) previewEditFile(_ context.Context, call core.ToolCall) (map[st
 		return nil, err
 	}
 	before, _ := normalizeTextFileBytes(data)
+	if code, msg := b.validateFileSnapshot(abs, in.SnapshotID, before); code != "" {
+		return nil, errors.New(code + ": " + msg)
+	}
 	if in.Search == "" {
 		return nil, os.ErrInvalid
 	}

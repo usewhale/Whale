@@ -328,10 +328,9 @@ func (a *Agent) runPreToolUseHook(ctx context.Context, sc streamDispatchContext,
 	}
 	var toolArgs any
 	_ = json.Unmarshal([]byte(call.Input), &toolArgs)
-	report := a.hooks.RunHook(ctx, NewPreToolUsePayload(sc.SessionID, call, toolArgs))
-	if !a.emitHookReport(ctx, sc.Events, report) {
-		return core.ToolCall{}, "", false, ctx.Err()
-	}
+	payload := NewPreToolUsePayload(sc.SessionID, call, toolArgs)
+	payload.CWD = a.workspaceRoot
+	report := a.hooks.RunHookWithObserver(ctx, payload, a.hookRunObserver(ctx, sc.Events))
 	if report.Blocked {
 		if err := flushPendingParallelSubagents(); err != nil {
 			return core.ToolCall{}, "", false, err

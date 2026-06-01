@@ -12,12 +12,13 @@ import (
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/defaults"
 	"github.com/usewhale/whale/internal/llm"
+	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/store"
 )
 
 func TestParallelReasonPreservesOrderAndAggregatesUsage(t *testing.T) {
-	factory := func(_ string, _ int) (llm.Provider, error) {
+	factory := func(_ string, _ string, _ int) (llm.Provider, error) {
 		return providerFunc(func(ctx context.Context, history []core.Message, tools []core.Tool) <-chan llm.ProviderEvent {
 			out := make(chan llm.ProviderEvent, 1)
 			go func() {
@@ -53,7 +54,7 @@ func TestParallelReasonPreservesOrderAndAggregatesUsage(t *testing.T) {
 }
 
 func TestParallelReasonCancellation(t *testing.T) {
-	factory := func(_ string, _ int) (llm.Provider, error) {
+	factory := func(_ string, _ string, _ int) (llm.Provider, error) {
 		return providerFunc(func(ctx context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
 			out := make(chan llm.ProviderEvent)
 			go func() {
@@ -127,6 +128,44 @@ func TestReadOnlyRegistryPreservesProgressRunner(t *testing.T) {
 	}
 	if progress[0].ToolCallID != "read-1" || progress[0].ToolName != "read_file" || progress[0].Summary != "progress from child read" {
 		t.Fatalf("unexpected progress: %+v", progress[0])
+	}
+}
+
+func TestCapabilityRegistryAllowsPolicyGatedWriteCapabilities(t *testing.T) {
+	parent := core.NewToolRegistry([]core.Tool{
+		testTool{name: "read_file", readOnly: true, capabilities: []string{CapabilityWorkspaceRead}},
+		testTool{name: "write", readOnly: false, capabilities: []string{CapabilityWorkspaceWrite}},
+		testTool{name: "shell_run", readOnly: false, readOnlyCheck: func(args map[string]any) bool { return true }, capabilities: []string{CapabilityShellRead, CapabilityShellWrite}},
+	})
+	child, err := BuildCapabilityRegistry(parent, []string{CapabilityWorkspaceWrite, CapabilityShellRead})
+	if err != nil {
+		t.Fatalf("BuildCapabilityRegistry: %v", err)
+	}
+	if child.Get("write") == nil {
+		t.Fatalf("expected workspace.write tool")
+	}
+	shellTool := child.Get("shell_run")
+	if shellTool == nil {
+		t.Fatalf("expected shell.read tool")
+	}
+	if !core.DescribeTool(shellTool).ReadOnly {
+		t.Fatalf("shell.read should keep shell_run read-only guarded")
+	}
+}
+
+func TestSpawnSubagentToolSchemaIncludesPluginRoles(t *testing.T) {
+	r := NewRunner(RunnerConfig{AgentDefinitions: []AgentDefinition{{
+		Name:         "demo:reviewer",
+		Description:  "Demo plugin reviewer.",
+		SystemPrompt: "Review as the plugin.",
+	}}})
+	tool := spawnSubagentTool{runner: r}
+	params := tool.Parameters()
+	props := params["properties"].(map[string]any)
+	role := props["role"].(map[string]any)
+	enums := role["enum"].([]string)
+	if !containsString(enums, "demo:reviewer") {
+		t.Fatalf("expected plugin role in schema enum, got %+v", enums)
 	}
 }
 
@@ -256,7 +295,7 @@ func TestSummarizeChildAgentEventProgress(t *testing.T) {
 }
 
 func TestSpawnSubagentSummaryTruncation(t *testing.T) {
-	factory := func(_ string, _ int) (llm.Provider, error) {
+	factory := func(_ string, _ string, _ int) (llm.Provider, error) {
 		return providerFunc(func(_ context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
 			out := make(chan llm.ProviderEvent, 1)
 			go func() {
@@ -280,8 +319,70 @@ func TestSpawnSubagentSummaryTruncation(t *testing.T) {
 	}
 }
 
+func TestSpawnSubagentUsesAgentEffort(t *testing.T) {
+	var gotEffort string
+	factory := func(_ string, effort string, _ int) (llm.Provider, error) {
+		gotEffort = effort
+		return providerFunc(func(_ context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
+			out := make(chan llm.ProviderEvent, 1)
+			go func() {
+				defer close(out)
+				out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{Content: "done"}}
+			}()
+			return out
+		}), nil
+	}
+	parent := core.NewToolRegistry([]core.Tool{testTool{name: "read_file", readOnly: true, capabilities: []string{CapabilityWorkspaceRead}}})
+	r := NewRunner(RunnerConfig{
+		ProviderFactory: factory,
+		ParentTools:     parent,
+		DefaultEffort:   "low",
+		AgentDefinitions: []AgentDefinition{
+			{Name: "plugin-reviewer", Effort: "high", Capabilities: []string{CapabilityWorkspaceRead}},
+		},
+	})
+	res, err := r.SpawnSubagent(context.Background(), SpawnSubagentRequest{Task: "inspect", Role: "plugin-reviewer"})
+	if err != nil {
+		t.Fatalf("SpawnSubagent: %v", err)
+	}
+	if gotEffort != "high" || res.Effort != "high" {
+		t.Fatalf("effort = provider %q response %q, want high", gotEffort, res.Effort)
+	}
+}
+
+func TestSpawnSubagentRequestEffortOverridesAgentEffort(t *testing.T) {
+	var gotEffort string
+	factory := func(_ string, effort string, _ int) (llm.Provider, error) {
+		gotEffort = effort
+		return providerFunc(func(_ context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
+			out := make(chan llm.ProviderEvent, 1)
+			go func() {
+				defer close(out)
+				out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{Content: "done"}}
+			}()
+			return out
+		}), nil
+	}
+	parent := core.NewToolRegistry([]core.Tool{testTool{name: "read_file", readOnly: true, capabilities: []string{CapabilityWorkspaceRead}}})
+	r := NewRunner(RunnerConfig{
+		ProviderFactory: factory,
+		ParentTools:     parent,
+		DefaultEffort:   "low",
+		AgentDefinitions: []AgentDefinition{
+			{Name: "plugin-reviewer", Effort: "high", Capabilities: []string{CapabilityWorkspaceRead}},
+		},
+	})
+	res, err := r.SpawnSubagent(context.Background(), SpawnSubagentRequest{Task: "inspect", Role: "plugin-reviewer", Effort: "max"})
+	if err != nil {
+		t.Fatalf("SpawnSubagent: %v", err)
+	}
+	if gotEffort != "max" || res.Effort != "max" {
+		t.Fatalf("effort = provider %q response %q, want max", gotEffort, res.Effort)
+	}
+}
+
 func TestSpawnSubagentCompletionProgressUsesFinalSummary(t *testing.T) {
-	factory := func(_ string, _ int) (llm.Provider, error) {
+	factory := func(_ string, _ string, _ int) (llm.Provider, error) {
 		return providerFunc(func(_ context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
 			out := make(chan llm.ProviderEvent, 1)
 			go func() {
@@ -325,7 +426,7 @@ func TestSpawnSubagentCapturesStructuredOutputToolResult(t *testing.T) {
 		"additionalProperties": false,
 	}
 	calls := 0
-	factory := func(_ string, _ int) (llm.Provider, error) {
+	factory := func(_ string, _ string, _ int) (llm.Provider, error) {
 		return providerFunc(func(_ context.Context, _ []core.Message, tools []core.Tool) <-chan llm.ProviderEvent {
 			out := make(chan llm.ProviderEvent, 1)
 			go func() {
@@ -387,7 +488,7 @@ func TestSpawnSubagentSchemaRequiresStructuredOutputToolCall(t *testing.T) {
 		"required":             []any{"answer"},
 		"additionalProperties": false,
 	}
-	factory := func(_ string, _ int) (llm.Provider, error) {
+	factory := func(_ string, _ string, _ int) (llm.Provider, error) {
 		return providerFunc(func(_ context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
 			out := make(chan llm.ProviderEvent, 1)
 			go func() {
@@ -420,7 +521,7 @@ func TestSpawnSubagentRepairsMissingStructuredOutputToolCall(t *testing.T) {
 	calls := 0
 	var repairPrompt string
 	var repairToolNames []string
-	factory := func(_ string, _ int) (llm.Provider, error) {
+	factory := func(_ string, _ string, _ int) (llm.Provider, error) {
 		return providerFunc(func(_ context.Context, messages []core.Message, tools []core.Tool) <-chan llm.ProviderEvent {
 			out := make(chan llm.ProviderEvent, 1)
 			go func() {
@@ -485,7 +586,7 @@ func TestSpawnSubagentSchemaReportsInvalidStructuredOutput(t *testing.T) {
 		"additionalProperties": false,
 	}
 	calls := 0
-	factory := func(_ string, _ int) (llm.Provider, error) {
+	factory := func(_ string, _ string, _ int) (llm.Provider, error) {
 		return providerFunc(func(_ context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
 			out := make(chan llm.ProviderEvent, 1)
 			go func() {
@@ -520,7 +621,7 @@ func TestSpawnSubagentSchemaReportsInvalidStructuredOutput(t *testing.T) {
 
 func TestSpawnSubagentReportsChildToolProgress(t *testing.T) {
 	calls := 0
-	factory := func(_ string, _ int) (llm.Provider, error) {
+	factory := func(_ string, _ string, _ int) (llm.Provider, error) {
 		return providerFunc(func(_ context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
 			out := make(chan llm.ProviderEvent, 1)
 			go func() {
@@ -570,7 +671,7 @@ func TestSpawnSubagentReportsChildToolProgress(t *testing.T) {
 
 func TestSpawnSubagentAllowsReadOnlyMCPToolsWithoutApprovalPath(t *testing.T) {
 	calls := 0
-	factory := func(_ string, _ int) (llm.Provider, error) {
+	factory := func(_ string, _ string, _ int) (llm.Provider, error) {
 		return providerFunc(func(_ context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
 			out := make(chan llm.ProviderEvent, 1)
 			go func() {
@@ -611,14 +712,196 @@ func TestSpawnSubagentAllowsReadOnlyMCPToolsWithoutApprovalPath(t *testing.T) {
 	if ran != 1 {
 		t.Fatalf("read-only MCP tool ran %d times, want 1", ran)
 	}
+	_ = res
+}
+
+func TestSpawnSubagentWriteCapabilityRequiresApproval(t *testing.T) {
+	calls := 0
+	factory := func(_ string, _ string, _ int) (llm.Provider, error) {
+		return providerFunc(func(_ context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
+			out := make(chan llm.ProviderEvent, 1)
+			go func() {
+				defer close(out)
+				calls++
+				if calls == 1 {
+					out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
+						FinishReason: core.FinishReasonToolUse,
+						ToolCalls: []core.ToolCall{{
+							ID:    "child-write",
+							Name:  "write",
+							Input: `{"file_path":"notes.txt","content":"mutated"}`,
+						}},
+					}}
+					return
+				}
+				out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
+					FinishReason: core.FinishReasonEndTurn,
+					Content:      "done",
+				}}
+			}()
+			return out
+		}), nil
+	}
+	ran := 0
+	parent := core.NewToolRegistry([]core.Tool{recordingTool{
+		testTool: testTool{name: "write", readOnly: false, capabilities: []string{CapabilityWorkspaceWrite}},
+		ran:      &ran,
+	}})
+	r := NewRunner(RunnerConfig{
+		ProviderFactory: factory,
+		ParentTools:     parent,
+		AgentDefinitions: []AgentDefinition{{
+			Name:         "writer",
+			SystemPrompt: "write when asked",
+			Capabilities: []string{CapabilityWorkspaceWrite},
+		}},
+	})
+	res, err := r.SpawnSubagent(context.Background(), SpawnSubagentRequest{
+		Task: "write notes",
+		Role: "writer",
+	})
+	if err != nil {
+		t.Fatalf("SpawnSubagent: %v", err)
+	}
+	if ran != 0 {
+		t.Fatalf("write tool ran without approval")
+	}
+	_ = res
+}
+
+func TestSpawnSubagentWriteCapabilityRunsAfterApproval(t *testing.T) {
+	calls := 0
+	factory := func(_ string, _ string, _ int) (llm.Provider, error) {
+		return providerFunc(func(_ context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
+			out := make(chan llm.ProviderEvent, 1)
+			go func() {
+				defer close(out)
+				calls++
+				if calls == 1 {
+					out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
+						FinishReason: core.FinishReasonToolUse,
+						ToolCalls: []core.ToolCall{{
+							ID:    "child-write",
+							Name:  "write",
+							Input: `{"file_path":"notes.txt","content":"mutated"}`,
+						}},
+					}}
+					return
+				}
+				out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
+					FinishReason: core.FinishReasonEndTurn,
+					Content:      "done",
+				}}
+			}()
+			return out
+		}), nil
+	}
+	ran := 0
+	approvals := 0
+	msgStore := store.NewInMemoryStore()
+	parent := core.NewToolRegistry([]core.Tool{recordingTool{
+		testTool: testTool{name: "write", readOnly: false, capabilities: []string{CapabilityWorkspaceWrite}},
+		ran:      &ran,
+	}})
+	r := NewRunner(RunnerConfig{
+		ProviderFactory: factory,
+		ParentTools:     parent,
+		MessageStore:    msgStore,
+		AgentDefinitions: []AgentDefinition{{
+			Name:         "writer",
+			SystemPrompt: "write when asked",
+			Capabilities: []string{CapabilityWorkspaceWrite},
+		}},
+		ApprovalFunc: func(req policy.ApprovalRequest) policy.ApprovalDecision {
+			approvals++
+			if req.ToolCall.Name != "write" || req.Code != "child_tool_approval_required" {
+				t.Fatalf("unexpected approval request: %+v", req)
+			}
+			return policy.ApprovalAllow
+		},
+	})
+	res, err := r.SpawnSubagent(context.Background(), SpawnSubagentRequest{
+		Task: "write notes",
+		Role: "writer",
+	})
+	if err != nil {
+		t.Fatalf("SpawnSubagent: %v", err)
+	}
+	if approvals != 1 {
+		msgs, _ := msgStore.List(context.Background(), res.SessionID)
+		t.Fatalf("approval requests = %d, ran = %d, provider calls = %d, messages = %+v, want 1 approval", approvals, ran, calls, msgs)
+	}
+	if ran != 1 {
+		t.Fatalf("write tool ran %d times, want 1", ran)
+	}
 	if res.Summary != "done" {
 		t.Fatalf("summary = %q", res.Summary)
 	}
 }
 
+func TestSpawnSubagentWriteCapabilityPreservesParentDenyPolicy(t *testing.T) {
+	calls := 0
+	factory := func(_ string, _ string, _ int) (llm.Provider, error) {
+		return providerFunc(func(_ context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
+			out := make(chan llm.ProviderEvent, 1)
+			go func() {
+				defer close(out)
+				calls++
+				if calls == 1 {
+					out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
+						FinishReason: core.FinishReasonToolUse,
+						ToolCalls: []core.ToolCall{{
+							ID:    "child-write",
+							Name:  "write",
+							Input: `{"file_path":"notes.txt","content":"mutated"}`,
+						}},
+					}}
+					return
+				}
+				out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
+					FinishReason: core.FinishReasonEndTurn,
+					Content:      "done",
+				}}
+			}()
+			return out
+		}), nil
+	}
+	ran := 0
+	approvals := 0
+	parent := core.NewToolRegistry([]core.Tool{recordingTool{
+		testTool: testTool{name: "write", readOnly: false, capabilities: []string{CapabilityWorkspaceWrite}},
+		ran:      &ran,
+	}})
+	r := NewRunner(RunnerConfig{
+		ProviderFactory: factory,
+		ParentTools:     parent,
+		ParentPolicy: policy.RulePolicy{Default: policy.PermissionAllow, Rules: []policy.PermissionRule{
+			{Permission: "edit", Pattern: "*", Action: policy.PermissionDeny},
+		}},
+		AgentDefinitions: []AgentDefinition{{
+			Name:         "writer",
+			SystemPrompt: "write when asked",
+			Capabilities: []string{CapabilityWorkspaceWrite},
+		}},
+		ApprovalFunc: func(policy.ApprovalRequest) policy.ApprovalDecision {
+			approvals++
+			return policy.ApprovalAllow
+		},
+	})
+	if _, err := r.SpawnSubagent(context.Background(), SpawnSubagentRequest{Task: "write notes", Role: "writer"}); err != nil {
+		t.Fatalf("SpawnSubagent: %v", err)
+	}
+	if approvals != 0 {
+		t.Fatalf("parent deny policy should block before approval, approvals=%d", approvals)
+	}
+	if ran != 0 {
+		t.Fatalf("write tool ran despite parent deny policy")
+	}
+}
+
 func TestSpawnSubagentInheritsAutoCompact(t *testing.T) {
 	var histories [][]core.Message
-	factory := func(_ string, _ int) (llm.Provider, error) {
+	factory := func(_ string, _ string, _ int) (llm.Provider, error) {
 		return providerFunc(func(_ context.Context, history []core.Message, tools []core.Tool) <-chan llm.ProviderEvent {
 			histories = append(histories, append([]core.Message(nil), history...))
 			out := make(chan llm.ProviderEvent, 1)
@@ -690,7 +973,7 @@ func TestSpawnSubagentInheritsAutoCompact(t *testing.T) {
 
 func TestSpawnSubagentDerivesAutoCompactWindowFromChildModel(t *testing.T) {
 	var histories [][]core.Message
-	factory := func(_ string, _ int) (llm.Provider, error) {
+	factory := func(_ string, _ string, _ int) (llm.Provider, error) {
 		return providerFunc(func(_ context.Context, history []core.Message, tools []core.Tool) <-chan llm.ProviderEvent {
 			histories = append(histories, append([]core.Message(nil), history...))
 			out := make(chan llm.ProviderEvent, 1)
@@ -758,7 +1041,7 @@ func TestSpawnSubagentDerivesAutoCompactWindowFromChildModel(t *testing.T) {
 }
 
 func TestSpawnSubagentPersistsDurableChildSessionAndMeta(t *testing.T) {
-	factory := func(_ string, _ int) (llm.Provider, error) {
+	factory := func(_ string, _ string, _ int) (llm.Provider, error) {
 		return providerFunc(func(_ context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
 			out := make(chan llm.ProviderEvent, 1)
 			go func() {
@@ -818,7 +1101,7 @@ func TestSpawnSubagentPersistsDurableChildSessionAndMeta(t *testing.T) {
 }
 
 func TestSpawnSubagentToolFailureIncludesChildSessionID(t *testing.T) {
-	factory := func(_ string, _ int) (llm.Provider, error) {
+	factory := func(_ string, _ string, _ int) (llm.Provider, error) {
 		return providerFunc(func(_ context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
 			out := make(chan llm.ProviderEvent, 1)
 			go func() {
@@ -954,6 +1237,15 @@ func (t testTool) ReadOnlyCheck(args map[string]any) bool {
 }
 func (t testTool) Run(_ context.Context, call core.ToolCall) (core.ToolResult, error) {
 	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"ok":true}`}, nil
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 // recordingTool wraps testTool to count how many times it actually executes,

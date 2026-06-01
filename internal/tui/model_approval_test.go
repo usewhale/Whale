@@ -56,6 +56,145 @@ func TestApprovalDecisionAppendsStructuredNotice(t *testing.T) {
 		t.Fatalf("unexpected notice metadata: %+v", got.Notice)
 	}
 }
+
+func TestApprovalDecisionPreservesPendingLiveRowsBeforeNotice(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.width = 120
+	m.height = 30
+	m.append("assistant", "I need to inspect the repository.")
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolCall, ToolCallID: "tool-1", ToolName: "list_dir", Text: "list_dir: ."}))
+	m = next.(model)
+
+	m.mode = modeApproval
+	m.approval.toolCallID = "tool-1"
+	m.approval.toolName = "list_dir"
+	m.approval.reason = "list_dir: ."
+	_ = m.handleApprovalKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolResult,
+		ToolCallID: "tool-1",
+		ToolName:   "list_dir",
+		Text:       `{"ok":true,"success":true,"code":"ok","summary":"tool completed","data":{"items":["internal/"]}}`,
+	}))
+	m = next.(model)
+
+	plain := xansi.Strip(strings.Join(tuirender.ChatLines(m.transcript, 120), "\n"))
+	assistantIx := strings.Index(plain, "I need to inspect the repository.")
+	toolIx := strings.Index(plain, "Explored")
+	approvalIx := strings.Index(plain, "Approved to use list_dir")
+	if assistantIx < 0 || toolIx < 0 || approvalIx < 0 {
+		t.Fatalf("expected assistant, tool result, and approval notice:\n%s", plain)
+	}
+	if !(assistantIx < toolIx && toolIx < approvalIx) {
+		t.Fatalf("live rows should stay before approval notice:\n%s", plain)
+	}
+}
+
+func TestApprovalDecisionStaysBeforeBackgroundWorkflowTerminalResult(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.width = 120
+	m.height = 30
+	raw := `{"ok":true,"success":true,"code":"ok","summary":"Review local changes","data":{"runId":"run-123","status":"async_launched","summary":"Review local changes"},"metadata":{"workflow_run_id":"run-123"}}`
+
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolCall, ToolCallID: "workflow-1", ToolName: "workflow", Text: `workflow: {"name":"review-local-changes"}`}))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolResult, ToolCallID: "workflow-1", ToolName: "workflow", Text: raw, Metadata: map[string]any{"workflow_run_id": "run-123"}}))
+	m = next.(model)
+
+	m.mode = modeApproval
+	m.approval.toolCallID = "tool-approval"
+	m.approval.toolName = "list_dir"
+	m.approval.reason = "list_dir: /tmp/external"
+	_ = m.handleApprovalKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind: protocol.EventWorkflowTerminal,
+		Text: "Workflow result",
+		LocalResult: &protocol.LocalResult{
+			Kind:      "workflow-terminal",
+			Title:     "Workflow run-123",
+			PlainText: "Workflow\n\nexecutiveSummary: review completed",
+		},
+	}))
+	m = next.(model)
+
+	messages := m.chatMessages()
+	approvalIx := -1
+	resultIx := -1
+	for i, msg := range messages {
+		if strings.Contains(msg.Text, "Approved to use list_dir") {
+			approvalIx = i
+		}
+		if strings.Contains(msg.Text, "executiveSummary") {
+			resultIx = i
+		}
+	}
+	if approvalIx < 0 || resultIx < 0 {
+		rendered := xansi.Strip(strings.Join(tuirender.ChatLines(messages, 120), "\n"))
+		t.Fatalf("expected approval notice and workflow result:\n%s", rendered)
+	}
+	if approvalIx > resultIx {
+		rendered := xansi.Strip(strings.Join(tuirender.ChatLines(messages, 120), "\n"))
+		t.Fatalf("approval notice should render before later workflow result:\n%s", rendered)
+	}
+}
+
+func TestWorkflowTerminalDoesNotCommitUnrelatedPendingToolCall(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 120
+	m.height = 30
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolCall, ToolCallID: "tool-1", ToolName: "list_dir", Text: "list_dir: ."}))
+	m = next.(model)
+
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind: protocol.EventWorkflowTerminal,
+		Text: "Workflow result",
+		LocalResult: &protocol.LocalResult{
+			Kind:      "workflow-terminal",
+			Title:     "Workflow run-123",
+			PlainText: "Workflow\n\nexecutiveSummary: review completed",
+		},
+	}))
+	m = next.(model)
+	if !m.hasPendingToolCalls() {
+		t.Fatal("workflow terminal should not clear unrelated pending tool call")
+	}
+	if len(m.transcript) != 0 {
+		t.Fatalf("workflow terminal should stay live while tool call is pending, got transcript: %+v", m.transcript)
+	}
+
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolResult,
+		ToolCallID: "tool-1",
+		ToolName:   "list_dir",
+		Text:       `{"ok":true,"success":true,"code":"ok","summary":"tool completed","data":{"items":["internal/"]}}`,
+	}))
+	m = next.(model)
+
+	messages := m.chatMessages()
+	plain := xansi.Strip(strings.Join(tuirender.ChatLines(messages, 120), "\n"))
+	toolIx := -1
+	resultIx := -1
+	for i, msg := range messages {
+		if strings.Contains(msg.Text, "Running list_dir") {
+			t.Fatalf("pending tool row should be updated, not left stale:\n%s", plain)
+		}
+		if strings.Contains(msg.Text, "Explored") {
+			toolIx = i
+		}
+		if strings.Contains(msg.Text, "executiveSummary") {
+			resultIx = i
+		}
+	}
+	if toolIx < 0 || resultIx < 0 {
+		t.Fatalf("expected completed tool row and workflow result:\n%s", plain)
+	}
+	if toolIx > resultIx {
+		t.Fatalf("tool row should keep its original position before interleaved workflow result:\n%s", plain)
+	}
+}
+
 func TestApprovalEscCancelsInsteadOfDenying(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.width = 80

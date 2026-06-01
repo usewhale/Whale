@@ -8,29 +8,32 @@ import (
 
 func (s *Service) DispatchProtocol(in protocol.Intent) {
 	s.Dispatch(Intent{
-		Kind:           serviceIntentKind(in.Kind),
-		Input:          in.Input,
-		HiddenInput:    in.HiddenInput,
-		ToolCallID:     in.ToolCallID,
-		UserInput:      coreUserInputResponse(in.UserInput),
-		SessionInput:   in.SessionInput,
-		MessageID:      in.MessageID,
-		Model:          in.Model,
-		Effort:         in.Effort,
-		Thinking:       in.Thinking,
-		ApprovalMode:   in.ApprovalMode,
-		ViewMode:       in.ViewMode,
-		SkillName:      in.SkillName,
-		SkillEnabled:   in.SkillEnabled,
-		PluginID:       in.PluginID,
-		PluginEnabled:  in.PluginEnabled,
-		SkillBinding:   appSkillBinding(in.SkillBinding),
-		WorktreeAction: in.WorktreeAction,
-		WorkflowRunID:  in.WorkflowRunID,
-		WorkflowName:   in.WorkflowName,
-		WorkflowArgs:   in.WorkflowArgs,
-		WorkflowResume: in.WorkflowResume,
-		WorkflowTrust:  in.WorkflowTrust,
+		Kind:              serviceIntentKind(in.Kind),
+		Input:             in.Input,
+		HiddenInput:       in.HiddenInput,
+		ToolCallID:        in.ToolCallID,
+		UserInput:         coreUserInputResponse(in.UserInput),
+		SessionInput:      in.SessionInput,
+		MessageID:         in.MessageID,
+		Model:             in.Model,
+		Effort:            in.Effort,
+		Thinking:          in.Thinking,
+		ApprovalMode:      in.ApprovalMode,
+		ViewMode:          in.ViewMode,
+		SkillName:         in.SkillName,
+		SkillEnabled:      in.SkillEnabled,
+		PluginID:          in.PluginID,
+		PluginEnabled:     in.PluginEnabled,
+		HookKey:           in.HookKey,
+		HookEnabled:       in.HookEnabled,
+		HooksReviewAction: in.HooksReviewAction,
+		SkillBinding:      appSkillBinding(in.SkillBinding),
+		WorktreeAction:    in.WorktreeAction,
+		WorkflowRunID:     in.WorkflowRunID,
+		WorkflowName:      in.WorkflowName,
+		WorkflowArgs:      in.WorkflowArgs,
+		WorkflowResume:    in.WorkflowResume,
+		WorkflowTrust:     in.WorkflowTrust,
 	})
 }
 
@@ -80,6 +83,16 @@ func serviceIntentKind(kind protocol.IntentKind) IntentKind {
 		return IntentSetSkillEnabled
 	case protocol.IntentSetPluginEnabled:
 		return IntentSetPluginEnabled
+	case protocol.IntentRequestHooksManage:
+		return IntentRequestHooksManage
+	case protocol.IntentSetHookEnabled:
+		return IntentSetHookEnabled
+	case protocol.IntentTrustHook:
+		return IntentTrustHook
+	case protocol.IntentTrustHooks:
+		return IntentTrustHooks
+	case protocol.IntentResolveHooksStartupReview:
+		return IntentResolveHooksStartupReview
 	case protocol.IntentWorktreeExitChoice:
 		return IntentWorktreeExitChoice
 	case protocol.IntentRequestWorkflowPanel:

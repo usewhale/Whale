@@ -86,6 +86,10 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 		return m.handleSkillsManagerKey(msg), false, true
 	case modePluginsManager:
 		return m.handlePluginsManagerKey(msg), false, true
+	case modeHooksManager:
+		return m.handleHooksManagerKey(msg), false, true
+	case modeHooksStartupReview:
+		return m.handleHooksStartupReviewKey(msg), false, true
 	case modeReviewMenu:
 		return m.handleReviewMenuKey(msg), false, true
 	case modeReviewBranchPicker, modeReviewCommitPicker, modeReviewPRPicker:

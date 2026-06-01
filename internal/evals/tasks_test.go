@@ -28,8 +28,22 @@ func TestTaskSearchReadEditFlow(t *testing.T) {
 				{
 					Steps: []StepSpec{
 						{ID: "search", ToolName: "search_files", Input: `{"path":".","pattern":"main.go","limit":20}`},
-						{ID: "read", ToolName: "read_file", Input: `{"file_path":"cmd/app/main.go","offset":0,"limit":20}`},
-						{ID: "edit", ToolName: "edit", Input: `{"file_path":"cmd/app/main.go","search":"old-value","replace":"new-value"}`},
+						{ID: "read", ToolName: "read_file", Input: `{"file_path":"cmd/app/main.go"}`},
+					},
+				},
+				{
+					Steps: []StepSpec{
+						{
+							ID:       "edit",
+							ToolName: "edit",
+							InputFunc: func(history []core.Message) (string, error) {
+								snapshotID, err := snapshotIDFromHistory(history, "read_file")
+								if err != nil {
+									return "", err
+								}
+								return fmt.Sprintf(`{"file_path":"cmd/app/main.go","snapshot_id":%q,"search":"old-value","replace":"new-value"}`, snapshotID), nil
+							},
+						},
 					},
 				},
 			},

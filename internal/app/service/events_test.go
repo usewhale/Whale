@@ -73,6 +73,28 @@ func TestCriticalEventsDeliverAfterDeltaBackpressure(t *testing.T) {
 	}
 }
 
+func TestHookLifecycleEventMapsStructuredSummary(t *testing.T) {
+	ev := hookLifecycleEvent(EventHookCompleted, &agent.HookEventInfo{
+		ID:         "hook-1",
+		Event:      agent.HookEventPermissionRequest,
+		Name:       "approval gate",
+		Source:     ".whale/config.toml",
+		Command:    "gate",
+		Decision:   agent.HookDecisionBlock,
+		Message:    "no",
+		DurationMS: 12,
+	})
+	if ev.Kind != EventHookCompleted || ev.Status != "blocked" || ev.Hook == nil {
+		t.Fatalf("unexpected hook event: %+v", ev)
+	}
+	if ev.Hook.ID != "hook-1" || ev.Hook.Event != "PermissionRequest" || ev.Hook.Status != "blocked" || ev.Hook.Decision != "block" {
+		t.Fatalf("unexpected hook payload: %+v", ev.Hook)
+	}
+	if !strings.Contains(ev.Text, "PermissionRequest hook blocked") || !strings.Contains(ev.Text, "no") {
+		t.Fatalf("unexpected hook text: %q", ev.Text)
+	}
+}
+
 func TestReviewMenuEventDeliversUnderBackpressure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -498,6 +520,107 @@ func TestSkillsCommandOpensMenuAndToggleUpdatesSuggestions(t *testing.T) {
 	}
 }
 
+func TestHooksCommandOpensManagerEvent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
+	work := t.TempDir()
+	t.Chdir(work)
+
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+
+	svc.Dispatch(Intent{Kind: IntentSubmitLocal, Input: "/hooks"})
+	ev := waitForServiceEvent(t, svc, EventHooksManagerUpdated)
+	if ev.Hooks == nil {
+		t.Fatalf("expected hooks manager payload, got %+v", ev)
+	}
+	if len(ev.Hooks.Events) == 0 {
+		t.Fatalf("expected lifecycle events in hooks manager payload, got %+v", ev.Hooks)
+	}
+}
+
+func TestHooksTrustSubcommandWorksViaLocalSubmit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
+	work := t.TempDir()
+	t.Chdir(work)
+	if err := os.MkdirAll(filepath.Join(work, ".whale"), 0o700); err != nil {
+		t.Fatalf("mkdir .whale: %v", err)
+	}
+	config := "[[hooks.SessionStart]]\ncommand = 'printf ran > hook-marker.txt'\ndescription = \"startup marker\"\n"
+	if err := os.WriteFile(filepath.Join(work, ".whale", "config.toml"), []byte(config), 0o600); err != nil {
+		t.Fatalf("write hook config: %v", err)
+	}
+
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventHooksStartupReviewRequested)
+
+	svc.Dispatch(Intent{Kind: IntentSubmitLocal, Input: "/hooks trust all"})
+	result := waitForServiceEvent(t, svc, EventLocalSubmitResult)
+	if !strings.Contains(result.Text, "trusted 1 hook") {
+		t.Fatalf("expected trust result, got %+v", result)
+	}
+	ev := waitForServiceEvent(t, svc, EventHooksManagerUpdated)
+	if ev.Hooks == nil || ev.Hooks.ReviewNeededCount != 0 {
+		t.Fatalf("expected trusted hooks manager payload, got %+v", ev.Hooks)
+	}
+}
+
+func TestHooksStartupReviewTrustAllRunsSessionStartHook(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
+	work := t.TempDir()
+	t.Chdir(work)
+	if err := os.MkdirAll(filepath.Join(work, ".whale"), 0o700); err != nil {
+		t.Fatalf("mkdir .whale: %v", err)
+	}
+	marker := filepath.Join(work, "session-start-hook.txt")
+	config := fmt.Sprintf("[[hooks.SessionStart]]\ncommand = 'printf ran > %q'\ndescription = \"startup marker\"\n", marker)
+	if err := os.WriteFile(filepath.Join(work, ".whale", "config.toml"), []byte(config), 0o600); err != nil {
+		t.Fatalf("write hook config: %v", err)
+	}
+
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+
+	ev := waitForServiceEvent(t, svc, EventHooksStartupReviewRequested)
+	if ev.Hooks == nil || ev.Hooks.ReviewNeededCount != 1 {
+		t.Fatalf("expected one startup hook needing review, got %+v", ev.Hooks)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("session-start hook ran before review was resolved, stat err=%v", err)
+	}
+
+	svc.Dispatch(Intent{Kind: IntentResolveHooksStartupReview, HooksReviewAction: "trust_all"})
+	ev = waitForServiceEvent(t, svc, EventHooksManagerUpdated)
+	if ev.Hooks == nil || ev.Hooks.ReviewNeededCount != 0 {
+		t.Fatalf("expected trusted hooks manager payload, got %+v", ev.Hooks)
+	}
+	waitForFileContent(t, marker, "ran")
+	svc.Dispatch(Intent{Kind: IntentResolveHooksStartupReview, HooksReviewAction: "continue"})
+	waitForFileContent(t, marker, "ran")
+}
+
 func hasServiceSkill(all []skills.SkillView, name, status string) bool {
 	for _, skill := range all {
 		if skill.Name != name {
@@ -506,6 +629,20 @@ func hasServiceSkill(all []skills.SkillView, name, status string) bool {
 		return status == "" || string(skill.Status) == status
 	}
 	return false
+}
+
+func waitForFileContent(t *testing.T, path, want string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		b, err := os.ReadFile(path)
+		if err == nil && string(b) == want {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	b, err := os.ReadFile(path)
+	t.Fatalf("timed out waiting for %s content %q, got %q err=%v", path, want, string(b), err)
 }
 
 func hasProtocolSkill(all []protocol.SkillView, name, status string) bool {
@@ -536,12 +673,18 @@ func TestPluginsCommandOpensManagerAndToggleUpdatesRuntime(t *testing.T) {
 
 	svc.Dispatch(Intent{Kind: IntentSubmit, Input: "/plugins"})
 	ev := waitForServiceEvent(t, svc, EventPluginsManagerUpdated)
+	if !ev.Open {
+		t.Fatalf("expected /plugins event to open manager")
+	}
 	if !hasProtocolPlugin(ev.Plugins, "memory", true) {
 		t.Fatalf("expected memory plugin enabled, got %+v", ev.Plugins)
 	}
 
 	svc.Dispatch(Intent{Kind: IntentSetPluginEnabled, PluginID: "memory", PluginEnabled: false})
 	ev = waitForServiceEvent(t, svc, EventPluginsManagerUpdated)
+	if ev.Open {
+		t.Fatalf("expected toggle refresh not to reopen manager")
+	}
 	if !hasProtocolPlugin(ev.Plugins, "memory", false) {
 		t.Fatalf("expected memory plugin disabled, got %+v", ev.Plugins)
 	}
@@ -549,12 +692,15 @@ func TestPluginsCommandOpensManagerAndToggleUpdatesRuntime(t *testing.T) {
 	if err != nil || !loaded {
 		t.Fatalf("load project local config loaded=%v err=%v", loaded, err)
 	}
-	if len(cfgFile.Plugins.Disabled) != 1 || cfgFile.Plugins.Disabled[0] != "memory" {
-		t.Fatalf("expected memory disabled in config, got %+v", cfgFile.Plugins.Disabled)
+	if cfgFile.Plugins["memory"].Enabled == nil || *cfgFile.Plugins["memory"].Enabled {
+		t.Fatalf("expected memory disabled in config, got %+v", cfgFile.Plugins)
 	}
 
 	svc.Dispatch(Intent{Kind: IntentSetPluginEnabled, PluginID: "memory", PluginEnabled: true})
 	ev = waitForServiceEvent(t, svc, EventPluginsManagerUpdated)
+	if ev.Open {
+		t.Fatalf("expected toggle refresh not to reopen manager")
+	}
 	if !hasProtocolPlugin(ev.Plugins, "memory", true) {
 		t.Fatalf("expected memory plugin enabled again, got %+v", ev.Plugins)
 	}
@@ -1503,6 +1649,14 @@ command = "printf '{\"updated_input\":\"$test-skill review this\"}'"
 
 	cfg := app.DefaultConfig()
 	cfg.DataDir = t.TempDir()
+	hooks, _, err := agent.LoadHooks(work, cfg.DataDir)
+	if err != nil {
+		t.Fatalf("load hooks: %v", err)
+	}
+	entries := agent.NewHookRunnerWithState(hooks, work, agent.HookStates{}).ListHooks()
+	if err := app.SaveHookStates(cfg.DataDir, work, agent.TrustHookStates(entries, nil, nil)); err != nil {
+		t.Fatalf("trust hooks: %v", err)
+	}
 	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
 	if err != nil {
 		t.Fatalf("New: %v", err)

@@ -117,13 +117,58 @@ func TestTaskEditMissingSearchReturnsSearchNotFound(t *testing.T) {
 			Turns: []TurnSpec{
 				{
 					Steps: []StepSpec{
-						{ID: "edit", ToolName: "edit", Input: `{"file_path":"notes.txt","search":"missing","replace":"new"}`, ExpectError: true},
+						{ID: "read", ToolName: "read_file", Input: `{"file_path":"notes.txt"}`},
+					},
+				},
+				{
+					Steps: []StepSpec{
+						{
+							ID:       "edit",
+							ToolName: "edit",
+							InputFunc: func(history []core.Message) (string, error) {
+								snapshotID, err := snapshotIDFromHistory(history, "read_file")
+								if err != nil {
+									return "", err
+								}
+								return fmt.Sprintf(`{"file_path":"notes.txt","snapshot_id":%q,"search":"missing","replace":"new"}`, snapshotID), nil
+							},
+							ExpectError: true,
+						},
 					},
 				},
 			},
 			Verify: func(run *Run) error {
 				step := run.FindStep("edit")
 				if step == nil || step.Envelope.Code != "search_not_found" {
+					return fmt.Errorf("unexpected edit error code: %s", step.Envelope.Code)
+				}
+				return nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("run task: %v", err)
+	}
+}
+
+func TestTaskEditWithoutReadReturnsReadRequired(t *testing.T) {
+	_, err := RunTask(context.Background(), TaskSpec{
+		ID:    "edit-read-required",
+		Suite: SuiteRegression,
+		Scenario: ScenarioSpec{
+			Setup: func(root string) error {
+				return os.WriteFile(filepath.Join(root, "notes.txt"), []byte("hello\n"), 0o644)
+			},
+			Turns: []TurnSpec{
+				{
+					Steps: []StepSpec{
+						{ID: "edit", ToolName: "edit", Input: `{"file_path":"notes.txt","search":"hello","replace":"new"}`, ExpectError: true},
+					},
+				},
+			},
+			Verify: func(run *Run) error {
+				step := run.FindStep("edit")
+				if step == nil || step.Envelope.Code != "read_required" {
 					return fmt.Errorf("unexpected edit error code: %s", step.Envelope.Code)
 				}
 				return nil
@@ -377,4 +422,27 @@ func TestTaskTodoRemoveInvalidPayloadReturnsInvalidTodoRemove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run task: %v", err)
 	}
+}
+
+func snapshotIDFromHistory(history []core.Message, toolName string) (string, error) {
+	for i := len(history) - 1; i >= 0; i-- {
+		for _, res := range history[i].ToolResults {
+			if res.Name != toolName {
+				continue
+			}
+			env, ok := core.ParseToolEnvelope(res.Content)
+			if !ok || !env.OK {
+				continue
+			}
+			payload, ok := env.Data["payload"].(map[string]any)
+			if !ok {
+				continue
+			}
+			snapshotID, ok := payload["snapshot_id"].(string)
+			if ok && strings.TrimSpace(snapshotID) != "" {
+				return snapshotID, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("snapshot_id not found in history for %s", toolName)
 }

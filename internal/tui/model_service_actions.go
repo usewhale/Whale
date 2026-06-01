@@ -9,13 +9,15 @@ import (
 type uiActionKind string
 
 const (
-	uiActionModelPicker     uiActionKind = "model_picker"
-	uiActionPermissionsMenu uiActionKind = "permissions_menu"
-	uiActionSkillsMenu      uiActionKind = "skills_menu"
-	uiActionSkillsManager   uiActionKind = "skills_manager"
-	uiActionPluginsManager  uiActionKind = "plugins_manager"
-	uiActionReviewMenu      uiActionKind = "review_menu"
-	uiActionClearScreen     uiActionKind = "clear_screen"
+	uiActionModelPicker        uiActionKind = "model_picker"
+	uiActionPermissionsMenu    uiActionKind = "permissions_menu"
+	uiActionSkillsMenu         uiActionKind = "skills_menu"
+	uiActionSkillsManager      uiActionKind = "skills_manager"
+	uiActionPluginsManager     uiActionKind = "plugins_manager"
+	uiActionHooksManager       uiActionKind = "hooks_manager"
+	uiActionHooksStartupReview uiActionKind = "hooks_startup_review"
+	uiActionReviewMenu         uiActionKind = "review_menu"
+	uiActionClearScreen        uiActionKind = "clear_screen"
 )
 
 type uiAction struct {
@@ -35,6 +37,10 @@ func uiActionFromServiceEvent(ev protocol.Event) (uiAction, bool) {
 		return uiAction{kind: uiActionSkillsManager, ev: ev}, true
 	case protocol.EventPluginsManagerUpdated:
 		return uiAction{kind: uiActionPluginsManager, ev: ev}, true
+	case protocol.EventHooksManagerUpdated:
+		return uiAction{kind: uiActionHooksManager, ev: ev}, true
+	case protocol.EventHooksStartupReviewRequested:
+		return uiAction{kind: uiActionHooksStartupReview, ev: ev}, true
 	case protocol.EventReviewRequested:
 		return uiAction{kind: uiActionReviewMenu, ev: ev}, true
 	case protocol.EventScreenClearRequested:
@@ -56,6 +62,10 @@ func (m *model) handleUIAction(action uiAction) (tea.Cmd, bool, bool) {
 		m.handleSkillsManagerEvent(action.ev)
 	case uiActionPluginsManager:
 		m.handlePluginsManagerEvent(action.ev)
+	case uiActionHooksManager:
+		m.handleHooksManagerEvent(action.ev)
+	case uiActionHooksStartupReview:
+		m.handleHooksStartupReviewEvent(action.ev)
 	case uiActionReviewMenu:
 		m.handleReviewMenuEvent(action.ev)
 	case uiActionClearScreen:

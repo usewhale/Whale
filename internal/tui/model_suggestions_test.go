@@ -158,24 +158,118 @@ func TestSlashStatsOptionSuggestionsUseFullCommandLabels(t *testing.T) {
 }
 func TestSlashCommandWithOptionsDrillsDownWhenSelected(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
-	m.input.SetValue("/mem")
+	m.input.SetValue("/sta")
 	m.updateSlashMatches()
-	selectSlashCommand(t, &m, "/memory ")
+	selectSlashCommand(t, &m, "/stats ")
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(model)
 	if len(*intents) != 0 {
-		t.Fatalf("selecting /memory should only show options, got intents %+v", *intents)
+		t.Fatalf("selecting /stats should only show options, got intents %+v", *intents)
 	}
-	if got := m.input.Value(); got != "/memory " {
-		t.Fatalf("expected /memory selection to add trailing space, got %q", got)
+	if got := m.input.Value(); got != "/stats " {
+		t.Fatalf("expected /stats selection to add trailing space, got %q", got)
 	}
 	if len(m.slash.matches) == 0 {
-		t.Fatal("expected /memory option suggestions after selection")
+		t.Fatal("expected /stats option suggestions after selection")
 	}
-	if rendered := m.renderSlashSuggestions(); !strings.Contains(rendered, "list") || !strings.Contains(rendered, "List remembered entries") {
-		t.Fatalf("expected /memory option list after selection, got:\n%s", rendered)
+	if rendered := m.renderSlashSuggestions(); !strings.Contains(rendered, "usage") || !strings.Contains(rendered, "Show token and cost usage") {
+		t.Fatalf("expected /stats option list after selection, got:\n%s", rendered)
 	}
 }
+
+func TestPluginSlashCommandsFollowEnabledPluginState(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind: protocol.EventSessionHydrated,
+		Plugins: []protocol.PluginStatus{{
+			Manifest: protocol.PluginManifest{ID: "memory", Name: "Memory"},
+			Enabled:  true,
+			Commands: []protocol.PluginCommand{{Name: "/memory", Usage: "/memory [list|path]", Description: "Manage memory entries"}},
+		}},
+	}))
+	m = next.(model)
+	m.input.SetValue("/mem")
+	m.updateSlashMatches()
+	selectSlashCommand(t, &m, "/memory ")
+
+	m.handleServiceEvent(protocol.Event{
+		Kind: protocol.EventPluginsManagerUpdated,
+		Plugins: []protocol.PluginStatus{{
+			Manifest: protocol.PluginManifest{ID: "memory", Name: "Memory"},
+			Enabled:  false,
+			Commands: []protocol.PluginCommand{{Name: "/memory", Usage: "/memory [list|path]", Description: "Manage memory entries"}},
+		}},
+	})
+	m.input.SetValue("/mem")
+	m.updateSlashMatches()
+	if len(m.slash.matches) != 0 {
+		t.Fatalf("disabled plugin command should disappear, got %+v", m.slash.matches)
+	}
+}
+
+func TestPluginTurnSlashCommandStartsNormalSubmit(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.handleServiceEvent(protocol.Event{
+		Kind: protocol.EventSessionHydrated,
+		Plugins: []protocol.PluginStatus{{
+			Manifest: protocol.PluginManifest{ID: "demo", Name: "Demo"},
+			Enabled:  true,
+			Commands: []protocol.PluginCommand{{Name: "/audit", Usage: "/audit [target]", Description: "Audit a target", Class: "turn"}},
+		}},
+	})
+	m.input.SetValue("/audit repo")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if len(*intents) != 1 {
+		t.Fatalf("expected one intent, got %+v", *intents)
+	}
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmit || got.Input != "/audit repo" {
+		t.Fatalf("plugin turn command should start a normal submit, got %+v", got)
+	}
+}
+
+func TestPluginReadOnlySlashCommandUsesLocalSubmit(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.handleServiceEvent(protocol.Event{
+		Kind: protocol.EventSessionHydrated,
+		Plugins: []protocol.PluginStatus{{
+			Manifest: protocol.PluginManifest{ID: "demo", Name: "Demo"},
+			Enabled:  true,
+			Commands: []protocol.PluginCommand{{Name: "/where", Usage: "/where", Description: "Show location", Class: "read_only"}},
+		}},
+	})
+	m.input.SetValue("/where")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if len(*intents) != 1 {
+		t.Fatalf("expected one intent, got %+v", *intents)
+	}
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmitLocal || got.Input != "/where" {
+		t.Fatalf("plugin read-only command should use local submit, got %+v", got)
+	}
+}
+
+func TestPluginMutatingTurnSlashCommandStartsNormalSubmit(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.handleServiceEvent(protocol.Event{
+		Kind: protocol.EventSessionHydrated,
+		Plugins: []protocol.PluginStatus{{
+			Manifest: protocol.PluginManifest{ID: "demo", Name: "Demo"},
+			Enabled:  true,
+			Commands: []protocol.PluginCommand{{Name: "/build", Usage: "/build", Description: "Run plugin build shell command", Class: "mutating", StartsTurn: true}},
+		}},
+	})
+	m.input.SetValue("/build")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if len(*intents) != 1 {
+		t.Fatalf("expected one intent, got %+v", *intents)
+	}
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmit || got.Input != "/build" {
+		t.Fatalf("plugin mutating turn command should start a normal submit, got %+v", got)
+	}
+}
+
 func TestSlashCommandWithOptionsAndAutoRunStillExecutesBareCommand(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.input.SetValue("/rev")

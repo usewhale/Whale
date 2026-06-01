@@ -181,6 +181,8 @@ func TestClassifySubmitSlashCommands(t *testing.T) {
 		{line: "/stats profile", want: appcommands.SubmitLocalReadOnly},
 		{line: "/stats all", want: appcommands.SubmitLocalReadOnly},
 		{line: "/mcp", want: appcommands.SubmitLocalReadOnly},
+		{line: "/hooks", want: appcommands.SubmitLocalReadOnly},
+		{line: "/hooks trust all", want: appcommands.SubmitLocalMutating},
 		{line: "/feedback", want: appcommands.SubmitLocalReadOnly},
 		{line: "/help", want: appcommands.SubmitLocalReadOnly},
 		{line: "/copy", want: appcommands.SubmitLocalReadOnly},
@@ -234,6 +236,8 @@ func TestClassifySubmitSlashCommands(t *testing.T) {
 		{line: "/new a b", want: appcommands.SubmitUsageError},
 		{line: "/fork a b", want: appcommands.SubmitUsageError},
 		{line: "/stats bad", want: appcommands.SubmitUsageError},
+		{line: "/hooks trust", want: appcommands.SubmitUsageError},
+		{line: "/hooks bad", want: appcommands.SubmitUsageError},
 		{line: "/feedback now", want: appcommands.SubmitUsageError},
 		{line: "/help now", want: appcommands.SubmitUsageError},
 		{line: "/copy 0", want: appcommands.SubmitUsageError},
@@ -1298,7 +1302,7 @@ func TestBuildStatusLocalResultIncludesStructuredFields(t *testing.T) {
 	if result == nil || result.Kind != "status" || result.Title != "Status" {
 		t.Fatalf("unexpected status local result: %+v", result)
 	}
-	for _, want := range []string{"Session", "Mode", "Permissions", "Model", "Effort", "Thinking", "Context window", "Usage", "Budget limit"} {
+	for _, want := range []string{"Session", "Mode", "Auto-accept", "Model", "Effort", "Thinking", "Context window", "Usage", "Budget limit"} {
 		if !localResultHasField(result, want) {
 			t.Fatalf("expected local result field %q, got %+v", want, result.Fields)
 		}
@@ -2728,7 +2732,7 @@ func TestHandleSlashReviewBuildsHiddenPrompt(t *testing.T) {
 	if !handled || out != "" || shouldExit || clearScreen {
 		t.Fatalf("unexpected /review flags handled=%v out=%q shouldExit=%v clearScreen=%v", handled, out, shouldExit, clearScreen)
 	}
-	for _, want := range []string{"You are an expert code reviewer", "Target: local changes", "git diff --cached", "git diff", "inspect the contents of each relevant untracked file", "git symbolic-ref --short refs/remotes/origin/HEAD", "Avoid shell pipelines, redirects", "Do not prefix commands with cd", "If a local git diff output is truncated", "git diff --stat", "git diff --name-only", "Start with findings"} {
+	for _, want := range []string{"You are an expert code reviewer", "Target: local changes", "git diff --cached", "git diff", "inspect the contents of each relevant untracked file", "git symbolic-ref --short refs/remotes/origin/HEAD", "Avoid shell pipelines, redirects", "Do not fix findings, edit files, create commits, push branches, or open/update pull requests", "do not infer that review findings should be fixed first", "Do not prefix commands with cd", "If a local git diff output is truncated", "git diff --stat", "git diff --name-only", "Start with findings"} {
 		if !strings.Contains(synthetic, want) {
 			t.Fatalf("review prompt missing %q:\n%s", want, synthetic)
 		}

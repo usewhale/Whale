@@ -129,6 +129,35 @@ func TestToolResultShowsDiffMetadata(t *testing.T) {
 		t.Fatalf("expected /diff content from metadata:\n%s", got)
 	}
 }
+
+func TestToolResultFailedEditShowsFailedVerb(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 24}
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolCall,
+		ToolCallID: "tc-edit-fail",
+		ToolName:   "edit",
+		Text:       `edit: a.txt`,
+	}))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolResult,
+		ToolCallID: "tc-edit-fail",
+		ToolName:   "edit",
+		Text:       `{"success":false,"code":"search_not_found","message":"search text not found"}`,
+	}))
+	m = next.(model)
+	plain := xansi.Strip(strings.Join(tuirender.ChatLines(m.transcript, 100), "\n"))
+	if !strings.Contains(plain, "Edit failed a.txt") {
+		t.Fatalf("expected failed edit title in transcript:\n%s", plain)
+	}
+	if strings.Contains(plain, "Edited a.txt") {
+		t.Fatalf("failed edit should not use successful verb:\n%s", plain)
+	}
+	if !strings.Contains(plain, "search text not found") {
+		t.Fatalf("expected failure detail in transcript:\n%s", plain)
+	}
+}
+
 func TestToolResultShowsLargeTranslationDiffTailInChat(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 120

@@ -7,7 +7,7 @@ import (
 )
 
 func doctorCheckPlugins(ctx context.Context, cfg Config, workspaceRoot string) []DoctorCheck {
-	mgr := plugins.NewManager(plugins.Context{DataDir: cfg.DataDir, WorkspaceRoot: workspaceRoot}, cfg.PluginsDisabled)
+	mgr := plugins.NewManager(plugins.Context{DataDir: cfg.DataDir, WorkspaceRoot: workspaceRoot}, cfg.Plugins)
 	var checks []DoctorCheck
 	statuses := mgr.Statuses()
 	enabled := 0

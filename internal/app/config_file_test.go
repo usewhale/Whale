@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/usewhale/whale/internal/plugins"
 	"github.com/usewhale/whale/internal/policy"
 )
 
@@ -154,7 +155,7 @@ func TestConfigFileSupportsPlugins(t *testing.T) {
 	dir := t.TempDir()
 	path := GlobalConfigPath(dir)
 	cfg := FileConfig{
-		Plugins: FilePluginsConfig{Disabled: []string{"memory"}},
+		Plugins: FilePluginsConfig{"memory": {Enabled: boolPtr(false)}},
 	}
 	if err := SaveConfigFile(path, cfg); err != nil {
 		t.Fatalf("SaveConfigFile: %v", err)
@@ -166,14 +167,56 @@ func TestConfigFileSupportsPlugins(t *testing.T) {
 	if !ok {
 		t.Fatal("expected config file")
 	}
-	if len(loaded.Plugins.Disabled) != 1 || loaded.Plugins.Disabled[0] != "memory" {
+	if loaded.Plugins["memory"].Enabled == nil || *loaded.Plugins["memory"].Enabled {
 		t.Fatalf("plugins config not loaded: %+v", loaded.Plugins)
 	}
 
 	appCfg := DefaultConfig()
 	ApplyFileConfig(&appCfg, loaded)
-	if len(appCfg.PluginsDisabled) != 1 || appCfg.PluginsDisabled[0] != "memory" {
-		t.Fatalf("plugins config not applied: %+v", appCfg.PluginsDisabled)
+	if appCfg.Plugins["memory"].Enabled == nil || *appCfg.Plugins["memory"].Enabled {
+		t.Fatalf("plugins config not applied: %+v", appCfg.Plugins)
+	}
+}
+
+func TestConfigFileSupportsPluginMCPServerPolicy(t *testing.T) {
+	dir := t.TempDir()
+	path := GlobalConfigPath(dir)
+	cfg := FileConfig{
+		Plugins: FilePluginsConfig{
+			"demo-plugin": {
+				Enabled: boolPtr(true),
+				MCPServers: map[string]plugins.MCPServerConfig{
+					"Search_Server": {
+						Enabled:       boolPtr(false),
+						DisabledTools: []string{"write_file"},
+					},
+				},
+			},
+		},
+	}
+	if err := SaveConfigFile(path, cfg); err != nil {
+		t.Fatalf("SaveConfigFile: %v", err)
+	}
+	loaded, ok, err := LoadConfigFile(path)
+	if err != nil {
+		t.Fatalf("LoadConfigFile: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected config file")
+	}
+	appCfg := loaded.Plugins.RuntimeConfig()
+	pluginCfg := appCfg["demo-plugin"]
+	if pluginCfg.Enabled == nil || !*pluginCfg.Enabled {
+		t.Fatalf("plugin enabled policy not loaded: %+v", pluginCfg)
+	}
+	serverCfg := pluginCfg.MCPServers["search-server"]
+	if serverCfg.Enabled == nil || *serverCfg.Enabled || !containsString(serverCfg.DisabledTools, "write_file") {
+		t.Fatalf("plugin MCP policy not loaded: %+v", pluginCfg.MCPServers)
+	}
+	fileCfg := FilePluginsFromRuntime(appCfg)
+	serverCfg = fileCfg["demo-plugin"].MCPServers["search-server"]
+	if serverCfg.Enabled == nil || *serverCfg.Enabled || !containsString(serverCfg.DisabledTools, "write_file") {
+		t.Fatalf("plugin MCP policy not round-tripped: %+v", fileCfg)
 	}
 }
 
@@ -505,12 +548,20 @@ func TestApplyLoadedConfigLocalEnabledOverridesSharedDisabled(t *testing.T) {
 	cfg := Config{}
 	err := ApplyLoadedConfig(&cfg, LoadedConfig{
 		Project: FileConfig{
-			Skills:  FileSkillsConfig{Disabled: []string{"review-skill", "keep-skill"}},
-			Plugins: FilePluginsConfig{Disabled: []string{"memory", "other-plugin"}},
+			Skills: FileSkillsConfig{Disabled: []string{"review-skill", "keep-skill"}},
+			Plugins: FilePluginsConfig{
+				"memory": {Enabled: boolPtr(false)},
+				"other-plugin": {
+					Enabled: boolPtr(false),
+					MCPServers: map[string]plugins.MCPServerConfig{
+						"Search_Server": {Enabled: boolPtr(false), DisabledTools: []string{"write_file"}},
+					},
+				},
+			},
 		},
 		ProjectLocal: FileConfig{
 			Skills:  FileSkillsConfig{Enabled: []string{"review-skill"}},
-			Plugins: FilePluginsConfig{Enabled: []string{"memory"}},
+			Plugins: FilePluginsConfig{"memory": {Enabled: boolPtr(true)}},
 		},
 	})
 	if err != nil {
@@ -519,8 +570,43 @@ func TestApplyLoadedConfigLocalEnabledOverridesSharedDisabled(t *testing.T) {
 	if containsString(cfg.SkillsDisabled, "review-skill") || !containsString(cfg.SkillsDisabled, "keep-skill") {
 		t.Fatalf("skills disabled override mismatch: %+v", cfg.SkillsDisabled)
 	}
-	if containsString(cfg.PluginsDisabled, "memory") || !containsString(cfg.PluginsDisabled, "other-plugin") {
-		t.Fatalf("plugins disabled override mismatch: %+v", cfg.PluginsDisabled)
+	if cfg.Plugins["memory"].Enabled == nil || !*cfg.Plugins["memory"].Enabled || cfg.Plugins["other-plugin"].Enabled == nil || *cfg.Plugins["other-plugin"].Enabled {
+		t.Fatalf("plugins override mismatch: %+v", cfg.Plugins)
+	}
+	serverCfg := cfg.Plugins["other-plugin"].MCPServers["search-server"]
+	if serverCfg.Enabled == nil || *serverCfg.Enabled || !containsString(serverCfg.DisabledTools, "write_file") {
+		t.Fatalf("plugins MCP config should be preserved across layers: %+v", cfg.Plugins)
+	}
+}
+
+func TestApplyLoadedConfigPluginMCPDisabledToolsOverrideByLayer(t *testing.T) {
+	cfg := Config{}
+	err := ApplyLoadedConfig(&cfg, LoadedConfig{
+		Project: FileConfig{
+			Plugins: FilePluginsConfig{
+				"demo-plugin": {
+					MCPServers: map[string]plugins.MCPServerConfig{
+						"search": {DisabledTools: []string{"tool_a"}},
+					},
+				},
+			},
+		},
+		ProjectLocal: FileConfig{
+			Plugins: FilePluginsConfig{
+				"demo-plugin": {
+					MCPServers: map[string]plugins.MCPServerConfig{
+						"search": {DisabledTools: []string{"tool_b"}},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ApplyLoadedConfig: %v", err)
+	}
+	got := cfg.Plugins["demo-plugin"].MCPServers["search"].DisabledTools
+	if len(got) != 1 || got[0] != "tool_b" {
+		t.Fatalf("disabled_tools should be replaced by the higher-priority layer, got %+v", got)
 	}
 }
 
@@ -575,6 +661,32 @@ func TestLoadConfigFileRejectsRemovedPermissionKeys(t *testing.T) {
 			t.Fatalf("config should not load when a removed key is present:\n%s", body)
 		}
 		if !strings.Contains(err.Error(), "removed permission key") {
+			t.Fatalf("unexpected error %v for config:\n%s", err, body)
+		}
+	}
+}
+
+func TestLoadConfigFileRejectsRemovedPluginListKeys(t *testing.T) {
+	for _, body := range []string{
+		"[plugins]\nenabled = [\"memory\"]\n",
+		"[plugins]\ndisabled = [\"memory\"]\n",
+	} {
+		dir := t.TempDir()
+		path := GlobalConfigPath(dir)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatalf("write config: %v", err)
+		}
+		_, ok, err := LoadConfigFile(path)
+		if err == nil {
+			t.Fatalf("expected removed plugin key error for config:\n%s", body)
+		}
+		if ok {
+			t.Fatalf("config should not load when a removed plugin key is present:\n%s", body)
+		}
+		if !strings.Contains(err.Error(), "removed config key") || !strings.Contains(err.Error(), "[plugins.<id>] enabled") {
 			t.Fatalf("unexpected error %v for config:\n%s", err, body)
 		}
 	}

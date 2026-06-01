@@ -12,6 +12,15 @@ import (
 func (s *Service) awaitApproval(req policy.ApprovalRequest) policy.ApprovalDecision {
 	toolCallID := req.ToolCall.ID
 	keys := policy.ApprovalRequestKeys(req)
+	if blocked, out := s.app.RunPermissionRequestHook(req, s.hookObserver()); blocked {
+		if out != "" {
+			s.emit(Event{Kind: EventInfo, Text: out})
+		}
+		s.recordApprovalPromptEvent(req, "approval_prompt_hook_blocked", keys)
+		return policy.ApprovalDeny
+	} else if out != "" {
+		s.emit(Event{Kind: EventInfo, Text: out})
+	}
 	s.interactionMu.Lock()
 	if s.shutdownRequested {
 		s.interactionMu.Unlock()

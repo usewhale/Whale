@@ -74,9 +74,10 @@ func TestWindowsEditFilePreservesGB18030Bytes(t *testing.T) {
 	}
 
 	res, err := ts.editFile(context.Background(), tc("edit_file", map[string]any{
-		"file_path": "gbk.txt",
-		"search":    "OLD",
-		"replace":   "NEW",
+		"file_path":   "gbk.txt",
+		"snapshot_id": readFileSnapshotID(t, ts, "gbk.txt"),
+		"search":      "OLD",
+		"replace":     "NEW",
 	}))
 	if err != nil || res.IsError {
 		t.Fatalf("edit_file failed: err=%v res=%+v", err, res)
@@ -111,9 +112,10 @@ func TestWindowsEditFileMatchesVisibleGB18030Text(t *testing.T) {
 	}
 
 	res, err := ts.editFile(context.Background(), tc("edit_file", map[string]any{
-		"file_path": "gbk.txt",
-		"search":    "中文内容",
-		"replace":   "中文结果",
+		"file_path":   "gbk.txt",
+		"snapshot_id": readFileSnapshotID(t, ts, "gbk.txt"),
+		"search":      "中文内容",
+		"replace":     "中文结果",
 	}))
 	if err != nil || res.IsError {
 		t.Fatalf("edit_file failed: err=%v res=%+v", err, res)
@@ -148,9 +150,10 @@ func TestWindowsEditFilePreservesNonChineseLegacyBytes(t *testing.T) {
 	}
 
 	res, err := ts.editFile(context.Background(), tc("edit_file", map[string]any{
-		"file_path": "shiftjis.txt",
-		"search":    "OLD",
-		"replace":   "NEW",
+		"file_path":   "shiftjis.txt",
+		"snapshot_id": readFileSnapshotID(t, ts, "shiftjis.txt"),
+		"search":      "OLD",
+		"replace":     "NEW",
 	}))
 	if err != nil || res.IsError {
 		t.Fatalf("edit_file failed: err=%v res=%+v", err, res)

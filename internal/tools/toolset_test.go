@@ -50,9 +50,10 @@ func TestViewWriteEdit(t *testing.T) {
 	}
 
 	editRes, err := ts.editFile(context.Background(), tc("edit", map[string]any{
-		"file_path": "a.txt",
-		"search":    "world",
-		"replace":   "whale",
+		"file_path":   "a.txt",
+		"snapshot_id": readFileSnapshotID(t, ts, "a.txt"),
+		"search":      "world",
+		"replace":     "whale",
 	}))
 	if err != nil || editRes.IsError {
 		t.Fatalf("edit failed: err=%v res=%+v", err, editRes)
@@ -117,6 +118,151 @@ func TestReadFileStripsUTF8BOMFromVisibleContent(t *testing.T) {
 	}
 	if strings.Contains(content, "\ufeff") {
 		t.Fatalf("content still contains BOM: %q", content)
+	}
+}
+
+func TestEditFileRequiresFullReadSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("alpha\nbeta\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.editFile(context.Background(), tc("edit", map[string]any{
+		"file_path": "a.txt",
+		"search":    "beta",
+		"replace":   "whale",
+	}))
+	if err != nil {
+		t.Fatalf("edit dispatch error: %v", err)
+	}
+	if got := toolErrorCode(t, res); got != "read_required" {
+		t.Fatalf("code = %q, want read_required; content=%s", got, res.Content)
+	}
+
+	rangeRes, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
+		"file_path": "a.txt",
+		"offset":    0,
+		"limit":     1,
+	}))
+	if err != nil || rangeRes.IsError {
+		t.Fatalf("range read failed: err=%v res=%+v", err, rangeRes)
+	}
+	payload := readFileData(t, rangeRes)["payload"].(map[string]any)
+	if _, ok := payload["snapshot_id"]; ok {
+		t.Fatalf("range read should not return snapshot_id: %#v", payload)
+	}
+}
+
+func TestEditFileUsesFullReadSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("alpha\nbeta\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.editFile(context.Background(), tc("edit", map[string]any{
+		"file_path":   "a.txt",
+		"snapshot_id": readFileSnapshotID(t, ts, "a.txt"),
+		"search":      "beta",
+		"replace":     "whale",
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("edit failed: err=%v res=%+v", err, res)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	if string(got) != "alpha\nwhale\n" {
+		t.Fatalf("content = %q, want edited content", string(got))
+	}
+}
+
+func TestEditFileRejectsStaleSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("alpha\nbeta\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	snapshotID := readFileSnapshotID(t, ts, "a.txt")
+	if err := os.WriteFile(path, []byte("external\nbeta\n"), 0o644); err != nil {
+		t.Fatalf("external write: %v", err)
+	}
+
+	res, err := ts.editFile(context.Background(), tc("edit", map[string]any{
+		"file_path":   "a.txt",
+		"snapshot_id": snapshotID,
+		"search":      "beta",
+		"replace":     "whale",
+	}))
+	if err != nil {
+		t.Fatalf("edit dispatch error: %v", err)
+	}
+	if got := toolErrorCode(t, res); got != "stale_read" {
+		t.Fatalf("code = %q, want stale_read; content=%s", got, res.Content)
+	}
+}
+
+func TestEditFileRejectsSnapshotPathMismatch(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("alpha\n"), 0o644); err != nil {
+		t.Fatalf("write fixture a: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b.txt"), []byte("beta\n"), 0o644); err != nil {
+		t.Fatalf("write fixture b: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.editFile(context.Background(), tc("edit", map[string]any{
+		"file_path":   "b.txt",
+		"snapshot_id": readFileSnapshotID(t, ts, "a.txt"),
+		"search":      "beta",
+		"replace":     "whale",
+	}))
+	if err != nil {
+		t.Fatalf("edit dispatch error: %v", err)
+	}
+	if got := toolErrorCode(t, res); got != "snapshot_mismatch" {
+		t.Fatalf("code = %q, want snapshot_mismatch; content=%s", got, res.Content)
+	}
+}
+
+func TestEditFileValidSnapshotStillReportsMissingSearch(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("alpha\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.editFile(context.Background(), tc("edit", map[string]any{
+		"file_path":   "a.txt",
+		"snapshot_id": readFileSnapshotID(t, ts, "a.txt"),
+		"search":      "missing",
+		"replace":     "whale",
+	}))
+	if err != nil {
+		t.Fatalf("edit dispatch error: %v", err)
+	}
+	if got := toolErrorCode(t, res); got != "search_not_found" {
+		t.Fatalf("code = %q, want search_not_found; content=%s", got, res.Content)
 	}
 }
 
@@ -404,9 +550,10 @@ func TestEditFileMatchesLFSearchAndPreservesCRLF(t *testing.T) {
 	}
 
 	res, err := ts.editFile(context.Background(), tc("edit", map[string]any{
-		"file_path": "a.txt",
-		"search":    "alpha\nbeta",
-		"replace":   "alpha\nwhale",
+		"file_path":   "a.txt",
+		"snapshot_id": readFileSnapshotID(t, ts, "a.txt"),
+		"search":      "alpha\nbeta",
+		"replace":     "alpha\nwhale",
 	}))
 	if err != nil || res.IsError {
 		t.Fatalf("edit failed: err=%v res=%+v", err, res)
@@ -432,9 +579,10 @@ func TestEditFileRepairsJSONEscapedControlCharacters(t *testing.T) {
 	}
 
 	res, err := ts.editFile(context.Background(), tc("edit", map[string]any{
-		"file_path": "a.txt",
-		"search":    `\tbody := string(raw)\n\tcontent := body`,
-		"replace":   `\tbody := string(raw)\n\ttext := htmlToText(body)\n\tcontent := text`,
+		"file_path":   "a.txt",
+		"snapshot_id": readFileSnapshotID(t, ts, "a.txt"),
+		"search":      `\tbody := string(raw)\n\tcontent := body`,
+		"replace":     `\tbody := string(raw)\n\ttext := htmlToText(body)\n\tcontent := text`,
 	}))
 	if err != nil || res.IsError {
 		t.Fatalf("edit failed: err=%v res=%+v", err, res)
@@ -472,9 +620,10 @@ func TestEditFileRejectsAmbiguousJSONEscapedRepair(t *testing.T) {
 	}
 
 	res, err := ts.editFile(context.Background(), tc("edit", map[string]any{
-		"file_path": "a.txt",
-		"search":    `alpha\nbeta`,
-		"replace":   `alpha\nwhale`,
+		"file_path":   "a.txt",
+		"snapshot_id": readFileSnapshotID(t, ts, "a.txt"),
+		"search":      `alpha\nbeta`,
+		"replace":     `alpha\nwhale`,
 	}))
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
@@ -496,9 +645,10 @@ func TestEditFileMatchesFirstLineAfterUTF8BOMAndPreservesBOM(t *testing.T) {
 	}
 
 	res, err := ts.editFile(context.Background(), tc("edit", map[string]any{
-		"file_path": "a.txt",
-		"search":    "SIF LOCAL:1 > 0",
-		"replace":   "SIF LOCAL:1 > 1",
+		"file_path":   "a.txt",
+		"snapshot_id": readFileSnapshotID(t, ts, "a.txt"),
+		"search":      "SIF LOCAL:1 > 0",
+		"replace":     "SIF LOCAL:1 > 1",
 	}))
 	if err != nil || res.IsError {
 		t.Fatalf("edit failed: err=%v res=%+v", err, res)
@@ -525,9 +675,10 @@ func TestEditFilePreservesMixedLineEndings(t *testing.T) {
 	}
 
 	res, err := ts.editFile(context.Background(), tc("edit", map[string]any{
-		"file_path": "a.txt",
-		"search":    "beta\ngamma",
-		"replace":   "whale\ngamma",
+		"file_path":   "a.txt",
+		"snapshot_id": readFileSnapshotID(t, ts, "a.txt"),
+		"search":      "beta\ngamma",
+		"replace":     "whale\ngamma",
 	}))
 	if err != nil || res.IsError {
 		t.Fatalf("edit failed: err=%v res=%+v", err, res)
@@ -553,9 +704,10 @@ func TestEditFileDuplicateReplacementKeepsMixedLineEndings(t *testing.T) {
 	}
 
 	res, err := ts.editFile(context.Background(), tc("edit", map[string]any{
-		"file_path": "a.txt",
-		"search":    "b",
-		"replace":   "c",
+		"file_path":   "a.txt",
+		"snapshot_id": readFileSnapshotID(t, ts, "a.txt"),
+		"search":      "b",
+		"replace":     "c",
 	}))
 	if err != nil || res.IsError {
 		t.Fatalf("edit failed: err=%v res=%+v", err, res)
@@ -597,9 +749,10 @@ func TestEditFileConcurrentConflictDoesNotLoseUpdate(t *testing.T) {
 		<-release
 	}
 
+	snapshotID := readFileSnapshotID(t, ts, "a.txt")
 	calls := []core.ToolCall{
-		tc("edit", map[string]any{"file_path": "a.txt", "search": "alpha", "replace": "ALPHA"}),
-		tc("edit", map[string]any{"file_path": "a.txt", "search": "beta", "replace": "BETA"}),
+		tc("edit", map[string]any{"file_path": "a.txt", "snapshot_id": snapshotID, "search": "alpha", "replace": "ALPHA"}),
+		tc("edit", map[string]any{"file_path": "a.txt", "snapshot_id": snapshotID, "search": "beta", "replace": "BETA"}),
 	}
 	results := make([]core.ToolResult, len(calls))
 	errs := make([]error, len(calls))
@@ -669,9 +822,10 @@ func TestEditFileDetectsExternalChangeBeforeWrite(t *testing.T) {
 	}
 
 	res, err := ts.editFile(context.Background(), tc("edit", map[string]any{
-		"file_path": "a.txt",
-		"search":    "alpha",
-		"replace":   "whale",
+		"file_path":   "a.txt",
+		"snapshot_id": readFileSnapshotID(t, ts, "a.txt"),
+		"search":      "alpha",
+		"replace":     "whale",
 	}))
 	if err != nil {
 		t.Fatalf("edit returned dispatch error: %v", err)
@@ -1432,9 +1586,10 @@ func TestWriteAndEditReturnDiffMetadata(t *testing.T) {
 	}
 
 	res, err := ts.editFile(context.Background(), tc("edit", map[string]any{
-		"file_path": "a.txt",
-		"search":    "world",
-		"replace":   "whale",
+		"file_path":   "a.txt",
+		"snapshot_id": readFileSnapshotID(t, ts, "a.txt"),
+		"search":      "world",
+		"replace":     "whale",
 	}))
 	if err != nil || res.IsError {
 		t.Fatalf("edit failed: err=%v res=%+v", err, res)
@@ -3149,6 +3304,25 @@ func readFileContent(t *testing.T, data map[string]any) string {
 		t.Fatalf("missing content in %#v", payload)
 	}
 	return content
+}
+
+func readFileSnapshotID(t *testing.T, ts *Toolset, path string) string {
+	t.Helper()
+	res, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
+		"file_path": path,
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
+	}
+	payload, ok := readFileData(t, res)["payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing payload in read_file result: %s", res.Content)
+	}
+	snapshotID, ok := payload["snapshot_id"].(string)
+	if !ok || strings.TrimSpace(snapshotID) == "" {
+		t.Fatalf("missing snapshot_id in read_file payload: %#v", payload)
+	}
+	return snapshotID
 }
 
 func grepMatches(t *testing.T, data map[string]any) []any {

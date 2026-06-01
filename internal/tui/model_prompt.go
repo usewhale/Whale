@@ -34,7 +34,7 @@ func (m *model) submitPromptWithBinding(value string, binding *protocol.SkillBin
 	if value == "" {
 		return nil
 	}
-	submit := appcommands.ClassifySubmit(value, appcommands.CommandsHelp(), "/mcp")
+	submit := m.classifySubmit(value)
 	if submit.LocalNoTurn() {
 		return m.submitLocalNoTurn(submit)
 	}
@@ -68,7 +68,7 @@ func (m *model) submitPromptWhileBusy(value string) {
 		}
 		return
 	}
-	submit := appcommands.ClassifySubmit(value, appcommands.CommandsHelp(), "/mcp")
+	submit := m.classifySubmit(value)
 	if submit.BusyImmediate() {
 		_ = m.submitLocalNoTurn(submit)
 		return
@@ -89,7 +89,7 @@ func (m *model) submitPromptFromDeferredBusyEnter(value string, wasStopping bool
 	if wasStopping && !m.busy {
 		return nil
 	}
-	submit := appcommands.ClassifySubmit(value, appcommands.CommandsHelp(), "/mcp")
+	submit := m.classifySubmit(value)
 	if submit.BusyImmediate() {
 		_ = m.submitLocalNoTurn(submit)
 		return nil
@@ -115,6 +115,51 @@ func busySlashBlockedStatus(line string, stopping bool) string {
 		state = "stopping"
 	}
 	return fmt.Sprintf("%s disabled while %s", cmd, state)
+}
+
+func (m model) classifySubmit(value string) appcommands.SubmitClassification {
+	line := m.expandSubmitSlashPrefix(value)
+	submit := appcommands.ClassifySubmit(line, appcommands.CommandsHelp(), "/mcp")
+	if submit.Class != appcommands.SubmitUsageError {
+		return submit
+	}
+	if class, ok := m.pluginSubmitClass(submit.Line); ok {
+		return appcommands.SubmitClassification{Line: submit.Line, Class: class}
+	}
+	return submit
+}
+
+func (m model) expandSubmitSlashPrefix(value string) string {
+	line := strings.TrimSpace(value)
+	if !appcommands.LooksLikeSlashCommand(line) || strings.ContainsAny(line, " \t") {
+		return line
+	}
+	var names []string
+	for _, spec := range m.slash.all {
+		name := strings.TrimSpace(spec.Name)
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	matches := make([]string, 0, 1)
+	for _, name := range names {
+		if strings.HasPrefix(name, line) {
+			matches = append(matches, name)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0]
+	}
+	return line
+}
+
+func (m model) pluginSubmitClass(line string) (appcommands.SubmitClass, bool) {
+	fields := strings.Fields(strings.TrimSpace(line))
+	if len(fields) == 0 || m.slash.commandClasses == nil {
+		return appcommands.SubmitUsageError, false
+	}
+	class, ok := m.slash.commandClasses[fields[0]]
+	return class, ok
 }
 
 func (m *model) submitLocalNoTurn(submit appcommands.SubmitClassification) tea.Cmd {

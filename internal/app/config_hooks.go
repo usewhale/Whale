@@ -9,8 +9,7 @@ func hooksFromFileConfig(cfg FileConfig) agent.HookSettings {
 	out := agent.HookSettings{Hooks: map[agent.HookEvent][]agent.HookConfig{}}
 	for raw, hooks := range cfg.Hooks {
 		ev := agent.HookEvent(strings.TrimSpace(raw))
-		switch ev {
-		case agent.HookEventPreToolUse, agent.HookEventPostToolUse, agent.HookEventUserPromptSubmit, agent.HookEventStop:
+		if agent.KnownHookEvent(ev) {
 			out.Hooks[ev] = append(out.Hooks[ev], hooks...)
 		}
 	}

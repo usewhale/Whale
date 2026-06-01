@@ -3,6 +3,7 @@ package app
 import (
 	"fmt"
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/plugins"
 	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/store"
 	"strings"
@@ -117,11 +118,11 @@ func ApplyFileConfig(cfg *Config, file FileConfig) error {
 	if len(file.Skills.Enabled) > 0 {
 		cfg.SkillsDisabled = removeNames(cfg.SkillsDisabled, file.Skills.Enabled)
 	}
-	if len(file.Plugins.Disabled) > 0 {
-		cfg.PluginsDisabled = mergeNames(cfg.PluginsDisabled, file.Plugins.Disabled)
-	}
-	if len(file.Plugins.Enabled) > 0 {
-		cfg.PluginsDisabled = removeNames(cfg.PluginsDisabled, file.Plugins.Enabled)
+	for id, pluginConfig := range file.Plugins.RuntimeConfig() {
+		if cfg.Plugins == nil {
+			cfg.Plugins = plugins.ConfigMap{}
+		}
+		cfg.Plugins[id] = mergePluginConfig(cfg.Plugins[id], pluginConfig)
 	}
 	if len(file.Workflows.Trusted) > 0 {
 		cfg.TrustedWorkflows = mergeNames(cfg.TrustedWorkflows, file.Workflows.Trusted)
@@ -219,12 +220,65 @@ func overlayExplicitConfig(dst *Config, src Config) {
 	if len(src.SkillsDisabled) > 0 {
 		dst.SkillsDisabled = trimList(src.SkillsDisabled)
 	}
-	if len(src.PluginsDisabled) > 0 {
-		dst.PluginsDisabled = trimList(src.PluginsDisabled)
+	if len(src.Plugins) > 0 {
+		dst.Plugins = clonePluginConfigMap(src.Plugins)
 	}
 	if len(src.TrustedWorkflows) > 0 {
 		dst.TrustedWorkflows = trimList(src.TrustedWorkflows)
 	}
+}
+
+func clonePluginConfigMap(in plugins.ConfigMap) plugins.ConfigMap {
+	if len(in) == 0 {
+		return nil
+	}
+	out := plugins.ConfigMap{}
+	for id, cfg := range in {
+		id = plugins.NormalizePluginID(id)
+		if id != "" {
+			cp := cfg
+			if cfg.Enabled != nil {
+				enabled := *cfg.Enabled
+				cp.Enabled = &enabled
+			}
+			cp.MCPServers = clonePluginMCPServers(cfg.MCPServers)
+			out[id] = cp
+		}
+	}
+	return out
+}
+
+func mergePluginConfig(base, overlay plugins.Config) plugins.Config {
+	out := plugins.Config{MCPServers: clonePluginMCPServers(base.MCPServers)}
+	if base.Enabled != nil {
+		enabled := *base.Enabled
+		out.Enabled = &enabled
+	}
+	if overlay.Enabled != nil {
+		enabled := *overlay.Enabled
+		out.Enabled = &enabled
+	}
+	if len(overlay.MCPServers) > 0 {
+		if out.MCPServers == nil {
+			out.MCPServers = map[string]plugins.MCPServerConfig{}
+		}
+		for name, serverOverlay := range overlay.MCPServers {
+			name = plugins.NormalizePluginID(name)
+			if name == "" {
+				continue
+			}
+			merged := out.MCPServers[name]
+			if serverOverlay.Enabled != nil {
+				enabled := *serverOverlay.Enabled
+				merged.Enabled = &enabled
+			}
+			if len(serverOverlay.DisabledTools) > 0 {
+				merged.DisabledTools = append([]string(nil), serverOverlay.DisabledTools...)
+			}
+			out.MCPServers[name] = merged
+		}
+	}
+	return out
 }
 
 func permissionRulesEqual(a, b []policy.PermissionRule) bool {

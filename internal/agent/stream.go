@@ -215,10 +215,9 @@ func (a *Agent) appendDispatchedToolResult(ctx context.Context, sessionID string
 	if !a.hooks.Empty() {
 		var toolArgs any
 		_ = json.Unmarshal([]byte(call.Input), &toolArgs)
-		report := a.hooks.RunHook(ctx, NewPostToolUsePayload(sessionID, call, toolArgs, finalRes.Content))
-		if !a.emitHookReport(ctx, events, report) {
-			return false
-		}
+		payload := NewPostToolUsePayload(sessionID, call, toolArgs, finalRes.Content)
+		payload.CWD = a.workspaceRoot
+		report := a.hooks.RunHookWithObserver(ctx, payload, a.hookRunObserver(ctx, events))
 		if strings.TrimSpace(report.AdditionalContext) != "" {
 			finalRes.Content = addHookContextToToolContent(finalRes.Content, report.AdditionalContext)
 		}

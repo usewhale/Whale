@@ -26,6 +26,7 @@ type Toolset struct {
 	bingSearchURL     string
 	tasks             *shellTaskRegistry
 	fileLocks         *fileMutationLocks
+	fileSnapshots     *fileSnapshotRegistry
 	// Test hooks for deterministic mutation-race coverage.
 	afterFileRead    func(string)
 	beforeFileCommit func(string)
@@ -68,6 +69,7 @@ func NewToolset(root string) (*Toolset, error) {
 		bingSearchURL: "https://www.bing.com/search?q=%s",
 		tasks:         newShellTaskRegistry(),
 		fileLocks:     newFileMutationLocks(),
+		fileSnapshots: newFileSnapshotRegistry(),
 	}, nil
 }
 
@@ -256,7 +258,8 @@ func (b *Toolset) isDiscoveredSkillReadPath(target string) bool {
 	if err != nil {
 		return false
 	}
-	for _, skill := range skills.Filter(skills.Discover(skills.DefaultRoots(b.root)), b.skillDisabled) {
+	allSkills := append(skills.Discover(skills.DefaultRoots(b.root)), b.extraSkills...)
+	for _, skill := range skills.Filter(allSkills, b.skillDisabled) {
 		if skill == nil || strings.TrimSpace(skill.Path) == "" {
 			continue
 		}
@@ -361,7 +364,8 @@ func (b *Toolset) displayPath(abs string) string {
 	if rel, err := filepath.Rel(b.root, abs); err == nil && rel != "." && !strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel) {
 		return filepath.ToSlash(rel)
 	}
-	for _, skill := range skills.Filter(skills.Discover(skills.DefaultRoots(b.root)), b.skillDisabled) {
+	allSkills := append(skills.Discover(skills.DefaultRoots(b.root)), b.extraSkills...)
+	for _, skill := range skills.Filter(allSkills, b.skillDisabled) {
 		if skill == nil || strings.TrimSpace(skill.Path) == "" {
 			continue
 		}

@@ -25,10 +25,12 @@ func initAppTools(cfg Config, start StartOptions, workspaceRoot string) (appTool
 	if err != nil {
 		return appToolInit{}, fmt.Errorf("load mcp config: %w", err)
 	}
+	pluginManager := plugins.NewManager(plugins.Context{DataDir: cfg.DataDir, WorkspaceRoot: workspaceRoot}, cfg.Plugins)
+	pluginOutcome := pluginManager.Outcome()
+	mergePluginMCPServers(&mcpConfig, pluginOutcome.MCPServers)
 	mcpManager := whalemcp.NewManager(mcpConfig, workspaceRoot)
-	pluginManager := plugins.NewManager(plugins.Context{DataDir: cfg.DataDir, WorkspaceRoot: workspaceRoot}, cfg.PluginsDisabled)
-	pluginTools := pluginManager.Tools()
-	toolset.SetExtraSkills(pluginManager.Skills())
+	pluginTools := pluginOutcome.Tools
+	toolset.SetExtraSkills(pluginOutcome.Skills)
 	baseTools := append([]core.Tool{}, toolset.Tools()...)
 	baseToolRegistry, err := core.NewToolRegistryChecked(baseTools)
 	if err != nil {
@@ -38,17 +40,42 @@ func initAppTools(cfg Config, start StartOptions, workspaceRoot string) (appTool
 	if hookLoadErr != nil {
 		return appToolInit{}, fmt.Errorf("load hooks failed: %w", hookLoadErr)
 	}
-	hookRunner := agent.NewHookRunner(hooks, workspaceRoot)
-	hookRunner.AddHandlers(pluginManager.Hooks()...)
+	hookStates, err := LoadHookStates(cfg.DataDir, workspaceRoot)
+	if err != nil {
+		return appToolInit{}, fmt.Errorf("load hook state failed: %w", err)
+	}
+	allHooks := append([]agent.ResolvedHook{}, hooks...)
+	allHooks = append(allHooks, pluginOutcome.CommandHooks...)
+	hookRunner := agent.NewHookRunnerWithState(allHooks, workspaceRoot, hookStates)
+	hookRunner.AddHandlers(pluginOutcome.HookHandlers...)
 	return appToolInit{
 		toolset:          toolset,
 		mcpManager:       mcpManager,
 		pluginManager:    pluginManager,
 		pluginTools:      pluginTools,
+		pluginAgents:     pluginOutcome.Agents,
 		baseTools:        baseTools,
 		baseToolRegistry: baseToolRegistry,
 		hooks:            hooks,
+		hookStates:       hookStates,
 		hookRunner:       hookRunner,
 		hookSources:      hookSources,
 	}, nil
+}
+
+func mergePluginMCPServers(cfg *whalemcp.Config, servers map[string]whalemcp.ServerConfig) {
+	if cfg == nil || len(servers) == 0 {
+		return
+	}
+	if cfg.Servers == nil {
+		cfg.Servers = map[string]whalemcp.ServerConfig{}
+	}
+	for name, srv := range servers {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		srv.Name = name
+		cfg.Servers[name] = srv
+	}
 }

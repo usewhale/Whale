@@ -97,6 +97,14 @@ func classifySlashFields(head string, fields []string, line string) SubmitClass 
 			return SubmitLocalUI
 		}
 		return SubmitUsageError
+	case "/hooks":
+		if len(fields) == 1 {
+			return SubmitLocalReadOnly
+		}
+		if len(fields) >= 3 && fields[1] == "trust" {
+			return SubmitLocalMutating
+		}
+		return SubmitUsageError
 	case "/review":
 		if len(fields) == 1 {
 			return SubmitLocalUI

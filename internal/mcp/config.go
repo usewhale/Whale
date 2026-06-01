@@ -21,16 +21,16 @@ type Config struct {
 
 type ServerConfig struct {
 	Name          string            `json:"-"`
-	Command       string            `json:"command,omitempty"`
-	Args          []string          `json:"args,omitempty"`
-	Env           map[string]string `json:"env,omitempty"`
-	Type          string            `json:"type,omitempty"`
-	Transport     string            `json:"transport,omitempty"`
-	URL           string            `json:"url,omitempty"`
-	Headers       map[string]string `json:"headers,omitempty"`
-	Disabled      bool              `json:"disabled,omitempty"`
-	DisabledTools []string          `json:"disabled_tools,omitempty"`
-	Timeout       int               `json:"timeout,omitempty"`
+	Command       string            `json:"command,omitempty" toml:"command,omitempty"`
+	Args          []string          `json:"args,omitempty" toml:"args,omitempty"`
+	Env           map[string]string `json:"env,omitempty" toml:"env,omitempty"`
+	Type          string            `json:"type,omitempty" toml:"type,omitempty"`
+	Transport     string            `json:"transport,omitempty" toml:"transport,omitempty"`
+	URL           string            `json:"url,omitempty" toml:"url,omitempty"`
+	Headers       map[string]string `json:"headers,omitempty" toml:"headers,omitempty"`
+	Disabled      bool              `json:"disabled,omitempty" toml:"disabled,omitempty"`
+	DisabledTools []string          `json:"disabled_tools,omitempty" toml:"disabled_tools,omitempty"`
+	Timeout       int               `json:"timeout,omitempty" toml:"timeout,omitempty"`
 }
 
 func DefaultConfigPath(dataDir string) string {
