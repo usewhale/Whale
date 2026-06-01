@@ -155,3 +155,37 @@ Security issues: [SECURITY.md](SECURITY.md).
    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=usewhale/DeepSeek-Code-Whale&type=date&legend=top-left" />
  </picture>
 </a>
+
+## FAQ
+
+### What is this project?
+
+Whale — a terminal AI agent built for DeepSeek. 1M context, persistent sessions
+
+### Key Features
+
+| Feature | Description |
+|---------|-------------|
+| AI-powered | Built for AI agents with long context and tool calling |
+| Open-source | Free and open source, MIT or Apache 2.0 license |
+| Easy to install | Quick start with one-line installation command |
+| Extensible | Support MCP servers, skills, and plugins |
+| Cost-efficient | Optimized for AI token usage and cost control |
+
+### How to install?
+
+Visit the official documentation or GitHub repository for installation instructions.
+
+### Is it free?
+
+Yes, this project is free and open source. Check the LICENSE file for details.
+
+### Where to get help?
+
+- GitHub Issues: Report bugs and request features
+- Documentation: Official docs site
+- Discord/Community: Join the community chat
+
+### License
+
+MIT License or Apache 2.0 License - see LICENSE file for details.
