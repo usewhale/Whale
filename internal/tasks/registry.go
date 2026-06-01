@@ -10,28 +10,29 @@ import (
 )
 
 const (
-	CapabilityWorkspaceRead = "workspace.read"
-	CapabilityWebSearch     = "web.search"
-	CapabilityWebFetch      = "web.fetch"
-	CapabilityMCPRead       = "mcp.read"
+	CapabilityWorkspaceRead  = "workspace.read"
+	CapabilityWorkspaceWrite = "workspace.write"
+	CapabilityShellRead      = "shell.read"
+	CapabilityShellWrite     = "shell.write"
+	CapabilityWebSearch      = "web.search"
+	CapabilityWebFetch       = "web.fetch"
+	CapabilityMCPRead        = "mcp.read"
 )
 
 var knownSubagentCapabilities = map[string]bool{
-	CapabilityWorkspaceRead: true,
-	CapabilityWebSearch:     true,
-	CapabilityWebFetch:      true,
-	CapabilityMCPRead:       true,
+	CapabilityWorkspaceRead:  true,
+	CapabilityWorkspaceWrite: true,
+	CapabilityShellRead:      true,
+	CapabilityShellWrite:     true,
+	CapabilityWebSearch:      true,
+	CapabilityWebFetch:       true,
+	CapabilityMCPRead:        true,
 }
 
 var excludedChildTools = map[string]bool{
 	"parallel_reason":    true,
 	"spawn_subagent":     true,
 	"request_user_input": true,
-	"shell_run":          true,
-	"shell_wait":         true,
-	"edit":               true,
-	"write":              true,
-	"apply_patch":        true,
 	"update_plan":        true,
 	"todo_add":           true,
 	"todo_update":        true,
@@ -48,6 +49,32 @@ func BuildCapabilityRegistry(parent *core.ToolRegistry, capabilities []string) (
 	tools, err := CapabilityTools(parent, capabilities)
 	if err != nil {
 		return nil, err
+	}
+	return core.NewToolRegistryChecked(tools)
+}
+
+func filterAgentTools(registry *core.ToolRegistry, def AgentDefinition) (*core.ToolRegistry, error) {
+	if registry == nil {
+		return registry, nil
+	}
+	allow := stringSet(def.AllowedTools)
+	deny := stringSet(def.DisallowedTools)
+	if len(allow) == 0 && len(deny) == 0 {
+		return registry, nil
+	}
+	var tools []core.Tool
+	for _, tool := range registry.Tools() {
+		if tool == nil {
+			continue
+		}
+		name := tool.Name()
+		if len(allow) > 0 && !allow[name] {
+			continue
+		}
+		if deny[name] {
+			continue
+		}
+		tools = append(tools, tool)
 	}
 	return core.NewToolRegistryChecked(tools)
 }
@@ -88,15 +115,29 @@ func CapabilityTools(parent *core.ToolRegistry, capabilities []string) ([]core.T
 		if excludedChildTools[spec.Name] {
 			continue
 		}
-		if !spec.ReadOnly && spec.ReadOnlyCheck == nil {
+		mutatingAllowed := allowsMutatingTool(spec, capSet)
+		if !mutatingAllowed && !spec.ReadOnly && spec.ReadOnlyCheck == nil {
 			continue
 		}
 		if !capabilityAllowed(spec, capSet) {
 			continue
 		}
-		out = append(out, guardedReadOnlyTool{tool: tool, spec: spec})
+		if mutatingAllowed {
+			out = append(out, tool)
+		} else {
+			out = append(out, guardedReadOnlyTool{tool: tool, spec: spec})
+		}
 	}
 	return out, nil
+}
+
+func KnownCapabilityNames() []string {
+	out := make([]string, 0, len(knownSubagentCapabilities))
+	for cap := range knownSubagentCapabilities {
+		out = append(out, cap)
+	}
+	slices.Sort(out)
+	return out
 }
 
 func normalizeCapabilities(capabilities []string) (map[string]bool, error) {
@@ -110,8 +151,7 @@ func normalizeCapabilities(capabilities []string) (map[string]bool, error) {
 			continue
 		}
 		if !knownSubagentCapabilities[cap] {
-			known := []string{CapabilityWorkspaceRead, CapabilityWebSearch, CapabilityWebFetch, CapabilityMCPRead}
-			return nil, fmt.Errorf("unknown subagent capability %q; allowed: %s", cap, strings.Join(known, ", "))
+			return nil, fmt.Errorf("unknown subagent capability %q; allowed: %s", cap, strings.Join(KnownCapabilityNames(), ", "))
 		}
 		out[cap] = true
 	}
@@ -135,6 +175,26 @@ func capabilityAllowed(spec core.ToolSpec, capSet map[string]bool) bool {
 		return true
 	}
 	return false
+}
+
+func allowsMutatingTool(spec core.ToolSpec, capSet map[string]bool) bool {
+	if capSet[CapabilityWorkspaceWrite] && slices.Contains(spec.Capabilities, CapabilityWorkspaceWrite) {
+		return true
+	}
+	if capSet[CapabilityShellWrite] && slices.Contains(spec.Capabilities, CapabilityShellWrite) {
+		return true
+	}
+	return false
+}
+
+func stringSet(values []string) map[string]bool {
+	out := map[string]bool{}
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			out[trimmed] = true
+		}
+	}
+	return out
 }
 
 type guardedReadOnlyTool struct {

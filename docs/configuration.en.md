@@ -129,9 +129,8 @@ max_concurrency = 3                    # parallel agent limit
 disabled = []                          # skills to hide
 enabled = []                           # force-enable even if project disables
 
-[plugins]
-disabled = []                          # plugins to disable
-enabled = []                           # force-enable
+[plugins.memory]
+enabled = true                         # configure each plugin by id
 
 [logging]
 level = "info"                         # debug | info | warn | error

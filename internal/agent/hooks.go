@@ -119,8 +119,9 @@ type HookSettings struct {
 
 type ResolvedHook struct {
 	HookConfig
-	Event  HookEvent
-	Source string
+	Event   HookEvent
+	Source  string
+	Managed bool
 }
 
 type HookPayload struct {
@@ -767,6 +768,7 @@ func hookEntryFromResolved(h ResolvedHook, states HookStates, ordinal int) HookL
 		TimeoutSec:  hookTimeoutSeconds(resolveHookTimeout(h.TimeoutSec)),
 		CWD:         strings.TrimSpace(h.CWD),
 		Enabled:     true,
+		Managed:     h.Managed,
 	}
 	entry.Hash = hookContentHash(entry)
 	entry.Key = hookStableKey(entry, ordinal)

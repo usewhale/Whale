@@ -99,8 +99,9 @@ func (b *Toolset) fileMutationTools() []core.Tool {
 				},
 				"required": []string{"file_path", "search", "replace"},
 			},
-			fn:      b.editFile,
-			preview: b.previewEditFile,
+			capabilities: []string{"workspace.write"},
+			fn:           b.editFile,
+			preview:      b.previewEditFile,
 		},
 		toolFn{
 			name:        "write",
@@ -114,8 +115,9 @@ func (b *Toolset) fileMutationTools() []core.Tool {
 				},
 				"required": []string{"file_path", "content"},
 			},
-			fn:      b.writeFile,
-			preview: b.previewWriteFile,
+			capabilities: []string{"workspace.write"},
+			fn:           b.writeFile,
+			preview:      b.previewWriteFile,
 		},
 		toolFn{
 			name:        "apply_patch",
@@ -128,8 +130,9 @@ func (b *Toolset) fileMutationTools() []core.Tool {
 				},
 				"required": []string{"patch"},
 			},
-			fn:      b.applyPatch,
-			preview: b.previewApplyPatch,
+			capabilities: []string{"workspace.write"},
+			fn:           b.applyPatch,
+			preview:      b.previewApplyPatch,
 		},
 	}
 }

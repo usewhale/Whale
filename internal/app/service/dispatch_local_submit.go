@@ -83,7 +83,7 @@ func (s *Service) handleLocalSubmit(line string) {
 		return
 	}
 	if line == "/plugins" {
-		s.emit(Event{Kind: EventPluginsManagerUpdated, Plugins: protocolPlugins(s.PluginsForManager())})
+		s.emit(Event{Kind: EventPluginsManagerUpdated, Plugins: protocolPlugins(s.PluginsForManager()), Open: true})
 		return
 	}
 	if line == "/hooks" {

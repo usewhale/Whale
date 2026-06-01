@@ -301,6 +301,7 @@ func TestSecondaryPickersUseSegmentedPickerStyles(t *testing.T) {
 	m = newModel(nil, "", "", "")
 	m.handleServiceEvent(protocol.Event{
 		Kind: protocol.EventPluginsManagerUpdated,
+		Open: true,
 		Plugins: []protocol.PluginStatus{{
 			Manifest: protocol.PluginManifest{ID: "memory", Name: "Memory", Description: "Durable memory"},
 			Enabled:  true,
@@ -425,12 +426,16 @@ func TestPluginsManagerRendersAndToggles(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.handleServiceEvent(protocol.Event{
 		Kind: protocol.EventPluginsManagerUpdated,
+		Open: true,
 		Plugins: []protocol.PluginStatus{
 			{
 				Manifest: protocol.PluginManifest{ID: "memory", Name: "Memory", Description: "Durable memory"},
 				Enabled:  true,
 				Tools:    []string{"forget", "recall_memory", "remember"},
 				Commands: []protocol.PluginCommand{{Name: "/memory"}},
+				Agents:   []string{"memory:curator"},
+				Rules:    []string{"memory:style"},
+				Services: []protocol.PluginService{{Name: "mcp:memory", Status: "configured"}},
 			},
 		},
 	})
@@ -438,7 +443,7 @@ func TestPluginsManagerRendersAndToggles(t *testing.T) {
 		t.Fatalf("expected plugins manager mode, got %v", m.mode)
 	}
 	rendered := m.renderPluginsManager()
-	for _, want := range []string{"Plugins", "Installed plugins", "[x] memory", "Run /memory", "Agent tools: forget", "Space enable/disable"} {
+	for _, want := range []string{"Plugins", "Installed plugins", "[x] memory", "Run /memory", "Agent tools: forget", "Subagents: memory:curator", "Rules: 1", "Services: mcp:memory", "Enter details", "Space enable/disable"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("expected plugins manager render to contain %q, got:\n%s", want, rendered)
 		}
@@ -461,11 +466,126 @@ func TestPluginsManagerRendersAndToggles(t *testing.T) {
 	if m.pluginsManager.all[idx].Enabled {
 		t.Fatalf("expected selected plugin to be optimistically disabled: %+v", m.pluginsManager.all[idx])
 	}
+	if _, ok := m.slashSpec("/memory"); ok {
+		t.Fatalf("disabled plugin command should be removed optimistically")
+	}
+	m.handleServiceEvent(protocol.Event{
+		Kind: protocol.EventPluginsManagerUpdated,
+		Plugins: []protocol.PluginStatus{{
+			Manifest: protocol.PluginManifest{ID: "memory", Name: "Memory", Description: "Durable memory"},
+			Enabled:  false,
+			Commands: []protocol.PluginCommand{{Name: "/memory"}},
+		}},
+	})
+	if m.mode != modePluginsManager {
+		t.Fatalf("plugin refresh while open should keep manager open, got mode %v", m.mode)
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" ")})
+	m = next.(model)
+	if len(*intents) != 2 {
+		t.Fatalf("expected rune-space to toggle too, got intents %+v", *intents)
+	}
+	if got := (*intents)[1]; got.Kind != protocol.IntentSetPluginEnabled || got.PluginID != "memory" || !got.PluginEnabled {
+		t.Fatalf("unexpected rune-space toggle intent: %+v", got)
+	}
+	if _, ok := m.slashSpec("/memory"); !ok {
+		t.Fatalf("enabled plugin command should be restored optimistically")
+	}
 
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = next.(model)
 	if m.mode != modeChat {
 		t.Fatalf("expected esc to close plugins manager, got mode %v", m.mode)
+	}
+	m.handleServiceEvent(protocol.Event{
+		Kind: protocol.EventPluginsManagerUpdated,
+		Plugins: []protocol.PluginStatus{{
+			Manifest: protocol.PluginManifest{ID: "memory", Name: "Memory", Description: "Durable memory"},
+			Enabled:  false,
+			Commands: []protocol.PluginCommand{{Name: "/memory"}},
+		}},
+	})
+	if m.mode != modeChat {
+		t.Fatalf("background plugin refresh should not reopen manager, got mode %v", m.mode)
+	}
+}
+
+func TestPluginsManagerDetailView(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.width = 96
+	m.height = 40
+	m.handleServiceEvent(protocol.Event{
+		Kind: protocol.EventPluginsManagerUpdated,
+		Open: true,
+		Plugins: []protocol.PluginStatus{
+			{
+				Manifest:    protocol.PluginManifest{ID: "demo-plugin", Name: "Demo Plugin", Version: "0.3.0", Description: "Demo plugin"},
+				Enabled:     true,
+				Commands:    []protocol.PluginCommand{{Name: "/demo-plugin:ask", Usage: "<topic>", Description: "Ask through plugin"}},
+				Tools:       []string{"demo_tool"},
+				Skills:      []string{"demo-skill"},
+				Agents:      []string{"demo-plugin:reviewer"},
+				Rules:       []string{"demo-plugin:style"},
+				Hooks:       []string{"Plugin startup marker"},
+				Services:    []protocol.PluginService{{Name: "mcp:search", Status: "configured"}},
+				Diagnostics: []protocol.PluginDiagnostic{{Level: "ok", Label: "components", Detail: "loaded"}},
+				Paths:       map[string]string{"cache": "/tmp/demo-cache"},
+			},
+		},
+	})
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if !m.pluginsManager.detail {
+		t.Fatal("expected plugin detail view")
+	}
+	plain := xansi.Strip(m.renderPluginsManager())
+	for _, want := range []string{
+		"Plugin details",
+		"demo-plugin · enabled",
+		"version: 0.3.0",
+		"Commands",
+		"/demo-plugin:ask <topic> - Ask through plugin",
+		"Tools",
+		"demo_tool",
+		"Agents",
+		"demo-plugin:reviewer",
+		"Rules",
+		"demo-plugin:style",
+		"Services",
+		"mcp:search · configured",
+		"Diagnostics",
+		"ok components: loaded",
+		"Paths",
+		"cache: /tmp/demo-cache",
+		"Esc back",
+	} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected plugin detail to contain %q, got:\n%s", want, plain)
+		}
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = next.(model)
+	if len(*intents) != 0 {
+		t.Fatalf("detail view should ignore Space, got intents %+v", *intents)
+	}
+	plain = xansi.Strip(m.renderPluginsManager())
+	if strings.Contains(plain, "Space enable/disable") {
+		t.Fatalf("detail footer should not advertise toggling, got:\n%s", plain)
+	}
+	if !strings.Contains(plain, "demo-plugin · enabled") {
+		t.Fatalf("detail view should remain read-only after Space, got:\n%s", plain)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(model)
+	if m.mode != modePluginsManager || m.pluginsManager.detail {
+		t.Fatalf("expected esc from detail to return to list, mode=%v detail=%v", m.mode, m.pluginsManager.detail)
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(model)
+	if m.mode != modeChat {
+		t.Fatalf("expected second esc to close manager, got %v", m.mode)
 	}
 }
 func TestReviewMenuDispatchesAndPrefillsTargets(t *testing.T) {

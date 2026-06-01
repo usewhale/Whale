@@ -421,6 +421,10 @@ func (m *model) handleSkillsManagerEvent(ev protocol.Event) {
 }
 
 func (m *model) handlePluginsManagerEvent(ev protocol.Event) {
+	m.setPluginsManagerItems(ev.Plugins)
+	if !ev.Open && m.mode != modePluginsManager {
+		return
+	}
 	m.clearProviderRetryStatus()
 	m.stopBusy()
 	m.stopping = false
@@ -430,7 +434,6 @@ func (m *model) handlePluginsManagerEvent(ev protocol.Event) {
 	m.slash.argumentHint = ""
 	m.skills.matches = nil
 	m.skills.selected = 0
-	m.setPluginsManagerItems(ev.Plugins)
 	m.status = "plugins"
 }
 
@@ -499,6 +502,7 @@ func (m *model) handleClearScreenEvent() tea.Cmd {
 }
 
 func (m *model) handleSessionHydratedEvent(ev protocol.Event) tea.Cmd {
+	m.setPluginSlashCommands(ev.Plugins)
 	preserveHooksStartupReview := m.mode == modeHooksStartupReview || (m.mode == modeHooksManager && m.hooksManager.startupReviewOpen)
 	m.mode = modeChat
 	m.resumeMenu = false

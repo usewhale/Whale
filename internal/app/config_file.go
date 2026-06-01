@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/BurntSushi/toml"
 	"github.com/usewhale/whale/internal/agent"
+	"github.com/usewhale/whale/internal/plugins"
 	"github.com/usewhale/whale/internal/securefs"
 	"github.com/usewhale/whale/internal/store"
 	"os"
@@ -95,9 +96,67 @@ type FileSkillsConfig struct {
 	Disabled []string `toml:"disabled,omitempty"`
 }
 
-type FilePluginsConfig struct {
-	Enabled  []string `toml:"enabled,omitempty"`
-	Disabled []string `toml:"disabled,omitempty"`
+type FilePluginsConfig map[string]FilePluginConfig
+
+type FilePluginConfig struct {
+	Enabled    *bool                              `toml:"enabled,omitempty"`
+	MCPServers map[string]plugins.MCPServerConfig `toml:"mcp_servers,omitempty"`
+}
+
+func (c FilePluginsConfig) RuntimeConfig() plugins.ConfigMap {
+	if len(c) == 0 {
+		return nil
+	}
+	out := plugins.ConfigMap{}
+	for id, cfg := range c {
+		id = plugins.NormalizePluginID(id)
+		if id == "" {
+			continue
+		}
+		runtimeCfg := plugins.Config{MCPServers: clonePluginMCPServers(cfg.MCPServers)}
+		if cfg.Enabled != nil {
+			enabled := *cfg.Enabled
+			runtimeCfg.Enabled = &enabled
+		}
+		out[id] = runtimeCfg
+	}
+	return out
+}
+
+func FilePluginsFromRuntime(in plugins.ConfigMap) FilePluginsConfig {
+	if len(in) == 0 {
+		return nil
+	}
+	out := FilePluginsConfig{}
+	for id, cfg := range in {
+		id = plugins.NormalizePluginID(id)
+		if id != "" {
+			fileCfg := FilePluginConfig{MCPServers: clonePluginMCPServers(cfg.MCPServers)}
+			if cfg.Enabled != nil {
+				enabled := *cfg.Enabled
+				fileCfg.Enabled = &enabled
+			}
+			out[id] = fileCfg
+		}
+	}
+	return out
+}
+
+func clonePluginMCPServers(in map[string]plugins.MCPServerConfig) map[string]plugins.MCPServerConfig {
+	if len(in) == 0 {
+		return nil
+	}
+	out := map[string]plugins.MCPServerConfig{}
+	for name, cfg := range in {
+		name = plugins.NormalizePluginID(name)
+		if name == "" {
+			continue
+		}
+		cp := cfg
+		cp.DisabledTools = append([]string(nil), cfg.DisabledTools...)
+		out[name] = cp
+	}
+	return out
 }
 
 type FileWorkflowsConfig struct {
@@ -168,6 +227,9 @@ func LoadConfigFile(path string) (FileConfig, bool, error) {
 		}
 		return FileConfig{}, false, fmt.Errorf("read config %s: %w", path, err)
 	}
+	if err := checkRemovedPluginListKeys(path, b); err != nil {
+		return FileConfig{}, false, err
+	}
 	var cfg FileConfig
 	meta, err := toml.Decode(string(b), &cfg)
 	if err != nil {
@@ -188,6 +250,8 @@ var removedConfigKeys = map[string]string{
 	"permissions.deny_shell_prefixes":  "add [permissions.shell] entries with a \"deny\" action instead",
 	"allow_shell_prefixes":             "add [permissions.shell] entries with an \"allow\" action instead",
 	"deny_shell_prefixes":              "add [permissions.shell] entries with a \"deny\" action instead",
+	"plugins.enabled":                  "replace it with [plugins.<id>] enabled = true",
+	"plugins.disabled":                 "replace it with [plugins.<id>] enabled = false",
 }
 
 // checkRemovedConfigKeys rejects configs that still carry legacy permission
@@ -197,7 +261,28 @@ var removedConfigKeys = map[string]string{
 func checkRemovedConfigKeys(path string, meta toml.MetaData) error {
 	for _, key := range meta.Undecoded() {
 		if hint, ok := removedConfigKeys[key.String()]; ok {
-			return fmt.Errorf("config %s uses removed permission key %q; %s", path, key.String(), hint)
+			if strings.HasPrefix(key.String(), "permissions.") || key.String() == "allow_shell_prefixes" || key.String() == "deny_shell_prefixes" {
+				return fmt.Errorf("config %s uses removed permission key %q; %s", path, key.String(), hint)
+			}
+			return fmt.Errorf("config %s uses removed config key %q; %s", path, key.String(), hint)
+		}
+	}
+	return nil
+}
+
+func checkRemovedPluginListKeys(path string, b []byte) error {
+	var raw map[string]any
+	if _, err := toml.Decode(string(b), &raw); err != nil {
+		return nil
+	}
+	table, ok := raw["plugins"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	for _, key := range []string{"enabled", "disabled"} {
+		if _, ok := table[key]; ok {
+			hint := removedConfigKeys["plugins."+key]
+			return fmt.Errorf("config %s uses removed config key %q; %s", path, "plugins."+key, hint)
 		}
 	}
 	return nil

@@ -103,10 +103,13 @@ func (a *App) SetHookEnabled(keys []string, enabled bool) (string, error) {
 func (a *App) rebuildHookRunner(message string) (string, error) {
 	pm := a.pluginManager
 	if pm == nil {
-		pm = plugins.NewManager(plugins.Context{DataDir: a.cfg.DataDir, WorkspaceRoot: a.workspaceRoot}, a.cfg.PluginsDisabled)
+		pm = plugins.NewManager(plugins.Context{DataDir: a.cfg.DataDir, WorkspaceRoot: a.workspaceRoot}, a.cfg.Plugins)
 	}
-	hookRunner := agent.NewHookRunnerWithState(a.hooks, a.workspaceRoot, a.hookStates)
-	hookRunner.AddHandlers(pm.Hooks()...)
+	outcome := pm.Outcome()
+	allHooks := append([]agent.ResolvedHook{}, a.hooks...)
+	allHooks = append(allHooks, outcome.CommandHooks...)
+	hookRunner := agent.NewHookRunnerWithState(allHooks, a.workspaceRoot, a.hookStates)
+	hookRunner.AddHandlers(outcome.HookHandlers...)
 	a.toolMu.Lock()
 	a.hookRunner = hookRunner
 	a.toolMu.Unlock()

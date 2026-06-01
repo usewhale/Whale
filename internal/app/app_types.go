@@ -50,7 +50,7 @@ type Config struct {
 	MCPConfigPath            string
 	APIBaseURL               string
 	SkillsDisabled           []string
-	PluginsDisabled          []string
+	Plugins                  plugins.ConfigMap
 	TrustedWorkflows         []string
 }
 
@@ -121,6 +121,7 @@ type App struct {
 	mcpManager            *whalemcp.Manager
 	pluginManager         *plugins.Manager
 	pluginTools           []core.Tool
+	pluginAgents          []plugins.AgentDefinition
 	checkpoints           *checkpoint.Manager
 	workflowManager       *workflow.RunManager
 	workflowRunner        *workflow.ScriptRunner

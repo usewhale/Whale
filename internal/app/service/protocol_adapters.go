@@ -207,6 +207,8 @@ func protocolPlugins(statuses []plugins.PluginStatus) []protocol.PluginStatus {
 			Commands:    protocolPluginCommands(status.Commands),
 			Tools:       append([]string(nil), status.Tools...),
 			Skills:      append([]string(nil), status.Skills...),
+			Agents:      append([]string(nil), status.Agents...),
+			Rules:       append([]string(nil), status.Rules...),
 			Hooks:       append([]string(nil), status.Hooks...),
 			Services:    protocolPluginServices(status.Services),
 			Diagnostics: protocolPluginDiagnostics(status.Diagnostics),
@@ -289,6 +291,7 @@ func protocolPluginCommands(commands []plugins.SlashCommand) []protocol.PluginCo
 			Usage:       command.Usage,
 			Description: command.Description,
 			Class:       string(command.Class),
+			StartsTurn:  command.StartsTurn,
 		})
 	}
 	return out

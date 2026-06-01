@@ -258,7 +258,8 @@ func (b *Toolset) isDiscoveredSkillReadPath(target string) bool {
 	if err != nil {
 		return false
 	}
-	for _, skill := range skills.Filter(skills.Discover(skills.DefaultRoots(b.root)), b.skillDisabled) {
+	allSkills := append(skills.Discover(skills.DefaultRoots(b.root)), b.extraSkills...)
+	for _, skill := range skills.Filter(allSkills, b.skillDisabled) {
 		if skill == nil || strings.TrimSpace(skill.Path) == "" {
 			continue
 		}
@@ -363,7 +364,8 @@ func (b *Toolset) displayPath(abs string) string {
 	if rel, err := filepath.Rel(b.root, abs); err == nil && rel != "." && !strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel) {
 		return filepath.ToSlash(rel)
 	}
-	for _, skill := range skills.Filter(skills.Discover(skills.DefaultRoots(b.root)), b.skillDisabled) {
+	allSkills := append(skills.Discover(skills.DefaultRoots(b.root)), b.extraSkills...)
+	for _, skill := range skills.Filter(allSkills, b.skillDisabled) {
 		if skill == nil || strings.TrimSpace(skill.Path) == "" {
 			continue
 		}

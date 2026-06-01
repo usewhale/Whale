@@ -88,6 +88,7 @@ type Event struct {
 	Hook             *HookRun             `json:"hook,omitempty"`
 	Skills           []SkillView          `json:"skills,omitempty"`
 	Plugins          []PluginStatus       `json:"plugins,omitempty"`
+	Open             bool                 `json:"open,omitempty"`
 	Hooks            *HooksManagerState   `json:"hooks,omitempty"`
 	WorktreeExit     *WorktreeExitSummary `json:"worktree_exit,omitempty"`
 	SessionID        string               `json:"session_id,omitempty"`
@@ -307,6 +308,8 @@ type PluginStatus struct {
 	Commands    []PluginCommand    `json:"commands,omitempty"`
 	Tools       []string           `json:"tools,omitempty"`
 	Skills      []string           `json:"skills,omitempty"`
+	Agents      []string           `json:"agents,omitempty"`
+	Rules       []string           `json:"rules,omitempty"`
 	Hooks       []string           `json:"hooks,omitempty"`
 	Services    []PluginService    `json:"services,omitempty"`
 	Diagnostics []PluginDiagnostic `json:"diagnostics,omitempty"`
@@ -329,6 +332,7 @@ type PluginCommand struct {
 	Usage       string `json:"usage,omitempty"`
 	Description string `json:"description,omitempty"`
 	Class       string `json:"class,omitempty"`
+	StartsTurn  bool   `json:"starts_turn,omitempty"`
 }
 
 type PluginService struct {

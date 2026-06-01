@@ -27,6 +27,7 @@ type appToolInit struct {
 	mcpManager       *whalemcp.Manager
 	pluginManager    *plugins.Manager
 	pluginTools      []core.Tool
+	pluginAgents     []plugins.AgentDefinition
 	baseTools        []core.Tool
 	baseToolRegistry *core.ToolRegistry
 	hooks            []agent.ResolvedHook

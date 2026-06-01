@@ -128,11 +128,13 @@ func (s *Service) Dispatch(in Intent) {
 		}
 		s.emit(Event{Kind: EventSkillsManagerUpdated, Skills: protocolSkills(s.SkillsForManager())})
 	case IntentSetPluginEnabled:
-		if _, err := s.app.SetPluginEnabled(in.PluginID, in.PluginEnabled); err != nil {
-			s.emit(Event{Kind: EventError, Text: err.Error()})
-			return
-		}
-		s.emit(Event{Kind: EventPluginsManagerUpdated, Plugins: protocolPlugins(s.PluginsForManager())})
+		s.goTracked(func() {
+			if _, err := s.app.SetPluginEnabled(in.PluginID, in.PluginEnabled); err != nil {
+				s.emit(Event{Kind: EventError, Text: err.Error()})
+				return
+			}
+			s.emit(Event{Kind: EventPluginsManagerUpdated, Plugins: protocolPlugins(s.PluginsForManager())})
+		})
 	case IntentRequestHooksManage:
 		s.emitHooksManagerUpdated()
 	case IntentSetHookEnabled:

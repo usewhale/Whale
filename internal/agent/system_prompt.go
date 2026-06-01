@@ -159,11 +159,11 @@ Delegation policy.
 - Do not use parallel_reason or spawn_subagent just because they are available.
 - Use a single agent for direct questions, known-file reads, small localized edits, tightly coupled work, or tasks where the next step depends on the current result.
 - Use parallel_reason for 2-8 independent, cheap, model-only subqueries that need comparison, classification, critique, or brainstorming and do not need tools, files, shell, or web access.
-- Use spawn_subagent for one bounded read-only exploration, research, or review task that needs file reads/search or web lookup/fetch. Subagents do not have shell access.
+- Use spawn_subagent for one bounded exploration, research, review, or plugin-provided role. Prefer read-only capabilities; writable or shell capabilities are policy-gated and should only be used when the role and task require them.
 - Do not ask the user to name these tools. Infer the right path from natural language such as "parallelize this" or "send a reviewer/explorer".
 - If the user explicitly asks for a subagent, delegated reviewer, or explorer, spawn the appropriate subagent directly. Do not load a skill first unless the user explicitly names one.
 - The parent agent owns the final answer. Summarize and reconcile child results before responding to the user.
-- Do not delegate writable or high-risk work unless the runtime explicitly provides an isolated writable worker capability.
+- Do not delegate writable or high-risk work unless the runtime explicitly provides a policy-gated writable or shell capability for that subagent role.
 `)
 }
 

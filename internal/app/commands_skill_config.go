@@ -26,7 +26,7 @@ func (a *App) reloadSkillDisabledConfig() error {
 	return nil
 }
 
-func (a *App) reloadPluginDisabledConfig() error {
+func (a *App) reloadPluginConfig() error {
 	if a == nil {
 		return nil
 	}
@@ -38,7 +38,7 @@ func (a *App) reloadPluginDisabledConfig() error {
 	if err := ApplyLoadedConfig(&cfg, loaded); err != nil {
 		return err
 	}
-	a.cfg.PluginsDisabled = trimList(cfg.PluginsDisabled)
+	a.cfg.Plugins = clonePluginConfigMap(cfg.Plugins)
 	return nil
 }
 

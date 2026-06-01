@@ -164,17 +164,19 @@ func (a *App) buildSkillSyntheticPromptFromBinding(name, args string, binding Sk
 		return "", "", fmt.Errorf("skill binding mismatch: selected %s but prompt mentions %s", bindingName, name)
 	}
 	roots := skills.DefaultRoots(a.workspaceRoot)
-	if strings.HasPrefix(bindingPath, "plugin://") && a.pluginManager != nil {
+	if a.pluginManager != nil {
 		if core.SkillNameDisabled(name, a.cfg.SkillsDisabled) {
 			return "", "", fmt.Errorf("skill disabled: %s", name)
 		}
 		for _, candidate := range a.pluginManager.Skills() {
-			if candidate != nil && candidate.Name == name && candidate.SkillFilePath == bindingPath {
+			if candidate != nil && candidate.Name == name && sameSkillPath(candidate.SkillFilePath, bindingPath) {
 				cp := *candidate
 				return a.buildSkillSyntheticPromptForSkill(&cp, args)
 			}
 		}
-		return "", "", fmt.Errorf("skill unavailable: %s", name)
+		if strings.HasPrefix(bindingPath, "plugin://") {
+			return "", "", fmt.Errorf("skill unavailable: %s", name)
+		}
 	}
 	skill, _, ok := skills.FindByPath(roots, bindingPath)
 	if !ok {

@@ -138,10 +138,11 @@ type model struct {
 	logFilterInput textinput.Model
 	logFilter      string
 	slash          struct {
-		all          []appcommands.SlashCommandSpec
-		matches      []slashSuggestion
-		selected     int
-		argumentHint string
+		all            []appcommands.SlashCommandSpec
+		commandClasses map[string]appcommands.SubmitClass
+		matches        []slashSuggestion
+		selected       int
+		argumentHint   string
 	}
 	skills struct {
 		all      []skillSuggestion
@@ -172,6 +173,8 @@ type model struct {
 		all      []pluginManagerItem
 		matches  []int
 		selected int
+		detail   bool
+		offset   int
 	}
 	hooksManager hooksManagerState
 	reviewMenu   struct {

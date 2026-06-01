@@ -673,12 +673,18 @@ func TestPluginsCommandOpensManagerAndToggleUpdatesRuntime(t *testing.T) {
 
 	svc.Dispatch(Intent{Kind: IntentSubmit, Input: "/plugins"})
 	ev := waitForServiceEvent(t, svc, EventPluginsManagerUpdated)
+	if !ev.Open {
+		t.Fatalf("expected /plugins event to open manager")
+	}
 	if !hasProtocolPlugin(ev.Plugins, "memory", true) {
 		t.Fatalf("expected memory plugin enabled, got %+v", ev.Plugins)
 	}
 
 	svc.Dispatch(Intent{Kind: IntentSetPluginEnabled, PluginID: "memory", PluginEnabled: false})
 	ev = waitForServiceEvent(t, svc, EventPluginsManagerUpdated)
+	if ev.Open {
+		t.Fatalf("expected toggle refresh not to reopen manager")
+	}
 	if !hasProtocolPlugin(ev.Plugins, "memory", false) {
 		t.Fatalf("expected memory plugin disabled, got %+v", ev.Plugins)
 	}
@@ -686,12 +692,15 @@ func TestPluginsCommandOpensManagerAndToggleUpdatesRuntime(t *testing.T) {
 	if err != nil || !loaded {
 		t.Fatalf("load project local config loaded=%v err=%v", loaded, err)
 	}
-	if len(cfgFile.Plugins.Disabled) != 1 || cfgFile.Plugins.Disabled[0] != "memory" {
-		t.Fatalf("expected memory disabled in config, got %+v", cfgFile.Plugins.Disabled)
+	if cfgFile.Plugins["memory"].Enabled == nil || *cfgFile.Plugins["memory"].Enabled {
+		t.Fatalf("expected memory disabled in config, got %+v", cfgFile.Plugins)
 	}
 
 	svc.Dispatch(Intent{Kind: IntentSetPluginEnabled, PluginID: "memory", PluginEnabled: true})
 	ev = waitForServiceEvent(t, svc, EventPluginsManagerUpdated)
+	if ev.Open {
+		t.Fatalf("expected toggle refresh not to reopen manager")
+	}
 	if !hasProtocolPlugin(ev.Plugins, "memory", true) {
 		t.Fatalf("expected memory plugin enabled again, got %+v", ev.Plugins)
 	}

@@ -129,9 +129,8 @@ max_concurrency = 3                    # 并行 agent 数
 disabled = []                          # 禁用的技能
 enabled = []                           # 强制启用的技能
 
-[plugins]
-disabled = []                          # 禁用的插件
-enabled = []                           # 强制启用的插件
+[plugins.memory]
+enabled = true                         # 每个插件单独配置启用状态
 
 [logging]
 level = "info"                         # debug | info | warn | error

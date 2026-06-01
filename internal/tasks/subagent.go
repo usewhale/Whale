@@ -21,6 +21,7 @@ type SpawnSubagentRequest struct {
 	Task              string         `json:"task"`
 	Role              string         `json:"role,omitempty"`
 	Model             string         `json:"model,omitempty"`
+	Effort            string         `json:"effort,omitempty"`
 	MaxToolIters      int            `json:"max_tool_iters,omitempty"`
 	MaxToolCalls      int            `json:"max_tool_calls,omitempty"`
 	Capabilities      []string       `json:"capabilities,omitempty"`
@@ -37,6 +38,7 @@ type SpawnSubagentResponse struct {
 	SessionID         string    `json:"session_id"`
 	Role              string    `json:"role"`
 	Model             string    `json:"model"`
+	Effort            string    `json:"effort,omitempty"`
 	PermissionProfile string    `json:"permission_profile"`
 	Status            string    `json:"status"`
 	Summary           string    `json:"summary"`
@@ -96,19 +98,47 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 	if role == "" {
 		role = "explore"
 	}
-	if !validRole(role) {
+	registry := r.agentRegistry
+	if registry == nil {
+		registry = NewAgentRegistry(nil)
+	}
+	agentDef, ok := registry.Resolve(role)
+	if !ok {
 		return SpawnSubagentResponse{}, fmt.Errorf("unsupported subagent role %q", role)
 	}
 	model := strings.TrimSpace(req.Model)
 	if model == "" {
+		model = agentDef.Model
+	}
+	if model == "" {
 		model = r.defaultModel
 	}
+	effort := strings.TrimSpace(req.Effort)
+	if effort == "" {
+		effort = agentDef.Effort
+	}
+	if effort == "" {
+		effort = r.defaultEffort
+	}
 	maxToolIters := req.MaxToolIters
+	if maxToolIters <= 0 {
+		maxToolIters = agentDef.MaxToolIters
+	}
 	if maxToolIters <= 0 {
 		maxToolIters = r.defaultMaxToolIters
 	}
 	maxToolCalls := req.MaxToolCalls
+	if maxToolCalls <= 0 {
+		maxToolCalls = agentDef.MaxToolCalls
+	}
+	if req.Capabilities == nil && len(agentDef.Capabilities) > 0 {
+		req.Capabilities = append([]string(nil), agentDef.Capabilities...)
+	}
 	childTools, err := BuildCapabilityRegistry(r.parentTools, req.Capabilities)
+	if err != nil {
+		return SpawnSubagentResponse{}, err
+	}
+	childTools, err = filterAgentTools(childTools, agentDef)
 	if err != nil {
 		return SpawnSubagentResponse{}, err
 	}
@@ -122,7 +152,7 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 			return SpawnSubagentResponse{}, err
 		}
 	}
-	provider, err := r.providerFactory(model, 0)
+	provider, err := r.providerFactory(model, effort, 0)
 	if err != nil {
 		return SpawnSubagentResponse{}, err
 	}
@@ -143,25 +173,34 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 		Workspace:       r.workspaceRoot,
 		StartedAt:       start.UTC(),
 	})
-	extraBlocks := []string{subagentSystemBlock(role)}
+	extraBlocks := []string{strings.TrimSpace(agentDef.SystemPrompt)}
+	if extraBlocks[0] == "" {
+		extraBlocks[0] = strings.TrimSpace(builtinExplorePrompt)
+	}
 	if workflowBlock := workflowContextSystemBlock(req); workflowBlock != "" {
 		extraBlocks = append(extraBlocks, workflowBlock)
 	}
 	if schemaBlock := outputSchemaSystemBlock(req.OutputSchema); schemaBlock != "" {
 		extraBlocks = append(extraBlocks, schemaBlock)
 	}
+	basePolicy := r.parentPolicy
+	if basePolicy == nil {
+		basePolicy = policy.RulePolicy{Default: policy.PermissionAllow, Rules: policy.DefaultRules(), WorkspaceRoot: r.workspaceRoot}
+	}
+	childPolicy := childToolApprovalPolicy{Base: basePolicy, Capabilities: append([]string(nil), req.Capabilities...)}
+	childMode := session.ModeAsk
+	if capabilitiesAllowMutatingTools(req.Capabilities) {
+		childMode = session.ModeAgent
+	}
 	newChild := func(registry *core.ToolRegistry, maxIters int) *agent.Agent {
 		return agent.NewAgentWithRegistry(provider, childStore, registry,
-			agent.WithSessionMode(session.ModeAsk),
-			agent.WithToolPolicy(policy.RulePolicy{Default: policy.PermissionAllow, Rules: policy.DefaultRules(), WorkspaceRoot: r.workspaceRoot}),
-			// The child registry is already restricted to read-only tools
-			// (BuildReadOnlyRegistry) and a subagent has no interactive approval
-			// path, so auto-approve "ask" decisions instead of defaulting them to
-			// denied. This keeps read-only MCP/memory tools usable, matching the
-			// pre-RulePolicy behavior; "deny" rules still produce a non-Allow
-			// decision and are enforced before the approval callback runs.
+			agent.WithSessionMode(childMode),
+			agent.WithToolPolicy(childPolicy),
 			agent.WithApprovalFunc(func(approvalReq policy.ApprovalRequest) policy.ApprovalDecision {
 				if r.approvalFunc == nil {
+					if capabilitiesNeedApproval(req.Capabilities) {
+						return policy.ApprovalDeny
+					}
 					return policy.ApprovalAllow
 				}
 				approvalReq.Metadata = workflowApprovalMetadata(approvalReq.Metadata, req)
@@ -345,11 +384,16 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 		}
 	}
 	r.patchSubagentMeta(sessionID, session.SessionMeta{Status: "completed", Summary: summary, CompletedAt: completedAt})
+	permissionProfile := "read_only"
+	if capabilitiesNeedApproval(req.Capabilities) {
+		permissionProfile = "policy_gated"
+	}
 	return SpawnSubagentResponse{
 		SessionID:         sessionID,
 		Role:              role,
 		Model:             model,
-		PermissionProfile: "read_only",
+		Effort:            effort,
+		PermissionProfile: permissionProfile,
 		Status:            "completed",
 		Summary:           summary,
 		StructuredResult:  structuredResult,
@@ -359,6 +403,26 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 		DurationMS:        time.Since(start).Milliseconds(),
 		CompletedAt:       completedAt.Format(time.RFC3339),
 	}, nil
+}
+
+func capabilitiesNeedApproval(capabilities []string) bool {
+	for _, cap := range capabilities {
+		switch strings.TrimSpace(cap) {
+		case CapabilityWorkspaceWrite, CapabilityShellRead, CapabilityShellWrite:
+			return true
+		}
+	}
+	return false
+}
+
+func capabilitiesAllowMutatingTools(capabilities []string) bool {
+	for _, cap := range capabilities {
+		switch strings.TrimSpace(cap) {
+		case CapabilityWorkspaceWrite, CapabilityShellWrite:
+			return true
+		}
+	}
+	return false
 }
 
 func workflowContextSystemBlock(req SpawnSubagentRequest) string {

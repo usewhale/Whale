@@ -10,7 +10,15 @@ func (s *Service) emitSessionHydratedWithMetadata(metadata map[string]any) {
 		s.emit(Event{Kind: EventError, Text: err.Error()})
 		return
 	}
-	s.emit(Event{Kind: EventSessionHydrated, SessionID: s.app.SessionID(), Messages: protocolMessages(msgs), AutoAccept: s.app.AutoAcceptPermissions(), AutoAcceptKnown: true, Metadata: metadata})
+	s.emit(Event{
+		Kind:            EventSessionHydrated,
+		SessionID:       s.app.SessionID(),
+		Messages:        protocolMessages(msgs),
+		AutoAccept:      s.app.AutoAcceptPermissions(),
+		AutoAcceptKnown: true,
+		Metadata:        metadata,
+		Plugins:         protocolPlugins(s.PluginsForManager()),
+	})
 }
 
 func (s *Service) emitSessionChoices() bool {

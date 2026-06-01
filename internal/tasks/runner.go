@@ -17,7 +17,7 @@ const (
 	DefaultSummaryMaxChar = 8 * 1024
 )
 
-type ProviderFactory func(model string, maxTokens int) (llm.Provider, error)
+type ProviderFactory func(model string, effort string, maxTokens int) (llm.Provider, error)
 
 type RunnerConfig struct {
 	ProviderFactory      ProviderFactory
@@ -33,11 +33,14 @@ type RunnerConfig struct {
 	AutoCompact          bool
 	AutoCompactThreshold float64
 	DefaultModel         string
+	DefaultEffort        string
 	DefaultMaxTokens     int
 	DefaultMaxToolIters  int
 	SummaryMaxChars      int
 	UsageLogPath         string
 	ApprovalFunc         policy.ApprovalFunc
+	ParentPolicy         policy.ToolPolicy
+	AgentDefinitions     []AgentDefinition
 }
 
 type Runner struct {
@@ -54,11 +57,14 @@ type Runner struct {
 	autoCompact          bool
 	autoCompactThreshold float64
 	defaultModel         string
+	defaultEffort        string
 	defaultMaxTokens     int
 	defaultMaxToolIters  int
 	summaryMaxChars      int
 	usageLogPath         string
 	approvalFunc         policy.ApprovalFunc
+	parentPolicy         policy.ToolPolicy
+	agentRegistry        *AgentRegistry
 }
 
 func NewRunner(cfg RunnerConfig) *Runner {
@@ -66,6 +72,7 @@ func NewRunner(cfg RunnerConfig) *Runner {
 	if model == "" {
 		model = defaults.DefaultModel
 	}
+	effort := strings.TrimSpace(cfg.DefaultEffort)
 	maxTokens := cfg.DefaultMaxTokens
 	if maxTokens <= 0 {
 		maxTokens = DefaultMaxTokens
@@ -92,10 +99,13 @@ func NewRunner(cfg RunnerConfig) *Runner {
 		autoCompact:          cfg.AutoCompact,
 		autoCompactThreshold: cfg.AutoCompactThreshold,
 		defaultModel:         model,
+		defaultEffort:        effort,
 		defaultMaxTokens:     maxTokens,
 		defaultMaxToolIters:  maxToolIters,
 		summaryMaxChars:      summaryMaxChars,
 		usageLogPath:         strings.TrimSpace(cfg.UsageLogPath),
 		approvalFunc:         cfg.ApprovalFunc,
+		parentPolicy:         cfg.ParentPolicy,
+		agentRegistry:        NewAgentRegistry(cfg.AgentDefinitions),
 	}
 }
