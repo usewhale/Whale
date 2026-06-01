@@ -438,10 +438,14 @@ func workflowPanelTaskFromSnapshot(task *workflowTaskSnapshot) WorkflowPanelTask
 func workflowTaskStatusFromEvent(ev workflow.RunEvent) string {
 	switch ev.Type {
 	case workflow.EventTaskCompleted, workflow.EventWorkflowCompleted:
-		if ev.Status != "" {
-			return ev.Status
+		switch ev.Status {
+		case workflow.TaskStatusFailed:
+			return workflow.TaskStatusFailed
+		case workflow.TaskStatusCancelled:
+			return workflow.TaskStatusCancelled
+		default:
+			return workflow.TaskStatusCompleted
 		}
-		return workflow.TaskStatusCompleted
 	case workflow.EventTaskFailed, workflow.EventWorkflowFailed:
 		return workflow.TaskStatusFailed
 	case workflow.EventTaskCancelled:

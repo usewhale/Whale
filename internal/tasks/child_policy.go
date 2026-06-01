@@ -33,11 +33,11 @@ func (p childToolApprovalPolicy) requiresApproval(spec core.ToolSpec, call core.
 	if core.IsReadOnlyToolCall(spec, call) {
 		return false
 	}
-	caps := stringSet(p.Capabilities)
+	caps := childCapabilitySet(p.Capabilities)
 	if caps[CapabilityWorkspaceWrite] && slices.Contains(spec.Capabilities, CapabilityWorkspaceWrite) {
 		return true
 	}
-	if caps[CapabilityShellWrite] && slices.Contains(spec.Capabilities, CapabilityShellWrite) {
+	if caps[CapabilityShellRun] && slices.Contains(spec.Capabilities, CapabilityShellRun) {
 		return true
 	}
 	for _, cap := range spec.Capabilities {
@@ -46,4 +46,14 @@ func (p childToolApprovalPolicy) requiresApproval(spec core.ToolSpec, call core.
 		}
 	}
 	return false
+}
+
+func childCapabilitySet(values []string) map[string]bool {
+	out := map[string]bool{}
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			out[trimmed] = true
+		}
+	}
+	return out
 }

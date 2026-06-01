@@ -210,7 +210,7 @@ func (p RulePolicy) requestsFor(spec core.ToolSpec, call core.ToolCall) []permis
 // unmapped custom or plugin tool name.
 func isMappedPermissionKind(kind string) bool {
 	switch kind {
-	case "read", "edit", "shell", "memory", "task", "mcp":
+	case "read", "edit", "shell", "memory", "task", "mcp", "web_search", "web_fetch":
 		return true
 	default:
 		return false

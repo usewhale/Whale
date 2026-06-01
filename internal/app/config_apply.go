@@ -312,6 +312,8 @@ func applyPermissionsConfig(cfg *Config, file FilePermissionsConfig) error {
 		MCP:               file.MCP,
 		Memory:            file.Memory,
 		Task:              file.Task,
+		WebSearch:         file.WebSearch,
+		WebFetch:          file.WebFetch,
 		MutatingTool:      file.MutatingTool,
 	})
 	if err != nil {

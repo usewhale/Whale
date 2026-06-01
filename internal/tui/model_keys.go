@@ -102,6 +102,8 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 		return m.handleWorktreeExitKey(msg), false, true
 	case modeWorkflowLaunch:
 		return m.handleWorkflowLaunchKey(msg), false, true
+	case modeWorkflowRawScript:
+		return m.handleWorkflowRawScriptKey(msg), false, true
 	case modeWorkflowPanel:
 		return m.handleWorkflowPanelKey(msg), false, true
 	}
@@ -151,6 +153,15 @@ func (m *model) cancelBlockingModalForInterrupt(dispatch bool) {
 		if dispatch && m.approval.toolCallID != "" {
 			m.dispatchIntent(protocol.Intent{Kind: protocol.IntentCancelToolApproval, ToolCallID: m.approval.toolCallID})
 		}
+		if dispatch {
+			for _, prompt := range m.approvalQueue {
+				if prompt.toolCallID != "" {
+					m.dispatchIntent(protocol.Intent{Kind: protocol.IntentCancelToolApproval, ToolCallID: prompt.toolCallID})
+				}
+			}
+		}
+		m.approval = approvalPromptState{}
+		m.approvalQueue = nil
 		m.mode = modeChat
 	case modeUserInput:
 		if dispatch && !m.busy && m.userInput.toolCallID != "" {

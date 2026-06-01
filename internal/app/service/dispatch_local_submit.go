@@ -226,8 +226,19 @@ func (s *Service) cancelWorkflowRun(runID string) {
 	s.emit(Event{Kind: EventWorkflowPanel, Text: out.PlainText, LocalResult: protocolLocalResult(out)})
 }
 
-func (s *Service) startWorkflow(name, args, resumeFromRunID string, trust bool) {
-	out, err := s.app.StartWorkflowFromConfirmation(name, args, resumeFromRunID, trust)
+func (s *Service) startWorkflow(name, args, resumeFromRunID string, trust bool, script, saveAs, scriptPath string) {
+	var (
+		out *app.LocalResult
+		err error
+	)
+	switch {
+	case strings.TrimSpace(script) != "":
+		out, err = s.app.StartGeneratedWorkflowFromConfirmation(script, saveAs, args, resumeFromRunID, trust)
+	case strings.TrimSpace(scriptPath) != "":
+		out, err = s.app.StartScriptPathWorkflowFromConfirmation(scriptPath, args, resumeFromRunID)
+	default:
+		out, err = s.app.StartWorkflowFromConfirmation(name, args, resumeFromRunID, trust)
+	}
 	if err != nil {
 		s.emit(localSubmitResultEvent("error", err.Error()))
 		s.emit(localSubmitDoneEvent())

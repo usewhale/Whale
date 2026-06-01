@@ -36,6 +36,12 @@ func initAppTools(cfg Config, start StartOptions, workspaceRoot string) (appTool
 	if err != nil {
 		return appToolInit{}, fmt.Errorf("init base tool registry failed: %w", err)
 	}
+	subagentTools := append([]core.Tool{}, baseTools...)
+	subagentTools = append(subagentTools, pluginTools...)
+	subagentToolRegistry, err := core.NewToolRegistryChecked(subagentTools)
+	if err != nil {
+		return appToolInit{}, fmt.Errorf("init subagent tool registry failed: %w", err)
+	}
 	hooks, hookSources, hookLoadErr := agent.LoadHooks(workspaceRoot, cfg.DataDir)
 	if hookLoadErr != nil {
 		return appToolInit{}, fmt.Errorf("load hooks failed: %w", hookLoadErr)
@@ -49,17 +55,18 @@ func initAppTools(cfg Config, start StartOptions, workspaceRoot string) (appTool
 	hookRunner := agent.NewHookRunnerWithState(allHooks, workspaceRoot, hookStates)
 	hookRunner.AddHandlers(pluginOutcome.HookHandlers...)
 	return appToolInit{
-		toolset:          toolset,
-		mcpManager:       mcpManager,
-		pluginManager:    pluginManager,
-		pluginTools:      pluginTools,
-		pluginAgents:     pluginOutcome.Agents,
-		baseTools:        baseTools,
-		baseToolRegistry: baseToolRegistry,
-		hooks:            hooks,
-		hookStates:       hookStates,
-		hookRunner:       hookRunner,
-		hookSources:      hookSources,
+		toolset:              toolset,
+		mcpManager:           mcpManager,
+		pluginManager:        pluginManager,
+		pluginTools:          pluginTools,
+		pluginAgents:         pluginOutcome.Agents,
+		baseTools:            baseTools,
+		baseToolRegistry:     baseToolRegistry,
+		subagentToolRegistry: subagentToolRegistry,
+		hooks:                hooks,
+		hookStates:           hookStates,
+		hookRunner:           hookRunner,
+		hookSources:          hookSources,
 	}, nil
 }
 

@@ -41,6 +41,40 @@ func TestHookRunnerPostToolWarnByExitCode2(t *testing.T) {
 	}
 }
 
+func TestHookRunnerOnceKeyIncludesHookBody(t *testing.T) {
+	hooks := []ResolvedHook{
+		{HookConfig: HookConfig{Type: "prompt", Match: "read_file", Prompt: "first gate", Once: true}, Event: HookEventPreToolUse, Source: "config"},
+		{HookConfig: HookConfig{Type: "prompt", Match: "read_file", Prompt: "second gate", Once: true}, Event: HookEventPreToolUse, Source: "config"},
+		{HookConfig: HookConfig{Command: "same", Match: "read_file", CWD: "a", Once: true}, Event: HookEventPreToolUse, Source: "config"},
+		{HookConfig: HookConfig{Command: "same", Match: "read_file", CWD: "b", Once: true}, Event: HookEventPreToolUse, Source: "config"},
+	}
+	r := NewHookRunner(hooks, ".")
+	promptCalls := 0
+	r.SetExecutors(func(_ context.Context, cfg HookConfig, _ HookPayload) HookResult {
+		promptCalls++
+		return HookResult{Decision: HookDecisionPass, Message: cfg.Prompt}
+	}, nil)
+	commandCalls := 0
+	r.spawner = func(_ context.Context, _ HookSpawnInput) HookSpawnResult {
+		commandCalls++
+		return HookSpawnResult{ExitCode: 0}
+	}
+
+	payload := HookPayload{Event: HookEventPreToolUse, ToolName: "read_file"}
+	report := r.RunHook(context.Background(), payload)
+	if report.Blocked {
+		t.Fatalf("first run blocked: %+v", report)
+	}
+	if promptCalls != 2 || commandCalls != 2 || len(report.Outcomes) != 4 {
+		t.Fatalf("first run promptCalls=%d commandCalls=%d outcomes=%d", promptCalls, commandCalls, len(report.Outcomes))
+	}
+
+	report = r.RunHook(context.Background(), payload)
+	if len(report.Outcomes) != 0 {
+		t.Fatalf("second run outcomes = %+v", report.Outcomes)
+	}
+}
+
 func TestHookRunnerObserverSeesStartedThenCompleted(t *testing.T) {
 	r := NewHookRunner([]ResolvedHook{{HookConfig: HookConfig{Command: "ok", Description: "test hook"}, Event: HookEventSessionStart}}, ".")
 	r.spawner = func(_ context.Context, _ HookSpawnInput) HookSpawnResult {
@@ -60,6 +94,25 @@ func TestHookRunnerObserverSeesStartedThenCompleted(t *testing.T) {
 	}
 	if infos[0].ID == "" || infos[0].ID != infos[1].ID || infos[0].Event != HookEventSessionStart || infos[0].Name != "test hook" {
 		t.Fatalf("unexpected lifecycle info: %+v", infos)
+	}
+}
+
+func TestHookRunnerIfConditionMatchesToolNameForNonToolEvent(t *testing.T) {
+	r := NewHookRunner([]ResolvedHook{
+		{HookConfig: HookConfig{Command: "skip", If: "read_file"}, Event: HookEventSubagentStart},
+		{HookConfig: HookConfig{Command: "run", If: "spawn_subagent"}, Event: HookEventSubagentStart},
+	}, ".")
+	var commands []string
+	r.spawner = func(_ context.Context, in HookSpawnInput) HookSpawnResult {
+		commands = append(commands, in.Command)
+		return HookSpawnResult{ExitCode: 0}
+	}
+	report := r.RunHook(context.Background(), NewSubagentHookPayload(HookEventSubagentStart, "s1", ".", "review", "", "check diff"))
+	if report.Blocked {
+		t.Fatalf("subagent start hook should not block: %+v", report)
+	}
+	if strings.Join(commands, ",") != "run" {
+		t.Fatalf("commands = %+v, want only run", commands)
 	}
 }
 
@@ -316,6 +369,51 @@ func TestTrustedHookStatesActivateCurrentHashAndBlockModifiedHash(t *testing.T) 
 	}}, ".", states).ListHooks()[0]
 	if modified.Trust != HookTrustModified || modified.Active {
 		t.Fatalf("modified hook should require review: %+v", modified)
+	}
+}
+
+func TestHookTrustHashIncludesRequestAffectingFields(t *testing.T) {
+	base := ResolvedHook{
+		HookConfig: HookConfig{
+			Type:           "http",
+			URL:            "https://hooks.example.test/review",
+			Match:          "shell_run",
+			If:             "tool == 'shell_run'",
+			Model:          "deepseek-v4-flash",
+			Shell:          "/bin/zsh",
+			Once:           true,
+			Async:          true,
+			AsyncRewake:    true,
+			Headers:        map[string]string{"X-Token": "one"},
+			AllowedEnvVars: []string{"API_KEY"},
+		},
+		Event:  HookEventPreToolUse,
+		Source: "source",
+	}
+	states := TrustHookStates(NewHookRunnerWithState([]ResolvedHook{base}, ".", HookStates{}).ListHooks(), nil, nil)
+
+	tests := []struct {
+		name   string
+		mutate func(*ResolvedHook)
+	}{
+		{name: "if", mutate: func(h *ResolvedHook) { h.If = "tool != 'shell_run'" }},
+		{name: "model", mutate: func(h *ResolvedHook) { h.Model = "deepseek-v4-pro" }},
+		{name: "shell", mutate: func(h *ResolvedHook) { h.Shell = "/bin/bash" }},
+		{name: "once", mutate: func(h *ResolvedHook) { h.Once = false }},
+		{name: "async", mutate: func(h *ResolvedHook) { h.Async = false }},
+		{name: "async rewake", mutate: func(h *ResolvedHook) { h.AsyncRewake = false }},
+		{name: "headers", mutate: func(h *ResolvedHook) { h.Headers = map[string]string{"X-Token": "two"} }},
+		{name: "allowed env vars", mutate: func(h *ResolvedHook) { h.AllowedEnvVars = []string{"API_KEY", "EXTRA_TOKEN"} }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			hook := base
+			tc.mutate(&hook)
+			entry := NewHookRunnerWithState([]ResolvedHook{hook}, ".", states).ListHooks()[0]
+			if entry.Trust != HookTrustModified || entry.Active {
+				t.Fatalf("changed %s should require review: %+v", tc.name, entry)
+			}
+		})
 	}
 }
 

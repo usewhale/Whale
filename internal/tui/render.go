@@ -176,6 +176,9 @@ func (m model) bottomPartsBeforeInput(mainWidth int) []string {
 	if m.mode == modeWorkflowLaunch {
 		bottomParts = append(bottomParts, m.renderWorkflowLaunch())
 	}
+	if m.mode == modeWorkflowRawScript {
+		bottomParts = append(bottomParts, m.renderWorkflowRawScript())
+	}
 	if m.mode == modeSessionPicker {
 		bottomParts = append(bottomParts, m.renderSessionPicker())
 	}

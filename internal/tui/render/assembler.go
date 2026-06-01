@@ -275,6 +275,18 @@ func (a *Assembler) AddNotice(text string) {
 	})
 }
 
+func (a *Assembler) AddAssistantMessage(text string) {
+	t := strings.TrimSpace(strings.TrimRight(text, "\n"))
+	if t == "" {
+		return
+	}
+	a.messages = append(a.messages, UIMessage{
+		Role: "assistant",
+		Kind: KindText,
+		Text: t,
+	})
+}
+
 func (a *Assembler) AddSystemNotice(notice *SystemNotice) {
 	if notice == nil {
 		return

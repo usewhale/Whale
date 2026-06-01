@@ -247,10 +247,15 @@ func (s *TaskScheduler) SpawnAgent(ctx context.Context, actor ActorContext, spec
 	if result.Status == "" {
 		result.Status = TaskStatusCompleted
 	}
+	eventStatus := result.Status
+	if eventStatus == TaskStatusRunning {
+		eventStatus = TaskStatusCompleted
+	}
 	data := map[string]any{
-		"tool_calls":  result.ToolCalls,
-		"duration_ms": result.DurationMS,
-		"usage":       usageEventData(result.Usage),
+		"tool_calls":   result.ToolCalls,
+		"duration_ms":  result.DurationMS,
+		"usage":        usageEventData(result.Usage),
+		"child_status": result.Status,
 	}
 	if resumeData := workflowResumeData(actor.CallKey, actor.SpecHash, actor.Sequence); resumeData != nil {
 		data["resume"] = resumeData
@@ -263,7 +268,7 @@ func (s *TaskScheduler) SpawnAgent(ctx context.Context, actor ActorContext, spec
 		TaskID:       actor.TaskID,
 		Type:         EventTaskCompleted,
 		Time:         s.now().UTC(),
-		Status:       result.Status,
+		Status:       eventStatus,
 		ParentTaskID: actor.ParentTaskID,
 		WorkflowName: actor.WorkflowName,
 		Phase:        actor.Phase,

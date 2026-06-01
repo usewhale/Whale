@@ -11,18 +11,18 @@ func taskAgentDefinitions(in []plugins.AgentDefinition) []tasks.AgentDefinition 
 	}
 	out := make([]tasks.AgentDefinition, 0, len(in))
 	for _, agent := range in {
+		tools := append([]string(nil), agent.Capabilities...)
+		tools = append(tools, agent.AllowedTools...)
 		out = append(out, tasks.AgentDefinition{
 			Name:            agent.Name,
 			Description:     agent.Description,
-			SystemPrompt:    agent.SystemPrompt,
+			Prompt:          agent.SystemPrompt,
 			Model:           agent.Model,
 			Effort:          agent.Effort,
 			MaxToolIters:    agent.MaxToolIters,
 			MaxToolCalls:    agent.MaxToolCalls,
-			Capabilities:    append([]string(nil), agent.Capabilities...),
-			AllowedTools:    append([]string(nil), agent.AllowedTools...),
+			Tools:           tools,
 			DisallowedTools: append([]string(nil), agent.DisallowedTools...),
-			Source:          agent.Source,
 		})
 	}
 	return out

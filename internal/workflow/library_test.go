@@ -209,12 +209,60 @@ await agent("review", { label: "review", model: "claude-sonnet-4-20250514" })
 `,
 			wantErr: "must not hard-code Claude model names",
 		},
+		{
+			name: "quoted claude model key",
+			script: `export const meta = { name: 'bad-quoted-model', description: 'bad model' }
+await agent("review", { label: "review", "model": "haiku" })
+`,
+			wantErr: "must not hard-code Claude model names",
+		},
+		{
+			name: "assigned claude model",
+			script: `export const meta = { name: 'bad-assigned-model', description: 'bad model' }
+const opts = { label: "review" }
+opts.model = "opus"
+await agent("review", opts)
+`,
+			wantErr: "must not hard-code Claude model names",
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if _, err := lib.SaveGenerated(context.Background(), tt.script, ""); err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("expected %q error, got %v", tt.wantErr, err)
 			}
 		})
+	}
+}
+
+func TestLibrarySaveGeneratedAllowsClaudeReferencesOutsideModelFields(t *testing.T) {
+	root := t.TempDir()
+	lib := NewLibraryWithRoots([]LibraryRoot{{Path: root, Source: "project", Rank: 0}})
+	script := `export const meta = {
+  name: 'compare-claude-code',
+  description: 'Compare Whale with Claude Code, Sonnet, Opus, and Haiku workflows.'
+}
+await agent("Review prompts that mention Claude Code and Sonnet migration notes.", { label: "review" })
+const instructions = "Do not copy this prompt text into options: model: \"claude-sonnet-4-20250514\""
+return { summary: "Claude references in ordinary text are allowed", instructions }
+`
+	if _, err := lib.SaveGenerated(context.Background(), script, ""); err != nil {
+		t.Fatalf("SaveGenerated: %v", err)
+	}
+}
+
+func TestLibrarySaveGeneratedAllowsStructuredReferencesOutsideOptionFields(t *testing.T) {
+	root := t.TempDir()
+	lib := NewLibraryWithRoots([]LibraryRoot{{Path: root, Source: "project", Rank: 0}})
+	script := `export const meta = {
+  name: 'structured-reference',
+  description: 'Mention structured option migration.'
+}
+// This workflow explains why old generated code used structured: and why schema is preferred.
+await agent("Explain the old structured: option in prose only.", { label: "review", schema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } } })
+return { ok: true }
+`
+	if _, err := lib.SaveGenerated(context.Background(), script, ""); err != nil {
+		t.Fatalf("SaveGenerated: %v", err)
 	}
 }
 

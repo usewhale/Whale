@@ -22,16 +22,15 @@ func (a *App) rebuildTaskRuntimeLocked() error {
 	thinking := a.thinkingEnabled
 	apiKey := a.apiKey
 	cfg := a.cfg
-	providerFactory := func(model string, requestEffort string, maxTokens int) (llm.Provider, error) {
+	providerFactory := func(model string, maxTokens int) (llm.Provider, error) {
 		if strings.TrimSpace(model) == "" {
 			model = defaults.DefaultModel
 		}
-		effectiveEffort := normalizeEffort(core.FirstNonEmpty(strings.TrimSpace(requestEffort), effort))
 		return newDeepSeekProvider(providerOptions{
 			APIKey:            apiKey,
 			BaseURL:           cfg.APIBaseURL,
 			Model:             model,
-			ReasoningEffort:   effectiveEffort,
+			ReasoningEffort:   effort,
 			ThinkingEnabled:   thinking,
 			MaxTokens:         maxTokens,
 			RetryPolicy:       retryPolicyFromConfig(cfg),

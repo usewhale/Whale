@@ -101,13 +101,15 @@ func buildHookModelPrompt(cfg agent.HookConfig, payload agent.HookPayload, hookK
 func completeHookModel(ctx context.Context, provider llm.Provider, prompt string) (string, llm.Usage, error) {
 	var content strings.Builder
 	var usage llm.Usage
+	sawDelta := false
 	for ev := range provider.StreamResponse(ctx, []core.Message{{Role: core.RoleUser, Text: prompt}}, nil) {
 		switch ev.Type {
 		case llm.EventContentDelta:
 			content.WriteString(ev.Content)
+			sawDelta = true
 		case llm.EventComplete:
 			if ev.Response != nil {
-				if strings.TrimSpace(ev.Response.Content) != "" {
+				if !sawDelta && strings.TrimSpace(ev.Response.Content) != "" {
 					content.WriteString(ev.Response.Content)
 				}
 				usage = addUsage(usage, ev.Response.Usage)

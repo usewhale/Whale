@@ -1,12 +1,19 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/usewhale/whale/internal/workflow"
 )
+
+const workflowTerminalPlainTextLimit = 12000
 
 func (a *App) BuildWorkflowTerminalLocalResult(runID string) *LocalResult {
 	run, res, err := a.loadWorkflowRunForLocalResult(runID)
@@ -33,15 +40,20 @@ func (a *App) BuildWorkflowTerminalLocalResult(runID string) *LocalResult {
 	lines = append(lines, "")
 	resultFields := workflowResultDisplayFields(summary.Result)
 	if len(resultFields) > 0 {
-		lines = append(lines, workflowTerminalResultLines(resultFields)...)
+		lines = append(lines, workflowTerminalResultLinesFor(summary.Result, resultFields)...)
 	} else if strings.TrimSpace(summary.Summary) != "" {
 		lines = append(lines, summary.Summary)
 	} else if strings.TrimSpace(run.Error) != "" {
 		lines = append(lines, strings.TrimSpace(run.Error))
 	}
-	lines = append(lines, "", "Full run details: open /workflows")
+	resultPath := a.writeWorkflowResultFile(run.ID, summary.Result)
+	if resultPath != "" {
+		lines = append(lines, "", "Full result:", resultPath)
+	} else {
+		lines = append(lines, "", "Full run details: open /workflows")
+	}
 	if runtime := workflowTerminalRuntimeLine(stats); runtime != "" {
-		lines = append(lines, runtime)
+		lines = append(lines, "", "Runtime:", strings.TrimSpace(strings.TrimPrefix(runtime, "Runtime:")))
 	}
 	failedFields := workflowTerminalFailedFields(snapshot.Tasks, 3)
 	if len(failedFields) > 0 {
@@ -78,13 +90,53 @@ func (a *App) BuildWorkflowTerminalLocalResult(runID string) *LocalResult {
 	if len(failedFields) > 0 {
 		sections = append(sections, LocalResultSection{Title: "Failed subagents", Fields: failedFields})
 	}
+	plainText := workflowTerminalLimitPlainText(strings.Join(lines, "\n"))
+	if resultPath != "" && !strings.Contains(plainText, resultPath) {
+		plainText = strings.TrimSpace(plainText) + "\n\nFull result:\n" + resultPath
+	}
 	return &LocalResult{
 		Kind:      "workflow-terminal",
 		Title:     title,
 		Fields:    fields,
 		Sections:  sections,
-		PlainText: strings.Join(lines, "\n"),
+		PlainText: plainText,
 	}
+}
+
+type workflowRunDirStore interface {
+	RunDir(workflow.RunID) (string, error)
+}
+
+func (a *App) writeWorkflowResultFile(runID workflow.RunID, result any) string {
+	if result == nil || a == nil || a.workflowManager == nil || a.workflowManager.Store == nil {
+		return ""
+	}
+	store, ok := a.workflowManager.Store.(workflowRunDirStore)
+	if !ok {
+		return ""
+	}
+	dir, err := store.RunDir(runID)
+	if err != nil {
+		return ""
+	}
+	data, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return ""
+	}
+	path := filepath.Join(dir, "result.json")
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		return ""
+	}
+	return path
+}
+
+func workflowTerminalLimitPlainText(text string) string {
+	text = strings.TrimSpace(text)
+	runes := []rune(text)
+	if len(runes) <= workflowTerminalPlainTextLimit {
+		return text
+	}
+	return strings.TrimSpace(string(runes[:workflowTerminalPlainTextLimit])) + "\n\n... output truncated in chat; open /workflows or the full result file for the complete structured result."
 }
 
 type workflowTerminalStatsSummary struct {
@@ -241,6 +293,186 @@ func workflowTerminalResultLines(fields []LocalResultField) []string {
 		}
 	}
 	return lines
+}
+
+func workflowTerminalResultLinesFor(result any, fields []LocalResultField) []string {
+	obj, ok := result.(map[string]any)
+	if !ok {
+		return workflowTerminalResultLines(fields)
+	}
+	lines := []string{}
+	used := map[string]bool{}
+	if key, text := workflowTerminalPrimaryResultText(obj); text != "" {
+		lines = append(lines, text)
+		used[key] = true
+	}
+	keys := make([]string, 0, len(obj))
+	for key := range obj {
+		if used[key] {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		return lines
+	}
+	if len(lines) > 0 {
+		lines = append(lines, "")
+	}
+	lines = append(lines, "Result:")
+	for _, key := range keys {
+		preview := workflowTerminalResultPreview(obj[key])
+		if preview == "" {
+			continue
+		}
+		label := workflowTerminalHumanizeIdentifier(key)
+		lines = append(lines, label+": "+preview)
+		for _, item := range workflowTerminalCollectionItemPreviews(obj[key], 3) {
+			lines = append(lines, "  "+item)
+		}
+	}
+	return lines
+}
+
+func workflowTerminalPrimaryResultText(obj map[string]any) (string, string) {
+	for _, key := range []string{"report", "summary", "answer", "decision", "verdict"} {
+		if text := strings.TrimSpace(workflowLocalString(obj[key])); text != "" {
+			return key, text
+		}
+	}
+	return "", ""
+}
+
+func workflowTerminalResultPreview(value any) string {
+	if value == nil {
+		return "null"
+	}
+	switch v := value.(type) {
+	case string:
+		return workflowTerminalCompactText(v, 240)
+	case bool:
+		return strconv.FormatBool(v)
+	case int:
+		return strconv.Itoa(v)
+	case int64:
+		return strconv.FormatInt(v, 10)
+	case float64:
+		return workflowTerminalFormatNumber(v)
+	case json.Number:
+		return v.String()
+	case []any:
+		if len(v) == 0 {
+			return "[]"
+		}
+		return fmt.Sprintf("%d items", len(v))
+	case []string:
+		if len(v) == 0 {
+			return "[]"
+		}
+		return fmt.Sprintf("%d items", len(v))
+	case map[string]any:
+		if len(v) == 0 {
+			return "{}"
+		}
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Sprintf("<%T>", value)
+	}
+	return workflowTerminalCompactText(string(data), 240)
+}
+
+func workflowTerminalCollectionItemPreviews(value any, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+	var items []any
+	switch v := value.(type) {
+	case []any:
+		items = v
+	case []string:
+		items = make([]any, 0, len(v))
+		for _, item := range v {
+			items = append(items, item)
+		}
+	default:
+		return nil
+	}
+	out := []string{}
+	for i, item := range items {
+		if i >= limit {
+			break
+		}
+		out = append(out, fmt.Sprintf("%d. %s", i+1, workflowTerminalCollectionItemPreview(item)))
+	}
+	if len(items) > limit {
+		out = append(out, fmt.Sprintf("... %d more", len(items)-limit))
+	}
+	return out
+}
+
+func workflowTerminalCollectionItemPreview(value any) string {
+	obj, ok := value.(map[string]any)
+	if !ok {
+		return workflowTerminalResultPreview(value)
+	}
+	prefixes := []string{}
+	for _, key := range []string{"severity", "confidence", "dimension", "category"} {
+		if text := workflowTerminalCompactText(workflowLocalString(obj[key]), 40); text != "" {
+			prefixes = append(prefixes, text)
+		}
+	}
+	title := ""
+	for _, key := range []string{"title", "name", "claim", "finding", "summary"} {
+		if text := workflowTerminalCompactText(workflowLocalString(obj[key]), 160); text != "" {
+			title = text
+			break
+		}
+	}
+	if title == "" {
+		return workflowTerminalResultPreview(value)
+	}
+	if len(prefixes) > 0 {
+		return "[" + strings.Join(prefixes, " · ") + "] " + title
+	}
+	return title
+}
+
+func workflowTerminalCompactText(text string, maxRunes int) string {
+	text = strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	if text == "" || maxRunes <= 0 {
+		return text
+	}
+	runes := []rune(text)
+	if len(runes) <= maxRunes {
+		return text
+	}
+	return strings.TrimSpace(string(runes[:maxRunes])) + "..."
+}
+
+func workflowTerminalFormatNumber(value float64) string {
+	if value == float64(int64(value)) {
+		return strconv.FormatInt(int64(value), 10)
+	}
+	return strconv.FormatFloat(value, 'f', -1, 64)
+}
+
+func workflowTerminalHumanizeIdentifier(value string) string {
+	var out []rune
+	var prev rune
+	for i, r := range value {
+		if i > 0 && r >= 'A' && r <= 'Z' && ((prev >= 'a' && prev <= 'z') || (prev >= '0' && prev <= '9')) {
+			out = append(out, ' ')
+		}
+		if r == '_' || r == '-' {
+			out = append(out, ' ')
+		} else {
+			out = append(out, r)
+		}
+		prev = r
+	}
+	return strings.Join(strings.Fields(string(out)), " ")
 }
 
 func workflowTerminalFailedFields(tasks []*workflowTaskSnapshot, limit int) []LocalResultField {

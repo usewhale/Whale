@@ -39,7 +39,7 @@ func (r *Runner) ParallelReason(ctx context.Context, req ParallelReasonRequest) 
 	if len(prompts) > MaxParallelPrompts {
 		return ParallelReasonResponse{}, fmt.Errorf("prompts supports at most %d items", MaxParallelPrompts)
 	}
-	if r.providerFactory == nil {
+	if r.providerFactory == nil && r.providerFactoryWithOptions == nil {
 		return ParallelReasonResponse{}, errors.New("provider factory is not configured")
 	}
 	model := strings.TrimSpace(req.Model)

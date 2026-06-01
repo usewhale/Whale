@@ -3,6 +3,7 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,7 +11,7 @@ import (
 	"github.com/usewhale/whale/internal/core"
 )
 
-func TestWorkflowToolLaunchesWorkflow(t *testing.T) {
+func TestWorkflowToolRejectsUnsavedScriptLaunch(t *testing.T) {
 	store := &memoryRunEventStore{}
 	manager := NewRunManager(store, NewTaskScheduler(store, &fakeAgentSpawner{}))
 	runner := NewScriptRunner(t.TempDir(), manager)
@@ -24,24 +25,11 @@ func TestWorkflowToolLaunchesWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.IsError {
-		t.Fatalf("unexpected tool error: %s", res.Content)
+	if !res.IsError || !strings.Contains(res.Content, "saved as a named workflow") {
+		t.Fatalf("expected unsaved script confirmation error, got: %+v", res)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
-	if !ok || !env.Success {
-		t.Fatalf("unexpected envelope: %s", res.Content)
-	}
-	if env.Data["status"] != WorkflowStatusAsyncLaunched || env.Data["runId"] == "" || env.Data["taskId"] == "" {
-		t.Fatalf("unexpected workflow data: %+v", env.Data)
-	}
-	runID := RunID(env.Data["runId"].(string))
-	waitRunStatus(t, store, runID, RunStatusCompleted)
-	events, err := store.List(context.Background(), runID)
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	if len(events) == 0 || events[0].SessionID != "parent-session" {
-		t.Fatalf("expected parent session on run start, events=%+v", events)
+	if len(store.events) != 0 {
+		t.Fatalf("unsaved script should not start run: %+v", store.events)
 	}
 }
 
@@ -59,6 +47,8 @@ func TestWorkflowToolDescriptionPrefersNamedCatalogWorkflows(t *testing.T) {
 		"Use agent(prompt, { label, phase, schema",
 		"Do not set opts.model",
 		"returning a final JSON-serializable result",
+		"Do not call request_user_input",
+		"single TUI launch confirmation",
 		"Do not first inspect files",
 		"include args only when the user supplied useful input",
 		"Do not ask for a missing args value",
@@ -71,7 +61,7 @@ func TestWorkflowToolDescriptionPrefersNamedCatalogWorkflows(t *testing.T) {
 	}
 }
 
-func TestWorkflowToolSavesGeneratedWorkflowBeforeLaunch(t *testing.T) {
+func TestWorkflowToolDefersGeneratedWorkflowSaveUntilConfirmation(t *testing.T) {
 	root := t.TempDir()
 	store := &memoryRunEventStore{}
 	manager := NewRunManager(store, NewTaskScheduler(store, &fakeAgentSpawner{}))
@@ -101,22 +91,65 @@ log('saved ' + args.topic)
 	if !ok || !env.Success {
 		t.Fatalf("unexpected envelope: %s", res.Content)
 	}
+	if env.Code != "workflow_confirmation_required" || env.Data["workflowName"] != "generated-review" {
+		t.Fatalf("expected confirmation envelope, got: %+v", env)
+	}
 	wantPath := filepath.Join(root, "generated-review.js")
 	if env.Data["scriptPath"] != wantPath {
 		t.Fatalf("scriptPath = %v, want %s", env.Data["scriptPath"], wantPath)
 	}
-	runID := RunID(env.Data["runId"].(string))
-	waitRunStatus(t, store, runID, RunStatusCompleted)
-	events, err := store.List(context.Background(), runID)
-	if err != nil {
-		t.Fatalf("List: %v", err)
+	if env.Data["workflowArgs"] != `{"topic":"ok"}` {
+		t.Fatalf("workflowArgs = %v", env.Data["workflowArgs"])
 	}
-	if !hasLog(events, "saved ok") {
-		t.Fatalf("expected saved workflow log, events=%+v", events)
+	if env.Data["workflowScript"] == "" || env.Data["workflowSaveAs"] != "generated-review" {
+		t.Fatalf("missing pending save data: %+v", env.Data)
+	}
+	if _, err := os.Stat(wantPath); !os.IsNotExist(err) {
+		t.Fatalf("generated workflow should not be written before confirmation, stat err=%v", err)
+	}
+	if len(store.events) != 0 {
+		t.Fatalf("confirmation should not start run: %+v", store.events)
 	}
 }
 
-func TestWorkflowToolLaunchesNamedWorkflow(t *testing.T) {
+func TestWorkflowToolConfirmsScriptPathWorkflow(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "custom-workflow.js")
+	writeWorkflowFile(t, path, `export const meta = { name: 'custom-workflow', description: 'custom file workflow' }
+log('topic ' + args.topic)
+`)
+	store := &memoryRunEventStore{}
+	manager := NewRunManager(store, NewTaskScheduler(store, &fakeAgentSpawner{}))
+	runner := NewScriptRunner(t.TempDir(), manager)
+	tool := NewTool(runner, func() string { return "parent-session" })
+
+	input, err := json.Marshal(map[string]any{
+		"scriptPath": path,
+		"args":       map[string]any{"topic": "ok"},
+	})
+	if err != nil {
+		t.Fatalf("marshal input: %v", err)
+	}
+	res, err := tool.Run(context.Background(), core.ToolCall{ID: "tool-1", Name: "workflow", Input: string(input)})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", res.Content)
+	}
+	env, ok := core.ParseToolEnvelope(res.Content)
+	if !ok || !env.Success || env.Code != "workflow_confirmation_required" {
+		t.Fatalf("unexpected envelope: %s", res.Content)
+	}
+	if env.Data["workflowName"] != "custom-workflow" || env.Data["workflowScriptPath"] != path || env.Data["scriptPath"] != path {
+		t.Fatalf("unexpected workflow data: %+v", env.Data)
+	}
+	if len(store.events) != 0 {
+		t.Fatalf("confirmation should not start run: %+v", store.events)
+	}
+}
+
+func TestWorkflowToolConfirmsNamedWorkflow(t *testing.T) {
 	root := t.TempDir()
 	writeWorkflowFile(t, filepath.Join(root, "named-tool.js"), `export const meta = { name: 'named-tool', description: 'tool named' }
 log('topic ' + args.topic)
@@ -142,24 +175,18 @@ log('topic ' + args.topic)
 	if !ok || !env.Success {
 		t.Fatalf("unexpected envelope: %s", res.Content)
 	}
-	runID := RunID(env.Data["runId"].(string))
-	waitRunStatus(t, store, runID, RunStatusCompleted)
-	events, err := store.List(context.Background(), runID)
-	if err != nil {
-		t.Fatalf("List: %v", err)
+	if env.Code != "workflow_confirmation_required" || env.Data["workflowName"] != "named-tool" || env.Data["workflowArgs"] != `{"topic":"ok"}` {
+		t.Fatalf("expected confirmation data, got: %+v", env)
 	}
-	var found bool
-	for _, ev := range events {
-		if ev.Type == EventLog && ev.Message == "topic ok" {
-			found = true
-		}
+	if res.Metadata["abort_turn_after_tool_result"] != true {
+		t.Fatalf("expected workflow confirmation to request turn abort, got metadata: %+v", res.Metadata)
 	}
-	if !found {
-		t.Fatalf("expected named workflow log event, events=%+v", events)
+	if len(store.events) != 0 {
+		t.Fatalf("confirmation should not start run: %+v", store.events)
 	}
 }
 
-func TestWorkflowToolLaunchesNamedWorkflowWithStringArgs(t *testing.T) {
+func TestWorkflowToolConfirmsNamedWorkflowWithStringArgs(t *testing.T) {
 	root := t.TempDir()
 	writeWorkflowFile(t, filepath.Join(root, "string-args.js"), `export const meta = { name: 'string-args', description: 'tool string args' }
 log('question ' + args)
@@ -195,14 +222,11 @@ log('question ' + args)
 	if !ok || !env.Success {
 		t.Fatalf("unexpected envelope: %s", res.Content)
 	}
-	runID := RunID(env.Data["runId"].(string))
-	waitRunStatus(t, store, runID, RunStatusCompleted)
-	events, err := store.List(context.Background(), runID)
-	if err != nil {
-		t.Fatalf("List: %v", err)
+	if env.Code != "workflow_confirmation_required" || env.Data["workflowName"] != "string-args" || env.Data["workflowArgs"] != "What changed in Node.js permissions?" {
+		t.Fatalf("expected confirmation data, got: %+v", env)
 	}
-	if !hasLog(events, "question What changed in Node.js permissions?") {
-		t.Fatalf("expected string args workflow log event, events=%+v", events)
+	if len(store.events) != 0 {
+		t.Fatalf("confirmation should not start run: %+v", store.events)
 	}
 }
 

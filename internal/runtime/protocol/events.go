@@ -209,14 +209,17 @@ type LocalResultField struct {
 }
 
 type LocalResultAction struct {
-	Label          string `json:"label,omitempty"`
-	Description    string `json:"description,omitempty"`
-	Command        string `json:"command,omitempty"`
-	Tone           string `json:"tone,omitempty"`
-	WorkflowName   string `json:"workflow_name,omitempty"`
-	WorkflowArgs   string `json:"workflow_args,omitempty"`
-	WorkflowResume string `json:"workflow_resume,omitempty"`
-	WorkflowTrust  bool   `json:"workflow_trust,omitempty"`
+	Label              string `json:"label,omitempty"`
+	Description        string `json:"description,omitempty"`
+	Command            string `json:"command,omitempty"`
+	Tone               string `json:"tone,omitempty"`
+	WorkflowName       string `json:"workflow_name,omitempty"`
+	WorkflowArgs       string `json:"workflow_args,omitempty"`
+	WorkflowResume     string `json:"workflow_resume,omitempty"`
+	WorkflowTrust      bool   `json:"workflow_trust,omitempty"`
+	WorkflowScript     string `json:"workflow_script,omitempty"`
+	WorkflowSaveAs     string `json:"workflow_save_as,omitempty"`
+	WorkflowScriptPath string `json:"workflow_script_path,omitempty"`
 }
 
 type WorkflowPanelSnapshot struct {

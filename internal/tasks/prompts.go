@@ -36,9 +36,13 @@ func agentDefinitionSystemBlock(def AgentDefinition, capabilities []string) stri
 		b.WriteString(prompt)
 		b.WriteString("\n\n")
 	}
-	if len(capabilities) > 0 {
+	effectiveCapabilities := capabilities
+	if effectiveCapabilities == nil {
+		effectiveCapabilities = []string{CapabilityWorkspaceRead}
+	}
+	if len(effectiveCapabilities) > 0 {
 		b.WriteString("- tools: ")
-		b.WriteString(strings.Join(capabilities, ", "))
+		b.WriteString(strings.Join(effectiveCapabilities, ", "))
 		b.WriteString("\n")
 	} else {
 		b.WriteString("- tools: model-only\n")

@@ -128,6 +128,9 @@ func TestApprovalDecisionStaysBeforeBackgroundWorkflowTerminalResult(t *testing.
 		}
 		if strings.Contains(msg.Text, "executiveSummary") {
 			resultIx = i
+			if msg.Role != "assistant" || msg.Kind != tuirender.KindText || msg.Local != nil {
+				t.Fatalf("workflow terminal should enter transcript as assistant text, got %+v", msg)
+			}
 		}
 	}
 	if approvalIx < 0 || resultIx < 0 {
@@ -185,6 +188,9 @@ func TestWorkflowTerminalDoesNotCommitUnrelatedPendingToolCall(t *testing.T) {
 		}
 		if strings.Contains(msg.Text, "executiveSummary") {
 			resultIx = i
+			if msg.Role != "assistant" || msg.Kind != tuirender.KindText || msg.Local != nil {
+				t.Fatalf("workflow terminal should enter transcript as assistant text, got %+v", msg)
+			}
 		}
 	}
 	if toolIx < 0 || resultIx < 0 {
@@ -272,6 +278,53 @@ func TestApprovalDStillDenies(t *testing.T) {
 		t.Fatalf("expected d to deny approval, got %+v", *intents)
 	}
 }
+
+func TestConcurrentApprovalsAreQueuedAndDecisionTargetsVisiblePrompt(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.width = 100
+	m.height = 24
+
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventApprovalRequired,
+		ToolCallID: "tool-1",
+		ToolName:   "read_file",
+		Text:       "read_file: first",
+	}))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventApprovalRequired,
+		ToolCallID: "tool-2",
+		ToolName:   "grep",
+		Text:       "grep: second",
+	}))
+	m = next.(model)
+
+	if m.mode != modeApproval || m.approval.toolCallID != "tool-1" {
+		t.Fatalf("first approval should remain visible, got mode=%v approval=%+v", m.mode, m.approval)
+	}
+	if len(m.approvalQueue) != 1 || m.approvalQueue[0].toolCallID != "tool-2" {
+		t.Fatalf("second approval should be queued, got %+v", m.approvalQueue)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m = next.(model)
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentAllowTool || (*intents)[0].ToolCallID != "tool-1" {
+		t.Fatalf("first decision should target visible approval, got %+v", *intents)
+	}
+	if m.mode != modeApproval || m.approval.toolCallID != "tool-2" || len(m.approvalQueue) != 0 {
+		t.Fatalf("queued approval should become visible, got mode=%v approval=%+v queue=%+v", m.mode, m.approval, m.approvalQueue)
+	}
+
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	m = next.(model)
+	if len(*intents) != 2 || (*intents)[1].Kind != protocol.IntentDenyTool || (*intents)[1].ToolCallID != "tool-2" {
+		t.Fatalf("second decision should target queued approval, got %+v", *intents)
+	}
+	if m.mode != modeChat || m.approval.toolCallID != "" {
+		t.Fatalf("approval mode should finish after queue drains, got mode=%v approval=%+v", m.mode, m.approval)
+	}
+}
+
 func TestCtrlCWhileBusyInterruptsBeforeApprovalMode(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.runtime = &testRuntime{}
@@ -280,6 +333,7 @@ func TestCtrlCWhileBusyInterruptsBeforeApprovalMode(t *testing.T) {
 	m.busy = true
 	m.mode = modeApproval
 	m.approval.toolCallID = "tool-1"
+	m.approvalQueue = []approvalPromptState{{toolCallID: "tool-2"}}
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	m = next.(model)
@@ -290,10 +344,12 @@ func TestCtrlCWhileBusyInterruptsBeforeApprovalMode(t *testing.T) {
 	if m.mode != modeChat {
 		t.Fatalf("expected interrupt to leave approval mode, got %v", m.mode)
 	}
-	if len(*intents) != 2 ||
+	if len(*intents) != 3 ||
 		(*intents)[0].Kind != protocol.IntentCancelToolApproval ||
 		(*intents)[0].ToolCallID != "tool-1" ||
-		(*intents)[1].Kind != protocol.IntentShutdown {
+		(*intents)[1].Kind != protocol.IntentCancelToolApproval ||
+		(*intents)[1].ToolCallID != "tool-2" ||
+		(*intents)[2].Kind != protocol.IntentShutdown {
 		t.Fatalf("expected cancel approval then shutdown intents, got %+v", *intents)
 	}
 }
@@ -379,6 +435,63 @@ func TestApprovalViewShowsExternalDirectoryMetadata(t *testing.T) {
 		t.Fatalf("approval view should not expose raw rule labels:\n%s", view)
 	}
 }
+
+func TestApprovalViewShowsWorkflowWebSearchContext(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 140
+	m.height = 30
+	m.mode = modeApproval
+	m.cwdPath = "/repo"
+	m.approval.toolName = "web_search"
+	m.approval.reason = "web_search: Node.js permission model"
+	m.approval.metadata = map[string]any{
+		"workflow_name":          "deep-research",
+		"approval_session_scope": "Web Search commands",
+		"approval_kind":          "web_search",
+	}
+
+	view := xansi.Strip(m.View())
+	for _, want := range []string{
+		`Tool use · from the "deep-research" workflow`,
+		`Web Search("Node.js permission model")`,
+		"Whale wants to search the web for: Node.js permission model",
+		"Yes (1)",
+		"Yes, and don't ask again for Web Search commands in /repo (2)",
+		"Yes, and switch to auto mode (3) workflows run best with it on",
+		"No (4)",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected workflow approval view to contain %q:\n%s", want, view)
+		}
+	}
+}
+
+func TestApprovalViewShowsWorkflowFetchHostContext(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 140
+	m.height = 30
+	m.mode = modeApproval
+	m.approval.toolName = "fetch"
+	m.approval.reason = "fetch: https://nodejs.org/api/permissions.html"
+	m.approval.metadata = map[string]any{
+		"workflow_name":          "deep-research",
+		"approval_session_scope": "nodejs.org",
+		"approval_kind":          "web_fetch",
+	}
+
+	view := xansi.Strip(m.View())
+	for _, want := range []string{
+		`Tool use · from the "deep-research" workflow`,
+		`url: "https://nodejs.org/api/permissions.html"`,
+		"Whale wants to fetch content from nodejs.org.",
+		"Yes, and don't ask again for nodejs.org (2)",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected workflow fetch approval view to contain %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestApprovalViewHidesDuplicatePendingToolRow(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 100

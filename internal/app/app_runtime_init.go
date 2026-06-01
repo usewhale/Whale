@@ -33,16 +33,15 @@ func initAppRuntime(cfg Config, sessionInit appSessionInit, toolInit appToolInit
 		APIKey:  apiKey,
 		BaseURL: cfg.APIBaseURL,
 	}))
-	providerFactory := func(model string, requestEffort string, maxTokens int) (llm.Provider, error) {
+	providerFactory := func(model string, maxTokens int) (llm.Provider, error) {
 		if strings.TrimSpace(model) == "" {
 			model = defaults.DefaultModel
 		}
-		effectiveEffort := normalizeEffort(core.FirstNonEmpty(strings.TrimSpace(requestEffort), effort))
 		return newDeepSeekProvider(providerOptions{
 			APIKey:            apiKey,
 			BaseURL:           cfg.APIBaseURL,
 			Model:             model,
-			ReasoningEffort:   effectiveEffort,
+			ReasoningEffort:   effort,
 			ThinkingEnabled:   thinking,
 			MaxTokens:         maxTokens,
 			RetryPolicy:       retryPolicyFromConfig(cfg),
@@ -91,7 +90,7 @@ func initAppRuntime(cfg Config, sessionInit appSessionInit, toolInit appToolInit
 	taskRunner := tasks.NewRunner(tasks.RunnerConfig{
 		ProviderFactory:            providerFactory,
 		ProviderFactoryWithOptions: providerFactoryWithOptions,
-		ParentTools:                toolInit.baseToolRegistry,
+		ParentTools:                toolInit.subagentToolRegistry,
 		WorkspaceTools:             workspaceTools,
 		AgentDefinitions:           tasks.NewAgentDefinitionLibrary(workspaceRoot),
 		MessageStore:               sessionInit.msgStore,

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/usewhale/whale/internal/core"
 )
@@ -122,45 +123,64 @@ func agentDefinitionSchema() map[string]any {
 }
 
 func agentHooksSchema() map[string]any {
-	commandHook := map[string]any{
+	hookConfig := map[string]any{
 		"type":                 "object",
 		"additionalProperties": true,
 		"properties": map[string]any{
-			"type":          map[string]any{"type": "string", "enum": []string{"command"}},
-			"command":       map[string]any{"type": "string"},
-			"match":         map[string]any{"type": "string"},
-			"if":            map[string]any{"type": "string"},
-			"shell":         map[string]any{"type": "string"},
-			"cwd":           map[string]any{"type": "string"},
-			"description":   map[string]any{"type": "string"},
-			"timeout":       map[string]any{"type": "number"},
-			"once":          map[string]any{"type": "boolean"},
-			"async":         map[string]any{"type": "boolean"},
-			"asyncRewake":   map[string]any{"type": "boolean"},
-			"statusMessage": map[string]any{"type": "string"},
+			"type":           map[string]any{"type": "string", "enum": []string{"command", "shell", "prompt", "http", "agent"}},
+			"command":        map[string]any{"type": "string"},
+			"prompt":         map[string]any{"type": "string"},
+			"url":            map[string]any{"type": "string"},
+			"model":          map[string]any{"type": "string"},
+			"match":          map[string]any{"type": "string"},
+			"if":             map[string]any{"type": "string"},
+			"shell":          map[string]any{"type": "string"},
+			"cwd":            map[string]any{"type": "string"},
+			"description":    map[string]any{"type": "string"},
+			"timeout":        map[string]any{"type": "number"},
+			"once":           map[string]any{"type": "boolean"},
+			"async":          map[string]any{"type": "boolean"},
+			"asyncRewake":    map[string]any{"type": "boolean"},
+			"statusMessage":  map[string]any{"type": "string"},
+			"headers":        map[string]any{"type": "object", "additionalProperties": true},
+			"allowedEnvVars": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 		},
-		"required": []string{"command"},
 	}
 	matcherHook := map[string]any{
 		"type":                 "object",
 		"additionalProperties": true,
 		"properties": map[string]any{
 			"matcher": map[string]any{"type": "string"},
-			"hooks":   map[string]any{"type": "array", "items": commandHook},
+			"hooks":   map[string]any{"type": "array", "items": hookConfig},
 		},
 		"required": []string{"hooks"},
 	}
 	return map[string]any{
 		"type":                 "object",
-		"description":          "Optional command hooks for child agents. Supports Whale-native event arrays or Claude Code-style matcher entries for PreToolUse, PostToolUse, SubagentStart, and Stop/SubagentStop.",
+		"description":          "Optional hooks for child agents. Supports Whale-native event arrays or Claude Code-style matcher entries for PreToolUse, PostToolUse, SubagentStart, and Stop/SubagentStop.",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"PreToolUse":    map[string]any{"type": "array", "items": map[string]any{"oneOf": []any{commandHook, matcherHook}}},
-			"PostToolUse":   map[string]any{"type": "array", "items": map[string]any{"oneOf": []any{commandHook, matcherHook}}},
-			"SubagentStart": map[string]any{"type": "array", "items": map[string]any{"oneOf": []any{commandHook, matcherHook}}},
-			"SubagentStop":  map[string]any{"type": "array", "items": map[string]any{"oneOf": []any{commandHook, matcherHook}}},
-			"Stop":          map[string]any{"type": "array", "items": map[string]any{"oneOf": []any{commandHook, matcherHook}}},
+			"PreToolUse":    map[string]any{"type": "array", "items": hookOrMatcherSchema(hookConfig, matcherHook)},
+			"PostToolUse":   map[string]any{"type": "array", "items": hookOrMatcherSchema(hookConfig, matcherHook)},
+			"SubagentStart": map[string]any{"type": "array", "items": hookOrMatcherSchema(hookConfig, matcherHook)},
+			"SubagentStop":  map[string]any{"type": "array", "items": hookOrMatcherSchema(hookConfig, matcherHook)},
+			"Stop":          map[string]any{"type": "array", "items": hookOrMatcherSchema(hookConfig, matcherHook)},
 		},
+	}
+}
+
+func hookOrMatcherSchema(hookConfig, matcherHook map[string]any) map[string]any {
+	props := map[string]any{}
+	for key, value := range hookConfig["properties"].(map[string]any) {
+		props[key] = value
+	}
+	for key, value := range matcherHook["properties"].(map[string]any) {
+		props[key] = value
+	}
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": true,
+		"properties":           props,
 	}
 }
 
@@ -168,8 +188,59 @@ func agentCapabilityEnum() []string {
 	return []string{CapabilityWorkspaceRead, CapabilityWorkspaceWrite, CapabilityShellRead, CapabilityShellRun, CapabilityWebSearch, CapabilityWebFetch, CapabilityMCPRead}
 }
 func (t spawnSubagentTool) ReadOnly() bool { return true }
+func (t spawnSubagentTool) ReadOnlyCheck(args map[string]any) bool {
+	return spawnSubagentLaunchReadOnly(args, t.runner)
+}
 func (t spawnSubagentTool) Run(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
 	return t.RunWithProgress(ctx, call, nil)
+}
+
+func spawnSubagentLaunchReadOnly(args map[string]any, runner *Runner) bool {
+	if args == nil {
+		return false
+	}
+	raw, err := json.Marshal(args)
+	if err != nil {
+		return false
+	}
+	var req SpawnSubagentRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return false
+	}
+	if strings.TrimSpace(req.Task) == "" {
+		return false
+	}
+	var library *AgentDefinitionLibrary
+	if runner != nil {
+		library = runner.agentDefinitions
+	}
+	cfg, err := ResolveAgentRuntimeConfigWithLibrary(req, RunnerDefaults{}, library)
+	if err != nil {
+		return false
+	}
+	if spawnSubagentSelectorsMutating(cfg.Capabilities) {
+		return false
+	}
+	if cfg.PermissionProfile != AgentPermissionReadOnly {
+		return false
+	}
+	if cfg.Isolation == AgentIsolationWorktree {
+		return false
+	}
+	if len(cfg.Hooks) > 0 {
+		return false
+	}
+	return true
+}
+
+func spawnSubagentSelectorsMutating(values []string) bool {
+	for _, value := range values {
+		switch strings.TrimSpace(value) {
+		case CapabilityWorkspaceWrite, CapabilityShellRun:
+			return true
+		}
+	}
+	return false
 }
 
 func (t spawnSubagentTool) RunWithProgress(ctx context.Context, call core.ToolCall, progress func(core.ToolProgress)) (core.ToolResult, error) {
@@ -306,6 +377,9 @@ func (t cancelSubagentTool) Parameters() map[string]any {
 	}
 }
 func (t cancelSubagentTool) ReadOnly() bool { return false }
+func (t cancelSubagentTool) Capabilities() []string {
+	return []string{"mutates_state"}
+}
 func (t cancelSubagentTool) Run(_ context.Context, call core.ToolCall) (core.ToolResult, error) {
 	if t.runner == nil {
 		return marshalError(call, "not_configured", "task runner is not configured")

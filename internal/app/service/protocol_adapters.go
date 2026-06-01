@@ -41,14 +41,17 @@ func protocolLocalResultActions(actions []app.LocalResultAction) []protocol.Loca
 	out := make([]protocol.LocalResultAction, 0, len(actions))
 	for _, action := range actions {
 		out = append(out, protocol.LocalResultAction{
-			Label:          action.Label,
-			Description:    action.Description,
-			Command:        action.Command,
-			Tone:           action.Tone,
-			WorkflowName:   action.WorkflowName,
-			WorkflowArgs:   action.WorkflowArgs,
-			WorkflowResume: action.WorkflowResume,
-			WorkflowTrust:  action.WorkflowTrust,
+			Label:              action.Label,
+			Description:        action.Description,
+			Command:            action.Command,
+			Tone:               action.Tone,
+			WorkflowName:       action.WorkflowName,
+			WorkflowArgs:       action.WorkflowArgs,
+			WorkflowResume:     action.WorkflowResume,
+			WorkflowTrust:      action.WorkflowTrust,
+			WorkflowScript:     action.WorkflowScript,
+			WorkflowSaveAs:     action.WorkflowSaveAs,
+			WorkflowScriptPath: action.WorkflowScriptPath,
 		})
 	}
 	return out

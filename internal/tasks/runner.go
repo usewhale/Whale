@@ -22,7 +22,7 @@ const (
 	DefaultSummaryMaxChar = 8 * 1024
 )
 
-type ProviderFactory func(model string, effort string, maxTokens int) (llm.Provider, error)
+type ProviderFactory func(model string, maxTokens int) (llm.Provider, error)
 type ProviderFactoryWithOptions func(ProviderRequest) (llm.Provider, error)
 
 type ProviderRequest struct {
@@ -153,7 +153,7 @@ func (r *Runner) newProvider(model string, maxTokens int, effort string) (llm.Pr
 	if r.providerFactory == nil {
 		return nil, errors.New("provider factory is not configured")
 	}
-	return r.providerFactory(model, effort, maxTokens)
+	return r.providerFactory(model, maxTokens)
 }
 
 func defaultWorkspaceTools(workspace ToolWorkspace) (*core.ToolRegistry, error) {

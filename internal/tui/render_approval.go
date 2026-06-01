@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"strconv"
+	"strings"
+
 	"github.com/charmbracelet/lipgloss"
 	"github.com/usewhale/whale/internal/core"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 	tuitheme "github.com/usewhale/whale/internal/tui/theme"
-	"strings"
 )
 
 func (m model) renderApprovalPrompt() string {
@@ -17,8 +19,11 @@ func (m model) renderApprovalPrompt() string {
 	review := isFileDiffApproval(m.approval.toolName, m.approval.metadata)
 	memory := memoryApprovalKind(m.approval.metadata)
 	externalDirectory := approvalPermissionKind(m.approval.metadata) == "external_directory"
+	workflowName := approvalWorkflowName(m.approval.metadata)
 	titleText := "Approval required"
-	if review {
+	if workflowName != "" {
+		titleText = `Tool use · from the "` + workflowName + `" workflow`
+	} else if review {
 		titleText = "Approval required: file diff review"
 	} else if memory != "" {
 		titleText = "Approval required: " + memory
@@ -37,13 +42,17 @@ func (m model) renderApprovalPrompt() string {
 		if target := approvalPermissionTarget(m.approval.metadata); target != "" {
 			bodyParts = append(bodyParts, "Path: "+target)
 		}
+	} else if workflowName != "" {
+		if workflowBody := m.renderWorkflowApprovalBody(); workflowBody != "" {
+			bodyParts = append(bodyParts, workflowBody)
+		}
 	}
 	if memory != "" {
 		if memoryPreview := renderApprovalMemoryMetadata(m.approval.metadata); memoryPreview != "" {
 			bodyParts = append(bodyParts, memoryPreview)
 		}
 	}
-	if detail := approvalDisplayBody(m.approval.toolName, m.approval.reason); detail != "" {
+	if detail := approvalDisplayBody(m.approval.toolName, m.approval.reason); detail != "" && !approvalWorkflowBodyIncludesDetail(workflowName, m.approval.toolName) {
 		bodyParts = append(bodyParts, renderApprovalDetail(m.approval.toolName, detail))
 	}
 	approvalBody := body.Render(indentApprovalBody(strings.Join(bodyParts, "\n")))
@@ -60,12 +69,20 @@ func (m model) renderApprovalPrompt() string {
 			approvalBody = diff
 		}
 	}
-
-	opts := []string{
-		renderApprovalOption("Allow once", "a", "", m.approval.selected == 0, false),
-		renderApprovalOption(approvalSessionOptionLabel(m.approval.metadata), "s", "", m.approval.selected == 1, false),
-		renderApprovalOption("Deny", "d", "", m.approval.selected == 2, true),
+	if queued := len(m.approvalQueue); queued > 0 {
+		queueLine := strconv.Itoa(queued) + " more approval request"
+		if queued != 1 {
+			queueLine += "s"
+		}
+		queueLine += " queued."
+		if approvalBody != "" {
+			approvalBody += "\n\n" + hint.Render(queueLine)
+		} else {
+			approvalBody = hint.Render(queueLine)
+		}
 	}
+
+	opts := m.renderApprovalOptions()
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -77,6 +94,56 @@ func (m model) renderApprovalPrompt() string {
 		"",
 		hint.Render("Enter confirm · Esc cancel · ←/→/tab switch"),
 	)
+}
+
+func approvalWorkflowBodyIncludesDetail(workflowName, toolName string) bool {
+	if strings.TrimSpace(workflowName) == "" {
+		return false
+	}
+	switch toolName {
+	case "web_search", "fetch", "web_fetch":
+		return true
+	default:
+		return false
+	}
+}
+
+func (m model) renderApprovalOptions() []string {
+	if approvalWorkflowName(m.approval.metadata) != "" {
+		return []string{
+			renderApprovalOption("Yes", "1", "", m.approval.selected == 0, false),
+			renderApprovalOption("Yes, and don't ask again for "+approvalSessionOptionSubject(m.approval.toolName, m.approval.metadata, m.cwdPath), "2", "", m.approval.selected == 1, false),
+			renderApprovalOption("Yes, and switch to auto mode", "3", "workflows run best with it on", m.approval.selected == 2, false),
+			renderApprovalOption("No", "4", "", m.approval.selected == 3, true),
+		}
+	}
+	return []string{
+		renderApprovalOption("Allow once", "a", "", m.approval.selected == 0, false),
+		renderApprovalOption(approvalSessionOptionLabel(m.approval.metadata), "s", "", m.approval.selected == 1, false),
+		renderApprovalOption("Deny", "d", "", m.approval.selected == 2, true),
+	}
+}
+
+func (m model) renderWorkflowApprovalBody() string {
+	detail := approvalDisplayBody(m.approval.toolName, m.approval.reason)
+	switch m.approval.toolName {
+	case "web_search":
+		if detail == "" {
+			return "Whale wants to search the web."
+		}
+		return "Web Search(" + strconvQuote(detail) + ")\nWhale wants to search the web for: " + detail
+	case "fetch", "web_fetch":
+		host := approvalSessionScope(m.approval.metadata)
+		if host == "" {
+			host = "this host"
+		}
+		if detail == "" {
+			return "Whale wants to fetch content from " + host + "."
+		}
+		return approvalToolDisplayName(m.approval.toolName) + "\nurl: " + strconvQuote(detail) + "\nWhale wants to fetch content from " + host + "."
+	default:
+		return ""
+	}
 }
 
 func isFileDiffApproval(toolName string, metadata map[string]any) bool {
@@ -108,6 +175,35 @@ func approvalPermissionKind(metadata map[string]any) string {
 
 func approvalPermissionTarget(metadata map[string]any) string {
 	return strings.TrimSpace(core.AsString(metadata["permission_target"]))
+}
+
+func approvalWorkflowName(metadata map[string]any) string {
+	return strings.TrimSpace(core.AsString(metadata["workflow_name"]))
+}
+
+func approvalSessionScope(metadata map[string]any) string {
+	return strings.TrimSpace(core.AsString(metadata["approval_session_scope"]))
+}
+
+func approvalSessionOptionSubject(toolName string, metadata map[string]any, cwd string) string {
+	scope := approvalSessionScope(metadata)
+	switch toolName {
+	case "web_search":
+		if strings.TrimSpace(cwd) != "" {
+			return "Web Search commands in " + strings.TrimSpace(cwd)
+		}
+		return "Web Search commands"
+	case "fetch", "web_fetch":
+		if scope != "" {
+			return scope
+		}
+		return "this host"
+	default:
+		if scope != "" {
+			return scope
+		}
+		return "this tool request"
+	}
 }
 
 func approvalSessionOptionLabel(metadata map[string]any) string {
@@ -145,6 +241,12 @@ func renderApprovalDetail(toolName, detail string) string {
 		return "$ " + tuirender.RenderCommandLike(detail)
 	}
 	return detail
+}
+
+func strconvQuote(v string) string {
+	v = strings.ReplaceAll(v, "\\", "\\\\")
+	v = strings.ReplaceAll(v, `"`, `\"`)
+	return `"` + v + `"`
 }
 
 func renderApprovalMemoryMetadata(metadata map[string]any) string {

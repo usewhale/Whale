@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/usewhale/whale/internal/agent"
@@ -71,6 +72,20 @@ func TestResolveAgentRuntimeConfigMergesDefinitionAndOverrides(t *testing.T) {
 	}
 	if cfg.PermissionProfile != AgentPermissionReadOnly {
 		t.Fatalf("permission profile = %q", cfg.PermissionProfile)
+	}
+}
+
+func TestAgentDefinitionSystemBlockShowsDefaultWorkspaceReadTools(t *testing.T) {
+	got := agentDefinitionSystemBlock(AgentDefinition{Name: "explore"}, nil)
+	if !strings.Contains(got, "- tools: workspace.read") {
+		t.Fatalf("default tools not rendered:\n%s", got)
+	}
+	if strings.Contains(got, "- tools: model-only") {
+		t.Fatalf("nil capabilities should not render model-only:\n%s", got)
+	}
+	explicitEmpty := agentDefinitionSystemBlock(AgentDefinition{Name: "synthesis"}, []string{})
+	if !strings.Contains(explicitEmpty, "- tools: model-only") {
+		t.Fatalf("explicit empty capabilities should render model-only:\n%s", explicitEmpty)
 	}
 }
 
@@ -153,6 +168,74 @@ Review local changes.
 	}
 	if len(defs) != 0 {
 		t.Fatalf("expected .claude agents to be ignored, got %+v", defs)
+	}
+}
+
+func TestAgentDefinitionLibraryResolveIgnoresMalformedUnrelatedAgents(t *testing.T) {
+	root := t.TempDir()
+	agentDir := filepath.Join(root, ".whale", "agents")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir agents: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "broken.json"), []byte(`{`), 0o644); err != nil {
+		t.Fatalf("write broken agent: %v", err)
+	}
+	library := NewAgentDefinitionLibrary(root)
+	cfg, err := ResolveAgentRuntimeConfigWithLibrary(SpawnSubagentRequest{
+		Role: "review",
+		Task: "review local changes",
+	}, RunnerDefaults{Model: "deepseek-v4-flash"}, library)
+	if err != nil {
+		t.Fatalf("ResolveAgentRuntimeConfigWithLibrary builtin review: %v", err)
+	}
+	if cfg.Definition.Name != "review" || cfg.PermissionProfile != AgentPermissionReadOnly {
+		t.Fatalf("builtin review config = %+v", cfg)
+	}
+}
+
+func TestAgentDefinitionLibraryListSkipsMalformedAgents(t *testing.T) {
+	root := t.TempDir()
+	agentDir := filepath.Join(root, ".whale", "agents")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir agents: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "broken.json"), []byte(`{`), 0o644); err != nil {
+		t.Fatalf("write broken agent: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "reader.json"), []byte(`{
+  "name": "reader",
+  "description": "Reads files",
+  "tools": ["workspace.read"],
+  "permissionMode": "read_only"
+}`), 0o644); err != nil {
+		t.Fatalf("write reader agent: %v", err)
+	}
+	library := NewAgentDefinitionLibrary(root)
+	defs, err := library.List(context.Background())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(defs) != 1 || defs[0].Name != "reader" {
+		t.Fatalf("definitions = %+v", defs)
+	}
+}
+
+func TestAgentDefinitionLibraryResolveFailsMalformedRequestedAgent(t *testing.T) {
+	root := t.TempDir()
+	agentDir := filepath.Join(root, ".whale", "agents")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir agents: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, "review.json"), []byte(`{`), 0o644); err != nil {
+		t.Fatalf("write broken agent: %v", err)
+	}
+	library := NewAgentDefinitionLibrary(root)
+	_, err := ResolveAgentRuntimeConfigWithLibrary(SpawnSubagentRequest{
+		Role: "review",
+		Task: "review local changes",
+	}, RunnerDefaults{Model: "deepseek-v4-flash"}, library)
+	if err == nil || !strings.Contains(err.Error(), "parse agent definition") {
+		t.Fatalf("expected requested agent parse error, got %v", err)
 	}
 }
 
@@ -383,5 +466,32 @@ func TestHookModelExecutorParsesOKContract(t *testing.T) {
 	res := exec(context.Background(), agent.HookConfig{Type: "prompt", Prompt: "Gate this."}, agent.HookPayload{Event: agent.HookEventPreToolUse, ToolName: "read_file"})
 	if res.Decision != agent.HookDecisionBlock || res.Message != "blocked by model" {
 		t.Fatalf("result = %+v", res)
+	}
+}
+
+func TestCompleteHookModelDoesNotDuplicateCompleteContentAfterDeltas(t *testing.T) {
+	provider := providerFunc(func(ctx context.Context, history []core.Message, tools []core.Tool) <-chan llm.ProviderEvent {
+		out := make(chan llm.ProviderEvent, 3)
+		go func() {
+			defer close(out)
+			out <- llm.ProviderEvent{Type: llm.EventContentDelta, Content: `{"ok":`}
+			out <- llm.ProviderEvent{Type: llm.EventContentDelta, Content: `true}`}
+			out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
+				Content: `{"ok":true}`,
+				Usage:   llm.Usage{TotalTokens: 5},
+			}}
+		}()
+		return out
+	})
+
+	content, usage, err := completeHookModel(context.Background(), provider, "prompt")
+	if err != nil {
+		t.Fatalf("completeHookModel: %v", err)
+	}
+	if content != `{"ok":true}` {
+		t.Fatalf("content = %q", content)
+	}
+	if usage.TotalTokens != 5 {
+		t.Fatalf("usage = %+v", usage)
 	}
 }

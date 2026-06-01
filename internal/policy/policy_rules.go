@@ -120,6 +120,8 @@ func RulesFromConfig(config PermissionConfig) ([]PermissionRule, error) {
 		{name: "mcp", rules: config.MCP},
 		{name: "memory", rules: config.Memory},
 		{name: "task", rules: config.Task},
+		{name: "web_search", rules: config.WebSearch},
+		{name: "web_fetch", rules: config.WebFetch},
 		{name: "mutating_tool", rules: config.MutatingTool},
 	}
 	var out []PermissionRule

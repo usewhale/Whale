@@ -195,7 +195,11 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 	}
 	parentTools := r.parentTools
 	if workspace.WorktreeRoot != "" {
-		parentTools, err = r.toolsForWorkspace(workspace)
+		workspaceTools, err := r.toolsForWorkspace(workspace)
+		if err != nil {
+			return SpawnSubagentResponse{}, err
+		}
+		parentTools, err = mergeWorkspaceAndParentTools(parentTools, workspaceTools)
 		if err != nil {
 			return SpawnSubagentResponse{}, err
 		}
@@ -595,6 +599,32 @@ func (r *Runner) toolsForWorkspace(workspace ToolWorkspace) (*core.ToolRegistry,
 		factory = defaultWorkspaceTools
 	}
 	return factory(workspace)
+}
+
+func mergeWorkspaceAndParentTools(parent, workspace *core.ToolRegistry) (*core.ToolRegistry, error) {
+	if workspace == nil {
+		if parent == nil {
+			return core.NewToolRegistryChecked(nil)
+		}
+		return parent.Snapshot(), nil
+	}
+	workspaceTools := workspace.Tools()
+	workspaceNames := map[string]bool{}
+	for _, tool := range workspaceTools {
+		if tool != nil && strings.TrimSpace(tool.Name()) != "" {
+			workspaceNames[tool.Name()] = true
+		}
+	}
+	merged := append([]core.Tool{}, workspaceTools...)
+	if parent != nil {
+		for _, tool := range parent.Tools() {
+			if tool == nil || workspaceNames[tool.Name()] {
+				continue
+			}
+			merged = append(merged, tool)
+		}
+	}
+	return core.NewToolRegistryChecked(merged)
 }
 
 func isolatedWorktreeName(role, sessionID string) string {

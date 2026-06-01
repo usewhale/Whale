@@ -40,10 +40,10 @@ func TestRulePolicyDefaultPosture(t *testing.T) {
 }
 
 func TestRulePolicyDefaultControlsUnspecifiedTools(t *testing.T) {
-	// web_fetch has no entry in DefaultRules, so its decision is governed
+	// custom_lookup has no entry in DefaultRules, so its decision is governed
 	// entirely by the policy default.
-	spec := core.ToolSpec{Name: "web_fetch"}
-	call := core.ToolCall{Name: "web_fetch", Input: `{"url":"https://example.com"}`}
+	spec := core.ToolSpec{Name: "custom_lookup"}
+	call := core.ToolCall{Name: "custom_lookup", Input: `{"query":"example"}`}
 
 	ask := RulePolicy{Default: PermissionAsk, Rules: DefaultRules()}.Decide(spec, call)
 	if !ask.Allow || !ask.RequiresApproval || ask.Code != "permission_required" {

@@ -62,6 +62,12 @@ func DefaultPermissionConfig() PermissionConfig {
 		Memory: map[string]string{
 			"*": "ask",
 		},
+		WebSearch: map[string]string{
+			"*": "ask",
+		},
+		WebFetch: map[string]string{
+			"*": "ask",
+		},
 		MutatingTool: map[string]string{
 			"*": "ask",
 		},

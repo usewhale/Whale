@@ -58,6 +58,7 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 		msgStore:              sessionInit.msgStore,
 		toolRegistry:          runtimeInit.toolRegistry,
 		baseToolRegistry:      toolInit.baseToolRegistry,
+		subagentToolRegistry:  toolInit.subagentToolRegistry,
 		toolset:               toolInit.toolset,
 		baseTools:             append([]core.Tool{}, toolInit.baseTools...),
 		taskTools:             append([]core.Tool{}, runtimeInit.taskTools...),

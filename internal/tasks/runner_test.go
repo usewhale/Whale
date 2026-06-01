@@ -56,6 +56,223 @@ func TestParallelReasonPreservesOrderAndAggregatesUsage(t *testing.T) {
 	}
 }
 
+func TestParallelReasonAllowsOptionsOnlyProviderFactory(t *testing.T) {
+	factory := func(req ProviderRequest) (llm.Provider, error) {
+		if req.Model == "" {
+			t.Errorf("model was not passed through options factory")
+		}
+		return providerFunc(func(ctx context.Context, history []core.Message, tools []core.Tool) <-chan llm.ProviderEvent {
+			out := make(chan llm.ProviderEvent, 1)
+			go func() {
+				defer close(out)
+				out <- llm.ProviderEvent{
+					Type: llm.EventComplete,
+					Response: &llm.ProviderResponse{
+						Content: "ok",
+						Usage:   llm.Usage{PromptTokens: 1, CompletionTokens: 1, TotalTokens: 2},
+					},
+				}
+			}()
+			return out
+		}), nil
+	}
+	r := NewRunner(RunnerConfig{ProviderFactoryWithOptions: factory, DefaultModel: "deepseek-v4-flash"})
+	res, err := r.ParallelReason(context.Background(), ParallelReasonRequest{Prompts: []string{"check"}})
+	if err != nil {
+		t.Fatalf("ParallelReason: %v", err)
+	}
+	if len(res.Results) != 1 || res.Results[0].Output != "ok" {
+		t.Fatalf("results = %+v", res.Results)
+	}
+}
+
+func TestSpawnSubagentInlineHookSchemaAllowsNonCommandHooks(t *testing.T) {
+	spec := core.DescribeTool(spawnSubagentTool{})
+	props := spec.Parameters["properties"].(map[string]any)
+	agentSchema := props["agent"].(map[string]any)
+	agentProps := agentSchema["properties"].(map[string]any)
+	hooksSchema := agentProps["hooks"].(map[string]any)
+	hookEvents := hooksSchema["properties"].(map[string]any)
+	preToolUse := hookEvents["PreToolUse"].(map[string]any)
+	itemProps := preToolUse["items"].(map[string]any)["properties"].(map[string]any)
+	typeEnum := itemProps["type"].(map[string]any)["enum"].([]string)
+	for _, want := range []string{"command", "shell", "prompt", "http", "agent"} {
+		if !slices.Contains(typeEnum, want) {
+			t.Fatalf("hook type enum missing %q: %+v", want, typeEnum)
+		}
+	}
+	for _, want := range []string{"prompt", "url", "model", "headers", "allowedEnvVars", "hooks", "matcher"} {
+		if _, ok := itemProps[want]; !ok {
+			t.Fatalf("hook schema missing %q in %+v", want, itemProps)
+		}
+	}
+}
+
+func TestSpawnSubagentToolReadOnlyCheckGatesMutatingLaunches(t *testing.T) {
+	spec := core.DescribeTool(spawnSubagentTool{})
+	tests := []struct {
+		name     string
+		input    string
+		readOnly bool
+	}{
+		{
+			name:     "default child is read-only",
+			input:    `{"task":"inspect files"}`,
+			readOnly: true,
+		},
+		{
+			name:     "workspace write capability needs approval",
+			input:    `{"task":"edit files","capabilities":["workspace.write"]}`,
+			readOnly: false,
+		},
+		{
+			name:     "shell run capability needs approval",
+			input:    `{"task":"run tests","capabilities":["shell.run"]}`,
+			readOnly: false,
+		},
+		{
+			name:     "inline agent write tool needs approval",
+			input:    `{"task":"edit files","agent":{"tools":["workspace.write"]}}`,
+			readOnly: false,
+		},
+		{
+			name:     "inline read-only mode stays read-only",
+			input:    `{"task":"inspect files","agent":{"permissionMode":"read_only"}}`,
+			readOnly: true,
+		},
+		{
+			name:     "inline command hook needs approval",
+			input:    `{"task":"inspect files","agent":{"hooks":{"PreToolUse":[{"type":"command","command":"touch owned"}]}}}`,
+			readOnly: false,
+		},
+		{
+			name:     "inline prompt hook needs approval",
+			input:    `{"task":"inspect files","agent":{"hooks":{"PreToolUse":[{"type":"prompt","prompt":"decide whether to allow this tool"}]}}}`,
+			readOnly: false,
+		},
+		{
+			name:     "inline http hook needs approval",
+			input:    `{"task":"inspect files","agent":{"hooks":{"PreToolUse":[{"type":"http","url":"https://example.com/hook"}]}}}`,
+			readOnly: false,
+		},
+		{
+			name:     "inline agent hook needs approval",
+			input:    `{"task":"inspect files","agent":{"hooks":{"PreToolUse":[{"type":"agent","prompt":"review this tool call"}]}}}`,
+			readOnly: false,
+		},
+		{
+			name:     "ask mode needs approval",
+			input:    `{"task":"maybe edit","agent":{"permissionMode":"ask"}}`,
+			readOnly: false,
+		},
+		{
+			name:     "auto mode needs approval",
+			input:    `{"task":"edit files","agent":{"permissionMode":"auto"}}`,
+			readOnly: false,
+		},
+		{
+			name:     "trusted mode needs approval",
+			input:    `{"task":"edit files","agent":{"permissionMode":"trusted"}}`,
+			readOnly: false,
+		},
+		{
+			name:     "worktree isolation needs approval",
+			input:    `{"task":"inspect in isolation","agent":{"isolation":"worktree"}}`,
+			readOnly: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			call := core.ToolCall{ID: "call-1", Name: spec.Name, Input: tc.input}
+			if got := core.IsReadOnlyToolCall(spec, call); got != tc.readOnly {
+				t.Fatalf("IsReadOnlyToolCall() = %v, want %v", got, tc.readOnly)
+			}
+		})
+	}
+}
+
+func TestSpawnSubagentToolReadOnlyCheckGatesNamedMutatingAgents(t *testing.T) {
+	root := t.TempDir()
+	agentsDir := filepath.Join(root, ".whale", "agents")
+	if err := os.MkdirAll(agentsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "writer.md"), []byte(`---
+name: writer
+description: Writes files
+tools: [workspace.write]
+permissionMode: auto
+---
+Write files.
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "hooked.json"), []byte(`{
+  "name": "hooked",
+  "description": "Runs hooks",
+  "hooks": {
+    "PreToolUse": [
+      { "type": "command", "command": "touch owned" }
+    ]
+  }
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "prompt-hooked.json"), []byte(`{
+  "name": "prompt-hooked",
+  "description": "Runs prompt hooks",
+  "hooks": {
+    "PreToolUse": [
+      { "type": "prompt", "prompt": "decide whether to allow this tool" }
+    ]
+  }
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	spec := core.DescribeTool(spawnSubagentTool{
+		runner: &Runner{agentDefinitions: NewAgentDefinitionLibrary(root)},
+	})
+	tests := []struct {
+		name     string
+		input    string
+		readOnly bool
+	}{
+		{
+			name:     "builtin review remains read-only",
+			input:    `{"task":"inspect files","role":"review"}`,
+			readOnly: true,
+		},
+		{
+			name:     "named writer needs approval",
+			input:    `{"task":"edit files","role":"writer"}`,
+			readOnly: false,
+		},
+		{
+			name:     "named hooked agent needs approval",
+			input:    `{"task":"inspect files","role":"hooked"}`,
+			readOnly: false,
+		},
+		{
+			name:     "named prompt hooked agent needs approval",
+			input:    `{"task":"inspect files","role":"prompt-hooked"}`,
+			readOnly: false,
+		},
+		{
+			name:     "unknown role needs approval",
+			input:    `{"task":"inspect files","role":"missing"}`,
+			readOnly: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			call := core.ToolCall{ID: "call-1", Name: spec.Name, Input: tc.input}
+			if got := core.IsReadOnlyToolCall(spec, call); got != tc.readOnly {
+				t.Fatalf("IsReadOnlyToolCall() = %v, want %v", got, tc.readOnly)
+			}
+		})
+	}
+}
+
 func TestParallelReasonCancellation(t *testing.T) {
 	factory := func(_ string, _ int) (llm.Provider, error) {
 		return providerFunc(func(ctx context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
@@ -306,6 +523,35 @@ func TestAgentRegistryRejectsUnknownToolSelectors(t *testing.T) {
 	_, err := BuildAgentRegistry(parent, []string{"missing_tool"}, AgentPermissionReadOnly)
 	if err == nil || !strings.Contains(err.Error(), "unknown agent tools selector") {
 		t.Fatalf("expected unknown tool selector error, got %v", err)
+	}
+}
+
+func TestMergeWorkspaceAndParentToolsPreservesNonWorkspaceTools(t *testing.T) {
+	parent := core.NewToolRegistry([]core.Tool{
+		testTool{name: "read_file", readOnly: true, capabilities: []string{CapabilityWorkspaceRead}},
+		testTool{name: "mcp__docs__search", readOnly: true, capabilities: []string{CapabilityMCPRead}},
+		testTool{name: "plugin_lookup", readOnly: true},
+	})
+	workspace := core.NewToolRegistry([]core.Tool{
+		testTool{name: "read_file", readOnly: true, capabilities: []string{CapabilityWorkspaceRead}},
+		testTool{name: "write", capabilities: []string{CapabilityWorkspaceWrite}},
+	})
+
+	merged, err := mergeWorkspaceAndParentTools(parent, workspace)
+	if err != nil {
+		t.Fatalf("mergeWorkspaceAndParentTools: %v", err)
+	}
+	child, err := BuildAgentRegistryForMCPServers(merged, []string{CapabilityWorkspaceRead, CapabilityMCPRead, "plugin_lookup"}, AgentPermissionReadOnly, []string{"docs"})
+	if err != nil {
+		t.Fatalf("BuildAgentRegistryForMCPServers: %v", err)
+	}
+	for _, name := range []string{"read_file", "mcp__docs__search", "plugin_lookup"} {
+		if child.Get(name) == nil {
+			t.Fatalf("expected %s to remain visible", name)
+		}
+	}
+	if child.Get("write") != nil {
+		t.Fatal("workspace write should not be visible under read-only permissions")
 	}
 }
 

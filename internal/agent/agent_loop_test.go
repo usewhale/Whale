@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -132,6 +133,82 @@ func TestAgentLoopWithToolRoundTrip(t *testing.T) {
 	all, _ := store.List(context.Background(), "s1")
 	if len(all) != 4 {
 		t.Fatalf("expected 4 messages (user,assistant,tool,assistant), got %d", len(all))
+	}
+}
+
+type abortAfterToolResultTool struct{}
+
+func (t abortAfterToolResultTool) Name() string { return "confirm_later" }
+func (t abortAfterToolResultTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
+	return ToolResult{
+		ToolCallID: call.ID,
+		Name:       call.Name,
+		Content:    `{"success":true,"code":"confirmation_required"}`,
+		Metadata: map[string]any{
+			"abort_turn_after_tool_result": true,
+		},
+	}, nil
+}
+
+type abortPlusEchoProvider struct{}
+
+func (p *abortPlusEchoProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	return eventStream(toolUseEvent(
+		toolCall("tc-confirm", "confirm_later", "{}"),
+		toolCall("tc-echo", "echo", "hi"),
+	))
+}
+
+func TestAgentLoopAbortsAfterToolResultWhenToolRequestsRuntimeHandoff(t *testing.T) {
+	store := NewInMemoryStore()
+	prov := &oneToolProvider{tool: "confirm_later", input: "{}"}
+	a := NewAgent(prov, store, []Tool{abortAfterToolResultTool{}})
+
+	msg, err := a.RunSession(context.Background(), "s-abort-after-tool", "run workflow")
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if msg.FinishReason != FinishReasonEndTurn {
+		t.Fatalf("unexpected finish: %s", msg.FinishReason)
+	}
+	if prov.calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", prov.calls)
+	}
+	all, _ := store.List(context.Background(), "s-abort-after-tool")
+	if len(all) != 3 {
+		t.Fatalf("expected 3 messages (user,assistant,tool), got %d", len(all))
+	}
+	if all[2].Role != RoleTool || len(all[2].ToolResults) != 1 {
+		t.Fatalf("expected terminal tool message, got %+v", all[2])
+	}
+}
+
+func TestAgentLoopAbortAddsResultsForUnprocessedToolCalls(t *testing.T) {
+	store := NewInMemoryStore()
+	a := NewAgent(&abortPlusEchoProvider{}, store, []Tool{abortAfterToolResultTool{}, echoTool{}})
+
+	msg, err := a.RunSession(context.Background(), "s-abort-align", "run workflow and echo")
+	if err != nil {
+		t.Fatalf("run failed: %v", err)
+	}
+	if msg.FinishReason != FinishReasonEndTurn {
+		t.Fatalf("unexpected finish: %s", msg.FinishReason)
+	}
+	all, err := store.List(context.Background(), "s-abort-align")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("expected 3 messages (user,assistant,tool), got %d", len(all))
+	}
+	if all[2].Role != RoleTool || len(all[2].ToolResults) != 2 {
+		t.Fatalf("expected aligned terminal tool message, got %+v", all[2])
+	}
+	if got := all[2].ToolResults[0]; got.ToolCallID != "tc-confirm" || got.IsError {
+		t.Fatalf("first result = %+v", got)
+	}
+	if got := all[2].ToolResults[1]; got.ToolCallID != "tc-echo" || !got.IsError || !strings.Contains(got.Content, "turn_aborted") {
+		t.Fatalf("second result = %+v", got)
 	}
 }
 

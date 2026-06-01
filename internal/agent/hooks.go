@@ -91,23 +91,31 @@ type HookState struct {
 type HookStates map[string]HookState
 
 type HookListEntry struct {
-	Key         string          `json:"key"`
-	Event       HookEvent       `json:"event"`
-	Type        string          `json:"type"`
-	Name        string          `json:"name,omitempty"`
-	Source      string          `json:"source,omitempty"`
-	Match       string          `json:"match,omitempty"`
-	Command     string          `json:"command,omitempty"`
-	Prompt      string          `json:"prompt,omitempty"`
-	URL         string          `json:"url,omitempty"`
-	Description string          `json:"description,omitempty"`
-	TimeoutSec  int             `json:"timeout_sec,omitempty"`
-	CWD         string          `json:"cwd,omitempty"`
-	Hash        string          `json:"hash,omitempty"`
-	Enabled     bool            `json:"enabled"`
-	Managed     bool            `json:"managed"`
-	Active      bool            `json:"active"`
-	Trust       HookTrustStatus `json:"trust"`
+	Key            string            `json:"key"`
+	Event          HookEvent         `json:"event"`
+	Type           string            `json:"type"`
+	Name           string            `json:"name,omitempty"`
+	Source         string            `json:"source,omitempty"`
+	Match          string            `json:"match,omitempty"`
+	If             string            `json:"if,omitempty"`
+	Command        string            `json:"command,omitempty"`
+	Prompt         string            `json:"prompt,omitempty"`
+	URL            string            `json:"url,omitempty"`
+	Model          string            `json:"model,omitempty"`
+	Description    string            `json:"description,omitempty"`
+	TimeoutSec     int               `json:"timeout_sec,omitempty"`
+	CWD            string            `json:"cwd,omitempty"`
+	Shell          string            `json:"shell,omitempty"`
+	Once           bool              `json:"once,omitempty"`
+	Async          bool              `json:"async,omitempty"`
+	AsyncRewake    bool              `json:"asyncRewake,omitempty"`
+	Headers        map[string]string `json:"-"`
+	AllowedEnvVars []string          `json:"allowedEnvVars,omitempty"`
+	Hash           string            `json:"hash,omitempty"`
+	Enabled        bool              `json:"enabled"`
+	Managed        bool              `json:"managed"`
+	Active         bool              `json:"active"`
+	Trust          HookTrustStatus   `json:"trust"`
 }
 
 type HookConfig struct {
@@ -962,19 +970,27 @@ func hookEntryFromResolved(h ResolvedHook, states HookStates, ordinal int) HookL
 	typ := hookRuntimeType(h)
 	name := hookDisplayName(h)
 	entry := HookListEntry{
-		Event:       h.Event,
-		Type:        typ,
-		Name:        name,
-		Source:      core.FirstNonEmpty(strings.TrimSpace(h.Source), "config"),
-		Match:       strings.TrimSpace(h.Match),
-		Command:     strings.TrimSpace(h.Command),
-		Prompt:      strings.TrimSpace(h.Prompt),
-		URL:         strings.TrimSpace(h.URL),
-		Description: strings.TrimSpace(h.Description),
-		TimeoutSec:  hookTimeoutSeconds(resolveHookTimeout(h.TimeoutSec)),
-		CWD:         strings.TrimSpace(h.CWD),
-		Enabled:     true,
-		Managed:     h.Managed,
+		Event:          h.Event,
+		Type:           typ,
+		Name:           name,
+		Source:         core.FirstNonEmpty(strings.TrimSpace(h.Source), "config"),
+		Match:          strings.TrimSpace(h.Match),
+		If:             strings.TrimSpace(h.If),
+		Command:        strings.TrimSpace(h.Command),
+		Prompt:         strings.TrimSpace(h.Prompt),
+		URL:            strings.TrimSpace(h.URL),
+		Model:          strings.TrimSpace(h.Model),
+		Description:    strings.TrimSpace(h.Description),
+		TimeoutSec:     hookTimeoutSeconds(resolveHookTimeout(h.TimeoutSec)),
+		CWD:            strings.TrimSpace(h.CWD),
+		Shell:          strings.TrimSpace(h.Shell),
+		Once:           h.Once,
+		Async:          h.Async,
+		AsyncRewake:    h.AsyncRewake,
+		Headers:        cloneHookHeaders(h.Headers),
+		AllowedEnvVars: normalizedHookStringSet(h.AllowedEnvVars),
+		Enabled:        true,
+		Managed:        h.Managed,
 	}
 	entry.Hash = hookContentHash(entry)
 	entry.Key = hookStableKey(entry, ordinal)
@@ -1032,15 +1048,68 @@ func hookContentHash(entry HookListEntry) string {
 		entry.Name,
 		entry.Source,
 		entry.Match,
+		entry.If,
 		entry.Command,
 		entry.Prompt,
 		entry.URL,
+		entry.Model,
 		entry.Description,
 		entry.CWD,
+		entry.Shell,
 		fmt.Sprintf("%d", entry.TimeoutSec),
+		fmt.Sprintf("%t", entry.Once),
+		fmt.Sprintf("%t", entry.Async),
+		fmt.Sprintf("%t", entry.AsyncRewake),
+		hookHeaderHashPayload(entry.Headers),
+		strings.Join(normalizedHookStringSet(entry.AllowedEnvVars), "\x1f"),
 	}, "\x00")
 	sum := sha256.Sum256([]byte(body))
 	return hex.EncodeToString(sum[:])
+}
+
+func cloneHookHeaders(headers map[string]string) map[string]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(headers))
+	for key, value := range headers {
+		out[strings.TrimSpace(key)] = strings.TrimSpace(value)
+	}
+	return out
+}
+
+func hookHeaderHashPayload(headers map[string]string) string {
+	if len(headers) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(headers))
+	for key := range headers {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, key+"\x1e"+headers[key])
+	}
+	return strings.Join(parts, "\x1f")
+}
+
+func normalizedHookStringSet(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func hookStableKey(entry HookListEntry, ordinal int) string {
@@ -1089,7 +1158,7 @@ func matchesHookCondition(h ResolvedHook, payload HookPayload) bool {
 	if cond == "" {
 		return true
 	}
-	if payload.ToolName != "" && matchesHookPattern(h.Event, cond, payload.ToolName) {
+	if payload.ToolName != "" && matchesHookValuePattern(cond, payload.ToolName) {
 		return true
 	}
 	re, err := regexp.Compile("^(?:" + cond + ")$")
@@ -1100,13 +1169,57 @@ func matchesHookCondition(h ResolvedHook, payload HookPayload) bool {
 }
 
 func hookOnceKey(h ResolvedHook) string {
-	return strings.Join([]string{strings.TrimSpace(h.Source), string(h.Event), strings.TrimSpace(h.Match), strings.TrimSpace(h.If), strings.TrimSpace(h.Command), strings.TrimSpace(h.Prompt), strings.TrimSpace(h.URL)}, "\x00")
+	return strings.Join([]string{
+		strings.TrimSpace(h.Source),
+		string(h.Event),
+		strings.TrimSpace(h.Match),
+		strings.TrimSpace(h.If),
+		hookOnceBodyHash(h),
+	}, "\x00")
+}
+
+func hookOnceBodyHash(h ResolvedHook) string {
+	body, _ := json.Marshal(struct {
+		Type           string
+		Command        string
+		Prompt         string
+		URL            string
+		Model          string
+		Description    string
+		TimeoutSec     int
+		CWD            string
+		Shell          string
+		Async          bool
+		AsyncRewake    bool
+		Headers        map[string]string
+		AllowedEnvVars []string
+	}{
+		Type:           strings.TrimSpace(h.Type),
+		Command:        strings.TrimSpace(h.Command),
+		Prompt:         strings.TrimSpace(h.Prompt),
+		URL:            strings.TrimSpace(h.URL),
+		Model:          strings.TrimSpace(h.Model),
+		Description:    strings.TrimSpace(h.Description),
+		TimeoutSec:     h.TimeoutSec,
+		CWD:            strings.TrimSpace(h.CWD),
+		Shell:          strings.TrimSpace(h.Shell),
+		Async:          h.Async,
+		AsyncRewake:    h.AsyncRewake,
+		Headers:        h.Headers,
+		AllowedEnvVars: h.AllowedEnvVars,
+	})
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
 }
 
 func matchesHookPattern(event HookEvent, match, toolName string) bool {
 	if event != HookEventPreToolUse && event != HookEventPostToolUse {
 		return true
 	}
+	return matchesHookValuePattern(match, toolName)
+}
+
+func matchesHookValuePattern(match, value string) bool {
 	m := strings.TrimSpace(match)
 	if m == "" || m == "*" {
 		return true
@@ -1115,7 +1228,7 @@ func matchesHookPattern(event HookEvent, match, toolName string) bool {
 	if err != nil {
 		return false
 	}
-	return re.MatchString(toolName)
+	return re.MatchString(value)
 }
 
 func shellHookResult(event HookEvent, res HookSpawnResult) HookResult {

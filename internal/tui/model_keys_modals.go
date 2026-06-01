@@ -10,27 +10,25 @@ import (
 )
 
 func (m *model) handleApprovalKey(msg tea.KeyMsg) tea.Cmd {
+	optionCount := m.approvalOptionCount()
 	switch msg.String() {
 	case "left", "h":
-		m.approval.selected = (m.approval.selected + 2) % 3
+		m.approval.selected = (m.approval.selected + optionCount - 1) % optionCount
 		return nil
 	case "right", "l", "tab":
-		m.approval.selected = (m.approval.selected + 1) % 3
+		m.approval.selected = (m.approval.selected + 1) % optionCount
 		return nil
 	case "enter":
-		switch m.approval.selected {
-		case 0:
-			return m.submitApprovalDecision(protocol.IntentAllowTool, "approval_allow", "allow", "approved", "allow")
-		case 1:
-			return m.submitApprovalDecision(protocol.IntentAllowToolForSession, "approval_allow_session", "allow for session", "approved for session", "allow_session")
-		default:
-			return m.submitApprovalDecision(protocol.IntentDenyTool, "approval_deny", "deny", "rejected", "deny")
-		}
-	case "a":
+		return m.submitSelectedApprovalDecision()
+	case "a", "1":
 		return m.submitApprovalDecision(protocol.IntentAllowTool, "approval_allow", "allow", "approved", "allow")
-	case "s":
+	case "s", "2":
 		return m.submitApprovalDecision(protocol.IntentAllowToolForSession, "approval_allow_session", "allow for session", "approved for session", "allow_session")
-	case "d":
+	case "3":
+		if m.approvalOptionCount() == 4 {
+			return m.submitApprovalAndEnableAutoAccept()
+		}
+	case "d", "4":
 		return m.submitApprovalDecision(protocol.IntentDenyTool, "approval_deny", "deny", "rejected", "deny")
 	case "esc", "ctrl+c":
 		return m.submitApprovalDecision(protocol.IntentCancelToolApproval, "approval_cancel", "cancel", "canceled", "cancel")
@@ -38,18 +36,67 @@ func (m *model) handleApprovalKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
+func (m *model) approvalOptionCount() int {
+	if approvalWorkflowName(m.approval.metadata) != "" {
+		return 4
+	}
+	return 3
+}
+
+func (m *model) submitSelectedApprovalDecision() tea.Cmd {
+	switch m.approval.selected {
+	case 0:
+		return m.submitApprovalDecision(protocol.IntentAllowTool, "approval_allow", "allow", "approved", "allow")
+	case 1:
+		return m.submitApprovalDecision(protocol.IntentAllowToolForSession, "approval_allow_session", "allow for session", "approved for session", "allow_session")
+	case 2:
+		if m.approvalOptionCount() == 4 {
+			return m.submitApprovalAndEnableAutoAccept()
+		}
+	}
+	return m.submitApprovalDecision(protocol.IntentDenyTool, "approval_deny", "deny", "rejected", "deny")
+}
+
+func (m *model) submitApprovalAndEnableAutoAccept() tea.Cmd {
+	toolCallID := m.approval.toolCallID
+	toolName := m.approval.toolName
+	notice := m.approvalNotice("allow_session")
+	m.dispatchIntent(protocol.Intent{Kind: protocol.IntentAllowToolForSession, ToolCallID: toolCallID})
+	m.dispatchIntent(protocol.Intent{Kind: protocol.IntentSetApprovalMode, ApprovalMode: "auto_accept"})
+	m.addLog(logEntry{Kind: "approval_allow_session_auto", Source: toolName, Summary: "allow for session and enable auto mode", Raw: "allow_session_auto"})
+	m.appendSystemNotice(notice)
+	m.advanceApprovalPrompt("approved for session")
+	return nil
+}
+
 func (m *model) submitApprovalDecision(kind protocol.IntentKind, logKind, summary, status, notice string) tea.Cmd {
 	toolCallID := m.approval.toolCallID
+	toolName := m.approval.toolName
+	systemNotice := m.approvalNotice(notice)
 	if kind == protocol.IntentCancelToolApproval {
 		m.removePendingApprovalToolCall(toolCallID)
 		m.sawTerminalToolOutcomeThisTurn = true
 	}
-	m.dispatchIntent(protocol.Intent{Kind: kind, ToolCallID: m.approval.toolCallID})
-	m.addLog(logEntry{Kind: logKind, Source: m.approval.toolName, Summary: summary, Raw: notice})
-	m.mode = modeChat
-	m.status = status
-	m.appendSystemNotice(m.approvalNotice(notice))
+	m.dispatchIntent(protocol.Intent{Kind: kind, ToolCallID: toolCallID})
+	m.addLog(logEntry{Kind: logKind, Source: toolName, Summary: summary, Raw: notice})
+	m.appendSystemNotice(systemNotice)
+	m.advanceApprovalPrompt(status)
 	return nil
+}
+
+func (m *model) advanceApprovalPrompt(status string) {
+	if len(m.approvalQueue) == 0 {
+		m.approval = approvalPromptState{}
+		m.mode = modeChat
+		m.status = status
+		return
+	}
+	m.approval = m.approvalQueue[0]
+	copy(m.approvalQueue, m.approvalQueue[1:])
+	m.approvalQueue = m.approvalQueue[:len(m.approvalQueue)-1]
+	m.approval.selected = 0
+	m.mode = modeApproval
+	m.status = "approval required"
 }
 
 func (m *model) removePendingApprovalToolCall(toolCallID string) {

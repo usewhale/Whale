@@ -1710,12 +1710,24 @@ func TestExecuteLocalWorkflowRunReturnsStructuredLocalResult(t *testing.T) {
 	for _, want := range []string{
 		"Dynamic workflow \"custom-review\" completed",
 		"final answer",
-		"Full run details: open /workflows",
-		"Runtime: 2/2 completed · 10s · 531 out · 2 tool calls",
+		"Full result:",
+		"result.json",
+		"Runtime:\n2/2 completed · 10s · 531 out · 2 tool calls",
 	} {
 		if !strings.Contains(terminal.PlainText, want) {
 			t.Fatalf("expected terminal plain text to contain %q, got:\n%s", want, terminal.PlainText)
 		}
+	}
+	resultPath := lineAfter(terminal.PlainText, "Full result:")
+	if resultPath == "" {
+		t.Fatalf("terminal result should include full result path, got:\n%s", terminal.PlainText)
+	}
+	data, err := os.ReadFile(resultPath)
+	if err != nil {
+		t.Fatalf("read result.json: %v", err)
+	}
+	if !strings.Contains(string(data), `"answer": "final answer"`) {
+		t.Fatalf("result.json did not contain structured result, got:\n%s", string(data))
 	}
 	if strings.Contains(terminal.PlainText, "total") {
 		t.Fatalf("terminal plain text should not show total token accounting, got:\n%s", terminal.PlainText)
@@ -1725,6 +1737,86 @@ func TestExecuteLocalWorkflowRunReturnsStructuredLocalResult(t *testing.T) {
 	}
 	if got := localResultSectionFieldValue(terminal, "Runtime", "Details"); got != "" {
 		t.Fatalf("runtime section should not repeat details link, got %q", got)
+	}
+}
+
+func TestWorkflowTerminalResultPreviewDoesNotInferBusinessMeaning(t *testing.T) {
+	lines := workflowTerminalResultLinesFor(map[string]any{
+		"candidateCount": float64(0),
+		"candidates":     []any{},
+		"rounds":         float64(2),
+	}, workflowResultDisplayFields(map[string]any{
+		"candidateCount": float64(0),
+		"candidates":     []any{},
+		"rounds":         float64(2),
+	}))
+	got := strings.Join(lines, "\n")
+	for _, want := range []string{"Result:", "candidate Count: 0", "candidates: []", "rounds: 2"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("preview missing %q, got:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "No candidates found") {
+		t.Fatalf("preview should not infer empty result semantics, got %q", got)
+	}
+
+	lines = workflowTerminalResultLinesFor(map[string]any{
+		"confirmedCount": float64(2),
+		"confirmed": []any{
+			map[string]any{"severity": "high", "dimension": "bugs", "title": "index.html not found in workspace"},
+			map[string]any{"severity": "medium", "dimension": "a11y", "title": "Missing label"},
+		},
+	}, workflowResultDisplayFields(map[string]any{
+		"confirmedCount": float64(2),
+		"confirmed": []any{
+			map[string]any{"severity": "high", "dimension": "bugs", "title": "index.html not found in workspace"},
+			map[string]any{"severity": "medium", "dimension": "a11y", "title": "Missing label"},
+		},
+	}))
+	got = strings.Join(lines, "\n")
+	for _, want := range []string{"confirmed Count: 2", "confirmed: 2 items", "1. [high · bugs] index.html not found in workspace", "2. [medium · a11y] Missing label"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("confirmed preview missing %q, got:\n%s", want, got)
+		}
+	}
+}
+
+func TestWorkflowTerminalResultKeepsFullResultPathWhenTruncated(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	app := newWorkflowTestApp(t, cfg.DataDir, &deepResearchTestSpawner{})
+	startedAt := time.Now().Add(-time.Minute)
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-long-result", Type: workflow.EventRunStarted, Status: workflow.RunStatusRunning, Time: startedAt, Message: "long result", SessionID: app.sessionID})
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-long-result", Type: workflow.EventScriptReady, Status: workflow.RunStatusRunning, Time: startedAt, Message: "long-result", Data: map[string]any{"name": "long-result"}})
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-long-result", Type: workflow.EventRunCompleted, Status: workflow.RunStatusCompleted, Time: startedAt.Add(time.Second), Message: "done", Data: map[string]any{
+		"result": map[string]any{
+			"answer": strings.Repeat("A", workflowTerminalPlainTextLimit+2000),
+		},
+	}})
+
+	terminal := app.BuildWorkflowTerminalLocalResult("run-long-result")
+	if terminal == nil || terminal.Kind != "workflow-terminal" {
+		t.Fatalf("expected terminal workflow result, got %+v", terminal)
+	}
+	if !strings.Contains(terminal.PlainText, "... output truncated in chat") {
+		t.Fatalf("expected truncation marker, got:\n%s", terminal.PlainText)
+	}
+	resultPath := lineAfter(terminal.PlainText, "Full result:")
+	if resultPath == "" || !strings.HasSuffix(resultPath, "result.json") {
+		t.Fatalf("truncated terminal result should keep full result path, got:\n%s", terminal.PlainText)
+	}
+	if _, err := os.Stat(resultPath); err != nil {
+		t.Fatalf("expected result.json to exist at %q: %v", resultPath, err)
+	}
+}
+
+func TestWorkflowTaskStatusFromEventTreatsCompletedRunningEventAsCompleted(t *testing.T) {
+	got := workflowTaskStatusFromEvent(workflow.RunEvent{
+		Type:   workflow.EventTaskCompleted,
+		Status: workflow.TaskStatusRunning,
+	})
+	if got != workflow.TaskStatusCompleted {
+		t.Fatalf("status = %q, want completed", got)
 	}
 }
 
@@ -1933,10 +2025,8 @@ func TestExecuteLocalDeepResearchStartsBuiltinWorkflow(t *testing.T) {
 		t.Fatalf("missing run id: %+v", out)
 	}
 	for _, want := range []string{
-		"Workflow(dynamic workflow: deep-research)",
-		"/workflows to view dynamic workflow runs",
-		"The deep-research workflow is now running in the background.",
-		"✻ Waiting for 1 dynamic workflow to finish",
+		"Started the deep-research workflow in the background.",
+		"Open /workflows to watch progress and inspect details.",
 	} {
 		if !strings.Contains(out.PlainText, want) {
 			t.Fatalf("expected launch text to contain %q, got:\n%s", want, out.PlainText)
@@ -2007,7 +2097,7 @@ return { answer: 'project answer: ' + args }
 	if out == nil || out.Kind != "workflow-run" {
 		t.Fatalf("expected workflow-run local result, got %+v", out)
 	}
-	if !strings.Contains(out.PlainText, "The deep-research workflow is now running in the background.") {
+	if !strings.Contains(out.PlainText, "Started the deep-research workflow in the background.") {
 		t.Fatalf("unexpected launch text:\n%s", out.PlainText)
 	}
 	runID := localResultFieldValue(out, "Run")
@@ -2042,10 +2132,58 @@ func TestExecuteLocalDeepResearchShowsLaunchConfirmation(t *testing.T) {
 	if !strings.Contains(out.Text, "Run a dynamic workflow?") || strings.Contains(out.Text, "--yes") {
 		t.Fatalf("unexpected confirmation text:\n%s", out.Text)
 	}
+	if !localResultHasAction(out.LocalResult, "View raw script") {
+		t.Fatalf("confirmation missing raw script action: %+v", out.LocalResult.Actions)
+	}
+	if localResultSectionFieldValue(out.LocalResult, "Raw script", "Script") == "" {
+		t.Fatalf("confirmation missing raw script section: %+v", out.LocalResult.Sections)
+	}
 	spawner.mu.Lock()
 	defer spawner.mu.Unlock()
 	if len(spawner.requests) != 0 {
 		t.Fatalf("confirmation should not spawn agents, got %+v", spawner.requests)
+	}
+}
+
+func TestStartWorkflowFromConfirmationRunsNamedWorkflow(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	app := newWorkflowTestApp(t, cfg.DataDir, &deepResearchTestSpawner{})
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "review-spa.js"), []byte(`export const meta = {
+  name: 'review-spa',
+  description: 'Review the book SPA',
+}
+log('topic ' + args.topic)
+return { summary: 'reviewed ' + args.topic }
+`), 0o600); err != nil {
+		t.Fatalf("write workflow: %v", err)
+	}
+	app.workflowRunner.Library = workflow.NewLibraryWithRoots([]workflow.LibraryRoot{{Path: root, Source: "project", Rank: 0}})
+
+	confirmation, err := app.BuildWorkflowLaunchConfirmation("review-spa", `{"topic":"ok"}`, "")
+	if err != nil {
+		t.Fatalf("BuildWorkflowLaunchConfirmation: %v", err)
+	}
+	if confirmation.Kind != "workflow-launch" || !strings.Contains(confirmation.PlainText, "Run a dynamic workflow?") {
+		t.Fatalf("unexpected confirmation: %+v", confirmation)
+	}
+
+	out, err := app.StartWorkflowFromConfirmation("review-spa", `{"topic":"ok"}`, "", false)
+	if err != nil {
+		t.Fatalf("StartWorkflowFromConfirmation: %v", err)
+	}
+	if out == nil || out.Kind != "workflow-run" || !strings.Contains(out.PlainText, "Started the review-spa workflow in the background.") {
+		t.Fatalf("expected workflow-run local result, got %+v", out)
+	}
+	runID := localResultFieldValue(out, "Run")
+	run := waitWorkflowRunStatus(t, app, workflow.RunID(runID), workflow.RunStatusCompleted)
+	summary := workflowRunSummary(run)
+	if summary.Summary != "reviewed ok" {
+		t.Fatalf("summary = %q; events=%+v", summary.Summary, run.Events)
+	}
+	if !hasWorkflowLog(run.Events, "topic ok") {
+		t.Fatalf("missing workflow log; events=%+v", run.Events)
 	}
 }
 
@@ -2516,6 +2654,18 @@ func localResultHasField(result *LocalResult, label string) bool {
 	return false
 }
 
+func localResultHasAction(result *LocalResult, label string) bool {
+	if result == nil {
+		return false
+	}
+	for _, action := range result.Actions {
+		if action.Label == label {
+			return true
+		}
+	}
+	return false
+}
+
 func localResultFieldValue(result *LocalResult, label string) string {
 	if result == nil {
 		return ""
@@ -2552,6 +2702,30 @@ func localResultSectionFieldValue(result *LocalResult, sectionTitle, fieldLabel 
 		for _, field := range section.Fields {
 			if field.Label == fieldLabel {
 				return field.Value
+			}
+		}
+	}
+	return ""
+}
+
+func lineContaining(text, needle string) string {
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, needle) {
+			return strings.TrimSpace(line)
+		}
+	}
+	return ""
+}
+
+func lineAfter(text, marker string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if !strings.Contains(line, marker) {
+			continue
+		}
+		for _, next := range lines[i+1:] {
+			if value := strings.TrimSpace(next); value != "" {
+				return value
 			}
 		}
 	}

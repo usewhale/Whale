@@ -37,6 +37,9 @@ func TestWorkflowLaunchLocalResultOpensInteractiveModal(t *testing.T) {
 	if got := m.renderWorkflowLaunch(); got == "" || !strings.Contains(got, "Run a dynamic workflow?") || !strings.Contains(got, "Yes, run it") || !strings.Contains(got, "Esc to cancel") {
 		t.Fatalf("launch render missing expected content:\n%s", got)
 	}
+	if got := m.renderWorkflowLaunch(); !strings.Contains(got, "View raw script") {
+		t.Fatalf("launch render missing raw script action:\n%s", got)
+	}
 }
 
 func TestWorkflowLaunchEnterRunsSelectedAction(t *testing.T) {
@@ -47,8 +50,9 @@ func TestWorkflowLaunchEnterRunsSelectedAction(t *testing.T) {
 		width:     100,
 		height:    30,
 		workflowLaunch: struct {
-			result   *protocol.LocalResult
-			selected int
+			result    *protocol.LocalResult
+			selected  int
+			rawScroll int
 		}{result: workflowLaunchTestResult()},
 		dispatch: func(in protocol.Intent) {
 			intents = append(intents, in)
@@ -70,6 +74,45 @@ func TestWorkflowLaunchEnterRunsSelectedAction(t *testing.T) {
 	}
 }
 
+func TestWorkflowLaunchViewRawScriptIsReadOnlyAndReturnsToConfirmation(t *testing.T) {
+	m := model{
+		assembler: tuirender.NewAssembler(),
+		mode:      modeWorkflowLaunch,
+		width:     100,
+		height:    16,
+		workflowLaunch: struct {
+			result    *protocol.LocalResult
+			selected  int
+			rawScroll int
+		}{result: workflowLaunchTestResult(), selected: 1},
+	}
+
+	cmd := m.handleWorkflowLaunchKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("did not expect async command")
+	}
+	if m.mode != modeWorkflowRawScript {
+		t.Fatalf("mode = %v, want raw script", m.mode)
+	}
+	got := m.renderWorkflowRawScript()
+	for _, want := range []string{"Workflow raw script", "Script    builtin:deep-research", "export const meta", "Esc back"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("raw script render missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(strings.ToLower(got), "edit") || strings.Contains(got, "$EDITOR") {
+		t.Fatalf("raw script view should be read-only, got:\n%s", got)
+	}
+	m.handleWorkflowRawScriptKey(tea.KeyMsg{Type: tea.KeyDown})
+	if m.workflowLaunch.rawScroll == 0 {
+		t.Fatalf("expected raw script view to scroll")
+	}
+	m.handleWorkflowRawScriptKey(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mode != modeWorkflowLaunch {
+		t.Fatalf("mode = %v, want workflow launch", m.mode)
+	}
+}
+
 func TestWorkflowRunLocalResultRendersAsPlainLaunchNotice(t *testing.T) {
 	m := model{
 		assembler:           tuirender.NewAssembler(),
@@ -81,7 +124,7 @@ func TestWorkflowRunLocalResultRendersAsPlainLaunchNotice(t *testing.T) {
 	result := &protocol.LocalResult{
 		Kind:      "workflow-run",
 		Title:     "deep-research is running in background",
-		PlainText: "Workflow(dynamic workflow: deep-research)\n/workflows to view dynamic workflow runs\n\nThe deep-research workflow is now running in the background.\n\n✻ Waiting for 1 dynamic workflow to finish",
+		PlainText: "Started the deep-research workflow in the background.\n\nOpen /workflows to watch progress and inspect details. I'll report back here when it completes.",
 		Fields: []protocol.LocalResultField{
 			{Label: "Status", Value: "async_launched"},
 			{Label: "Run", Value: "run-123"},
@@ -96,8 +139,16 @@ func TestWorkflowRunLocalResultRendersAsPlainLaunchNotice(t *testing.T) {
 	if m.mode != modeChat {
 		t.Fatalf("mode = %v, want chat", m.mode)
 	}
-	got := strings.Join(tuirender.ChatLines(m.transcript, 120), "\n")
-	if !strings.Contains(got, "Workflow(dynamic workflow: deep-research)") || !strings.Contains(got, "✻ Waiting for 1 dynamic workflow to finish") {
+	messages := m.chatMessages()
+	if len(messages) < 2 {
+		t.Fatalf("expected command echo and assistant launch notice, got %+v", messages)
+	}
+	got := strings.Join(tuirender.ChatLines(messages, 120), "\n")
+	last := messages[len(messages)-1]
+	if last.Role != "assistant" || last.Kind != tuirender.KindText || last.Local != nil {
+		t.Fatalf("workflow launch notice should enter chat as assistant text, got %+v", last)
+	}
+	if !strings.Contains(got, "Started the deep-research workflow in the background.") || !strings.Contains(got, "Open /workflows to watch progress") {
 		t.Fatalf("workflow launch notice missing expected plain text:\n%s", got)
 	}
 	if strings.Contains(got, "async_launched") || strings.Contains(got, "/tmp/run-123/script.js") {
@@ -258,9 +309,27 @@ func workflowLaunchTestResult() *protocol.LocalResult {
 			Fields: []protocol.LocalResultField{
 				{Label: "1. Scope", Value: "Decompose question"},
 			},
+		}, {
+			Title: "Raw script",
+			Fields: []protocol.LocalResultField{
+				{Label: "Source", Value: "builtin"},
+				{Label: "Path", Value: "builtin:deep-research"},
+				{Label: "Script", Value: strings.Join([]string{
+					"export const meta = {",
+					"  name: 'deep-research',",
+					"}",
+					"phase('Scope')",
+					"await agent('scope')",
+					"phase('Search')",
+					"await agent('search')",
+					"phase('Synthesize')",
+					"return {}",
+				}, "\n")},
+			},
 		}},
 		Actions: []protocol.LocalResultAction{
 			{Label: "Yes, run it", WorkflowName: "deep-research", WorkflowArgs: "question", WorkflowResume: "run-source"},
+			{Label: "View raw script"},
 			{Label: "No"},
 		},
 	}
