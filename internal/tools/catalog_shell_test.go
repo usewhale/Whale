@@ -54,6 +54,23 @@ func TestShellRunDescriptionIncludesCmdRuntimeGuidance(t *testing.T) {
 	}
 }
 
+func TestShellRunDescriptionWarnsAgainstDestructiveGitRestore(t *testing.T) {
+	desc := shellRunDescriptionFor(shell.RuntimeDescription{})
+	for _, want := range []string{
+		"destructive workspace restore operations",
+		"git checkout -- <path>",
+		"git restore",
+		"git reset --hard",
+		"git clean",
+		"Whale's /rewind command or /checkpoint alias",
+		"unless the user explicitly asked to discard local changes",
+	} {
+		if !strings.Contains(desc, want) {
+			t.Fatalf("description missing %q:\n%s", want, desc)
+		}
+	}
+}
+
 func TestShellReadOnlyCheckRejectsWindowsShellCommands(t *testing.T) {
 	powerShellSpec := shellRunReadOnlySpecFor(shell.KindPowerShell)
 	cmdSpec := shellRunReadOnlySpecFor(shell.KindCmd)

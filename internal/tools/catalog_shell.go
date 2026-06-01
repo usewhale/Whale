@@ -66,7 +66,7 @@ func shellRunDescription() string {
 }
 
 func shellRunDescriptionFor(rt shell.RuntimeDescription) string {
-	base := fmt.Sprintf("Run a shell command from the current Whale workspace. Commands default to the workspace root; do not assume synthetic paths like /workspace. Use relative paths, or set cwd to a subdirectory inside the workspace, instead of prefixing commands with cd. Foreground wait defaults to %dms and clamps at %dms; long-running commands can return a background task_id when the foreground wait expires. Continue with shell_wait instead of rerunning the same command.", defaultForegroundShellWaitMS, maxForegroundShellWaitMS)
+	base := fmt.Sprintf("Run a shell command from the current Whale workspace. Commands default to the workspace root; do not assume synthetic paths like /workspace. Use relative paths, or set cwd to a subdirectory inside the workspace, instead of prefixing commands with cd. Foreground wait defaults to %dms and clamps at %dms; long-running commands can return a background task_id when the foreground wait expires. Continue with shell_wait instead of rerunning the same command. Before running destructive workspace restore operations such as git checkout -- <path>, git restore, git reset --hard, or git clean, prefer Whale's /rewind command or /checkpoint alias unless the user explicitly asked to discard local changes.", defaultForegroundShellWaitMS, maxForegroundShellWaitMS)
 	if guidance := rt.ToolGuidance(); strings.TrimSpace(guidance) != "" {
 		return base + " " + strings.TrimSpace(guidance)
 	}

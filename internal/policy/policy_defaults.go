@@ -42,6 +42,7 @@ func DefaultPermissionConfig() PermissionConfig {
 			"pnpm install*":           "ask",
 			"yarn add*":               "ask",
 			"git reset*":              "ask",
+			"git checkout -- *":       "ask",
 			"git restore*":            "ask",
 			"git rm*":                 "ask",
 			"git clean*":              "ask",

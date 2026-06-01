@@ -310,6 +310,8 @@ func TestRulePolicyShellWildcardAllowOnlyUsesExplicitRules(t *testing.T) {
 		`git config --get remote.origin.url 2>/dev/null && echo "---" && git remote -v`,
 		"git config --get remote.origin.url && git remote -v",
 		`ls -la .worktrees 2>/dev/null; echo "---"; ls -la worktrees 2>/dev/null; echo "---"; git worktree list 2>/dev/null; echo "---"`,
+		"git checkout -b feature/guard",
+		"git checkout --branch feature/guard",
 		"make test",
 	} {
 		got := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`})
@@ -329,6 +331,7 @@ func TestRulePolicyShellWildcardAllowOnlyUsesExplicitRules(t *testing.T) {
 			"pnpm install",
 			"yarn add react",
 			"git reset --hard HEAD",
+			"git checkout -- README.md",
 			"git restore README.md",
 			"git rm README.md",
 			"git rm -f README.md",
