@@ -93,7 +93,7 @@ func classifySlashFields(head string, fields []string, line string) SubmitClass 
 		return classifyWorkflowsFields(fields)
 	case "/deep-research":
 		return classifyDeepResearchFields(fields)
-	case "/model", "/permissions", "/skills", "/plugins", "/resume":
+	case "/model", "/permissions", "/skills", "/config", "/plugins", "/resume":
 		if len(fields) == 1 {
 			return SubmitLocalUI
 		}

@@ -194,6 +194,142 @@ func (m *model) submitLocalNoTurn(submit appcommands.SubmitClassification) tea.C
 	return nil
 }
 
+func (m *model) submitSteeringPrompt(value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	binding := m.currentSkillBinding(value)
+	clientInputID := m.nextPendingInputID()
+	m.clearEphemeralMessages()
+	if m.assembler != nil && m.assembler.Len() > 0 {
+		m.commitLiveTranscript(false)
+	}
+	m.recordPromptHistory(value)
+	m.resetHistoryNavigation()
+	m.appendTranscript("you", tuirender.KindText, visibleSubmittedText(value))
+	m.input.SetValue("")
+	m.skillBinding = nil
+	m.resetWindowsPasteFallbackInputState()
+	m.slash.matches = nil
+	m.slash.selected = 0
+	m.slash.argumentHint = ""
+	clearFileSuggestions(m)
+	m.pendingSteers = append(m.pendingSteers, pendingSteer{
+		ID:           clientInputID,
+		Text:         value,
+		SkillBinding: binding,
+	})
+	m.status = "sent"
+	m.dispatchIntent(protocol.Intent{Kind: protocol.IntentSubmit, Input: value, ClientInputID: clientInputID, SkillBinding: binding})
+	m.refreshViewportContentFollow(true)
+}
+
+func (m *model) nextPendingInputID() string {
+	m.nextClientInputID++
+	return fmt.Sprintf("pending-%d", m.nextClientInputID)
+}
+
+func (m *model) markPendingInputAccepted(clientInputID string) {
+	if clientInputID == "" {
+		return
+	}
+	for i := range m.pendingSteers {
+		if m.pendingSteers[i].ID == clientInputID {
+			m.pendingSteers[i].Accepted = true
+			m.refreshViewportContent()
+			return
+		}
+	}
+}
+
+func (m *model) rejectPendingInput(clientInputID, text string) tea.Cmd {
+	if clientInputID == "" {
+		return nil
+	}
+	for i, steer := range m.pendingSteers {
+		if steer.ID != clientInputID {
+			continue
+		}
+		if strings.TrimSpace(text) == "" {
+			text = steer.Text
+		}
+		m.pendingSteers = append(m.pendingSteers[:i], m.pendingSteers[i+1:]...)
+		return m.restoreTextToComposer(text)
+	}
+	return nil
+}
+
+func (m *model) clearAcceptedPendingSteers() {
+	if len(m.pendingSteers) == 0 {
+		return
+	}
+	m.pendingSteers = nil
+}
+
+func (m *model) restoreTextToComposer(text string) tea.Cmd {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	current := strings.TrimSpace(m.input.Value())
+	if current != "" {
+		text += "\n" + current
+	}
+	m.input.SetValue(text)
+	m.skillBinding = nil
+	m.resetHistoryNavigation()
+	cmd := m.updateSlashMatches()
+	m.refreshViewportContent()
+	return cmd
+}
+
+func (m *model) submitPendingSteersNow() tea.Cmd {
+	if len(m.pendingSteers) == 0 {
+		return nil
+	}
+	parts := make([]string, 0, len(m.pendingSteers))
+	for _, steer := range m.pendingSteers {
+		if text := strings.TrimSpace(steer.Text); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	m.pendingSteers = nil
+	value := strings.TrimSpace(strings.Join(parts, "\n"))
+	if value == "" {
+		return nil
+	}
+	m.startBusy()
+	m.status = "running"
+	m.clearEphemeralMessages()
+	m.beginTurnTranscript()
+	m.dispatchIntent(protocol.Intent{Kind: protocol.IntentSubmit, Input: value})
+	m.refreshViewportContentFollow(true)
+	return busyTickCmd()
+}
+
+func (m *model) prepareQueuedPromptAfterInterrupt() {
+	value := strings.TrimSpace(m.input.Value())
+	if value != "" {
+		submit := m.classifySubmit(value)
+		if !submit.BusyImmediate() && !appcommands.LooksLikeSlashCommand(submit.Line) {
+			m.enqueuePrompt(value)
+		}
+	}
+	if len(m.queuedPrompts) > 0 {
+		m.submitQueuedPromptAfterInterrupt = true
+	}
+}
+
+func (m *model) submitQueuedPromptAfterInterruptNow(snapshot windowsBusyInputSnapshot) tea.Cmd {
+	next, ok := m.popQueuedPrompt()
+	m.submitQueuedPromptAfterInterrupt = false
+	if !ok {
+		return nil
+	}
+	return tea.Batch(m.submitPromptWithBinding(next.Text, next.SkillBinding), m.restoreWindowsBusyInput(snapshot))
+}
+
 func isBtwCommand(line string) bool {
 	fields := strings.Fields(strings.TrimSpace(line))
 	return len(fields) > 0 && fields[0] == "/btw"
@@ -244,10 +380,15 @@ func (m *model) restoreQueuedPromptsToComposerWithWindowsInput(snapshot windowsB
 }
 
 func (m *model) restoreQueuedPromptsToComposerWithCurrent(currentValue string) (bool, tea.Cmd) {
-	if len(m.queuedPrompts) == 0 {
+	if len(m.queuedPrompts) == 0 && len(m.pendingSteers) == 0 {
 		return false, nil
 	}
-	parts := make([]string, 0, len(m.queuedPrompts)+1)
+	parts := make([]string, 0, len(m.pendingSteers)+len(m.queuedPrompts)+1)
+	for _, steer := range m.pendingSteers {
+		if text := strings.TrimSpace(steer.Text); text != "" {
+			parts = append(parts, text)
+		}
+	}
 	for _, prompt := range m.queuedPrompts {
 		if text := strings.TrimSpace(prompt.Text); text != "" {
 			parts = append(parts, text)
@@ -256,6 +397,8 @@ func (m *model) restoreQueuedPromptsToComposerWithCurrent(currentValue string) (
 	if current := strings.TrimSpace(currentValue); current != "" {
 		parts = append(parts, current)
 	}
+	m.pendingSteers = nil
+	m.submitQueuedPromptAfterInterrupt = false
 	m.queuedPrompts = nil
 	m.skillBinding = nil
 	m.input.SetValue(strings.Join(parts, "\n"))

@@ -29,6 +29,45 @@ func (s *Service) maybeWatchWorkflowRun(result *app.LocalResult) {
 	s.goTracked(func() { s.watchWorkflowRun(runID) })
 }
 
+func workflowSnapshotEvent(result *app.LocalResult) (Event, bool) {
+	if result == nil || result.WorkflowPanelSnapshot == nil {
+		return Event{}, false
+	}
+	runID := strings.TrimSpace(result.WorkflowPanelSnapshot.RunID)
+	if runID == "" {
+		runID = workflowRunIDFromLocalResult(result)
+	}
+	if runID == "" {
+		return Event{}, false
+	}
+	text := strings.TrimSpace(result.PlainText)
+	if text == "" {
+		text = strings.TrimSpace(result.WorkflowPanelSnapshot.Summary)
+	}
+	return Event{
+		Kind:          EventWorkflowSnapshot,
+		WorkflowRunID: runID,
+		Text:          text,
+		Status:        strings.TrimSpace(result.WorkflowPanelSnapshot.Status),
+		LocalResult:   protocolLocalResult(result),
+	}, true
+}
+
+func (s *Service) emitWorkflowSnapshotForResult(result *app.LocalResult) {
+	if ev, ok := workflowSnapshotEvent(result); ok {
+		s.emit(ev)
+		return
+	}
+	runID := workflowRunIDFromLocalResult(result)
+	if runID == "" {
+		return
+	}
+	panel := s.app.WorkflowPanelLocalResult(runID)
+	if ev, ok := workflowSnapshotEvent(panel); ok {
+		s.emit(ev)
+	}
+}
+
 func workflowRunIDFromLocalResult(result *app.LocalResult) string {
 	if result == nil || result.Kind != "workflow-run" {
 		return ""
@@ -70,6 +109,7 @@ func (s *Service) maybeEmitWorkflowLaunchConfirmationToolResult(result *core.Too
 				return true
 			}
 			s.maybeWatchWorkflowRun(out)
+			s.emitWorkflowSnapshotForResult(out)
 			ev := localSubmitResultEvent("info", out.PlainText)
 			ev.LocalResult = protocolLocalResult(out)
 			s.emit(ev)
@@ -167,7 +207,10 @@ func (s *Service) watchWorkflowRun(runID string) {
 			}
 			s.workflowReports[runID] = struct{}{}
 			s.workflowWatchMu.Unlock()
-			s.emit(Event{Kind: EventWorkflowTerminal, Text: result.PlainText, LocalResult: protocolLocalResult(result)})
+			if ev, ok := workflowSnapshotEvent(result); ok {
+				s.emit(ev)
+			}
+			s.emit(Event{Kind: EventWorkflowTerminal, WorkflowRunID: runID, Text: result.PlainText, LocalResult: protocolLocalResult(result)})
 			return
 		}
 	}

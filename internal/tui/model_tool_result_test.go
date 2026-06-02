@@ -401,7 +401,7 @@ func TestMCPToolCallRendersUserFacingLabelAndArgs(t *testing.T) {
 		Text:       `mcp__fs__list_directory: {"path":"/tmp/中文目录"}`,
 	}))
 	m = next.(model)
-	snap := m.assembler.Snapshot()
+	snap := m.liveTranscriptMessages()
 	if len(snap) != 1 {
 		t.Fatalf("expected one MCP tool call, got %+v", snap)
 	}
@@ -672,7 +672,7 @@ func TestMultipleToolResultsWaitForPendingToolCallsBeforeCommit(t *testing.T) {
 	raw := `{"success":true,"data":{"count":2,"items":[]}}`
 	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolResult, ToolCallID: "todo-1", ToolName: "todo_update", Text: raw}))
 	m = next.(model)
-	if got := len(m.assembler.Snapshot()); got != 2 {
+	if got := len(m.liveTranscriptMessages()); got != 2 {
 		t.Fatalf("expected pending tool calls to stay live until all results arrive, got %d", got)
 	}
 	if got := strings.Join(tuirender.ChatLines(m.transcript, 100), "\n"); strings.Contains(got, "✓") {
@@ -784,7 +784,7 @@ func TestTaskProgressUpdatesTaskToolRow(t *testing.T) {
 		},
 	}))
 	m = next.(model)
-	snap := m.assembler.Snapshot()
+	snap := m.liveTranscriptMessages()
 	if len(snap) != 1 {
 		t.Fatalf("expected one tool row, got %+v", snap)
 	}
@@ -809,7 +809,7 @@ func TestTaskProgressUpdatesTaskToolRow(t *testing.T) {
 		},
 	}))
 	m = next.(model)
-	snap = m.assembler.Snapshot()
+	snap = m.liveTranscriptMessages()
 	if snap[0].Kind != tuirender.KindSubagent || snap[0].Role != "result_running" {
 		t.Fatalf("expected running subagent row to persist: %+v", snap[0])
 	}
@@ -829,7 +829,7 @@ func TestTaskProgressUpdatesTaskToolRow(t *testing.T) {
 		},
 	}))
 	m = next.(model)
-	snap = m.assembler.Snapshot()
+	snap = m.liveTranscriptMessages()
 	if snap[0].Kind != tuirender.KindSubagent || snap[0].Role != "result_running" || !strings.Contains(snap[0].Text, "Subagent review compacted") || !strings.Contains(snap[0].Text, "current: grep") {
 		t.Fatalf("expected non-running progress status to update subagent row without losing current tool: %+v", snap[0])
 	}
@@ -846,7 +846,7 @@ func TestTaskProgressUpdatesTaskToolRow(t *testing.T) {
 		},
 	}))
 	m = next.(model)
-	snap = m.assembler.Snapshot()
+	snap = m.liveTranscriptMessages()
 	if snap[0].Kind != tuirender.KindSubagent || snap[0].Role != "result_ok" || !strings.Contains(snap[0].Text, "Subagent review completed") {
 		t.Fatalf("expected completed progress status to update subagent row: %+v", snap[0])
 	}
@@ -893,7 +893,7 @@ func TestSubagentFailureUpdatesDedicatedCell(t *testing.T) {
 		},
 	}))
 	m = next.(model)
-	snap := m.assembler.Snapshot()
+	snap := m.liveTranscriptMessages()
 	if !strings.Contains(snap[0].Text, "Subagent review failed") || !strings.Contains(snap[0].Text, "current: read_file") {
 		t.Fatalf("unexpected progress row: %+v", snap[0])
 	}
@@ -925,7 +925,7 @@ func TestToolCallShowsSearchPatternAndPath(t *testing.T) {
 		Text:       `grep: assistant_delta in internal/tui (*.go)`,
 	}))
 	m = next.(model)
-	snap := m.assembler.Snapshot()
+	snap := m.liveTranscriptMessages()
 	if len(snap) != 1 {
 		t.Fatalf("expected one tool cell, got %+v", snap)
 	}
@@ -971,7 +971,7 @@ func TestToolCallShowsWebSearchQuery(t *testing.T) {
 		Text:       `web_search: F1 pit strategy tools`,
 	}))
 	m = next.(model)
-	snap := m.assembler.Snapshot()
+	snap := m.liveTranscriptMessages()
 	if len(snap) != 1 {
 		t.Fatalf("expected one web search cell, got %+v", snap)
 	}

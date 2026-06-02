@@ -122,17 +122,15 @@ func (p FocusSummaryPart) Text() string {
 }
 
 type Assembler struct {
-	messages      []UIMessage
-	toolEntryByID map[string]int
+	messages []UIMessage
 }
 
 func NewAssembler() *Assembler {
-	return &Assembler{toolEntryByID: map[string]int{}}
+	return &Assembler{}
 }
 
 func (a *Assembler) Reset() {
 	a.messages = nil
-	a.toolEntryByID = map[string]int{}
 }
 
 func (a *Assembler) Len() int {
@@ -154,7 +152,6 @@ func (a *Assembler) RemoveAssistantMessages() {
 		out = append(out, msg)
 	}
 	a.messages = out
-	a.rebuildToolEntryIndex()
 }
 
 func (a *Assembler) ReplaceTrailingAssistantMessages(text string) bool {
@@ -176,7 +173,6 @@ func (a *Assembler) ReplaceTrailingAssistantMessages(text string) bool {
 	}
 	a.messages[start].Text = t
 	a.messages = a.messages[:start+1]
-	a.rebuildToolEntryIndex()
 	return true
 }
 
@@ -207,60 +203,6 @@ func (a *Assembler) AppendDelta(role, text string) {
 		Text:      t,
 		Streaming: role == "think",
 	})
-}
-
-func (a *Assembler) AddToolCall(toolCallID, toolName, text string) {
-	t := strings.TrimSpace(strings.TrimRight(text, "\n"))
-	if t == "" {
-		return
-	}
-	a.messages = append(a.messages, UIMessage{
-		ID:       toolCallID,
-		Role:     "tool",
-		Kind:     KindToolCall,
-		Text:     t,
-		ToolName: strings.TrimSpace(toolName),
-	})
-	if toolCallID != "" {
-		a.toolEntryByID[toolCallID] = len(a.messages) - 1
-	}
-}
-
-func (a *Assembler) AddSubagent(toolCallID, text string) {
-	a.AddSubagentWithSteps(toolCallID, text, nil)
-}
-
-func (a *Assembler) AddSubagentWithSteps(toolCallID, text string, steps []protocol.ProgressStep) {
-	t := strings.TrimSpace(strings.TrimRight(text, "\n"))
-	if t == "" {
-		return
-	}
-	a.messages = append(a.messages, UIMessage{
-		ID:            toolCallID,
-		Role:          "tool",
-		Kind:          KindSubagent,
-		Text:          t,
-		ToolName:      "spawn_subagent",
-		SubagentSteps: steps,
-	})
-	if toolCallID != "" {
-		a.toolEntryByID[toolCallID] = len(a.messages) - 1
-	}
-}
-
-func (a *Assembler) UpdateSubagentProgress(toolCallID, text string, role string, steps []protocol.ProgressStep) {
-	if toolCallID == "" {
-		return
-	}
-	idx, ok := a.toolEntryByID[toolCallID]
-	if !ok || idx < 0 || idx >= len(a.messages) {
-		return
-	}
-	a.messages[idx].Text = text
-	a.messages[idx].Role = role
-	if len(steps) > 0 {
-		a.messages[idx].SubagentSteps = steps
-	}
 }
 
 func (a *Assembler) AddNotice(text string) {
@@ -344,54 +286,6 @@ func (a *Assembler) AddLocalResult(result *protocol.LocalResult) {
 	})
 }
 
-func (a *Assembler) UpdateToolCall(toolCallID, text, role string) bool {
-	return a.UpdateToolCallWithIdentity(toolCallID, text, role, "")
-}
-
-func (a *Assembler) UpdateToolCallWithIdentity(toolCallID, text, role, identity string) bool {
-	t := strings.TrimSpace(strings.TrimRight(text, "\n"))
-	if toolCallID == "" || t == "" {
-		return false
-	}
-	idx, ok := a.toolEntryByID[toolCallID]
-	if !ok || idx < 0 || idx >= len(a.messages) {
-		return false
-	}
-	if strings.TrimSpace(role) == "" {
-		role = "tool"
-	}
-	a.messages[idx].Role = role
-	a.messages[idx].Text = t
-	if strings.TrimSpace(identity) != "" {
-		a.messages[idx].ToolIdentity = identity
-	}
-	return true
-}
-
-func (a *Assembler) ToolCallText(toolCallID string) string {
-	if toolCallID == "" {
-		return ""
-	}
-	idx, ok := a.toolEntryByID[toolCallID]
-	if !ok || idx < 0 || idx >= len(a.messages) {
-		return ""
-	}
-	return a.messages[idx].Text
-}
-
-func (a *Assembler) RemoveToolCall(toolCallID string) bool {
-	if toolCallID == "" {
-		return false
-	}
-	idx, ok := a.toolEntryByID[toolCallID]
-	if !ok || idx < 0 || idx >= len(a.messages) {
-		return false
-	}
-	a.messages = append(a.messages[:idx], a.messages[idx+1:]...)
-	a.rebuildToolEntryIndex()
-	return true
-}
-
 func (a *Assembler) AddPlanDelta(text string) {
 	t := strings.ReplaceAll(text, "\r\n", "\n")
 	if t == "" {
@@ -464,9 +358,6 @@ func (a *Assembler) replacePlanMessages(text string) bool {
 		out = append(out, msg)
 	}
 	a.messages = out
-	if replaced {
-		a.rebuildToolEntryIndex()
-	}
 	return replaced
 }
 
@@ -492,30 +383,6 @@ func (a *Assembler) AddToolResultWithRole(name, text, role string) {
 		Text:     t,
 		ToolName: strings.TrimSpace(name),
 	})
-}
-
-func (a *Assembler) BackfillToolCall(toolCallID, replacement string) {
-	if toolCallID == "" || replacement == "" {
-		return
-	}
-	idx, ok := a.toolEntryByID[toolCallID]
-	if !ok || idx < 0 || idx >= len(a.messages) {
-		return
-	}
-	a.messages[idx].Text = replacement
-}
-
-func (a *Assembler) rebuildToolEntryIndex() {
-	a.toolEntryByID = map[string]int{}
-	for i, msg := range a.messages {
-		if msg.ID != "" && isIndexableToolMessage(msg.Kind) {
-			a.toolEntryByID[msg.ID] = i
-		}
-	}
-}
-
-func isIndexableToolMessage(kind MessageKind) bool {
-	return kind == KindToolCall || kind == KindSubagent
 }
 
 func canCoalesce(role string, last UIMessage) bool {

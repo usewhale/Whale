@@ -26,22 +26,19 @@ func TestApprovalNoticeTextUsesDecisionAndSummary(t *testing.T) {
 		t.Fatalf("unexpected cancel notice: %q", got)
 	}
 }
-func TestApprovalDecisionAppendsStructuredNotice(t *testing.T) {
+func TestApprovalDecisionEventAppendsStructuredNotice(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
-	m.mode = modeApproval
-	m.approval.toolCallID = "tool-1"
-	m.approval.toolName = "shell_run"
-	m.approval.reason = "shell_run: git status"
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventApprovalRequired, ToolCallID: "tool-1", ToolName: "shell_run", Text: "shell_run: git status"}))
+	m = next.(model)
 
-	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
 	m = next.(model)
 	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentAllowTool || (*intents)[0].ToolCallID != "tool-1" {
 		t.Fatalf("unexpected approval intent: %+v", *intents)
 	}
-	if m.assembler == nil {
-		t.Fatal("expected assembler with approval notice")
-	}
-	snap := m.assembler.Snapshot()
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventApprovalDecision, ToolCallID: "tool-1", ToolName: "shell_run", Decision: "allow", DecisionScope: "this_time"}))
+	m = next.(model)
+	snap := m.liveTranscriptMessages()
 	if len(snap) == 0 {
 		t.Fatal("expected approval notice message")
 	}
@@ -81,37 +78,54 @@ func TestWorkflowApprovalAutoModeDoesNotUseLocalSettingsIntent(t *testing.T) {
 	}
 }
 
-func TestApprovalDecisionPreservesPendingLiveRowsBeforeNotice(t *testing.T) {
+func TestApprovalDecisionRendersBeforeSubagentResult(t *testing.T) {
 	m, _ := newModelWithDispatchSpy()
 	m.width = 120
 	m.height = 30
 	m.append("assistant", "I need to inspect the repository.")
-	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolCall, ToolCallID: "tool-1", ToolName: "list_dir", Text: "list_dir: ."}))
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolCall, ToolCallID: "tool-1", ToolName: "spawn_subagent", Text: "spawn_subagent: prefill-smoke · inspect repo"}))
 	m = next.(model)
 
-	m.mode = modeApproval
-	m.approval.toolCallID = "tool-1"
-	m.approval.toolName = "list_dir"
-	m.approval.reason = "list_dir: ."
-	_ = m.handleApprovalKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventApprovalRequired, ToolCallID: "tool-1", ToolName: "spawn_subagent", Text: "spawn_subagent: prefill-smoke · inspect repo"}))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventApprovalDecision, ToolCallID: "tool-1", ToolName: "spawn_subagent", Decision: "allow_session", DecisionScope: "session"}))
+	m = next.(model)
 
 	next, _ = m.Update(svcMsg(protocol.Event{
 		Kind:       protocol.EventToolResult,
 		ToolCallID: "tool-1",
-		ToolName:   "list_dir",
-		Text:       `{"ok":true,"success":true,"code":"ok","summary":"tool completed","data":{"items":["internal/"]}}`,
+		ToolName:   "spawn_subagent",
+		Text:       `{"ok":true,"success":true,"code":"ok","summary":"subagent completed","data":{"role":"prefill-smoke","child_session_id":"child-1","summary":"ok"},"metadata":{"duration_ms":5}}`,
 	}))
 	m = next.(model)
 
-	plain := xansi.Strip(strings.Join(tuirender.ChatLines(m.transcript, 120), "\n"))
-	assistantIx := strings.Index(plain, "I need to inspect the repository.")
-	toolIx := strings.Index(plain, "Explored")
-	approvalIx := strings.Index(plain, "Approved to use list_dir")
-	if assistantIx < 0 || toolIx < 0 || approvalIx < 0 {
-		t.Fatalf("expected assistant, tool result, and approval notice:\n%s", plain)
+	assistantIx := -1
+	approvalIx := -1
+	subagentIx := -1
+	for i, msg := range m.transcript {
+		if strings.Contains(msg.Text, "I need to inspect the repository.") {
+			assistantIx = i
+		}
+		if strings.Contains(msg.Text, "Approved to use spawn_subagent") {
+			approvalIx = i
+		}
+		if msg.Kind == tuirender.KindSubagent && strings.Contains(msg.Text, "summary: ok") {
+			subagentIx = i
+		}
 	}
-	if !(assistantIx < toolIx && toolIx < approvalIx) {
-		t.Fatalf("live rows should stay before approval notice:\n%s", plain)
+	if assistantIx < 0 || approvalIx < 0 || subagentIx < 0 {
+		plain := xansi.Strip(strings.Join(tuirender.ChatLines(m.transcript, 120), "\n"))
+		t.Fatalf("expected assistant, approval notice, and subagent result:\n%s", plain)
+	}
+	if !(assistantIx < approvalIx && approvalIx < subagentIx) {
+		plain := xansi.Strip(strings.Join(tuirender.ChatLines(m.transcript, 120), "\n"))
+		t.Fatalf("approval notice should render before subagent result:\n%s", plain)
+	}
+	rendered := xansi.Strip(strings.Join(tuirender.ChatLines(m.transcript, 120), "\n"))
+	approvalRenderedIx := strings.Index(rendered, "Approved to use spawn_subagent")
+	subagentRenderedIx := strings.Index(rendered, "Subagent prefill-smoke")
+	if approvalRenderedIx < 0 || subagentRenderedIx < 0 || approvalRenderedIx > subagentRenderedIx {
+		t.Fatalf("approval notice should be visibly rendered before subagent result:\n%s", rendered)
 	}
 }
 
@@ -126,11 +140,10 @@ func TestApprovalDecisionStaysBeforeBackgroundWorkflowTerminalResult(t *testing.
 	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolResult, ToolCallID: "workflow-1", ToolName: "workflow", Text: raw, Metadata: map[string]any{"workflow_run_id": "run-123"}}))
 	m = next.(model)
 
-	m.mode = modeApproval
-	m.approval.toolCallID = "tool-approval"
-	m.approval.toolName = "list_dir"
-	m.approval.reason = "list_dir: /tmp/external"
-	_ = m.handleApprovalKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventApprovalRequired, ToolCallID: "tool-approval", ToolName: "list_dir", Text: "list_dir: /tmp/external"}))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventApprovalDecision, ToolCallID: "tool-approval", ToolName: "list_dir", Decision: "allow_session", DecisionScope: "session"}))
+	m = next.(model)
 
 	next, _ = m.Update(svcMsg(protocol.Event{
 		Kind: protocol.EventWorkflowTerminal,
@@ -184,7 +197,7 @@ func TestWorkflowTerminalDoesNotCommitUnrelatedPendingToolCall(t *testing.T) {
 		},
 	}))
 	m = next.(model)
-	if !m.hasPendingToolCalls() {
+	if !m.hasPendingLifecycleItems() {
 		t.Fatal("workflow terminal should not clear unrelated pending tool call")
 	}
 	if len(m.transcript) != 0 {
@@ -254,25 +267,23 @@ func TestApprovalEscRemovesPendingToolCallBeforeTurnDone(t *testing.T) {
 	m.approval.toolCallID = "tool-1"
 	m.approval.toolName = "shell_run"
 	m.approval.reason = "shell_run: date"
-	m.assembler.AddToolCall("tool-1", "shell_run", "Running date")
-	m.markToolCallPending("tool-1")
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolCall, ToolCallID: "tool-1", ToolName: "shell_run", Text: `shell_run: {"command":"date"}`}))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventApprovalRequired, ToolCallID: "tool-1", ToolName: "shell_run", Text: "shell_run: date"}))
+	m = next.(model)
 	m.sawReasoningThisTurn = true
 
 	_ = m.handleApprovalKey(tea.KeyMsg{Type: tea.KeyEsc})
 	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentCancelToolApproval {
 		t.Fatalf("expected esc to cancel approval, got %+v", *intents)
 	}
-	if got := m.assembler.ToolCallText("tool-1"); got != "" {
-		t.Fatalf("cancel should remove pending tool call before turn done, got %q", got)
-	}
-	if m.hasPendingToolCalls() {
-		t.Fatalf("cancel should clear pending tool call state: %+v", m.pendingToolCalls)
-	}
 	if !m.sawTerminalToolOutcomeThisTurn {
 		t.Fatal("cancel should mark the turn as terminal to suppress reasoning-only fallback")
 	}
 
-	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventApprovalDecision, ToolCallID: "tool-1", ToolName: "shell_run", Decision: "cancel"}))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	m = next.(model)
 	rendered := strings.Join(tuirender.ChatLines(m.transcript, 100), "\n")
 	if strings.Contains(rendered, "Running date") {
@@ -525,7 +536,7 @@ func TestApprovalViewHidesDuplicatePendingToolRow(t *testing.T) {
 	m.approval.toolCallID = "tool-1"
 	m.approval.toolName = "shell_run"
 	m.approval.reason = "shell_run: git diff -- internal/tui/render.go | head -600"
-	m.assembler.AddToolCall("tool-1", "shell_run", "Running git diff -- internal/tui/render.go | head -600")
+	m.ensureTimeline().HandleEvent(protocol.Event{Kind: protocol.EventToolCall, ToolCallID: "tool-1", ToolName: "shell_run", Text: `shell_run: {"command":"git diff -- internal/tui/render.go | head -600"}`})
 
 	view := xansi.Strip(m.View())
 	if strings.Contains(view, "Running git diff") {

@@ -111,14 +111,22 @@ func (a *App) rebuildTaskRuntimeLocked() error {
 		},
 	})
 	a.taskTools = tasks.NewTools(taskRunner)
-	workflowStore, err := workflow.NewFileRunEventStore(cfg.DataDir)
-	if err != nil {
-		return err
+	a.workflowManager = nil
+	a.workflowRunner = nil
+	a.workflowTools = nil
+	if cfg.WorkflowsEnabled {
+		workflowStore, err := workflow.NewFileRunEventStore(cfg.DataDir)
+		if err != nil {
+			return err
+		}
+		workflowScheduler := workflow.NewTaskScheduler(workflowStore, taskRunner)
+		a.workflowManager = workflow.NewRunManager(workflowStore, workflowScheduler)
+		a.workflowRunner = workflow.NewScriptRunner(cfg.DataDir, a.workflowManager)
+		a.workflowRunner.Library = workflow.NewLibrary(a.workspaceRoot)
+		a.workflowTools = []core.Tool{workflow.NewToolWithOptions(a.workflowRunner, workflow.ToolOptions{
+			ParentSessionIDFunc:   func() string { return a.sessionID },
+			KeywordTriggerEnabled: cfg.WorkflowKeywordTrigger,
+		})}
 	}
-	workflowScheduler := workflow.NewTaskScheduler(workflowStore, taskRunner)
-	a.workflowManager = workflow.NewRunManager(workflowStore, workflowScheduler)
-	a.workflowRunner = workflow.NewScriptRunner(cfg.DataDir, a.workflowManager)
-	a.workflowRunner.Library = workflow.NewLibrary(a.workspaceRoot)
-	a.workflowTools = []core.Tool{workflow.NewTool(a.workflowRunner, func() string { return a.sessionID })}
 	return nil
 }

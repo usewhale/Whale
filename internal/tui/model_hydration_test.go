@@ -293,6 +293,42 @@ func TestSessionHydrationCommitsTranscriptAndClearsLiveAssembler(t *testing.T) {
 	}
 }
 
+func TestSessionHydrationRendersStoredToolLifecycleThroughTimelineInOrder(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 24}
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind: protocol.EventSessionHydrated,
+		Messages: protocolMessagesForTest([]core.Message{
+			{Role: core.RoleAssistant, Text: "before tool"},
+			{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{
+				ID:    "read-1",
+				Name:  "read_file",
+				Input: `{"file_path":"README.md"}`,
+			}}},
+			{Role: core.RoleTool, ToolResults: []core.ToolResult{{
+				ToolCallID: "read-1",
+				Name:       "read_file",
+				Content:    `{"success":true,"data":{"content":"ok"}}`,
+			}}},
+			{Role: core.RoleAssistant, Text: "after tool"},
+		}),
+	}))
+	m = next.(model)
+
+	if m.hasPendingLifecycleItems() {
+		t.Fatalf("hydrated completed tool should not remain pending: %+v", m.timeline.Snapshot())
+	}
+	rendered := strings.Join(tuirender.ChatLines(m.transcript, 100), "\n")
+	before := strings.Index(rendered, "before tool")
+	tool := strings.Index(rendered, "Read")
+	after := strings.Index(rendered, "after tool")
+	if before < 0 || tool < 0 || after < 0 {
+		t.Fatalf("expected assistant/tool/assistant transcript:\n%s", rendered)
+	}
+	if !(before < tool && tool < after) {
+		t.Fatalf("expected hydrated tool row between assistant messages:\n%s", rendered)
+	}
+}
+
 func TestRewindHydrationClearsVisibleTranscriptAndRestoresInput(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 80, height: 24}
 	m.append("you", "a")

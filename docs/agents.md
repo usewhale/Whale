@@ -131,6 +131,7 @@ and missing validation. Report evidence and uncertainty clearly.
 | `memory` | 可用记忆范围 | `project` |
 | `background` | 是否后台运行 | `true` |
 | `isolation` | 是否使用 worktree 隔离 | `worktree` |
+| `generation` | 高级生成控制 | 见下方 |
 
 新手建议只先用这几个字段：
 
@@ -140,6 +141,22 @@ whenToUse: ...
 tools: workspace.read
 permissionMode: read_only
 ```
+
+---
+
+## 高级：生成控制
+
+`generation` 可以给 model-only subagent 配置 assistant 回复前缀。如果当前 provider 支持 prefix completion，Whale 会让模型从这个前缀继续生成。
+
+```yaml
+description: Return a compact classification.
+tools: []
+generation:
+  assistantPrefix: "{"
+  prefixCompletion: true
+```
+
+这个功能只在没有工具的 subagent 上启用。带 `workspace.read`、`shell.read` 等工具的 subagent 会继续走普通生成路径，避免因为 prefix completion 失去工具调用能力。
 
 ---
 

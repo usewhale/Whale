@@ -12,7 +12,7 @@ import (
 func (s *Service) Dispatch(in Intent) {
 	switch in.Kind {
 	case IntentSubmit:
-		s.goTracked(func() { s.handleSubmit(in.Input, in.HiddenInput, in.SkillBinding) })
+		s.goTracked(func() { s.handleSubmit(in.Input, in.HiddenInput, in.SkillBinding, in.ClientInputID) })
 	case IntentSubmitLocal:
 		s.enqueueLocalSubmit(in.Input)
 	case IntentAllowTool:
@@ -140,6 +140,30 @@ func (s *Service) Dispatch(in Intent) {
 		})
 	case IntentRequestHooksManage:
 		s.emitHooksManagerUpdated()
+	case IntentRequestConfigManage:
+		s.emitConfigManagerUpdated(true)
+	case IntentApplyConfigSettings:
+		s.goTracked(func() {
+			updates := make([]app.ConfigSettingUpdate, 0, len(in.ConfigUpdates))
+			for _, update := range in.ConfigUpdates {
+				updates = append(updates, app.ConfigSettingUpdate{ID: update.ID, Value: update.Value})
+			}
+			res, err := s.app.ApplyConfigSettings(updates)
+			if err != nil {
+				s.emit(Event{Kind: EventError, Text: err.Error()})
+				s.emitConfigManagerUpdated(false)
+				return
+			}
+			msg := "config unchanged"
+			if len(res.Updated) > 0 {
+				msg = fmt.Sprintf("updated %d config setting(s): %s", len(res.Updated), configSettingLabels(res.Updated))
+				if res.Path != "" {
+					msg += "\nconfig: " + res.Path
+				}
+			}
+			s.emit(Event{Kind: EventLocalSubmitResult, Status: "ok", Text: msg})
+			s.emitConfigManagerUpdated(false)
+		})
 	case IntentSetHookEnabled:
 		if _, err := s.app.SetHookEnabled([]string{in.HookKey}, in.HookEnabled); err != nil {
 			s.emit(Event{Kind: EventError, Text: err.Error()})
@@ -165,4 +189,25 @@ func (s *Service) Dispatch(in Intent) {
 
 func (s *Service) emitHooksManagerUpdated() {
 	s.emit(Event{Kind: EventHooksManagerUpdated, Hooks: protocolHooks(s.app.HookEntries())})
+}
+
+func (s *Service) emitConfigManagerUpdated(open bool) {
+	state, err := s.app.ConfigSettings()
+	if err != nil {
+		s.emit(Event{Kind: EventError, Text: err.Error()})
+		return
+	}
+	s.emit(Event{Kind: EventConfigManagerUpdated, Config: protocolConfigSettings(state), Open: open})
+}
+
+func configSettingLabels(items []app.ConfigSettingView) string {
+	labels := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.Label != "" {
+			labels = append(labels, item.Label)
+		} else {
+			labels = append(labels, item.ID)
+		}
+	}
+	return strings.Join(labels, ", ")
 }

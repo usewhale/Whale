@@ -27,6 +27,8 @@ const (
 	IntentSetSkillEnabled           IntentKind = "set_skill_enabled"
 	IntentSetPluginEnabled          IntentKind = "set_plugin_enabled"
 	IntentRequestHooksManage        IntentKind = "request_hooks_manage"
+	IntentRequestConfigManage       IntentKind = "request_config_manage"
+	IntentApplyConfigSettings       IntentKind = "apply_config_settings"
 	IntentSetHookEnabled            IntentKind = "set_hook_enabled"
 	IntentTrustHook                 IntentKind = "trust_hook"
 	IntentTrustHooks                IntentKind = "trust_hooks"
@@ -38,35 +40,42 @@ const (
 )
 
 type Intent struct {
-	Kind               IntentKind         `json:"kind"`
-	Input              string             `json:"input,omitempty"`
-	HiddenInput        bool               `json:"hidden_input,omitempty"`
-	ToolCallID         string             `json:"tool_call_id,omitempty"`
-	UserInput          *UserInputResponse `json:"user_input,omitempty"`
-	SessionInput       string             `json:"session_input,omitempty"`
-	MessageID          string             `json:"message_id,omitempty"`
-	Model              string             `json:"model,omitempty"`
-	Effort             string             `json:"effort,omitempty"`
-	Thinking           string             `json:"thinking,omitempty"`
-	ApprovalMode       string             `json:"approval_mode,omitempty"`
-	ViewMode           string             `json:"view_mode,omitempty"`
-	SkillName          string             `json:"skill_name,omitempty"`
-	SkillEnabled       bool               `json:"skill_enabled,omitempty"`
-	PluginID           string             `json:"plugin_id,omitempty"`
-	PluginEnabled      bool               `json:"plugin_enabled,omitempty"`
-	HookKey            string             `json:"hook_key,omitempty"`
-	HookEnabled        bool               `json:"hook_enabled,omitempty"`
-	HooksReviewAction  string             `json:"hooks_review_action,omitempty"`
-	SkillBinding       *SkillBinding      `json:"skill_binding,omitempty"`
-	WorktreeAction     string             `json:"worktree_action,omitempty"`
-	WorkflowRunID      string             `json:"workflow_run_id,omitempty"`
-	WorkflowName       string             `json:"workflow_name,omitempty"`
-	WorkflowArgs       string             `json:"workflow_args,omitempty"`
-	WorkflowResume     string             `json:"workflow_resume,omitempty"`
-	WorkflowTrust      bool               `json:"workflow_trust,omitempty"`
-	WorkflowScript     string             `json:"workflow_script,omitempty"`
-	WorkflowSaveAs     string             `json:"workflow_save_as,omitempty"`
-	WorkflowScriptPath string             `json:"workflow_script_path,omitempty"`
+	Kind               IntentKind            `json:"kind"`
+	Input              string                `json:"input,omitempty"`
+	ClientInputID      string                `json:"client_input_id,omitempty"`
+	HiddenInput        bool                  `json:"hidden_input,omitempty"`
+	ToolCallID         string                `json:"tool_call_id,omitempty"`
+	UserInput          *UserInputResponse    `json:"user_input,omitempty"`
+	SessionInput       string                `json:"session_input,omitempty"`
+	MessageID          string                `json:"message_id,omitempty"`
+	Model              string                `json:"model,omitempty"`
+	Effort             string                `json:"effort,omitempty"`
+	Thinking           string                `json:"thinking,omitempty"`
+	ApprovalMode       string                `json:"approval_mode,omitempty"`
+	ViewMode           string                `json:"view_mode,omitempty"`
+	SkillName          string                `json:"skill_name,omitempty"`
+	SkillEnabled       bool                  `json:"skill_enabled,omitempty"`
+	PluginID           string                `json:"plugin_id,omitempty"`
+	PluginEnabled      bool                  `json:"plugin_enabled,omitempty"`
+	HookKey            string                `json:"hook_key,omitempty"`
+	HookEnabled        bool                  `json:"hook_enabled,omitempty"`
+	HooksReviewAction  string                `json:"hooks_review_action,omitempty"`
+	ConfigUpdates      []ConfigSettingUpdate `json:"config_updates,omitempty"`
+	SkillBinding       *SkillBinding         `json:"skill_binding,omitempty"`
+	WorktreeAction     string                `json:"worktree_action,omitempty"`
+	WorkflowRunID      string                `json:"workflow_run_id,omitempty"`
+	WorkflowName       string                `json:"workflow_name,omitempty"`
+	WorkflowArgs       string                `json:"workflow_args,omitempty"`
+	WorkflowResume     string                `json:"workflow_resume,omitempty"`
+	WorkflowTrust      bool                  `json:"workflow_trust,omitempty"`
+	WorkflowScript     string                `json:"workflow_script,omitempty"`
+	WorkflowSaveAs     string                `json:"workflow_save_as,omitempty"`
+	WorkflowScriptPath string                `json:"workflow_script_path,omitempty"`
+}
+
+type ConfigSettingUpdate struct {
+	ID    string `json:"id"`
+	Value string `json:"value"`
 }
 
 type SkillBinding struct {

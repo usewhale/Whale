@@ -247,9 +247,9 @@ func TestProviderRetryStreamResetClearsLiveAttempt(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.handleServiceEvent(protocol.Event{Kind: protocol.EventAssistantDelta, Text: "old answer"})
 	m.handleServiceEvent(protocol.Event{Kind: protocol.EventReasoningDelta, Text: "old thought"})
-	m.appendToolCall("tc-old", "shell_run", `{"command":"date"}`)
+	m.handleServiceEvent(protocol.Event{Kind: protocol.EventToolCall, ToolCallID: "tc-old", ToolName: "shell_run", Text: `shell_run: {"command":"date"}`})
 
-	if len(m.assembler.Snapshot()) == 0 {
+	if len(m.liveTranscriptMessages()) == 0 {
 		t.Fatal("expected live attempt content before retry reset")
 	}
 	if m.busyTokenCount == 0 {
@@ -261,8 +261,8 @@ func TestProviderRetryStreamResetClearsLiveAttempt(t *testing.T) {
 		Metadata: map[string]any{"delay_ms": int64(1000), "stage": "stream", "stream_reset": true},
 	})
 
-	if got := len(m.assembler.Snapshot()); got != 0 {
-		t.Fatalf("expected live attempt cleared, got %+v", m.assembler.Snapshot())
+	if got := len(m.liveTranscriptMessages()); got != 0 {
+		t.Fatalf("expected live attempt cleared, got %+v", m.liveTranscriptMessages())
 	}
 	if m.visibleAssistantThisTurn != "" || m.sawAssistantThisTurn || m.sawReasoningThisTurn {
 		t.Fatalf("turn visibility not reset: visible=%q assistant=%v reasoning=%v", m.visibleAssistantThisTurn, m.sawAssistantThisTurn, m.sawReasoningThisTurn)
@@ -277,6 +277,44 @@ func TestProviderRetryStreamResetClearsLiveAttempt(t *testing.T) {
 		t.Fatalf("retry reset should not append transcript: %+v", m.transcript)
 	}
 }
+
+func TestResponseResetClearsLiveAndCommittedCurrentTurnOutput(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.appendTranscript("you", tuirender.KindText, "start")
+	m.beginTurnTranscript()
+	m.handleServiceEvent(protocol.Event{Kind: protocol.EventAssistantDelta, Text: "old answer"})
+	m.handleServiceEvent(protocol.Event{Kind: protocol.EventReasoningDelta, Text: "old thought"})
+	m.handleServiceEvent(protocol.Event{Kind: protocol.EventToolCall, ToolCallID: "tc-old", ToolName: "shell_run", Text: `shell_run: {"command":"date"}`})
+	m.commitLiveTranscript(false)
+
+	before := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
+	if !strings.Contains(before, "old answer") || !strings.Contains(before, "Running") {
+		t.Fatalf("expected committed old response and tool call before reset:\n%s", before)
+	}
+
+	m.handleServiceEvent(protocol.Event{Kind: protocol.EventResponseReset})
+	afterReset := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
+	if strings.Contains(afterReset, "old answer") || strings.Contains(afterReset, "old thought") {
+		t.Fatalf("response reset left stale model output:\n%s", afterReset)
+	}
+	if !strings.Contains(afterReset, "Running") {
+		t.Fatalf("response reset should keep tool context:\n%s", afterReset)
+	}
+	if got := len(m.assembler.Snapshot()); got != 0 {
+		t.Fatalf("expected live assembler cleared, got %+v", m.assembler.Snapshot())
+	}
+	if m.visibleAssistantThisTurn != "" || m.sawAssistantThisTurn || m.sawReasoningThisTurn {
+		t.Fatalf("turn visibility not reset: visible=%q assistant=%v reasoning=%v", m.visibleAssistantThisTurn, m.sawAssistantThisTurn, m.sawReasoningThisTurn)
+	}
+
+	m.handleServiceEvent(protocol.Event{Kind: protocol.EventAssistantDelta, Text: "steered answer"})
+	m.handleServiceEvent(protocol.Event{Kind: protocol.EventTurnDone, LastResponse: "steered answer"})
+	final := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
+	if strings.Contains(final, "old answer") || !strings.Contains(final, "steered answer") {
+		t.Fatalf("unexpected transcript after steered answer:\n%s", final)
+	}
+}
+
 func TestLiveTokenEstimateAccumulatesDeltas(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	full := "hello 世界"

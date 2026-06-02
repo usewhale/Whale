@@ -97,5 +97,30 @@ Use `/workflows` to open the workflow panel.
 
 ## Requirements
 
-Available on all paid plans (DeepSeek API). The feature is always active —
-no configuration toggle required.
+Available on all paid plans (DeepSeek API). The feature is disabled by default,
+and can be enabled per project.
+
+### Configuration Toggles
+
+Run `/config` in the TUI to manage workflow settings:
+
+- `Dynamic workflows` (`workflows.enabled`) controls the workflow runtime,
+  `workflow` tool, catalog hints, and `/workflows` panel integration.
+- `Workflow keyword trigger` (`workflows.keyword_trigger_enabled`) only controls
+  whether catalog hints encourage automatic workflow use. Turning it off still
+  allows manually running workflows.
+
+In `/config`, `Space` toggles the selected item and creates an unsaved change;
+press `Enter` or `Ctrl+S` to save. Saved changes are written to the current
+project's personal config file:
+
+```toml
+# .whale/config.local.toml
+[workflows]
+enabled = true
+keyword_trigger_enabled = true
+```
+
+`.whale/config.local.toml` only affects the current workspace and should not be
+committed. To share defaults with the team, put the same `[workflows]` settings
+in `.whale/config.toml`.

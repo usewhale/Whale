@@ -9,7 +9,6 @@ import (
 	"github.com/usewhale/whale/internal/app"
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/plugins"
-	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/runtime/protocol"
 	"github.com/usewhale/whale/internal/skills"
 )
@@ -41,6 +40,8 @@ const (
 	IntentSetSkillEnabled           IntentKind = "set_skill_enabled"
 	IntentSetPluginEnabled          IntentKind = "set_plugin_enabled"
 	IntentRequestHooksManage        IntentKind = "request_hooks_manage"
+	IntentRequestConfigManage       IntentKind = "request_config_manage"
+	IntentApplyConfigSettings       IntentKind = "apply_config_settings"
 	IntentSetHookEnabled            IntentKind = "set_hook_enabled"
 	IntentTrustHook                 IntentKind = "trust_hook"
 	IntentTrustHooks                IntentKind = "trust_hooks"
@@ -54,6 +55,7 @@ const (
 type Intent struct {
 	Kind               IntentKind
 	Input              string
+	ClientInputID      string
 	HiddenInput        bool
 	ToolCallID         string
 	UserInput          *core.UserInputResponse
@@ -71,6 +73,7 @@ type Intent struct {
 	HookKey            string
 	HookEnabled        bool
 	HooksReviewAction  string
+	ConfigUpdates      []protocol.ConfigSettingUpdate
 	SkillBinding       *app.SkillBinding
 	WorktreeAction     string
 	WorkflowRunID      string
@@ -100,6 +103,7 @@ const (
 	EventPlanCompleted                 = protocol.EventPlanCompleted
 	EventPlanUpdate                    = protocol.EventPlanUpdate
 	EventProviderRetry                 = protocol.EventProviderRetry
+	EventResponseReset                 = protocol.EventResponseReset
 	EventToolCall                      = protocol.EventToolCall
 	EventToolResult                    = protocol.EventToolResult
 	EventHookStarted                   = protocol.EventHookStarted
@@ -110,6 +114,7 @@ const (
 	EventMCPStatus                     = protocol.EventMCPStatus
 	EventMCPComplete                   = protocol.EventMCPComplete
 	EventApprovalRequired              = protocol.EventApprovalRequired
+	EventApprovalDecision              = protocol.EventApprovalDecision
 	EventUserInputRequired             = protocol.EventUserInputRequired
 	EventUserInputDone                 = protocol.EventUserInputDone
 	EventSessionsListed                = protocol.EventSessionsListed
@@ -120,12 +125,15 @@ const (
 	EventBtwDelta                      = protocol.EventBtwDelta
 	EventBtwDone                       = protocol.EventBtwDone
 	EventBtwError                      = protocol.EventBtwError
+	EventPendingInputAccepted          = protocol.EventPendingInputAccepted
+	EventPendingInputRejected          = protocol.EventPendingInputRejected
 	EventTurnDone                      = protocol.EventTurnDone
 	EventModelSelectionRequested       = protocol.EventModelSelectionRequested
 	EventPermissionsSelectionRequested = protocol.EventPermissionsSelectionRequested
 	EventSkillsSelectionRequested      = protocol.EventSkillsSelectionRequested
 	EventSkillsManagerUpdated          = protocol.EventSkillsManagerUpdated
 	EventPluginsManagerUpdated         = protocol.EventPluginsManagerUpdated
+	EventConfigManagerUpdated          = protocol.EventConfigManagerUpdated
 	EventHooksManagerUpdated           = protocol.EventHooksManagerUpdated
 	EventHooksStartupReviewRequested   = protocol.EventHooksStartupReviewRequested
 	EventReviewRequested               = protocol.EventReviewRequested
@@ -137,6 +145,7 @@ const (
 	EventSessionHydrated               = protocol.EventSessionHydrated
 	EventRewindMessagesListed          = protocol.EventRewindMessagesListed
 	EventWorkflowPanel                 = protocol.EventWorkflowPanel
+	EventWorkflowSnapshot              = protocol.EventWorkflowSnapshot
 	EventWorkflowTerminal              = protocol.EventWorkflowTerminal
 )
 
@@ -155,13 +164,14 @@ type Service struct {
 	shutdownRequested bool
 
 	approveMu     sync.Mutex
-	approvals     map[string]chan policy.ApprovalDecision
+	approvals     map[string]pendingApproval
 	sessionGrants map[string]map[string]bool
 
 	inputMu sync.Mutex
 	inputs  map[string]chan userInputDecision
 
-	btwNextID atomic.Int64
+	btwNextID         atomic.Int64
+	nextEventSequence atomic.Int64
 
 	workflowWatchMu      sync.Mutex
 	workflowWatches      map[string]struct{}
@@ -187,7 +197,7 @@ func New(ctx context.Context, cfg app.Config, start app.StartOptions) (*Service,
 		app:              a,
 		events:           make(chan Event, 512),
 		localSubmits:     make(chan string, 64),
-		approvals:        map[string]chan policy.ApprovalDecision{},
+		approvals:        map[string]pendingApproval{},
 		sessionGrants:    map[string]map[string]bool{},
 		inputs:           map[string]chan userInputDecision{},
 		workflowWatches:  map[string]struct{}{},

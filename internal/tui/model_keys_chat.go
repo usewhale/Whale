@@ -90,6 +90,7 @@ func (m *model) handleChatModeKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 		}
 	case "esc":
 		if m.busy {
+			m.prepareQueuedPromptAfterInterrupt()
 			return m.interruptBusyTurn(), true
 		}
 		if m.page != pageChat {

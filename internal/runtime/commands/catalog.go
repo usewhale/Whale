@@ -45,6 +45,7 @@ func DefaultSlashCommands() []SlashCommandSpec {
 			{Token: "commit", Description: "Review one commit by SHA", InsertText: "/review commit "},
 		}},
 		{Name: "/skills", Description: "Show available skills", AutoRun: true},
+		{Name: "/config", Description: "Open searchable settings", AutoRun: true},
 		{Name: "/plugins", Description: "Manage plugins", AutoRun: true},
 		{Name: "/hooks", Description: "View and trust lifecycle hooks", ArgumentHint: "[trust all|trust <hook-key>...]", AutoRun: true},
 		{Name: "/feedback", Description: "Open the Whale issue tracker", AutoRun: true},

@@ -510,6 +510,112 @@ func TestPluginsManagerRendersAndToggles(t *testing.T) {
 	}
 }
 
+func TestConfigManagerSearchesTogglesAndApplies(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.handleServiceEvent(protocol.Event{
+		Kind: protocol.EventConfigManagerUpdated,
+		Open: true,
+		Config: &protocol.ConfigManagerState{Items: []protocol.ConfigSettingView{
+			{ID: "workflows.enabled", Label: "Dynamic workflows", Description: "Enable workflow runtime", Type: "bool", Value: "true", Scope: "project local", Source: "default"},
+			{ID: "workflows.keyword_trigger_enabled", Label: "Workflow keyword trigger", Description: "Let catalog hints encourage workflow use", Type: "bool", Value: "true", Scope: "project local", Source: "default"},
+		}},
+	})
+	if m.mode != modeConfigManager {
+		t.Fatalf("expected config manager mode, got %v", m.mode)
+	}
+	rendered := xansi.Strip(m.renderConfigManager())
+	for _, want := range []string{"Config", "Search settings", "[x] Dynamic workflows", "workflows.keyword_trigger_enabled"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected config render to contain %q, got:\n%s", want, rendered)
+		}
+	}
+
+	for _, r := range "catalog" {
+		next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+		m = next.(model)
+	}
+	if m.configManager.query != "catalog" {
+		t.Fatalf("expected query with plain a to be searchable, got %q", m.configManager.query)
+	}
+	if len(m.configManager.matches) != 1 {
+		t.Fatalf("expected one filtered config setting, got matches=%v", m.configManager.matches)
+	}
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = next.(model)
+	if got := m.configManager.pending["workflows.keyword_trigger_enabled"]; got != "false" {
+		t.Fatalf("expected pending false value, got %q", got)
+	}
+	if !strings.Contains(xansi.Strip(m.renderConfigManager()), "1 pending") {
+		t.Fatalf("expected pending marker in render:\n%s", m.renderConfigManager())
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	m = next.(model)
+	if len(*intents) != 0 {
+		t.Fatalf("plain a should extend search, not apply pending config changes: %+v", *intents)
+	}
+	if m.configManager.query != "cataloga" {
+		t.Fatalf("expected plain a to extend query, got %q", m.configManager.query)
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	m = next.(model)
+	if len(*intents) != 1 {
+		t.Fatalf("expected one config apply intent, got %+v", *intents)
+	}
+	got := (*intents)[0]
+	if got.Kind != protocol.IntentApplyConfigSettings || len(got.ConfigUpdates) != 1 ||
+		got.ConfigUpdates[0].ID != "workflows.keyword_trigger_enabled" || got.ConfigUpdates[0].Value != "false" {
+		t.Fatalf("unexpected config apply intent: %+v", got)
+	}
+}
+
+func TestConfigManagerEscDiscardsPendingChanges(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.handleServiceEvent(protocol.Event{
+		Kind: protocol.EventConfigManagerUpdated,
+		Open: true,
+		Config: &protocol.ConfigManagerState{Items: []protocol.ConfigSettingView{
+			{ID: "workflows.enabled", Label: "Dynamic workflows", Type: "bool", Value: "true"},
+		}},
+	})
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	m = next.(model)
+	if len(m.configManager.pending) != 1 {
+		t.Fatalf("expected pending change")
+	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(model)
+	if m.mode != modeChat {
+		t.Fatalf("expected config manager to close, mode=%v", m.mode)
+	}
+	if len(*intents) != 0 {
+		t.Fatalf("expected no apply intent on esc, got %+v", *intents)
+	}
+}
+
+func TestConfigManagerShowsApplyResultInline(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.handleServiceEvent(protocol.Event{
+		Kind: protocol.EventConfigManagerUpdated,
+		Open: true,
+		Config: &protocol.ConfigManagerState{Items: []protocol.ConfigSettingView{
+			{ID: "workflows.enabled", Label: "Dynamic workflows", Type: "bool", Value: "false", Scope: "project local", Source: "project local"},
+		}},
+	})
+	before := len(m.transcript)
+	m, _ = updateTestModel(t, m, svcMsg(protocol.Event{
+		Kind:   protocol.EventLocalSubmitResult,
+		Status: "ok",
+		Text:   "updated 1 config setting(s): Dynamic workflows\nconfig: /workspace/.whale/config.local.toml",
+	}))
+	if len(m.transcript) != before {
+		t.Fatalf("config apply result should stay inline, before=%d after=%d", before, len(m.transcript))
+	}
+	rendered := xansi.Strip(m.renderConfigManager())
+	if !strings.Contains(rendered, "saved: updated 1 config setting(s): Dynamic workflows") {
+		t.Fatalf("expected inline saved status, got:\n%s", rendered)
+	}
+}
+
 func TestPluginsManagerDetailView(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.width = 96
@@ -948,6 +1054,15 @@ func TestPickerAndModalViewsHideComposer(t *testing.T) {
 			want: "Plugins",
 		},
 		{
+			name: "config manager",
+			setup: func(m *model) {
+				m.mode = modeConfigManager
+				m.configManager.all = []protocol.ConfigSettingView{{ID: "workflows.enabled", Label: "Dynamic workflows", Type: "bool", Value: "true"}}
+				m.configManager.matches = []int{0}
+			},
+			want: "Config",
+		},
+		{
 			name: "help",
 			setup: func(m *model) {
 				m.mode = modeHelp
@@ -980,7 +1095,7 @@ func TestRenderQueuedPromptsShowsPreviewLimit(t *testing.T) {
 	}
 
 	view := m.renderQueuedPrompts(80)
-	for _, want := range []string{"queued (4)", "first queued", "second queued", "third queued", "... 1 more"} {
+	for _, want := range []string{"queued follow-up (4)", "first queued", "second queued", "third queued", "... 1 more"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected queued preview to contain %q:\n%s", want, view)
 		}

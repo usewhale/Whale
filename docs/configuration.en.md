@@ -131,8 +131,10 @@ tools = []                             # hide built-in tools by name
 [mcp]
 config_path = ""                       # custom MCP config path
 
-[workflows]
-max_concurrency = 3                    # parallel agent limit
+	[workflows]
+	enabled = false                        # enable the workflow runtime/tool
+	keyword_trigger_enabled = true         # allow workflow catalog hints to trigger automatic use
+	max_concurrency = 3                    # parallel agent limit
 
 [skills]
 disabled = []                          # skills to hide

@@ -14,6 +14,7 @@ const (
 	uiActionSkillsMenu         uiActionKind = "skills_menu"
 	uiActionSkillsManager      uiActionKind = "skills_manager"
 	uiActionPluginsManager     uiActionKind = "plugins_manager"
+	uiActionConfigManager      uiActionKind = "config_manager"
 	uiActionHooksManager       uiActionKind = "hooks_manager"
 	uiActionHooksStartupReview uiActionKind = "hooks_startup_review"
 	uiActionReviewMenu         uiActionKind = "review_menu"
@@ -37,6 +38,8 @@ func uiActionFromServiceEvent(ev protocol.Event) (uiAction, bool) {
 		return uiAction{kind: uiActionSkillsManager, ev: ev}, true
 	case protocol.EventPluginsManagerUpdated:
 		return uiAction{kind: uiActionPluginsManager, ev: ev}, true
+	case protocol.EventConfigManagerUpdated:
+		return uiAction{kind: uiActionConfigManager, ev: ev}, true
 	case protocol.EventHooksManagerUpdated:
 		return uiAction{kind: uiActionHooksManager, ev: ev}, true
 	case protocol.EventHooksStartupReviewRequested:
@@ -62,6 +65,8 @@ func (m *model) handleUIAction(action uiAction) (tea.Cmd, bool, bool) {
 		m.handleSkillsManagerEvent(action.ev)
 	case uiActionPluginsManager:
 		m.handlePluginsManagerEvent(action.ev)
+	case uiActionConfigManager:
+		m.handleConfigManagerEvent(action.ev)
 	case uiActionHooksManager:
 		m.handleHooksManagerEvent(action.ev)
 	case uiActionHooksStartupReview:

@@ -22,25 +22,31 @@ const (
 // agent calls and spawn_subagent requests should converge here before tools,
 // model, and runtime limits are resolved.
 type AgentDefinition struct {
-	Name            string   `json:"name,omitempty"`
-	Description     string   `json:"description,omitempty"`
-	WhenToUse       string   `json:"whenToUse,omitempty"`
-	Prompt          string   `json:"prompt,omitempty"`
-	Tools           []string `json:"tools,omitempty"`
-	DisallowedTools []string `json:"disallowedTools,omitempty"`
-	Skills          []string `json:"skills,omitempty"`
-	MCPServers      []string `json:"mcpServers,omitempty"`
-	Hooks           any      `json:"hooks,omitempty"`
-	Model           string   `json:"model,omitempty"`
-	Effort          string   `json:"effort,omitempty"`
-	PermissionMode  string   `json:"permissionMode,omitempty"`
-	MaxToolIters    int      `json:"maxToolIters,omitempty"`
-	MaxToolCalls    int      `json:"maxToolCalls,omitempty"`
-	MaxTurns        int      `json:"maxTurns,omitempty"`
-	InitialPrompt   string   `json:"initialPrompt,omitempty"`
-	Memory          string   `json:"memory,omitempty"`
-	Background      bool     `json:"background,omitempty"`
-	Isolation       string   `json:"isolation,omitempty"`
+	Name            string                `json:"name,omitempty"`
+	Description     string                `json:"description,omitempty"`
+	WhenToUse       string                `json:"whenToUse,omitempty"`
+	Prompt          string                `json:"prompt,omitempty"`
+	Tools           []string              `json:"tools,omitempty"`
+	DisallowedTools []string              `json:"disallowedTools,omitempty"`
+	Skills          []string              `json:"skills,omitempty"`
+	MCPServers      []string              `json:"mcpServers,omitempty"`
+	Hooks           any                   `json:"hooks,omitempty"`
+	Model           string                `json:"model,omitempty"`
+	Effort          string                `json:"effort,omitempty"`
+	PermissionMode  string                `json:"permissionMode,omitempty"`
+	MaxToolIters    int                   `json:"maxToolIters,omitempty"`
+	MaxToolCalls    int                   `json:"maxToolCalls,omitempty"`
+	MaxTurns        int                   `json:"maxTurns,omitempty"`
+	InitialPrompt   string                `json:"initialPrompt,omitempty"`
+	Memory          string                `json:"memory,omitempty"`
+	Background      bool                  `json:"background,omitempty"`
+	Isolation       string                `json:"isolation,omitempty"`
+	Generation      AgentGenerationConfig `json:"generation,omitempty"`
+}
+
+type AgentGenerationConfig struct {
+	AssistantPrefix  string `json:"assistantPrefix,omitempty"`
+	PrefixCompletion bool   `json:"prefixCompletion,omitempty"`
 }
 
 type AgentRuntimeConfig struct {
@@ -59,6 +65,7 @@ type AgentRuntimeConfig struct {
 	Skills            []string
 	InitialPrompt     string
 	Memory            string
+	Generation        AgentGenerationConfig
 }
 
 func ResolveAgentRuntimeConfig(req SpawnSubagentRequest, defaults RunnerDefaults) (AgentRuntimeConfig, error) {
@@ -143,6 +150,10 @@ func ResolveAgentRuntimeConfigWithLibrary(req SpawnSubagentRequest, defaults Run
 		Skills:            cloneStrings(def.Skills),
 		InitialPrompt:     strings.TrimSpace(def.InitialPrompt),
 		Memory:            memoryScope,
+		Generation: AgentGenerationConfig{
+			AssistantPrefix:  def.Generation.AssistantPrefix,
+			PrefixCompletion: def.Generation.PrefixCompletion,
+		},
 	}, nil
 }
 
@@ -337,6 +348,12 @@ func mergeAgentDefinition(base, override AgentDefinition, fallbackName string) A
 	if v := strings.TrimSpace(override.Isolation); v != "" {
 		out.Isolation = v
 	}
+	if agentGenerationConfigured(override.Generation) {
+		out.Generation = AgentGenerationConfig{
+			AssistantPrefix:  override.Generation.AssistantPrefix,
+			PrefixCompletion: override.Generation.PrefixCompletion,
+		}
+	}
 	return out
 }
 
@@ -357,7 +374,12 @@ func agentRequestHasDefinition(def AgentDefinition) bool {
 		strings.TrimSpace(def.InitialPrompt) != "" ||
 		strings.TrimSpace(def.Memory) != "" ||
 		def.Background ||
-		strings.TrimSpace(def.Isolation) != ""
+		strings.TrimSpace(def.Isolation) != "" ||
+		agentGenerationConfigured(def.Generation)
+}
+
+func agentGenerationConfigured(cfg AgentGenerationConfig) bool {
+	return strings.TrimSpace(cfg.AssistantPrefix) != "" || cfg.PrefixCompletion
 }
 
 func normalizeAgentMCPServers(values []string) []string {

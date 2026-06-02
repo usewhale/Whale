@@ -194,10 +194,7 @@ func (m model) scrollbackText(messages []tuirender.UIMessage) string {
 }
 
 func (m model) chatMessages() []tuirender.UIMessage {
-	live := []tuirender.UIMessage(nil)
-	if m.assembler != nil {
-		live = m.visibleLiveMessages(m.assembler.Snapshot())
-	}
+	live := m.liveTranscriptMessages()
 	header := m.startupHeaderMessage()
 	if header == nil && len(m.transcript) == 0 && len(live) == 0 && len(m.ephemeralMessages) == 0 {
 		return nil
@@ -217,9 +214,7 @@ func (m model) chatViewportMessages() []tuirender.UIMessage {
 		return m.chatMessages()
 	}
 	live := []tuirender.UIMessage(nil)
-	if m.assembler != nil {
-		live = m.visibleLiveMessages(m.assembler.Snapshot())
-	}
+	live = m.liveTranscriptMessages()
 	start := min(max(m.nativeScrollbackPrinted, 0), len(m.transcript))
 	header := m.startupHeaderMessage()
 	if header == nil && start >= len(m.transcript) && len(live) == 0 && len(m.ephemeralMessages) == 0 {

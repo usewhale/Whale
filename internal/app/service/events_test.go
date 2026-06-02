@@ -95,6 +95,75 @@ func TestHookLifecycleEventMapsStructuredSummary(t *testing.T) {
 	}
 }
 
+func TestLifecycleEmitAddsCorrelationFields(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	svc := &Service{ctx: ctx, events: make(chan Event, 10)}
+
+	svc.emit(Event{Kind: EventToolCall, ToolCallID: "tc-1", ToolName: "read_file"})
+	svc.emit(Event{Kind: EventToolResult, ToolCallID: "tc-1", ToolName: "read_file", Metadata: map[string]any{"exit_code": 0}})
+	svc.emit(Event{Kind: EventWorkflowSnapshot, LocalResult: &protocol.LocalResult{WorkflowPanelSnapshot: &protocol.WorkflowPanelSnapshot{RunID: "run-1", Status: "running"}}})
+	svc.emit(Event{Kind: EventWorkflowTerminal, WorkflowRunID: "run-1"})
+	svc.emit(Event{Kind: EventUserInputDone, ToolCallID: "input-1"})
+
+	toolCall := waitForServiceEvent(t, svc, EventToolCall)
+	toolResult := waitForServiceEvent(t, svc, EventToolResult)
+	snapshot := waitForServiceEvent(t, svc, EventWorkflowSnapshot)
+	terminal := waitForServiceEvent(t, svc, EventWorkflowTerminal)
+	inputDone := waitForServiceEvent(t, svc, EventUserInputDone)
+
+	if toolCall.ItemID != "tool:tc-1" || toolResult.ItemID != "tool:tc-1" {
+		t.Fatalf("tool events should share item id, got call=%+v result=%+v", toolCall, toolResult)
+	}
+	if toolCall.Sequence == 0 || toolResult.Sequence <= toolCall.Sequence || toolCall.StartedAt.IsZero() || toolResult.StartedAt.IsZero() {
+		t.Fatalf("expected increasing lifecycle sequence and timestamps, got call=%+v result=%+v", toolCall, toolResult)
+	}
+	if snapshot.ItemID != "workflow:run-1" || snapshot.WorkflowRunID != "run-1" {
+		t.Fatalf("unexpected workflow snapshot correlation: %+v", snapshot)
+	}
+	if terminal.ItemID != "workflow:run-1" || terminal.WorkflowRunID != "run-1" || terminal.Sequence <= snapshot.Sequence {
+		t.Fatalf("unexpected workflow terminal correlation: snapshot=%+v terminal=%+v", snapshot, terminal)
+	}
+	if inputDone.ItemID != "user_input:input-1" {
+		t.Fatalf("unexpected user input correlation: %+v", inputDone)
+	}
+}
+
+func TestResolveApprovalEmitsDecisionCorrelation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := make(chan policy.ApprovalDecision, 1)
+	svc := &Service{
+		ctx:    ctx,
+		events: make(chan Event, 10),
+		approvals: map[string]pendingApproval{"tc-approval": {
+			ch:       ch,
+			toolName: "shell_run",
+			key:      "approval-key",
+			keys:     []string{"approval-key"},
+			scope:    "this shell command",
+		}},
+	}
+
+	svc.resolveApproval("tc-approval", policy.ApprovalAllowForSession)
+
+	decision := waitForServiceEvent(t, svc, EventApprovalDecision)
+	if decision.ItemID != "tool:tc-approval" || decision.ToolName != "shell_run" || decision.ApprovalID != "approval-key" {
+		t.Fatalf("unexpected approval decision correlation: %+v", decision)
+	}
+	if decision.Decision != "allow_session" || decision.DecisionScope != "this shell command" || len(decision.ApprovalKeys) != 1 || decision.ApprovalKeys[0] != "approval-key" {
+		t.Fatalf("unexpected approval decision payload: %+v", decision)
+	}
+	select {
+	case got := <-ch:
+		if got != policy.ApprovalAllowForSession {
+			t.Fatalf("decision channel = %v, want allow for session", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("approval decision was not delivered")
+	}
+}
+
 func TestReviewMenuEventDeliversUnderBackpressure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -291,6 +360,52 @@ func TestRunTurnWithStreamResetClearsLastResponse(t *testing.T) {
 			}
 			if ev.LastResponse != "new final" {
 				t.Fatalf("last response should exclude pre-reset delta, got %q", ev.LastResponse)
+			}
+			return
+		case <-deadline:
+			t.Fatal("timed out waiting for turn done")
+		}
+	}
+}
+
+func TestRunTurnWithResponseResetClearsLastResponse(t *testing.T) {
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+
+	ch := make(chan agent.AgentEvent, 5)
+	ch <- agent.AgentEvent{Type: agent.AgentEventTypeAssistantDelta, Content: "first answer"}
+	ch <- agent.AgentEvent{Type: agent.AgentEventTypeResponseReset}
+	ch <- agent.AgentEvent{Type: agent.AgentEventTypeAssistantDelta, Content: "steered answer"}
+	ch <- agent.AgentEvent{Type: agent.AgentEventTypeDone, Message: &core.Message{Text: "steered answer", FinishReason: core.FinishReasonEndTurn}}
+	close(ch)
+
+	svc.runTurnWith(func(context.Context) (<-chan agent.AgentEvent, error) {
+		return ch, nil
+	})
+
+	deadline := time.After(2 * time.Second)
+	sawReset := false
+	for {
+		select {
+		case ev := <-svc.Events():
+			if ev.Kind == EventResponseReset {
+				sawReset = true
+				continue
+			}
+			if ev.Kind != EventTurnDone {
+				continue
+			}
+			if !sawReset {
+				t.Fatal("expected response reset event before turn done")
+			}
+			if ev.LastResponse != "steered answer" {
+				t.Fatalf("last response should exclude pre-steering delta, got %q", ev.LastResponse)
 			}
 			return
 		case <-deadline:
@@ -706,6 +821,68 @@ func TestPluginsCommandOpensManagerAndToggleUpdatesRuntime(t *testing.T) {
 	}
 }
 
+func TestConfigCommandOpensManagerAndAppliesWorkflowSetting(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
+	work := t.TempDir()
+	t.Chdir(work)
+	enabled := true
+	if err := app.SaveConfigFile(app.ProjectLocalConfigPath(work), app.FileConfig{Workflows: app.FileWorkflowsConfig{Enabled: &enabled}}); err != nil {
+		t.Fatalf("SaveConfigFile: %v", err)
+	}
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+
+	svc.Dispatch(Intent{Kind: IntentSubmit, Input: "/config"})
+	ev := waitForServiceEvent(t, svc, EventConfigManagerUpdated)
+	if !ev.Open {
+		t.Fatalf("expected /config to open manager: %+v", ev)
+	}
+	if ev.Config == nil || !hasConfigSetting(ev.Config, "workflows.keyword_trigger_enabled", "true") {
+		t.Fatalf("expected workflow keyword setting, got %+v", ev.Config)
+	}
+
+	svc.Dispatch(Intent{Kind: IntentApplyConfigSettings, ConfigUpdates: []protocol.ConfigSettingUpdate{{ID: "workflows.keyword_trigger_enabled", Value: "false"}}})
+	result := waitForServiceEvent(t, svc, EventLocalSubmitResult)
+	if result.Status != "ok" || !strings.Contains(result.Text, "Workflow keyword trigger") {
+		t.Fatalf("unexpected config apply result: %+v", result)
+	}
+	ev = waitForServiceEvent(t, svc, EventConfigManagerUpdated)
+	if ev.Config == nil || !hasConfigSetting(ev.Config, "workflows.keyword_trigger_enabled", "false") {
+		t.Fatalf("expected updated workflow keyword setting, got %+v", ev.Config)
+	}
+	if !hasConfigSetting(ev.Config, "workflows.enabled", "true") {
+		t.Fatalf("updating keyword trigger should not disable workflows: %+v", ev.Config)
+	}
+	loaded, ok, err := app.LoadConfigFile(app.ProjectLocalConfigPath(work))
+	if err != nil {
+		t.Fatalf("LoadConfigFile: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected project-local config to be written")
+	}
+	if loaded.Workflows.KeywordTriggerEnabled == nil || *loaded.Workflows.KeywordTriggerEnabled {
+		t.Fatalf("keyword trigger not persisted: %+v", loaded.Workflows.KeywordTriggerEnabled)
+	}
+}
+
+func hasConfigSetting(state *protocol.ConfigManagerState, id, value string) bool {
+	if state == nil {
+		return false
+	}
+	for _, item := range state.Items {
+		if item.ID == id && item.Value == value {
+			return true
+		}
+	}
+	return false
+}
+
 func hasServicePlugin(all []plugins.PluginStatus, id string, enabled bool) bool {
 	for _, plugin := range all {
 		if plugin.Manifest.ID == id {
@@ -1079,7 +1256,7 @@ func TestShutdownCancelsPendingInteractions(t *testing.T) {
 		ctx:       ctx,
 		events:    make(chan Event, 10),
 		cancel:    turnCancel,
-		approvals: map[string]chan policy.ApprovalDecision{"approval-1": approvalCh},
+		approvals: map[string]pendingApproval{"approval-1": {ch: approvalCh}},
 		inputs:    map[string]chan userInputDecision{"input-1": inputCh},
 	}
 
@@ -1120,7 +1297,7 @@ func TestShutdownRejectsLateInteractions(t *testing.T) {
 	svc := &Service{
 		ctx:           ctx,
 		events:        make(chan Event, 10),
-		approvals:     map[string]chan policy.ApprovalDecision{},
+		approvals:     map[string]pendingApproval{},
 		sessionGrants: map[string]map[string]bool{},
 		inputs:        map[string]chan userInputDecision{},
 	}
@@ -1186,7 +1363,7 @@ func TestAwaitApprovalEmitsFileReviewMetadataAndDefersFileCache(t *testing.T) {
 	svc := &Service{
 		ctx:           ctx,
 		events:        make(chan Event, 8),
-		approvals:     map[string]chan policy.ApprovalDecision{},
+		approvals:     map[string]pendingApproval{},
 		sessionGrants: map[string]map[string]bool{},
 		inputs:        map[string]chan userInputDecision{},
 	}
@@ -1222,6 +1399,10 @@ func TestAwaitApprovalEmitsFileReviewMetadataAndDefersFileCache(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("approval did not resolve")
 	}
+	decisionEvent := waitForServiceEvent(t, svc, EventApprovalDecision)
+	if decisionEvent.ToolCallID != "approval-files" || decisionEvent.Decision != "allow_session" || decisionEvent.ItemID != "tool:approval-files" {
+		t.Fatalf("unexpected approval decision event: %+v", decisionEvent)
+	}
 
 	svc.approveMu.Lock()
 	if svc.sessionGrantAllLocked("session-1", []string{"file:a.txt"}) {
@@ -1246,10 +1427,9 @@ func TestAwaitApprovalEmitsFileReviewMetadataAndDefersFileCache(t *testing.T) {
 	if got != policy.ApprovalAllowForSession {
 		t.Fatalf("cached decision = %v, want allow for session", got)
 	}
-	select {
-	case ev := <-svc.events:
-		t.Fatalf("cached approval emitted event: %+v", ev)
-	default:
+	cached := waitForServiceEvent(t, svc, EventApprovalDecision)
+	if cached.ToolCallID != "approval-a" || cached.Decision != "allow_session" || cached.ItemID != "tool:approval-a" {
+		t.Fatalf("unexpected cached approval decision event: %+v", cached)
 	}
 }
 

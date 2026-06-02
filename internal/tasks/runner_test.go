@@ -1750,6 +1750,124 @@ func TestSpawnSubagentAppliesAgentSkillsInitialPromptAndMemory(t *testing.T) {
 	}
 }
 
+func TestSpawnSubagentUsesAgentGenerationPrefixCompletion(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	provider := &subagentPrefixProvider{}
+	r := NewRunner(RunnerConfig{
+		ProviderFactory: func(_ string, _ int) (llm.Provider, error) {
+			return provider, nil
+		},
+		ParentTools:   core.NewToolRegistry(nil),
+		WorkspaceRoot: workspaceRoot,
+	})
+	res, err := r.SpawnSubagent(context.Background(), SpawnSubagentRequest{
+		Task:         "return ok",
+		Capabilities: []string{},
+		Agent: AgentDefinition{
+			Name:        "prefill-agent",
+			Description: "uses prefix completion",
+			Generation: AgentGenerationConfig{
+				AssistantPrefix:  "ok:\n",
+				PrefixCompletion: true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SpawnSubagent: %v", err)
+	}
+	if !provider.prefixCalled || provider.streamCalled {
+		t.Fatalf("prefixCalled=%v streamCalled=%v", provider.prefixCalled, provider.streamCalled)
+	}
+	if provider.prefix != "ok:\n" {
+		t.Fatalf("prefix = %q", provider.prefix)
+	}
+	if res.Summary != "prefixed" {
+		t.Fatalf("summary = %q", res.Summary)
+	}
+	if res.Usage.PrefixCompletionRequests != 1 {
+		t.Fatalf("prefix usage = %+v", res.Usage)
+	}
+}
+
+func TestSpawnSubagentGenerationKeepsToolAgentsOnNormalStream(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	provider := &subagentPrefixProvider{}
+	r := NewRunner(RunnerConfig{
+		ProviderFactory: func(_ string, _ int) (llm.Provider, error) {
+			return provider, nil
+		},
+		ParentTools: core.NewToolRegistry([]core.Tool{
+			testTool{name: "read_file", readOnly: true, capabilities: []string{CapabilityWorkspaceRead}},
+		}),
+		WorkspaceRoot: workspaceRoot,
+	})
+	res, err := r.SpawnSubagent(context.Background(), SpawnSubagentRequest{
+		Task: "return ok",
+		Agent: AgentDefinition{
+			Name:        "tool-agent",
+			Description: "keeps tools",
+			Tools:       []string{CapabilityWorkspaceRead},
+			Generation: AgentGenerationConfig{
+				AssistantPrefix:  "ok:",
+				PrefixCompletion: true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SpawnSubagent: %v", err)
+	}
+	if provider.prefixCalled || !provider.streamCalled {
+		t.Fatalf("prefixCalled=%v streamCalled=%v", provider.prefixCalled, provider.streamCalled)
+	}
+	if res.Summary != "streamed" {
+		t.Fatalf("summary = %q", res.Summary)
+	}
+}
+
+func TestSpawnSubagentGenerationFallsBackWithoutPrefixProvider(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	var streamCalled bool
+	r := NewRunner(RunnerConfig{
+		ProviderFactory: func(_ string, _ int) (llm.Provider, error) {
+			return providerFunc(func(_ context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
+				streamCalled = true
+				out := make(chan llm.ProviderEvent, 1)
+				go func() {
+					defer close(out)
+					out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
+						FinishReason: core.FinishReasonEndTurn,
+						Content:      "fallback",
+					}}
+				}()
+				return out
+			}), nil
+		},
+		ParentTools:   core.NewToolRegistry(nil),
+		WorkspaceRoot: workspaceRoot,
+	})
+	res, err := r.SpawnSubagent(context.Background(), SpawnSubagentRequest{
+		Task:         "return ok",
+		Capabilities: []string{},
+		Agent: AgentDefinition{
+			Name:        "fallback-agent",
+			Description: "falls back",
+			Generation: AgentGenerationConfig{
+				AssistantPrefix:  "ok:",
+				PrefixCompletion: true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SpawnSubagent: %v", err)
+	}
+	if !streamCalled {
+		t.Fatal("expected normal stream fallback")
+	}
+	if res.Summary != "fallback" {
+		t.Fatalf("summary = %q", res.Summary)
+	}
+}
+
 func TestSpawnSubagentToolFailureIncludesChildSessionID(t *testing.T) {
 	factory := func(_ string, _ int) (llm.Provider, error) {
 		return providerFunc(func(_ context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
@@ -1916,6 +2034,40 @@ type providerFunc func(context.Context, []core.Message, []core.Tool) <-chan llm.
 
 func (f providerFunc) StreamResponse(ctx context.Context, history []core.Message, tools []core.Tool) <-chan llm.ProviderEvent {
 	return f(ctx, history, tools)
+}
+
+type subagentPrefixProvider struct {
+	prefixCalled bool
+	streamCalled bool
+	prefix       string
+}
+
+func (p *subagentPrefixProvider) StreamResponse(context.Context, []core.Message, []core.Tool) <-chan llm.ProviderEvent {
+	p.streamCalled = true
+	out := make(chan llm.ProviderEvent, 1)
+	go func() {
+		defer close(out)
+		out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
+			FinishReason: core.FinishReasonEndTurn,
+			Content:      "streamed",
+		}}
+	}()
+	return out
+}
+
+func (p *subagentPrefixProvider) StreamResponseWithPrefix(_ context.Context, _ []core.Message, prefix string, _ []string) <-chan llm.ProviderEvent {
+	p.prefixCalled = true
+	p.prefix = prefix
+	out := make(chan llm.ProviderEvent, 1)
+	go func() {
+		defer close(out)
+		out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
+			FinishReason: core.FinishReasonEndTurn,
+			Content:      "prefixed",
+			Usage:        llm.Usage{PrefixCompletionRequests: 1},
+		}}
+	}()
+	return out
 }
 
 type testTool struct {

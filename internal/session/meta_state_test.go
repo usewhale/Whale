@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/usewhale/whale/internal/build"
 )
 
 func float64Ptr(v float64) *float64 { return &v }
@@ -29,6 +31,36 @@ func TestMetaLocksDoNotGrowWithSessionCount(t *testing.T) {
 	metaLocksMu.Unlock()
 	if after > before+1 {
 		t.Fatalf("metaLocks grew by %d entries after %d sessions; before=%d after=%d", after-before, sessions, before, after)
+	}
+}
+
+func TestSessionMetaWritesCurrentAppVersion(t *testing.T) {
+	oldVersion := build.Version
+	build.Version = "v9.8.7-test"
+	t.Cleanup(func() { build.Version = oldVersion })
+
+	dir := t.TempDir()
+	if err := SaveSessionMeta(dir, "s1", SessionMeta{Title: "saved", AppVersion: "stale"}); err != nil {
+		t.Fatalf("save meta: %v", err)
+	}
+	got, err := LoadSessionMeta(dir, "s1")
+	if err != nil {
+		t.Fatalf("load meta: %v", err)
+	}
+	if got.AppVersion != "v9.8.7-test" {
+		t.Fatalf("AppVersion after save = %q, want current build version", got.AppVersion)
+	}
+
+	build.Version = "v9.8.8-test"
+	if _, err := PatchSessionMeta(dir, "s1", SessionMetaPatch{Summary: "patched"}); err != nil {
+		t.Fatalf("patch meta: %v", err)
+	}
+	got, err = LoadSessionMeta(dir, "s1")
+	if err != nil {
+		t.Fatalf("load patched meta: %v", err)
+	}
+	if got.AppVersion != "v9.8.8-test" {
+		t.Fatalf("AppVersion after patch = %q, want current build version", got.AppVersion)
 	}
 }
 

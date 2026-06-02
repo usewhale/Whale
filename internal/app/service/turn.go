@@ -36,6 +36,37 @@ func (s *Service) runInjectedTurnWithOptions(visibleInput, hiddenInput string, o
 	})
 }
 
+func (s *Service) injectActiveTurn(line string, opts agent.RunOptions, clientInputID string) bool {
+	return s.injectActiveTurnWithHidden(line, "", opts, clientInputID)
+}
+
+func (s *Service) injectActiveTurnWithHidden(visibleInput, hiddenInput string, opts agent.RunOptions, clientInputID string) bool {
+	s.cancelMu.Lock()
+	active := s.active
+	s.cancelMu.Unlock()
+	if !active {
+		return false
+	}
+	opts = s.tuiRunOptions(opts)
+	injected, err := s.app.InjectTurnInputWithHidden(s.ctx, visibleInput, hiddenInput, opts)
+	if err != nil {
+		if clientInputID != "" {
+			s.emit(Event{Kind: EventPendingInputRejected, ClientInputID: clientInputID, Text: visibleInput})
+		}
+		s.emit(Event{Kind: EventError, Text: err.Error()})
+		return true
+	}
+	if !injected {
+		if clientInputID != "" {
+			s.emit(Event{Kind: EventPendingInputRejected, ClientInputID: clientInputID, Text: visibleInput})
+		}
+		s.emit(Event{Kind: EventError, Text: agent.ErrSessionBusy.Error()})
+	} else if clientInputID != "" {
+		s.emit(Event{Kind: EventPendingInputAccepted, ClientInputID: clientInputID, Text: visibleInput})
+	}
+	return true
+}
+
 func (s *Service) tuiRunOptions(opts agent.RunOptions) agent.RunOptions {
 	if strings.TrimSpace(opts.ViewMode) == "" && s != nil && s.app != nil {
 		opts.ViewMode = s.app.ViewMode()
@@ -137,6 +168,10 @@ func (s *Service) runTurnWith(start func(context.Context) (<-chan agent.AgentEve
 				}
 				s.emit(providerRetryEvent(ev.ProviderRetry))
 			}
+		case agent.AgentEventTypeResponseReset:
+			deltas.flushReliable()
+			last = ""
+			s.emit(Event{Kind: EventResponseReset})
 		case agent.AgentEventTypeToolCall:
 			if ev.ToolCall != nil {
 				deltas.flushReliable()
@@ -203,7 +238,17 @@ func (s *Service) runTurnWith(start func(context.Context) (<-chan agent.AgentEve
 			}
 		case agent.AgentEventTypeUserInputSubmitted, agent.AgentEventTypeUserInputCancelled:
 			deltas.flushReliable()
-			s.emit(Event{Kind: EventUserInputDone})
+			doneEvent := Event{Kind: EventUserInputDone}
+			if ev.Type == agent.AgentEventTypeUserInputCancelled {
+				doneEvent.Status = "canceled"
+			} else {
+				doneEvent.Status = "submitted"
+			}
+			if ev.ToolCall != nil {
+				doneEvent.ToolCallID = ev.ToolCall.ID
+				doneEvent.ToolName = ev.ToolCall.Name
+			}
+			s.emit(doneEvent)
 		case agent.AgentEventTypeDone:
 			if ev.Message != nil {
 				if last == "" {

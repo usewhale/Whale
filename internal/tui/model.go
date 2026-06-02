@@ -15,6 +15,7 @@ import (
 	"github.com/usewhale/whale/internal/notification"
 	appcommands "github.com/usewhale/whale/internal/runtime/commands"
 	"github.com/usewhale/whale/internal/runtime/protocol"
+	"github.com/usewhale/whale/internal/runtime/timeline"
 	"github.com/usewhale/whale/internal/tui/composer"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
@@ -32,6 +33,7 @@ const (
 	modeSkillsMenu
 	modeSkillsManager
 	modePluginsManager
+	modeConfigManager
 	modeHooksManager
 	modeHooksStartupReview
 	modeReviewMenu
@@ -69,7 +71,7 @@ type model struct {
 	viewport               viewport.Model
 	chat                   chatList
 	assembler              *tuirender.Assembler
-	pendingToolCalls       map[string]struct{}
+	timeline               *timeline.TurnTimelineBuilder
 	transcript             []tuirender.UIMessage
 	sessionID              string
 	startupHeaderPrinted   bool
@@ -181,8 +183,9 @@ type model struct {
 		detail   bool
 		offset   int
 	}
-	hooksManager hooksManagerState
-	reviewMenu   struct {
+	configManager configManagerState
+	hooksManager  hooksManagerState
+	reviewMenu    struct {
 		selected int
 	}
 	reviewTargetPicker reviewTargetPickerState
@@ -211,24 +214,27 @@ type model struct {
 	planImplementation struct {
 		index int
 	}
-	lastProposedPlan               string
-	sawPlanThisTurn                bool
-	sawAssistantThisTurn           bool
-	sawReasoningThisTurn           bool
-	sawTerminalToolOutcomeThisTurn bool
-	visibleAssistantThisTurn       string
-	turnTranscriptStart            int
-	quitArmedUntil                 time.Time
-	promptHistory                  []string
-	historyIndex                   int
-	historyDraft                   string
-	lastHistoryText                string
-	inHistoryNav                   bool
-	queuedPrompts                  []queuedPrompt
-	nativeScrollbackPrinted        int
-	pendingMouseCSIFragment        bool
-	windowsPaste                   windowsPasteFallbackState
-	viewCache                      *modelViewCache
+	lastProposedPlan                 string
+	sawPlanThisTurn                  bool
+	sawAssistantThisTurn             bool
+	sawReasoningThisTurn             bool
+	sawTerminalToolOutcomeThisTurn   bool
+	visibleAssistantThisTurn         string
+	turnTranscriptStart              int
+	quitArmedUntil                   time.Time
+	promptHistory                    []string
+	historyIndex                     int
+	historyDraft                     string
+	lastHistoryText                  string
+	inHistoryNav                     bool
+	queuedPrompts                    []queuedPrompt
+	pendingSteers                    []pendingSteer
+	nextClientInputID                int
+	submitQueuedPromptAfterInterrupt bool
+	nativeScrollbackPrinted          int
+	pendingMouseCSIFragment          bool
+	windowsPaste                     windowsPasteFallbackState
+	viewCache                        *modelViewCache
 }
 
 type modelViewCache struct {
@@ -243,6 +249,13 @@ type modelViewCache struct {
 type queuedPrompt struct {
 	Text         string
 	SkillBinding *protocol.SkillBinding
+}
+
+type pendingSteer struct {
+	ID           string
+	Text         string
+	SkillBinding *protocol.SkillBinding
+	Accepted     bool
 }
 
 type paletteAction struct {
@@ -318,7 +331,7 @@ func newModel(rt Runtime, modelName, effort, thinking string) model {
 		viewport:          vp,
 		chat:              newChatList(),
 		assembler:         tuirender.NewAssembler(),
-		pendingToolCalls:  map[string]struct{}{},
+		timeline:          timeline.NewTurnTimelineBuilder(),
 		startupHeaderOnce: new(bool),
 		status:            "ready",
 		followTail:        true,

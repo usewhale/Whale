@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"time"
 
 	"github.com/usewhale/whale/internal/agent"
@@ -8,6 +9,14 @@ import (
 	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/telemetry"
 )
+
+type pendingApproval struct {
+	ch       chan policy.ApprovalDecision
+	toolName string
+	key      string
+	keys     []string
+	scope    string
+}
 
 func (s *Service) awaitApproval(req policy.ApprovalRequest) policy.ApprovalDecision {
 	toolCallID := req.ToolCall.ID
@@ -17,6 +26,7 @@ func (s *Service) awaitApproval(req policy.ApprovalRequest) policy.ApprovalDecis
 			s.emit(Event{Kind: EventInfo, Text: out})
 		}
 		s.recordApprovalPromptEvent(req, "approval_prompt_hook_blocked", keys)
+		s.emit(approvalDecisionEvent(req, keys, policy.ApprovalDeny))
 		return policy.ApprovalDeny
 	} else if out != "" {
 		s.emit(Event{Kind: EventInfo, Text: out})
@@ -31,10 +41,17 @@ func (s *Service) awaitApproval(req policy.ApprovalRequest) policy.ApprovalDecis
 		s.approveMu.Unlock()
 		s.interactionMu.Unlock()
 		s.recordApprovalPromptEvent(req, "approval_prompt_cached_allowed", keys)
+		s.emit(approvalDecisionEvent(req, keys, policy.ApprovalAllowForSession))
 		return policy.ApprovalAllowForSession
 	}
 	ch := make(chan policy.ApprovalDecision, 1)
-	s.approvals[toolCallID] = ch
+	s.approvals[toolCallID] = pendingApproval{
+		ch:       ch,
+		toolName: req.ToolCall.Name,
+		key:      firstApprovalKey(req, keys),
+		keys:     append([]string(nil), keys...),
+		scope:    policy.ApprovalScope(req.ToolCall),
+	}
 	s.approveMu.Unlock()
 	s.interactionMu.Unlock()
 	metadata := policy.ApprovalMetadata(req.ToolCall, keys, req.Metadata)
@@ -82,9 +99,21 @@ func approvalPromptDecisionEvent(decision policy.ApprovalDecision) string {
 	}
 }
 
+func approvalDecisionEvent(req policy.ApprovalRequest, keys []string, decision policy.ApprovalDecision) Event {
+	return Event{
+		Kind:          EventApprovalDecision,
+		ToolCallID:    req.ToolCall.ID,
+		ToolName:      req.ToolCall.Name,
+		ApprovalID:    firstApprovalKey(req, keys),
+		Decision:      approvalDecisionName(decision),
+		DecisionScope: approvalDecisionScope(decision, policy.ApprovalScope(req.ToolCall)),
+		ApprovalKeys:  append([]string(nil), keys...),
+	}
+}
+
 func (s *Service) resolveApproval(toolCallID string, decision policy.ApprovalDecision) {
 	s.approveMu.Lock()
-	ch, ok := s.approvals[toolCallID]
+	pending, ok := s.approvals[toolCallID]
 	if ok {
 		delete(s.approvals, toolCallID)
 	}
@@ -96,10 +125,57 @@ func (s *Service) resolveApproval(toolCallID string, decision policy.ApprovalDec
 		s.emit(Event{Kind: EventError, Text: "no pending approval for tool call"})
 		return
 	}
+	s.emit(Event{
+		Kind:          EventApprovalDecision,
+		ToolCallID:    toolCallID,
+		ToolName:      pending.toolName,
+		ApprovalID:    pending.key,
+		Decision:      approvalDecisionName(decision),
+		DecisionScope: approvalDecisionScope(decision, pending.scope),
+		ApprovalKeys:  append([]string(nil), pending.keys...),
+	})
 	select {
-	case ch <- decision:
+	case pending.ch <- decision:
 	default:
 	}
+}
+
+func firstApprovalKey(req policy.ApprovalRequest, keys []string) string {
+	for _, key := range keys {
+		if strings.TrimSpace(key) != "" {
+			return strings.TrimSpace(key)
+		}
+	}
+	if strings.TrimSpace(req.Key) != "" {
+		return strings.TrimSpace(req.Key)
+	}
+	return strings.TrimSpace(req.ToolCall.ID)
+}
+
+func approvalDecisionName(decision policy.ApprovalDecision) string {
+	switch decision {
+	case policy.ApprovalAllow:
+		return "allow"
+	case policy.ApprovalAllowForSession:
+		return "allow_session"
+	case policy.ApprovalCancel:
+		return "cancel"
+	default:
+		return "deny"
+	}
+}
+
+func approvalDecisionScope(decision policy.ApprovalDecision, scope string) string {
+	if decision == policy.ApprovalAllow {
+		return "this_time"
+	}
+	if decision == policy.ApprovalAllowForSession {
+		if s := strings.TrimSpace(scope); s != "" {
+			return s
+		}
+		return "session"
+	}
+	return ""
 }
 
 func (s *Service) sessionGrantLocked(sessionID, key string) bool {
@@ -192,15 +268,15 @@ func (s *Service) cancelPendingInteractions() {
 	s.interactionMu.Lock()
 	s.shutdownRequested = true
 	s.approveMu.Lock()
-	approvals := make([]chan policy.ApprovalDecision, 0, len(s.approvals))
-	for id, ch := range s.approvals {
-		approvals = append(approvals, ch)
+	approvals := make([]pendingApproval, 0, len(s.approvals))
+	for id, pending := range s.approvals {
+		approvals = append(approvals, pending)
 		delete(s.approvals, id)
 	}
 	s.approveMu.Unlock()
-	for _, ch := range approvals {
+	for _, pending := range approvals {
 		select {
-		case ch <- policy.ApprovalCancel:
+		case pending.ch <- policy.ApprovalCancel:
 		default:
 		}
 	}

@@ -63,13 +63,18 @@ func marshalWebFetchError(call core.ToolCall, err *webfetch.Error) core.ToolResu
 	if err.Result.Recovery != nil {
 		data["recovery"] = err.Result.Recovery
 	}
-	content, marshalErr := core.MarshalToolEnvelope(core.ToolEnvelope{
+	env := core.ToolEnvelope{
 		OK:      false,
 		Success: false,
 		Code:    err.Code,
 		Message: err.Message,
 		Data:    data,
-	})
+	}
+	if hint, ok := core.ToolInputRecoveryHint(call.Name, err.Message); ok {
+		env.Summary = hint
+		data["recovery"] = hint
+	}
+	content, marshalErr := core.MarshalToolEnvelope(env)
 	if marshalErr != nil {
 		return marshalToolError(call, err.Code, err.Message)
 	}

@@ -117,15 +117,23 @@ func initAppRuntime(cfg Config, sessionInit appSessionInit, toolInit appToolInit
 	})
 	taskTools := tasks.NewTools(taskRunner)
 	goalTools := newGoalTools(cfg.DataDir, sessionInit.sessionsDir, parentSessionIDFunc)
-	workflowStore, err := workflow.NewFileRunEventStore(cfg.DataDir)
-	if err != nil {
-		return appRuntimeInit{}, fmt.Errorf("init workflow event store failed: %w", err)
+	var workflowManager *workflow.RunManager
+	var workflowRunner *workflow.ScriptRunner
+	var workflowTools []core.Tool
+	if cfg.WorkflowsEnabled {
+		workflowStore, err := workflow.NewFileRunEventStore(cfg.DataDir)
+		if err != nil {
+			return appRuntimeInit{}, fmt.Errorf("init workflow event store failed: %w", err)
+		}
+		workflowScheduler := workflow.NewTaskScheduler(workflowStore, taskRunner)
+		workflowManager = workflow.NewRunManager(workflowStore, workflowScheduler)
+		workflowRunner = workflow.NewScriptRunner(cfg.DataDir, workflowManager)
+		workflowRunner.Library = workflow.NewLibrary(workspaceRoot)
+		workflowTools = []core.Tool{workflow.NewToolWithOptions(workflowRunner, workflow.ToolOptions{
+			ParentSessionIDFunc:   parentSessionIDFunc,
+			KeywordTriggerEnabled: cfg.WorkflowKeywordTrigger,
+		})}
 	}
-	workflowScheduler := workflow.NewTaskScheduler(workflowStore, taskRunner)
-	workflowManager := workflow.NewRunManager(workflowStore, workflowScheduler)
-	workflowRunner := workflow.NewScriptRunner(cfg.DataDir, workflowManager)
-	workflowRunner.Library = workflow.NewLibrary(workspaceRoot)
-	workflowTools := []core.Tool{workflow.NewTool(workflowRunner, parentSessionIDFunc)}
 	registeredTools := append([]core.Tool{}, toolInit.baseTools...)
 	registeredTools = append(registeredTools, toolInit.pluginTools...)
 	registeredTools = append(registeredTools, taskTools...)

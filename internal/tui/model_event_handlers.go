@@ -76,6 +76,12 @@ func (m *model) handleProviderRetryEvent(ev protocol.Event) {
 	m.addLog(logEntry{Kind: "api_retry", Source: "provider", Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Metadata)})
 }
 
+func (m *model) handleResponseResetEvent(ev protocol.Event) {
+	m.clearProviderRetryStatus()
+	m.resetLiveAttemptForResponseReset()
+	m.addLog(logEntry{Kind: "response_reset", Source: "assistant", Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Metadata)})
+}
+
 func (m *model) handleInfoEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	if !isEnvironmentInventoryBlock(ev.Text) {
@@ -116,6 +122,13 @@ func (m *model) handleLocalSubmitResultEvent(ev protocol.Event) tea.Cmd {
 	if role == "" {
 		role = "info"
 	}
+	if m.handleConfigManagerSubmitResult(ev) {
+		m.addLog(logEntry{Kind: role, Source: "system", Summary: ev.Text, Raw: ev.Text})
+		if role == "error" {
+			m.status = "error"
+		}
+		return nil
+	}
 	if !isEnvironmentInventoryBlock(ev.Text) {
 		m.appendLocalCommandEcho(m.popLocalSubmitCommand())
 		if ev.LocalResult != nil && ev.LocalResult.Kind == "workflow-launch" {
@@ -123,7 +136,7 @@ func (m *model) handleLocalSubmitResultEvent(ev protocol.Event) tea.Cmd {
 			return m.openWorkflowLaunch(ev.LocalResult)
 		}
 		if ev.LocalResult != nil && ev.LocalResult.Kind == "workflow-run" {
-			m.appendWorkflowLaunchNotice(ev.Text)
+			// Workflow run lifecycle is rendered from workflow_snapshot events.
 		} else if shouldOpenWorkflowPanelForLocalResult(ev.LocalResult) {
 			m.addLog(logEntry{Kind: role, Source: "system", Summary: ev.Text, Raw: ev.Text})
 			return m.openWorkflowPanel(ev.LocalResult)
@@ -150,42 +163,29 @@ func (m *model) handleLocalSubmitResultEvent(ev protocol.Event) tea.Cmd {
 	return nil
 }
 
-func (m *model) appendWorkflowLaunchNotice(text string) {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return
-	}
-	if m.busy {
-		m.appendLiveAssistantMessage(text)
-		return
-	}
-	if m.assembler != nil && m.assembler.Len() > 0 {
-		m.commitLiveTranscript(false)
-	}
-	m.appendTranscript("assistant", tuirender.KindText, text)
-}
-
 func (m *model) handleWorkflowTerminalEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
-	text := strings.TrimSpace(ev.Text)
-	if ev.LocalResult != nil {
-		if plain := strings.TrimSpace(ev.LocalResult.PlainText); plain != "" {
-			text = plain
-		}
-	}
-	if m.assembler != nil && m.assembler.Len() > 0 {
-		if text != "" {
-			m.appendLiveAssistantMessage(text)
-		}
-		if !m.hasPendingToolCalls() {
-			m.commitLiveTranscript(false)
-		}
-	} else if text != "" {
-		m.appendTranscript("assistant", tuirender.KindText, text)
+	m.ensureTimeline().HandleEvent(ev)
+	if !m.hasPendingLifecycleItems() {
+		m.commitLiveTranscript(false)
+	} else {
+		m.refreshLiveViewportContent()
 	}
 	m.addLog(logEntry{Kind: "workflow_terminal", Source: "workflow", Summary: truncateLine(ev.Text, 120), Raw: ev.Text})
 	m.status = "ready"
 	m.refreshViewportContentFollow(true)
+}
+
+func (m *model) handleWorkflowSnapshotEvent(ev protocol.Event) {
+	m.clearProviderRetryStatus()
+	m.ensureTimeline().HandleEvent(ev)
+	if !m.hasPendingLifecycleItems() {
+		m.commitLiveTranscript(false)
+	} else {
+		m.refreshLiveViewportContent()
+	}
+	m.addLog(logEntry{Kind: "workflow_snapshot", Source: "workflow", Summary: truncateLine(ev.Text, 120), Raw: ev.Text})
+	m.status = "workflow"
 }
 
 func (m *model) handleDiffResultEvent(ev protocol.Event) {
@@ -225,7 +225,8 @@ func (m *model) handleBtwErrorEvent(ev protocol.Event) {
 func (m *model) handleToolCallEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	if ev.ToolName != "update_plan" {
-		m.appendToolCall(ev.ToolCallID, ev.ToolName, ev.Text)
+		m.ensureTimeline().HandleEvent(ev)
+		m.refreshLiveViewportContent()
 	}
 	m.addLog(logEntry{
 		Kind:    "tool_call",
@@ -237,21 +238,20 @@ func (m *model) handleToolCallEvent(ev protocol.Event) {
 
 func (m *model) handleToolResultEvent(ev protocol.Event) tea.Cmd {
 	m.clearProviderRetryStatus()
-	role, text := summarizeToolResultForChat(ev.ToolName, ev.Text)
+	role, _ := summarizeToolResultForChat(ev.ToolName, ev.Text)
 	if suppressesNoFinalAnswer(role) {
 		m.sawTerminalToolOutcomeThisTurn = true
 	}
-	if !m.updateToolCallFromResult(ev.ToolCallID, ev.ToolName, ev.Text, role, text, ev.Metadata) {
-		m.markToolCallResolved(ev.ToolCallID)
-		if shouldShowUnmatchedToolResult(ev.ToolName, role, text) {
-			m.appendLiveToolResult(text, role)
-		}
+	if ev.ToolName != "update_plan" {
+		m.ensureTimeline().HandleEvent(ev)
 	}
 	m.addLog(logEntry{Kind: "tool_result", Source: ev.ToolName, Summary: truncateLine(ev.Text, 120), Raw: ev.Text})
 	m.captureDiffMetadata(ev.ToolName, ev.Metadata)
 	m.captureDiff(ev.ToolName, ev.Text)
-	if !m.hasPendingToolCalls() {
+	if !m.hasPendingLifecycleItems() {
 		m.commitLiveTranscript(false)
+	} else {
+		m.refreshLiveViewportContent()
 	}
 	if toolResultMayChangeGitBranch(ev.ToolName) {
 		return detectGitBranchCmd(m.cwdPath)
@@ -261,24 +261,22 @@ func (m *model) handleToolResultEvent(ev protocol.Event) tea.Cmd {
 
 func (m *model) handleHookStartedEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
+	m.ensureTimeline().HandleEvent(ev)
 	m.status = ev.Text
+	m.refreshLiveViewportContent()
 	m.addLog(logEntry{Kind: "hook_started", Source: hookLogSource(ev), Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Hook)})
 }
 
 func (m *model) handleHookCompletedEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
+	m.ensureTimeline().HandleEvent(ev)
 	m.status = ev.Text
-	if shouldAppendHookNotice(ev) {
-		m.appendNotice(ev.Text)
+	if !m.hasPendingLifecycleItems() {
+		m.commitLiveTranscript(false)
+	} else {
+		m.refreshLiveViewportContent()
 	}
 	m.addLog(logEntry{Kind: "hook_completed", Source: hookLogSource(ev), Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Hook)})
-}
-
-func shouldAppendHookNotice(ev protocol.Event) bool {
-	if ev.Hook == nil {
-		return strings.TrimSpace(ev.Text) != ""
-	}
-	return ev.Hook.Status == "blocked" || ev.Hook.Status == "failed" || ev.Hook.Status == "warning" || strings.TrimSpace(ev.Hook.Message) != ""
 }
 
 func hookLogSource(ev protocol.Event) string {
@@ -300,7 +298,10 @@ func (m *model) handleTaskStartedEvent(ev protocol.Event) {
 func (m *model) handleTaskProgressEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.status = ev.Text
-	m.updateTaskProgressWithSteps(ev.ToolCallID, ev.ToolName, ev.Text, ev.Status, ev.Metadata, ev.ProgressMessages)
+	if ev.ToolName != "update_plan" {
+		m.ensureTimeline().HandleEvent(ev)
+		m.refreshLiveViewportContent()
+	}
 	m.addLog(logEntry{Kind: "task_progress", Source: ev.ToolName, Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Metadata)})
 }
 
@@ -324,6 +325,8 @@ func (m *model) handleMCPCompleteEvent(ev protocol.Event) {
 
 func (m *model) handleApprovalRequiredEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
+	m.ensureTimeline().HandleEvent(ev)
+	m.refreshLiveViewportContent()
 	if m.stopping {
 		if ev.ToolCallID != "" {
 			m.dispatchIntent(protocol.Intent{Kind: protocol.IntentCancelToolApproval, ToolCallID: ev.ToolCallID})
@@ -353,8 +356,23 @@ func (m *model) handleApprovalRequiredEvent(ev protocol.Event) {
 	}
 }
 
+func (m *model) handleApprovalDecisionEvent(ev protocol.Event) {
+	m.clearProviderRetryStatus()
+	m.ensureTimeline().HandleEvent(ev)
+	if ev.Decision == "cancel" || ev.Decision == "deny" {
+		m.sawTerminalToolOutcomeThisTurn = true
+	}
+	if !m.hasPendingLifecycleItems() {
+		m.commitLiveTranscript(false)
+		return
+	}
+	m.refreshLiveViewportContent()
+}
+
 func (m *model) handleUserInputRequiredEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
+	m.ensureTimeline().HandleEvent(ev)
+	m.refreshLiveViewportContent()
 	if m.stopping {
 		if ev.ToolCallID != "" {
 			m.dispatchIntent(protocol.Intent{Kind: protocol.IntentCancelUserInput, ToolCallID: ev.ToolCallID})
@@ -371,6 +389,17 @@ func (m *model) handleUserInputRequiredEvent(ev protocol.Event) {
 	m.userInput.answers = nil
 	m.addLog(logEntry{Kind: "user_input_required", Source: ev.ToolName, Summary: fmt.Sprintf("%d questions", len(ev.Questions)), Raw: fmt.Sprintf("%+v", ev.Questions)})
 	m.status = "user input required"
+}
+
+func (m *model) handleUserInputDoneEvent(ev protocol.Event) {
+	m.clearProviderRetryStatus()
+	m.ensureTimeline().HandleEvent(ev)
+	if !m.hasPendingLifecycleItems() {
+		m.commitLiveTranscript(false)
+		return
+	}
+	m.refreshLiveViewportContent()
+	m.addLog(logEntry{Kind: "user_input_done", Source: ev.ToolName, Summary: ev.Status, Raw: fmt.Sprintf("%+v", ev.Metadata)})
 }
 
 func (m *model) handleSessionsListedEvent(ev protocol.Event) {
@@ -516,7 +545,7 @@ func (m *model) handleWorktreeExitPromptEvent(ev protocol.Event) {
 func (m *model) handleClearScreenEvent() tea.Cmd {
 	m.clearProviderRetryStatus()
 	m.assembler.Reset()
-	m.clearPendingToolCalls()
+	m.resetTimeline()
 	m.ephemeralMessages = nil
 	m.resetTranscript()
 	m.resetTurnVisibility()
@@ -540,7 +569,7 @@ func (m *model) handleSessionHydratedEvent(ev protocol.Event) tea.Cmd {
 	hadStartupHeaderPrinted := m.startupHeaderPrinted || (m.startupHeaderOnce != nil && *m.startupHeaderOnce)
 	m.clearProviderRetryStatus()
 	m.assembler.Reset()
-	m.clearPendingToolCalls()
+	m.resetTimeline()
 	m.ephemeralMessages = nil
 	m.resetTranscript()
 	m.resetTurnVisibility()

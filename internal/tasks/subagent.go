@@ -307,7 +307,10 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 	}
 	runChild := func(runCtx context.Context, progress func(core.ToolProgress)) (SpawnSubagentResponse, error) {
 		child := newChild(childTools, maxToolIters)
-		events, err := child.RunStream(runCtx, sessionID, prompt)
+		events, err := child.RunStreamWithTurnOptions(runCtx, sessionID, prompt, agent.RunOptions{
+			AssistantPrefix:  cfg.Generation.AssistantPrefix,
+			PrefixCompletion: cfg.Generation.PrefixCompletion,
+		})
 		if err != nil {
 			r.patchSubagentMeta(sessionID, session.SessionMeta{Status: "failed", Error: err.Error(), CompletedAt: time.Now().UTC()})
 			return SpawnSubagentResponse{}, &SpawnSubagentError{SessionID: sessionID, Code: "spawn_subagent_failed", Message: err.Error(), Err: err}

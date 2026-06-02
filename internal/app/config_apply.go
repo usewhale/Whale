@@ -127,6 +127,14 @@ func ApplyFileConfig(cfg *Config, file FileConfig) error {
 		}
 		cfg.Plugins[id] = mergePluginConfig(cfg.Plugins[id], pluginConfig)
 	}
+	if file.Workflows.Enabled != nil {
+		cfg.WorkflowsEnabled = *file.Workflows.Enabled
+		cfg.WorkflowsEnabledExplicit = true
+	}
+	if file.Workflows.KeywordTriggerEnabled != nil {
+		cfg.WorkflowKeywordTrigger = *file.Workflows.KeywordTriggerEnabled
+		cfg.WorkflowKeywordTriggerExplicit = true
+	}
 	if len(file.Workflows.Trusted) > 0 {
 		cfg.TrustedWorkflows = mergeNames(cfg.TrustedWorkflows, file.Workflows.Trusted)
 	}
@@ -216,6 +224,14 @@ func overlayExplicitConfig(dst *Config, src Config) {
 	}
 	if src.MaxParallelSubagents != 0 && src.MaxParallelSubagents != def.MaxParallelSubagents {
 		dst.MaxParallelSubagents = src.MaxParallelSubagents
+	}
+	if src.WorkflowsEnabledExplicit || (src.configDefaulted && src.WorkflowsEnabled != def.WorkflowsEnabled) {
+		dst.WorkflowsEnabled = src.WorkflowsEnabled
+		dst.WorkflowsEnabledExplicit = src.WorkflowsEnabledExplicit || (src.configDefaulted && src.WorkflowsEnabled != def.WorkflowsEnabled)
+	}
+	if src.WorkflowKeywordTriggerExplicit || (src.configDefaulted && src.WorkflowKeywordTrigger != def.WorkflowKeywordTrigger) {
+		dst.WorkflowKeywordTrigger = src.WorkflowKeywordTrigger
+		dst.WorkflowKeywordTriggerExplicit = src.WorkflowKeywordTriggerExplicit || (src.configDefaulted && src.WorkflowKeywordTrigger != def.WorkflowKeywordTrigger)
 	}
 	if strings.TrimSpace(src.MCPConfigPath) != "" {
 		dst.MCPConfigPath = src.MCPConfigPath

@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/usewhale/whale/internal/core"
-	"github.com/usewhale/whale/internal/runtime/protocol"
 	"github.com/usewhale/whale/internal/tui/history"
 )
 
@@ -145,14 +144,6 @@ func firstNonEmptyLine(s string) string {
 
 func isEnvironmentInventoryBlock(text string) bool {
 	return history.IsEnvironmentInventoryBlock(text)
-}
-
-func summarizeHydratedToolCall(call protocol.ToolCall) string {
-	return history.SummarizeHydratedToolCall(core.ToolCall{
-		ID:    call.ID,
-		Name:  call.Name,
-		Input: call.Input,
-	})
 }
 
 func normalizeToolCallLabel(text string) string {

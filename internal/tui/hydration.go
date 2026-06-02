@@ -6,19 +6,30 @@ import (
 
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/runtime/protocol"
+	"github.com/usewhale/whale/internal/runtime/timeline"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
 const maxHydratedVisibleMessages = 8
 
 func (m *model) hydrateSessionMessages(msgs []protocol.Message) {
+	flushLifecycle := func() {
+		if !m.hasPendingLifecycleItems() && len(m.timelineSnapshotMessages()) == 0 {
+			return
+		}
+		m.commitLiveTranscript(true)
+	}
 	for _, msg := range recentHydrationMessages(msgs, maxHydratedVisibleMessages) {
 		switch msg.Role {
 		case string(core.RoleUser):
 			if strings.TrimSpace(msg.Text) != "" && !msg.Hidden {
+				flushLifecycle()
 				m.append("you", msg.Text)
 			}
 		case string(core.RoleAssistant):
+			if hasVisibleHydratedAssistantText(msg) {
+				flushLifecycle()
+			}
 			hasVisibleText := strings.TrimSpace(msg.Text) != "" && !isEnvironmentInventoryBlock(msg.Text)
 			if strings.TrimSpace(msg.Reasoning) != "" {
 				m.append("think", msg.Reasoning)
@@ -45,7 +56,10 @@ func (m *model) hydrateSessionMessages(msgs []protocol.Message) {
 				if tc.Name == "update_plan" {
 					continue
 				}
-				m.appendToolCall(tc.ID, tc.Name, summarizeHydratedToolCall(tc))
+				events := timeline.HydrationEventsFromMessage(protocol.Message{ToolCalls: []protocol.ToolCall{tc}, CreatedAt: msg.CreatedAt})
+				for _, ev := range events {
+					m.ensureTimeline().HandleEvent(ev)
+				}
 			}
 		case string(core.RoleTool):
 			for _, tr := range msg.ToolResults {
@@ -62,17 +76,22 @@ func (m *model) hydrateSessionMessages(msgs []protocol.Message) {
 						continue
 					}
 				}
-				role, text := summarizeToolResultForChat(tr.Name, body)
-				if !m.updateToolCallFromResult(tr.ToolCallID, tr.Name, tr.Content, role, text, tr.Metadata) {
-					m.markToolCallResolved(tr.ToolCallID)
-					if shouldShowUnmatchedToolResult(tr.Name, role, text) {
-						m.assembler.AddToolResultWithRole("", text, role)
+				events := timeline.HydrationEventsFromMessage(protocol.Message{ToolResults: []protocol.ToolResult{tr}, CreatedAt: msg.CreatedAt})
+				for _, ev := range events {
+					if strings.TrimSpace(ev.Text) == "" {
+						continue
 					}
+					m.ensureTimeline().HandleEvent(ev)
 				}
 				m.captureDiffMetadata(tr.Name, tr.Metadata)
 			}
 		}
 	}
+}
+
+func hasVisibleHydratedAssistantText(msg protocol.Message) bool {
+	return strings.TrimSpace(msg.Reasoning) != "" ||
+		(strings.TrimSpace(msg.Text) != "" && !isEnvironmentInventoryBlock(msg.Text))
 }
 
 func hydratedPlanUpdateText(body string) (string, bool) {

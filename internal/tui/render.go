@@ -149,6 +149,9 @@ func (m model) bottomPartsBeforeInput(mainWidth int) []string {
 	if m.mode == modePluginsManager {
 		bottomParts = append(bottomParts, m.renderPluginsManager())
 	}
+	if m.mode == modeConfigManager {
+		bottomParts = append(bottomParts, m.renderConfigManager())
+	}
 	if m.mode == modeHooksManager {
 		bottomParts = append(bottomParts, m.renderHooksManager())
 	}

@@ -11,8 +11,9 @@ import (
 )
 
 type Tool struct {
-	runner              *ScriptRunner
-	parentSessionIDFunc func() string
+	runner               *ScriptRunner
+	parentSessionIDFunc  func() string
+	keywordTriggerEnable bool
 }
 
 func NewTool(runner *ScriptRunner, parentSessionIDFunc ...func() string) Tool {
@@ -20,7 +21,16 @@ func NewTool(runner *ScriptRunner, parentSessionIDFunc ...func() string) Tool {
 	if len(parentSessionIDFunc) > 0 {
 		fn = parentSessionIDFunc[0]
 	}
-	return Tool{runner: runner, parentSessionIDFunc: fn}
+	return Tool{runner: runner, parentSessionIDFunc: fn, keywordTriggerEnable: true}
+}
+
+type ToolOptions struct {
+	ParentSessionIDFunc   func() string
+	KeywordTriggerEnabled bool
+}
+
+func NewToolWithOptions(runner *ScriptRunner, opts ToolOptions) Tool {
+	return Tool{runner: runner, parentSessionIDFunc: opts.ParentSessionIDFunc, keywordTriggerEnable: opts.KeywordTriggerEnabled}
 }
 
 func (t Tool) Name() string { return "workflow" }
@@ -28,7 +38,7 @@ func (t Tool) Name() string { return "workflow" }
 func (t Tool) Description() string {
 	return strings.Join([]string{
 		"Launch a restricted Whale workflow script asynchronously for decomposable multi-agent work such as fan-out research, repository inspection, or multi-perspective review.",
-		"Use this when the user explicitly asks for a workflow, fan-out, multi-agent orchestration, or names/describes an available workflow from the system prompt catalog.",
+		t.workflowUseGuidance(),
 		"When the user clearly asks to run a named workflow, call this workflow tool directly with name. Do not call request_user_input or ask a chat question for launch confirmation first; this tool returns the single TUI launch confirmation when confirmation is required. Do not first inspect files, search the workspace, or block confirmation because you think an expected input might be missing unless the user asked for a preflight check.",
 		"When the user clearly asks to create, generate, or write a new workflow, do not inspect existing workflow directories or load skills first. Generate a Claude Code-compatible raw JavaScript workflow script, pass it as script, and set saveAs to the same kebab-case value as meta.name. The tool will request confirmation; if the user confirms, Whale saves it under the project .whale/workflows directory before launching it.",
 		"Use ordinary tools instead for a single quick read, edit, shell-dependent task, or answer.",
@@ -43,6 +53,13 @@ func (t Tool) Description() string {
 		"Workflow agent leaves are capability-defined workers. Use agent definitions and opts.tools/opts.disallowedTools to state required capabilities. Supported capabilities include workspace.read, workspace.write, shell.read, shell.run, web.search, web.fetch, and mcp.read; shell.run or workspace.write require an explicit non-read-only permissionMode. If a needed capability is not exposed by the runtime, make the workflow report the missing evidence instead of assuming shell, edit, or host access.",
 		"Returns an async launch receipt; tell the user only that /workflows opens the workflow panel. Do not mention /workflows with run ids or hidden subcommands.",
 	}, " ")
+}
+
+func (t Tool) workflowUseGuidance() string {
+	if t.keywordTriggerEnable {
+		return "Use this when the user explicitly asks for a workflow, fan-out, multi-agent orchestration, or names/describes an available workflow from the system prompt catalog."
+	}
+	return "Use this only when the user explicitly asks Whale to run or create a workflow by name or script. Do not infer workflow use from broad task descriptions, ordinary release tasks, or the presence of the word workflow."
 }
 
 func (t Tool) Parameters() map[string]any {

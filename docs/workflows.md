@@ -90,4 +90,22 @@ Whale 从两个位置发现 workflow 脚本：
 
 ## 要求
 
-所有付费计划可用（DeepSeek API）。功能默认开启，无需配置。
+所有付费计划可用（DeepSeek API）。功能默认关闭，可以按项目开启。
+
+### 配置开关
+
+在 TUI 中运行 `/config` 可以管理 workflow 开关：
+
+- `Dynamic workflows`（`workflows.enabled`）控制 workflow runtime、`workflow` 工具、目录提示和 `/workflows` 面板集成。
+- `Workflow keyword trigger`（`workflows.keyword_trigger_enabled`）只控制按 workflow 目录提示自动触发使用；关闭后仍可手动运行 workflow。
+
+在 `/config` 中按 `Space` 只会切换当前项并产生未保存变更；按 `Enter` 或 `Ctrl+S` 才会保存。保存后会写入当前项目的个人配置文件：
+
+```toml
+# .whale/config.local.toml
+[workflows]
+enabled = true
+keyword_trigger_enabled = true
+```
+
+`.whale/config.local.toml` 只影响当前 workspace，不建议提交到版本控制。如果希望团队共享默认值，可以把同样的 `[workflows]` 配置写入 `.whale/config.toml`。

@@ -18,6 +18,7 @@ const (
 	EventPlanCompleted        EventKind = "plan_completed"
 	EventPlanUpdate           EventKind = "plan_update"
 	EventProviderRetry        EventKind = "provider_retry"
+	EventResponseReset        EventKind = "response_reset"
 	EventToolCall             EventKind = "tool_call"
 	EventToolResult           EventKind = "tool_result"
 	EventHookStarted          EventKind = "hook_started"
@@ -28,6 +29,7 @@ const (
 	EventMCPStatus            EventKind = "mcp_status"
 	EventMCPComplete          EventKind = "mcp_complete"
 	EventApprovalRequired     EventKind = "approval_required"
+	EventApprovalDecision     EventKind = "approval_decision"
 	EventUserInputRequired    EventKind = "user_input_required"
 	EventUserInputDone        EventKind = "user_input_done"
 	EventSessionsListed       EventKind = "sessions_listed"
@@ -38,6 +40,8 @@ const (
 	EventBtwDelta             EventKind = "btw_delta"
 	EventBtwDone              EventKind = "btw_done"
 	EventBtwError             EventKind = "btw_error"
+	EventPendingInputAccepted EventKind = "pending_input_accepted"
+	EventPendingInputRejected EventKind = "pending_input_rejected"
 	EventTurnDone             EventKind = "turn_done"
 	EventViewModeChanged      EventKind = "view_mode_changed"
 	EventSkillLoaded          EventKind = "skill_loaded"
@@ -46,6 +50,7 @@ const (
 	EventSessionHydrated      EventKind = "session_hydrated"
 	EventRewindMessagesListed EventKind = "rewind_messages_listed"
 	EventWorkflowPanel        EventKind = "workflow_panel"
+	EventWorkflowSnapshot     EventKind = "workflow_snapshot"
 	EventWorkflowTerminal     EventKind = "workflow_terminal"
 )
 
@@ -55,6 +60,7 @@ const (
 	EventSkillsSelectionRequested      EventKind = "skills_selection_requested"
 	EventSkillsManagerUpdated          EventKind = "skills_manager_updated"
 	EventPluginsManagerUpdated         EventKind = "plugins_manager_updated"
+	EventConfigManagerUpdated          EventKind = "config_manager_updated"
 	EventHooksManagerUpdated           EventKind = "hooks_manager_updated"
 	EventHooksStartupReviewRequested   EventKind = "hooks_startup_review_requested"
 	EventReviewRequested               EventKind = "review_requested"
@@ -63,7 +69,18 @@ const (
 
 type Event struct {
 	Kind             EventKind            `json:"kind"`
+	TurnID           string               `json:"turn_id,omitempty"`
+	ItemID           string               `json:"item_id,omitempty"`
+	ParentID         string               `json:"parent_id,omitempty"`
+	ApprovalID       string               `json:"approval_id,omitempty"`
+	Decision         string               `json:"decision,omitempty"`
+	DecisionScope    string               `json:"decision_scope,omitempty"`
+	ApprovalKeys     []string             `json:"approval_keys,omitempty"`
+	WorkflowRunID    string               `json:"workflow_run_id,omitempty"`
+	Sequence         int64                `json:"sequence,omitempty"`
+	StartedAt        time.Time            `json:"started_at,omitempty"`
 	Text             string               `json:"text,omitempty"`
+	ClientInputID    string               `json:"client_input_id,omitempty"`
 	ToolCallID       string               `json:"tool_call_id,omitempty"`
 	ToolName         string               `json:"tool_name,omitempty"`
 	Metadata         map[string]any       `json:"metadata,omitempty"`
@@ -88,11 +105,27 @@ type Event struct {
 	Hook             *HookRun             `json:"hook,omitempty"`
 	Skills           []SkillView          `json:"skills,omitempty"`
 	Plugins          []PluginStatus       `json:"plugins,omitempty"`
+	Config           *ConfigManagerState  `json:"config,omitempty"`
 	Open             bool                 `json:"open,omitempty"`
 	Hooks            *HooksManagerState   `json:"hooks,omitempty"`
 	WorktreeExit     *WorktreeExitSummary `json:"worktree_exit,omitempty"`
 	SessionID        string               `json:"session_id,omitempty"`
 	Messages         []Message            `json:"messages,omitempty"`
+}
+
+type ConfigManagerState struct {
+	Items []ConfigSettingView `json:"items,omitempty"`
+}
+
+type ConfigSettingView struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+	Type        string `json:"type"`
+	Value       string `json:"value"`
+	Default     string `json:"default,omitempty"`
+	Scope       string `json:"scope,omitempty"`
+	Source      string `json:"source,omitempty"`
 }
 
 type HooksManagerState struct {

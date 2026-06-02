@@ -221,6 +221,23 @@ func protocolPlugins(statuses []plugins.PluginStatus) []protocol.PluginStatus {
 	return out
 }
 
+func protocolConfigSettings(state app.ConfigSettingsState) *protocol.ConfigManagerState {
+	out := &protocol.ConfigManagerState{Items: make([]protocol.ConfigSettingView, 0, len(state.Items))}
+	for _, item := range state.Items {
+		out.Items = append(out.Items, protocol.ConfigSettingView{
+			ID:          item.ID,
+			Label:       item.Label,
+			Description: item.Description,
+			Type:        string(item.Type),
+			Value:       item.Value,
+			Default:     item.Default,
+			Scope:       item.Scope,
+			Source:      item.Source,
+		})
+	}
+	return out
+}
+
 func protocolHooks(entries []agent.HookListEntry) *protocol.HooksManagerState {
 	state := &protocol.HooksManagerState{}
 	for _, info := range agent.HookEvents() {

@@ -113,7 +113,7 @@ func TestWorkflowLaunchViewRawScriptIsReadOnlyAndReturnsToConfirmation(t *testin
 	}
 }
 
-func TestWorkflowRunLocalResultRendersAsPlainLaunchNotice(t *testing.T) {
+func TestWorkflowRunLocalResultDoesNotRenderPlainLaunchNotice(t *testing.T) {
 	m := model{
 		assembler:           tuirender.NewAssembler(),
 		mode:                modeChat,
@@ -140,20 +140,32 @@ func TestWorkflowRunLocalResultRendersAsPlainLaunchNotice(t *testing.T) {
 		t.Fatalf("mode = %v, want chat", m.mode)
 	}
 	messages := m.chatMessages()
-	if len(messages) < 2 {
-		t.Fatalf("expected command echo and assistant launch notice, got %+v", messages)
+	messages = nonHeaderMessages(messages)
+	if len(messages) != 1 {
+		t.Fatalf("expected only command echo; workflow lifecycle is rendered from workflow_snapshot, got %+v", messages)
 	}
 	got := strings.Join(tuirender.ChatLines(messages, 120), "\n")
 	last := messages[len(messages)-1]
-	if last.Role != "assistant" || last.Kind != tuirender.KindText || last.Local != nil {
-		t.Fatalf("workflow launch notice should enter chat as assistant text, got %+v", last)
+	if last.Role != "you" || last.Kind != tuirender.KindText || last.Local != nil {
+		t.Fatalf("workflow local result should not enter chat as assistant text, got %+v", last)
 	}
-	if !strings.Contains(got, "Started the deep-research workflow in the background.") || !strings.Contains(got, "Open /workflows to watch progress") {
-		t.Fatalf("workflow launch notice missing expected plain text:\n%s", got)
+	if !strings.Contains(got, "/deep-research question") {
+		t.Fatalf("workflow command echo missing:\n%s", got)
 	}
-	if strings.Contains(got, "async_launched") || strings.Contains(got, "/tmp/run-123/script.js") {
-		t.Fatalf("workflow run should not render structured fields in chat:\n%s", got)
+	if strings.Contains(got, "Started the deep-research workflow") || strings.Contains(got, "async_launched") || strings.Contains(got, "/tmp/run-123/script.js") {
+		t.Fatalf("workflow run local result should not render transcript lifecycle text:\n%s", got)
 	}
+}
+
+func nonHeaderMessages(messages []tuirender.UIMessage) []tuirender.UIMessage {
+	out := messages[:0]
+	for _, msg := range messages {
+		if msg.Role == "header" {
+			continue
+		}
+		out = append(out, msg)
+	}
+	return out
 }
 
 func TestWorkflowEventsLocalResultDoesNotOpenPanel(t *testing.T) {

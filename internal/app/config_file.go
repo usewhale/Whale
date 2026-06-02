@@ -167,7 +167,9 @@ func clonePluginMCPServers(in map[string]plugins.MCPServerConfig) map[string]plu
 }
 
 type FileWorkflowsConfig struct {
-	Trusted []string `toml:"trusted,omitempty"`
+	Enabled               *bool    `toml:"enabled,omitempty"`
+	KeywordTriggerEnabled *bool    `toml:"keyword_trigger_enabled,omitempty"`
+	Trusted               []string `toml:"trusted,omitempty"`
 }
 
 type LoadedConfig struct {

@@ -279,6 +279,44 @@ func TestConfigFileSupportsTrustedWorkflows(t *testing.T) {
 	}
 }
 
+func TestConfigFileSupportsWorkflowToggles(t *testing.T) {
+	dir := t.TempDir()
+	path := GlobalConfigPath(dir)
+	disabled := false
+	cfg := FileConfig{
+		Workflows: FileWorkflowsConfig{
+			Enabled:               &disabled,
+			KeywordTriggerEnabled: &disabled,
+		},
+	}
+	if err := SaveConfigFile(path, cfg); err != nil {
+		t.Fatalf("SaveConfigFile: %v", err)
+	}
+	loaded, ok, err := LoadConfigFile(path)
+	if err != nil {
+		t.Fatalf("LoadConfigFile: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected config file")
+	}
+	if loaded.Workflows.Enabled == nil || *loaded.Workflows.Enabled {
+		t.Fatalf("workflows.enabled not loaded: %+v", loaded.Workflows.Enabled)
+	}
+	if loaded.Workflows.KeywordTriggerEnabled == nil || *loaded.Workflows.KeywordTriggerEnabled {
+		t.Fatalf("workflows.keyword_trigger_enabled not loaded: %+v", loaded.Workflows.KeywordTriggerEnabled)
+	}
+	appCfg := DefaultConfig()
+	if err := ApplyFileConfig(&appCfg, loaded); err != nil {
+		t.Fatalf("ApplyFileConfig: %v", err)
+	}
+	if appCfg.WorkflowsEnabled {
+		t.Fatal("expected workflows to be disabled")
+	}
+	if appCfg.WorkflowKeywordTrigger {
+		t.Fatal("expected workflow keyword trigger to be disabled")
+	}
+}
+
 func TestConfigNewAppLoadsGlobalConfig(t *testing.T) {
 	dir := t.TempDir()
 	enabled := false
@@ -778,6 +816,62 @@ func TestConfigExplicitUpdateCheckDisableOverridesFileConfig(t *testing.T) {
 	}
 	if loaded.CheckForUpdateOnStartup {
 		t.Fatal("check_for_update_on_startup: want explicit programmatic false to be preserved")
+	}
+}
+
+func TestConfigExplicitWorkflowDisablesOverrideFileConfig(t *testing.T) {
+	dir := t.TempDir()
+	workspace := t.TempDir()
+	enabled := true
+	if err := SaveConfigFile(GlobalConfigPath(dir), FileConfig{
+		Workflows: FileWorkflowsConfig{
+			Enabled:               &enabled,
+			KeywordTriggerEnabled: &enabled,
+		},
+	}); err != nil {
+		t.Fatalf("SaveConfigFile: %v", err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.DataDir = dir
+	cfg.WorkflowsEnabled = false
+	cfg.WorkflowsEnabledExplicit = true
+	cfg.WorkflowKeywordTrigger = false
+	cfg.WorkflowKeywordTriggerExplicit = true
+	loaded, err := LoadAndApplyConfig(cfg, workspace)
+	if err != nil {
+		t.Fatalf("LoadAndApplyConfig: %v", err)
+	}
+	if loaded.WorkflowsEnabled {
+		t.Fatal("workflows.enabled: want explicit programmatic false to be preserved")
+	}
+	if loaded.WorkflowKeywordTrigger {
+		t.Fatal("workflows.keyword_trigger_enabled: want explicit programmatic false to be preserved")
+	}
+}
+
+func TestConfigZeroValueDoesNotDisableWorkflows(t *testing.T) {
+	dir := t.TempDir()
+	workspace := t.TempDir()
+	enabled := true
+	if err := SaveConfigFile(GlobalConfigPath(dir), FileConfig{
+		Workflows: FileWorkflowsConfig{
+			Enabled:               &enabled,
+			KeywordTriggerEnabled: &enabled,
+		},
+	}); err != nil {
+		t.Fatalf("SaveConfigFile: %v", err)
+	}
+
+	loaded, err := LoadAndApplyConfig(Config{DataDir: dir}, workspace)
+	if err != nil {
+		t.Fatalf("LoadAndApplyConfig: %v", err)
+	}
+	if !loaded.WorkflowsEnabled {
+		t.Fatal("workflows.enabled: zero-value Config should not imply false")
+	}
+	if !loaded.WorkflowKeywordTrigger {
+		t.Fatal("workflows.keyword_trigger_enabled: zero-value Config should not imply false")
 	}
 }
 

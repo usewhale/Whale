@@ -215,22 +215,23 @@ func TestAssembler_PreservesStreamingBlankLineBeforeTable(t *testing.T) {
 	}
 }
 
-func TestAssembler_RebuildToolEntryIndexPreservesSubagentEntries(t *testing.T) {
+func TestAssembler_SetPlanReplacesExistingPlanOnly(t *testing.T) {
 	a := NewAssembler()
 	a.AddPlan("old plan")
-	a.AddSubagent("tc-subagent", "Subagent review running\nsession: child-123\ncurrent: read_file")
+	a.AddNotice("keep notice")
+	a.AddPlan("duplicate plan")
 
 	a.SetPlan("new plan")
-	if !a.UpdateToolCall("tc-subagent", "Subagent review running\nsession: child-123\ncurrent: grep", "result_running") {
-		t.Fatalf("expected subagent row to remain indexed after plan replacement")
-	}
 
 	snap := a.Snapshot()
 	if len(snap) != 2 {
-		t.Fatalf("expected plan and subagent rows, got %+v", snap)
+		t.Fatalf("expected plan and notice rows, got %+v", snap)
 	}
-	if snap[1].Kind != KindSubagent || snap[1].Text != "Subagent review running\nsession: child-123\ncurrent: grep" {
-		t.Fatalf("expected subagent row to be updated after index rebuild, got %+v", snap[1])
+	if snap[0].Kind != KindPlan || snap[0].Text != "new plan" {
+		t.Fatalf("expected first plan to be replaced, got %+v", snap[0])
+	}
+	if snap[1].Kind != KindNotice || snap[1].Text != "keep notice" {
+		t.Fatalf("expected notice to remain after plan replacement, got %+v", snap[1])
 	}
 }
 

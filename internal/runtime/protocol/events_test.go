@@ -3,17 +3,29 @@ package protocol
 import (
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 func TestEventJSONRoundTrip(t *testing.T) {
 	events := []Event{
 		{Kind: EventAssistantDelta, Text: "hello"},
+		{Kind: EventResponseReset},
 		{
-			Kind:       EventToolResult,
-			ToolCallID: "tc-1",
-			ToolName:   "shell_run",
-			Text:       "ok",
-			Metadata:   map[string]any{"exit_code": float64(0)},
+			Kind:          EventToolResult,
+			TurnID:        "turn-1",
+			ItemID:        "item-1",
+			ParentID:      "parent-1",
+			ApprovalID:    "approval-1",
+			Decision:      "allow_session",
+			DecisionScope: "session",
+			ApprovalKeys:  []string{"approval-1"},
+			WorkflowRunID: "run-1",
+			Sequence:      42,
+			StartedAt:     time.Unix(1700000000, 0).UTC(),
+			ToolCallID:    "tc-1",
+			ToolName:      "shell_run",
+			Text:          "ok",
+			Metadata:      map[string]any{"exit_code": float64(0)},
 		},
 		{
 			Kind: EventApprovalRequired,
@@ -23,6 +35,20 @@ func TestEventJSONRoundTrip(t *testing.T) {
 				Reason:    "confirm command",
 				Code:      "shell_command",
 				Key:       "shell:ls",
+			},
+		},
+		{
+			Kind:          EventWorkflowSnapshot,
+			WorkflowRunID: "run-2",
+			Status:        "running",
+			LocalResult: &LocalResult{
+				Kind: "workflow",
+				WorkflowPanelSnapshot: &WorkflowPanelSnapshot{
+					RunID:        "run-2",
+					Status:       "running",
+					Summary:      "scan repo",
+					CurrentPhase: "inspect",
+				},
 			},
 		},
 		{

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/usewhale/whale/internal/agent"
+	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/workflow"
@@ -110,6 +111,9 @@ func (a *App) ensureAgent() (*agent.Agent, error) {
 				if a.workflowRunner == nil || a.workflowRunner.Library == nil {
 					return ""
 				}
+				if !a.cfg.WorkflowsEnabled || !a.cfg.WorkflowKeywordTrigger {
+					return ""
+				}
 				return workflow.RenderPromptCatalog(context.Background(), a.workflowRunner.Library, workflow.DefaultPromptCatalogLimit)
 			}),
 			agent.WithProjectMemory(a.cfg.MemoryEnabled, a.cfg.MemoryMaxChars, parseCSVList(a.cfg.MemoryFileOrder), a.workspaceRoot),
@@ -163,6 +167,26 @@ func (a *App) RunTurnWithInjectedInputOptions(ctx context.Context, visibleInput,
 		return nil, err
 	}
 	return ag.RunStreamWithInjectedInputOptions(ctx, a.sessionID, visibleInput, hiddenInput, opts)
+}
+
+func (a *App) InjectTurnInput(ctx context.Context, input string, opts agent.RunOptions) (bool, error) {
+	return a.InjectTurnInputWithHidden(ctx, input, "", opts)
+}
+
+func (a *App) InjectTurnInputWithHidden(ctx context.Context, visibleInput, hiddenInput string, opts agent.RunOptions) (bool, error) {
+	opts = a.applyRunOptionsDefaults(opts)
+	if !opts.HiddenInput && strings.TrimSpace(visibleInput) != "" {
+		_, _ = session.PatchSessionMeta(a.sessionsDir, a.sessionID, session.SessionMetaPatch{Title: visibleInput})
+	}
+	ag, err := a.ensureAgent()
+	if err != nil {
+		return false, err
+	}
+	messages := []core.Message{{SessionID: a.sessionID, Role: core.RoleUser, Text: visibleInput, Hidden: opts.HiddenInput}}
+	if strings.TrimSpace(hiddenInput) != "" {
+		messages = append(messages, core.Message{SessionID: a.sessionID, Role: core.RoleUser, Text: hiddenInput, Hidden: true})
+	}
+	return ag.InjectTurnInput(ctx, a.sessionID, messages)
 }
 
 func (a *App) applyRunOptionsDefaults(opts agent.RunOptions) agent.RunOptions {

@@ -2,12 +2,14 @@ package service
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
 )
 
 func (s *Service) emit(ev Event) {
+	ev = s.prepareLifecycleEvent(ev)
 	if isCriticalEvent(ev.Kind) {
 		s.emitReliable(ev)
 		return
@@ -31,11 +33,85 @@ func (s *Service) emitBestEffort(ev Event) {
 
 func isCriticalEvent(kind EventKind) bool {
 	switch kind {
-	case EventError, EventPlanCompleted, EventPlanUpdate, EventProviderRetry, EventToolCall, EventToolResult, EventHookStarted, EventHookCompleted, EventTaskStarted, EventTaskCompleted, EventMCPComplete, EventApprovalRequired, EventUserInputRequired, EventUserInputDone, EventSessionsListed, EventRewindMessagesListed, EventLocalSubmitResult, EventLocalSubmitDone, EventDiffResult, EventBtwStarted, EventBtwDelta, EventBtwDone, EventBtwError, EventTurnDone, EventModelSelectionRequested, EventPermissionsSelectionRequested, EventSkillsSelectionRequested, EventSkillsManagerUpdated, EventPluginsManagerUpdated, EventHooksManagerUpdated, EventHooksStartupReviewRequested, EventReviewRequested, EventSkillLoaded, EventWorktreeExitPrompt, EventExitRequested, EventScreenClearRequested, EventSessionHydrated, EventWorkflowPanel, EventWorkflowTerminal:
+	case EventError, EventPlanCompleted, EventPlanUpdate, EventProviderRetry, EventResponseReset, EventToolCall, EventToolResult, EventHookStarted, EventHookCompleted, EventTaskStarted, EventTaskCompleted, EventMCPComplete, EventApprovalRequired, EventApprovalDecision, EventUserInputRequired, EventUserInputDone, EventSessionsListed, EventRewindMessagesListed, EventLocalSubmitResult, EventLocalSubmitDone, EventDiffResult, EventBtwStarted, EventBtwDelta, EventBtwDone, EventBtwError, EventPendingInputAccepted, EventPendingInputRejected, EventTurnDone, EventModelSelectionRequested, EventPermissionsSelectionRequested, EventSkillsSelectionRequested, EventSkillsManagerUpdated, EventPluginsManagerUpdated, EventConfigManagerUpdated, EventHooksManagerUpdated, EventHooksStartupReviewRequested, EventReviewRequested, EventSkillLoaded, EventWorktreeExitPrompt, EventExitRequested, EventScreenClearRequested, EventSessionHydrated, EventWorkflowPanel, EventWorkflowSnapshot, EventWorkflowTerminal:
 		return true
 	default:
 		return false
 	}
+}
+
+func (s *Service) prepareLifecycleEvent(ev Event) Event {
+	if !isLifecycleEvent(ev.Kind) {
+		return ev
+	}
+	if ev.Sequence == 0 {
+		ev.Sequence = s.nextEventSequence.Add(1)
+	}
+	if ev.StartedAt.IsZero() {
+		ev.StartedAt = time.Now()
+	}
+	if ev.ItemID == "" {
+		ev.ItemID = lifecycleItemID(ev)
+	}
+	if ev.ApprovalID == "" && ev.Approval != nil {
+		ev.ApprovalID = ev.Approval.Key
+	}
+	if ev.WorkflowRunID == "" {
+		ev.WorkflowRunID = workflowRunIDFromEvent(ev)
+	}
+	return ev
+}
+
+func isLifecycleEvent(kind EventKind) bool {
+	switch kind {
+	case EventToolCall, EventToolResult, EventApprovalRequired, EventApprovalDecision, EventTaskStarted, EventTaskProgress, EventTaskCompleted, EventHookStarted, EventHookCompleted, EventUserInputRequired, EventUserInputDone, EventWorkflowSnapshot, EventWorkflowTerminal:
+		return true
+	default:
+		return false
+	}
+}
+
+func lifecycleItemID(ev Event) string {
+	if ev.Kind == EventWorkflowSnapshot || ev.Kind == EventWorkflowTerminal {
+		if runID := workflowRunIDFromEvent(ev); runID != "" {
+			return "workflow:" + runID
+		}
+	}
+	if ev.ToolCallID != "" {
+		if ev.Kind == EventUserInputRequired || ev.Kind == EventUserInputDone {
+			return "user_input:" + ev.ToolCallID
+		}
+		return "tool:" + ev.ToolCallID
+	}
+	if ev.Approval != nil && ev.Approval.ToolCall.ID != "" {
+		return "tool:" + ev.Approval.ToolCall.ID
+	}
+	if ev.Hook != nil && ev.Hook.ID != "" {
+		return "hook:" + ev.Hook.ID
+	}
+	return ""
+}
+
+func workflowRunIDFromEvent(ev Event) string {
+	if ev.WorkflowRunID != "" {
+		return strings.TrimSpace(ev.WorkflowRunID)
+	}
+	for _, key := range []string{"workflow_run_id", "run_id", "runId"} {
+		if ev.Metadata == nil {
+			continue
+		}
+		raw, ok := ev.Metadata[key]
+		if !ok || raw == nil {
+			continue
+		}
+		if s := strings.TrimSpace(fmt.Sprint(raw)); s != "" {
+			return s
+		}
+	}
+	if ev.LocalResult != nil && ev.LocalResult.WorkflowPanelSnapshot != nil {
+		return strings.TrimSpace(ev.LocalResult.WorkflowPanelSnapshot.RunID)
+	}
+	return ""
 }
 
 type deltaChunk struct {

@@ -31,6 +31,17 @@ func TestWorkflowsCommandIsLocalReadOnly(t *testing.T) {
 	}
 }
 
+func TestConfigCommandIsLocalUI(t *testing.T) {
+	got := ClassifySubmit("/config", CommandsHelp())
+	if got.Class != SubmitLocalUI {
+		t.Fatalf("/config class = %v, want SubmitLocalUI", got.Class)
+	}
+	got = ClassifySubmit("/config workflows", CommandsHelp())
+	if got.Class != SubmitUsageError {
+		t.Fatalf("/config workflows class = %v, want SubmitUsageError", got.Class)
+	}
+}
+
 func TestDeepResearchCommandIsLocalMutating(t *testing.T) {
 	for _, line := range []string{
 		"/deep-research marked v12 sanitize behavior",

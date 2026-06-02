@@ -60,11 +60,9 @@ func (m *model) submitSelectedApprovalDecision() tea.Cmd {
 func (m *model) submitApprovalAndEnableAutoAccept() tea.Cmd {
 	toolCallID := m.approval.toolCallID
 	toolName := m.approval.toolName
-	notice := m.approvalNotice("allow_session")
 	m.dispatchIntent(protocol.Intent{Kind: protocol.IntentAllowToolForSession, ToolCallID: toolCallID})
 	m.dispatchIntent(protocol.Intent{Kind: protocol.IntentEnableAutoAccept})
 	m.addLog(logEntry{Kind: "approval_allow_session_auto", Source: toolName, Summary: "allow for session and enable auto mode", Raw: "allow_session_auto"})
-	m.appendSystemNotice(notice)
 	m.advanceApprovalPrompt("approved for session")
 	return nil
 }
@@ -72,14 +70,11 @@ func (m *model) submitApprovalAndEnableAutoAccept() tea.Cmd {
 func (m *model) submitApprovalDecision(kind protocol.IntentKind, logKind, summary, status, notice string) tea.Cmd {
 	toolCallID := m.approval.toolCallID
 	toolName := m.approval.toolName
-	systemNotice := m.approvalNotice(notice)
 	if kind == protocol.IntentCancelToolApproval {
-		m.removePendingApprovalToolCall(toolCallID)
 		m.sawTerminalToolOutcomeThisTurn = true
 	}
 	m.dispatchIntent(protocol.Intent{Kind: kind, ToolCallID: toolCallID})
 	m.addLog(logEntry{Kind: logKind, Source: toolName, Summary: summary, Raw: notice})
-	m.appendSystemNotice(systemNotice)
 	m.advanceApprovalPrompt(status)
 	return nil
 }
@@ -97,13 +92,6 @@ func (m *model) advanceApprovalPrompt(status string) {
 	m.approval.selected = 0
 	m.mode = modeApproval
 	m.status = "approval required"
-}
-
-func (m *model) removePendingApprovalToolCall(toolCallID string) {
-	if m.assembler != nil {
-		m.assembler.RemoveToolCall(toolCallID)
-	}
-	m.markToolCallResolved(toolCallID)
 }
 
 func (m *model) handleSessionPickerKey(msg tea.KeyMsg) tea.Cmd {

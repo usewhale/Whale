@@ -23,36 +23,41 @@ const (
 )
 
 type Config struct {
-	DataDir                  string
-	ConfigLoaded             bool
-	PermissionDefault        policy.PermissionAction
-	PermissionRules          []policy.PermissionRule
-	AutoAcceptPermissions    bool
-	AutoCompact              bool
-	AutoCompactThreshold     float64
-	MemoryEnabled            bool
-	MemoryMaxChars           int
-	MemoryFileOrder          string
-	BudgetWarningUSD         float64
-	Model                    string
-	ModelExplicit            bool
-	ReasoningEffort          string
-	ThinkingEnabled          bool
-	CheckForUpdateOnStartup  bool
-	ViewMode                 string
-	ShowReasoning            bool
-	RetryMaxAttempts         int
-	RetryMaxAttemptsExplicit bool
-	RetryStreamMaxAttempts   int
-	RetryStreamIdleTimeout   time.Duration
-	RetryMaxDelay            time.Duration
-	DeepSeekPrefixCompletion bool
-	MaxParallelSubagents     int
-	MCPConfigPath            string
-	APIBaseURL               string
-	SkillsDisabled           []string
-	Plugins                  plugins.ConfigMap
-	TrustedWorkflows         []string
+	DataDir                        string
+	ConfigLoaded                   bool
+	PermissionDefault              policy.PermissionAction
+	PermissionRules                []policy.PermissionRule
+	AutoAcceptPermissions          bool
+	AutoCompact                    bool
+	AutoCompactThreshold           float64
+	MemoryEnabled                  bool
+	MemoryMaxChars                 int
+	MemoryFileOrder                string
+	BudgetWarningUSD               float64
+	Model                          string
+	ModelExplicit                  bool
+	ReasoningEffort                string
+	ThinkingEnabled                bool
+	CheckForUpdateOnStartup        bool
+	ViewMode                       string
+	ShowReasoning                  bool
+	RetryMaxAttempts               int
+	RetryMaxAttemptsExplicit       bool
+	RetryStreamMaxAttempts         int
+	RetryStreamIdleTimeout         time.Duration
+	RetryMaxDelay                  time.Duration
+	DeepSeekPrefixCompletion       bool
+	MaxParallelSubagents           int
+	MCPConfigPath                  string
+	APIBaseURL                     string
+	SkillsDisabled                 []string
+	Plugins                        plugins.ConfigMap
+	WorkflowsEnabled               bool
+	WorkflowsEnabledExplicit       bool
+	WorkflowKeywordTrigger         bool
+	WorkflowKeywordTriggerExplicit bool
+	TrustedWorkflows               []string
+	configDefaulted                bool
 }
 
 type StartOptions struct {

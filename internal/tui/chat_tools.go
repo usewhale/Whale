@@ -6,57 +6,7 @@ import (
 	"strings"
 
 	"github.com/usewhale/whale/internal/core"
-	"github.com/usewhale/whale/internal/runtime/protocol"
-	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
-
-func (m *model) appendToolCall(toolCallID, toolName, text string) {
-	if m.assembler == nil {
-		m.assembler = tuirender.NewAssembler()
-	}
-	m.markToolCallPending(toolCallID)
-	if strings.TrimSpace(toolName) == "spawn_subagent" {
-		m.assembler.AddSubagent(toolCallID, subagentStartedText(text))
-	} else {
-		m.assembler.AddToolCall(toolCallID, toolName, summarizeToolCallForChat(toolName, text))
-	}
-	m.refreshLiveViewportContent()
-}
-
-func (m *model) updateToolCallFromResult(toolCallID, toolName, result, role, summary string, metadata map[string]any) bool {
-	if toolCallID == "" {
-		return false
-	}
-	previous := ""
-	if m.assembler != nil {
-		previous = m.assembler.ToolCallText(toolCallID)
-	}
-	title := completedToolTitle(toolName, result, previous)
-	if strings.TrimSpace(toolName) == "spawn_subagent" {
-		title = subagentCompletedText(result, previous)
-		summary = ""
-	}
-	if summary != "" && summary != "✓" {
-		title += "\n" + summary
-	}
-	if diff := renderFileDiffMetadataForChat(metadata, fileDiffPreviewMaxLines); diff != "" && role == "result_ok" {
-		title += "\n\n" + diff
-	}
-	identity := ""
-	if toolDisplayKind(toolName) == "shell" {
-		role = shellResultRole(role)
-		identity = shellCommandIdentityFromResult(result)
-		if identity == "" {
-			identity = focusShellRawCommand(previous)
-		}
-	}
-	ok := m.assembler.UpdateToolCallWithIdentity(toolCallID, title, role, identity)
-	m.markToolCallResolved(toolCallID)
-	if ok {
-		m.refreshLiveViewportContent()
-	}
-	return ok
-}
 
 func shellCommandIdentityFromResult(raw string) string {
 	env := parseToolEnvelope(raw)
@@ -69,57 +19,6 @@ func shellCommandIdentityFromResult(raw string) string {
 		return command
 	}
 	return command + "\x00cwd=" + cwd
-}
-
-func (m *model) updateTaskProgress(toolCallID, toolName, text, status string, metadata map[string]any) bool {
-	return m.updateTaskProgressWithSteps(toolCallID, toolName, text, status, metadata, nil)
-}
-
-func (m *model) updateTaskProgressWithSteps(toolCallID, toolName, text, status string, metadata map[string]any, steps []protocol.ProgressStep) bool {
-	if toolCallID == "" || m.assembler == nil {
-		return false
-	}
-	title := summarizeTaskProgressForChat(toolName, text)
-	role := "result_running"
-	if strings.TrimSpace(toolName) == "spawn_subagent" {
-		previous := m.assembler.ToolCallText(toolCallID)
-		title = subagentProgressText(text, status, metadata, previous)
-		role = subagentProgressRole(status, text)
-		m.assembler.UpdateSubagentProgress(toolCallID, title, role, steps)
-	} else {
-		m.assembler.UpdateToolCall(toolCallID, title, role)
-	}
-	m.refreshLiveViewportContent()
-	return true
-}
-
-func (m *model) markToolCallPending(toolCallID string) {
-	toolCallID = strings.TrimSpace(toolCallID)
-	if toolCallID == "" {
-		return
-	}
-	if m.pendingToolCalls == nil {
-		m.pendingToolCalls = map[string]struct{}{}
-	}
-	m.pendingToolCalls[toolCallID] = struct{}{}
-}
-
-func (m *model) markToolCallResolved(toolCallID string) {
-	toolCallID = strings.TrimSpace(toolCallID)
-	if toolCallID == "" || m.pendingToolCalls == nil {
-		return
-	}
-	delete(m.pendingToolCalls, toolCallID)
-}
-
-func (m *model) hasPendingToolCalls() bool {
-	return len(m.pendingToolCalls) > 0
-}
-
-func (m *model) clearPendingToolCalls() {
-	for k := range m.pendingToolCalls {
-		delete(m.pendingToolCalls, k)
-	}
 }
 
 func summarizeToolCallForChat(toolName, text string) string {

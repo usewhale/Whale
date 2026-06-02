@@ -14,6 +14,8 @@ const (
 	ToolInputRepairBareStringToArray    = "bare_string_to_array"
 	ToolInputRepairEmptyObjectToArray   = "empty_object_to_array"
 	ToolInputRepairMarkdownAutolinkPath = "markdown_autolink_path"
+	ToolInputRepairSemanticBoolean      = "semantic_boolean_string"
+	ToolInputRepairSemanticInteger      = "semantic_integer_string"
 )
 
 type ToolInputRepair struct {
@@ -295,6 +297,40 @@ func applyToolInputIssueRepair(issue toolInputIssue) (ToolInputRepair, bool) {
 			AfterType:  "omitted",
 		}, true
 	}
+	if s, ok := value.(string); ok {
+		switch issue.expected {
+		case "boolean":
+			switch s {
+			case "true":
+				issue.parent[issue.key] = true
+			case "false":
+				issue.parent[issue.key] = false
+			default:
+				return ToolInputRepair{}, false
+			}
+			return ToolInputRepair{
+				Kind:       ToolInputRepairSemanticBoolean,
+				Path:       issue.path,
+				BeforeType: "string",
+				AfterType:  "boolean",
+			}, true
+		case "integer":
+			if !isDecimalIntegerLiteral(s) {
+				return ToolInputRepair{}, false
+			}
+			n, err := strconv.ParseInt(s, 10, 64)
+			if err != nil {
+				return ToolInputRepair{}, false
+			}
+			issue.parent[issue.key] = float64(n)
+			return ToolInputRepair{
+				Kind:       ToolInputRepairSemanticInteger,
+				Path:       issue.path,
+				BeforeType: "string",
+				AfterType:  "number",
+			}, true
+		}
+	}
 	if issue.expected != "array" {
 		return ToolInputRepair{}, false
 	}
@@ -334,6 +370,25 @@ func applyToolInputIssueRepair(issue toolInputIssue) (ToolInputRepair, bool) {
 	default:
 		return ToolInputRepair{}, false
 	}
+}
+
+func isDecimalIntegerLiteral(s string) bool {
+	if s == "" {
+		return false
+	}
+	start := 0
+	if s[0] == '-' {
+		if len(s) == 1 {
+			return false
+		}
+		start = 1
+	}
+	for i := start; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func schemaType(schema map[string]any) string {

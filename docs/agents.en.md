@@ -131,6 +131,7 @@ and missing validation. Report evidence and uncertainty clearly.
 | `memory` | Memory scope | `project` |
 | `background` | Run in the background | `true` |
 | `isolation` | Worktree isolation | `worktree` |
+| `generation` | Advanced generation steering | See below |
 
 For a first custom subagent, start with only:
 
@@ -140,6 +141,22 @@ whenToUse: ...
 tools: workspace.read
 permissionMode: read_only
 ```
+
+---
+
+## Advanced: Generation Steering
+
+`generation` can configure an assistant response prefix for model-only subagents. When the current provider supports prefix completion, Whale asks the model to continue from that prefix.
+
+```yaml
+description: Return a compact classification.
+tools: []
+generation:
+  assistantPrefix: "{"
+  prefixCompletion: true
+```
+
+This is only enabled for subagents without tools. Subagents with `workspace.read`, `shell.read`, or other tools keep using the normal generation path so prefix completion does not remove tool-calling ability.
 
 ---
 

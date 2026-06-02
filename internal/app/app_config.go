@@ -29,5 +29,8 @@ func DefaultConfig() Config {
 		RetryStreamMaxAttempts:  6,
 		RetryStreamIdleTimeout:  90 * time.Second,
 		RetryMaxDelay:           llmretry.DefaultPolicy().MaxDelay,
+		WorkflowsEnabled:        false,
+		WorkflowKeywordTrigger:  true,
+		configDefaulted:         true,
 	}
 }

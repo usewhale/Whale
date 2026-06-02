@@ -704,7 +704,7 @@ func TestUnmatchedToolResultRefreshesLiveViewportWhilePendingCallsRemain(t *test
 	if got := m.View(); got == beforeView || !strings.Contains(got, "visible output") {
 		t.Fatalf("expected unmatched live tool result to appear in chat viewport:\n%s", got)
 	}
-	if got := len(m.assembler.Snapshot()); got != 3 {
+	if got := len(m.liveTranscriptMessages()); got != 3 {
 		t.Fatalf("expected pending tool calls plus unmatched result to remain live, got %d", got)
 	}
 }

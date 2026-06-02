@@ -8,9 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-
-	"github.com/usewhale/whale/internal/core"
 	"time"
+
+	"github.com/usewhale/whale/internal/build"
+	"github.com/usewhale/whale/internal/core"
 )
 
 var (
@@ -31,6 +32,7 @@ func metaLock(sessionsDir string) *sync.Mutex {
 }
 
 type SessionMeta struct {
+	AppVersion         string    `json:"app_version,omitempty"`
 	Branch             string    `json:"branch,omitempty"`
 	Title              string    `json:"title,omitempty"`
 	Summary            string    `json:"summary,omitempty"`
@@ -146,6 +148,7 @@ func SaveSessionMeta(sessionsDir, sessionID string, st SessionMeta) error {
 }
 
 func saveSessionMetaAt(path string, st SessionMeta) error {
+	st.AppVersion = build.CurrentVersion()
 	st.UpdatedAt = time.Now()
 	b, err := json.Marshal(st)
 	if err != nil {

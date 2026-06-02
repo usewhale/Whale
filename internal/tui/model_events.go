@@ -79,6 +79,8 @@ func (m *model) handleServiceEvent(ev protocol.Event) (tea.Cmd, bool, bool) {
 		m.handlePlanUpdateEvent(ev)
 	case protocol.EventProviderRetry:
 		m.handleProviderRetryEvent(ev)
+	case protocol.EventResponseReset:
+		m.handleResponseResetEvent(ev)
 	case protocol.EventInfo:
 		m.handleInfoEvent(ev)
 	case protocol.EventError:
@@ -87,6 +89,8 @@ func (m *model) handleServiceEvent(ev protocol.Event) (tea.Cmd, bool, bool) {
 		return m.handleLocalSubmitResultEvent(ev), false, false
 	case protocol.EventWorkflowPanel:
 		return m.handleWorkflowPanelEvent(ev.LocalResult), false, false
+	case protocol.EventWorkflowSnapshot:
+		m.handleWorkflowSnapshotEvent(ev)
 	case protocol.EventWorkflowTerminal:
 		m.handleWorkflowTerminalEvent(ev)
 	case protocol.EventDiffResult:
@@ -99,6 +103,10 @@ func (m *model) handleServiceEvent(ev protocol.Event) (tea.Cmd, bool, bool) {
 		m.handleBtwDoneEvent(ev)
 	case protocol.EventBtwError:
 		m.handleBtwErrorEvent(ev)
+	case protocol.EventPendingInputAccepted:
+		m.markPendingInputAccepted(ev.ClientInputID)
+	case protocol.EventPendingInputRejected:
+		return m.rejectPendingInput(ev.ClientInputID, ev.Text), false, false
 	case protocol.EventToolCall:
 		m.handleToolCallEvent(ev)
 	case protocol.EventToolResult:
@@ -119,8 +127,12 @@ func (m *model) handleServiceEvent(ev protocol.Event) (tea.Cmd, bool, bool) {
 		m.handleMCPCompleteEvent(ev)
 	case protocol.EventApprovalRequired:
 		m.handleApprovalRequiredEvent(ev)
+	case protocol.EventApprovalDecision:
+		m.handleApprovalDecisionEvent(ev)
 	case protocol.EventUserInputRequired:
 		m.handleUserInputRequiredEvent(ev)
+	case protocol.EventUserInputDone:
+		m.handleUserInputDoneEvent(ev)
 	case protocol.EventSessionsListed:
 		m.handleSessionsListedEvent(ev)
 	case protocol.EventRewindMessagesListed:
@@ -204,18 +216,30 @@ func (m *model) handleTurnDone(ev protocol.Event) tea.Cmd {
 	pendingWindowsInput := m.snapshotWindowsBusyInput()
 	if wasStopping {
 		m.deferredPlanPicker = false
-		var restoreCmd tea.Cmd
-		queuedRestored, restoreCmd = m.restoreQueuedPromptsToComposerWithWindowsInput(pendingWindowsInput)
-		eventCmd = tea.Batch(eventCmd, restoreCmd)
-	} else if m.localSubmitPending > 0 {
+		if m.submitQueuedPromptAfterInterrupt && len(m.queuedPrompts) > 0 {
+			eventCmd = tea.Batch(eventCmd, m.submitQueuedPromptAfterInterruptNow(pendingWindowsInput))
+			queuedTurnStarted = true
+			queuedRestored = true
+		} else {
+			m.submitQueuedPromptAfterInterrupt = false
+			var restoreCmd tea.Cmd
+			queuedRestored, restoreCmd = m.restoreQueuedPromptsToComposerWithWindowsInput(pendingWindowsInput)
+			eventCmd = tea.Batch(eventCmd, restoreCmd)
+		}
+	} else {
+		m.clearAcceptedPendingSteers()
+	}
+	if !wasStopping && m.localSubmitPending > 0 {
 		if shouldOpenPlanPicker {
 			m.deferredPlanPicker = true
 		}
 		m.status = "wait for command to finish"
-	} else if next, ok := m.popQueuedPrompt(); ok {
-		m.deferredPlanPicker = false
-		eventCmd = tea.Batch(eventCmd, m.submitPromptWithBinding(next.Text, next.SkillBinding), m.restoreWindowsBusyInput(pendingWindowsInput))
-		queuedTurnStarted = true
+	} else if !wasStopping {
+		if next, ok := m.popQueuedPrompt(); ok {
+			m.deferredPlanPicker = false
+			eventCmd = tea.Batch(eventCmd, m.submitPromptWithBinding(next.Text, next.SkillBinding), m.restoreWindowsBusyInput(pendingWindowsInput))
+			queuedTurnStarted = true
+		}
 	}
 	if !queuedTurnStarted && !queuedRestored && m.localSubmitPending == 0 && !m.hasPendingWindowsBusyInput() && shouldOpenPlanPicker {
 		m.openPlanImplementationPicker()
@@ -350,9 +374,23 @@ func (m *model) resetTurnVisibility() {
 }
 
 func (m *model) resetLiveAttemptForProviderRetry() {
+	m.resetLiveAttempt()
+}
+
+func (m *model) resetLiveAttemptForResponseReset() {
 	if m.assembler != nil {
 		m.assembler.Reset()
 	}
+	m.discardCurrentTurnModelOutput()
+	m.resetTurnVisibility()
+	m.refreshLiveViewportContent()
+}
+
+func (m *model) resetLiveAttempt() {
+	if m.assembler != nil {
+		m.assembler.Reset()
+	}
+	m.resetTimeline()
 	m.resetTurnVisibility()
 	m.refreshLiveViewportContent()
 }

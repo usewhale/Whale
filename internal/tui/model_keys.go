@@ -86,6 +86,8 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 		return m.handleSkillsManagerKey(msg), false, true
 	case modePluginsManager:
 		return m.handlePluginsManagerKey(msg), false, true
+	case modeConfigManager:
+		return m.handleConfigManagerKey(msg), false, true
 	case modeHooksManager:
 		return m.handleHooksManagerKey(msg), false, true
 	case modeHooksStartupReview:
@@ -141,7 +143,11 @@ func (m *model) interruptBusyTurn() tea.Cmd {
 		m.stopping = true
 		m.markWindowsBusyInputStopped()
 		m.cancelWindowsDeferredEnter()
-		m.appendNotice(m.turnInterruptedNoticeText())
+		if m.submitQueuedPromptAfterInterrupt {
+			m.appendNotice(m.turnInterruptedForQueuedPromptNoticeText())
+		} else {
+			m.appendNotice(m.turnInterruptedNoticeText())
+		}
 	}
 	m.commitLiveTranscript(false)
 	return m.flushNativeScrollbackCmd()

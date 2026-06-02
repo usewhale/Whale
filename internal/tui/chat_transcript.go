@@ -9,6 +9,7 @@ import (
 
 func (m *model) resetTranscript() {
 	m.transcript = nil
+	m.resetTimeline()
 	m.startupHeaderPrinted = false
 	if m.startupHeaderOnce == nil {
 		m.startupHeaderOnce = new(bool)
@@ -76,14 +77,86 @@ func (m *model) appendTranscriptMessages(messages []tuirender.UIMessage) {
 	}
 }
 
+func (m model) liveTranscriptMessages() []tuirender.UIMessage {
+	assemblerMessages := []tuirender.UIMessage(nil)
+	if m.assembler != nil {
+		assemblerMessages = m.assembler.Snapshot()
+	}
+	before, after := splitAssemblerAroundTimeline(assemblerMessages)
+	timelineMessages := m.timelineSnapshotMessages()
+	out := make([]tuirender.UIMessage, 0, len(before)+len(timelineMessages)+len(after))
+	out = append(out, m.visibleLiveMessages(before)...)
+	out = append(out, m.visibleLiveMessages(timelineMessages)...)
+	out = append(out, m.visibleLiveMessages(after)...)
+	return out
+}
+
+func splitAssemblerAroundTimeline(messages []tuirender.UIMessage) ([]tuirender.UIMessage, []tuirender.UIMessage) {
+	split := 0
+	for split < len(messages) && isModelOutputMessage(messages[split]) {
+		split++
+	}
+	return messages[:split], messages[split:]
+}
+
+func isModelOutputMessage(msg tuirender.UIMessage) bool {
+	switch msg.Role {
+	case "assistant", "think", "plan":
+		return msg.Kind == tuirender.KindText || msg.Kind == tuirender.KindThinking || msg.Kind == tuirender.KindPlan
+	default:
+		return false
+	}
+}
+
 func (m *model) commitLiveTranscript(forceBottom bool) {
-	if m.assembler == nil {
+	if m.assembler == nil && m.timeline == nil {
 		return
 	}
-	m.appendTranscriptMessages(m.assembler.Snapshot())
-	m.assembler.Reset()
-	m.clearPendingToolCalls()
+	if m.assembler != nil {
+		before, after := splitAssemblerAroundTimeline(m.assembler.Snapshot())
+		m.appendTranscriptMessages(before)
+		m.appendTranscriptMessages(m.timelineSnapshotMessages())
+		m.appendTranscriptMessages(after)
+		m.assembler.Reset()
+	} else {
+		m.appendTranscriptMessages(m.timelineSnapshotMessages())
+	}
+	m.resetTimeline()
 	m.refreshViewportContentFollow(forceBottom)
+}
+
+func (m *model) discardCurrentTurnModelOutput() {
+	start := m.turnTranscriptStart
+	if start < 0 || start > len(m.transcript) {
+		start = len(m.transcript)
+	}
+	out := make([]tuirender.UIMessage, 0, len(m.transcript))
+	out = append(out, m.transcript[:start]...)
+	changed := false
+	for _, msg := range m.transcript[start:] {
+		if isResettableModelOutput(msg) {
+			changed = true
+			continue
+		}
+		out = append(out, msg)
+	}
+	if !changed {
+		return
+	}
+	m.transcript = out
+	if m.nativeScrollbackPrinted > start {
+		m.nativeScrollbackPrinted = start
+	}
+}
+
+func isResettableModelOutput(msg tuirender.UIMessage) bool {
+	if msg.Local != nil {
+		return false
+	}
+	return (msg.Role == "assistant" && msg.Kind == tuirender.KindText) ||
+		msg.Role == "think" ||
+		msg.Kind == tuirender.KindThinking ||
+		msg.Kind == tuirender.KindPlan
 }
 
 const maxHydratedTranscriptLines = 300

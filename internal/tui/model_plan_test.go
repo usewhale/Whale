@@ -3,6 +3,7 @@ package tui
 import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/usewhale/whale/internal/runtime/protocol"
+	"github.com/usewhale/whale/internal/runtime/timeline"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 	"strings"
 	"testing"
@@ -361,9 +362,9 @@ func TestPlanUpdateEventRendersUpdatedPlan(t *testing.T) {
 }
 func TestPlanUpdateDoesNotClearPendingToolCallsBeforeResult(t *testing.T) {
 	m := model{
-		assembler:        tuirender.NewAssembler(),
-		mode:             modeChat,
-		pendingToolCalls: map[string]struct{}{},
+		assembler: tuirender.NewAssembler(),
+		mode:      modeChat,
+		timeline:  timeline.NewTurnTimelineBuilder(),
 	}
 	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolCall, ToolCallID: "read-1", ToolName: "read_file", Text: `read_file: docs/plugins.md`}))
 	m = next.(model)
@@ -372,11 +373,11 @@ func TestPlanUpdateDoesNotClearPendingToolCallsBeforeResult(t *testing.T) {
 	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventPlanUpdate, Text: "[x] Inspect\n[ ] Report"}))
 	m = next.(model)
 
-	if _, ok := m.pendingToolCalls["read-1"]; !ok {
-		t.Fatalf("plan update event cleared unrelated pending tool calls: %+v", m.pendingToolCalls)
+	if !m.hasPendingLifecycleItems() {
+		t.Fatal("plan update event cleared unrelated pending lifecycle item")
 	}
-	if _, ok := m.pendingToolCalls["plan-1"]; ok {
-		t.Fatalf("update_plan should not create a pending tool row")
+	if got := m.timeline.Snapshot().Items; len(got) != 1 || got[0].ToolCallID != "read-1" {
+		t.Fatalf("update_plan should not create a lifecycle row, got %+v", got)
 	}
 	if len(m.transcript) != 0 {
 		t.Fatalf("plan update should remain live while another tool is pending, got %+v", m.transcript)
