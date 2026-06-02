@@ -44,6 +44,7 @@ func (a *App) refreshMCPTools() error {
 	full := append([]core.Tool{}, base...)
 	full = append(full, a.pluginTools...)
 	full = append(full, a.taskTools...)
+	full = append(full, a.goalTools...)
 	full = append(full, a.workflowTools...)
 	return a.toolRegistry.ReplaceTools(full)
 }

@@ -14,6 +14,7 @@ import (
 type RunOptions struct {
 	HiddenInput        bool
 	ReadOnly           bool
+	GoalContinuation   bool
 	ShellAllowPrefixes []string
 	ViewMode           string
 }

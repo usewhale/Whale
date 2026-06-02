@@ -178,6 +178,7 @@ type CommandTurn struct {
 	Input               string
 	Hidden              bool
 	ReadOnly            bool
+	GoalContinuation    bool
 	SkipUserPromptHooks bool
 	SkipSkillInjection  bool
 	ShellAllowPrefixes  []string
