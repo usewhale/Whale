@@ -245,23 +245,33 @@ func invalidToolInputContent(toolName string, err error) string {
 		Code:    "invalid_input",
 		Error:   msg,
 	}
-	if toolName == "search_files" {
-		switch msg {
-		case `unknown field "include"`:
-			hint := "search_files does not support include; retry with grep for content search or remove include."
-			env.Summary = hint
-			env.Data = map[string]any{"recovery": hint}
-		case `missing required field "pattern"`:
-			hint := "search_files requires pattern; provide pattern and path, or use grep for content search."
-			env.Summary = hint
-			env.Data = map[string]any{"recovery": hint}
-		}
+	if hint, ok := ToolInputRecoveryHint(toolName, msg); ok {
+		env.Summary = hint
+		env.Data = map[string]any{"recovery": hint}
 	}
 	content, marshalErr := MarshalToolEnvelope(env)
 	if marshalErr != nil {
 		return fmt.Sprintf(`{"ok":false,"error":%q,"code":"invalid_input"}`, msg)
 	}
 	return content
+}
+
+func ToolInputRecoveryHint(toolName, msg string) (string, bool) {
+	toolName = strings.TrimSpace(toolName)
+	msg = strings.TrimSpace(msg)
+	switch {
+	case toolName == "search_files" && msg == `unknown field "include"`:
+		return "search_files does not support include; retry with grep for content search or remove include.", true
+	case toolName == "search_files" && msg == `missing required field "pattern"`:
+		return "search_files requires pattern; provide pattern and path, or use grep for content search.", true
+	case (toolName == "fetch" || toolName == "web_fetch") && msg == `unknown field "max_results"`:
+		return toolName + " does not support max_results; remove it or use web_search when you need multiple search results.", true
+	case (toolName == "fetch" || toolName == "web_fetch") && msg == `unknown field "format"`:
+		return toolName + " does not support format; omit it and use prompt to request the output shape.", true
+	case (toolName == "fetch" || toolName == "web_fetch") && (strings.Contains(msg, "url scheme must be http or https") || msg == "valid url is required"):
+		return toolName + " only supports http/https URLs; use read_file for local file paths or tool result files.", true
+	}
+	return "", false
 }
 
 func normalizeRegistryResult(ctx context.Context, call ToolCall, res ToolResult, maxResultChars int, durationMS int64) ToolResult {

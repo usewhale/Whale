@@ -16,6 +16,7 @@ func readToolInputStats(sessionsDir string) toolInputStats {
 		ByModel:      map[string]*toolInputModelStats{},
 		ByErrorCode:  map[string]int{},
 	}
+	seenInvalid := map[string]bool{}
 	entries, err := os.ReadDir(strings.TrimSpace(sessionsDir))
 	if err != nil {
 		return stats
@@ -24,12 +25,12 @@ func readToolInputStats(sessionsDir string) toolInputStats {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), telemetry.ToolInputEventsSuffix) {
 			continue
 		}
-		readToolInputEventFile(filepath.Join(sessionsDir, entry.Name()), &stats)
+		readToolInputEventFile(filepath.Join(sessionsDir, entry.Name()), &stats, seenInvalid)
 	}
 	return stats
 }
 
-func readToolInputEventFile(path string, stats *toolInputStats) {
+func readToolInputEventFile(path string, stats *toolInputStats, seenInvalid map[string]bool) {
 	f, err := os.Open(path)
 	if err != nil {
 		return
@@ -50,6 +51,12 @@ func readToolInputEventFile(path string, stats *toolInputStats) {
 			updateToolInputToolStats(stats, rec.Tool, true)
 			updateToolInputModelStats(stats, rec.Model, true)
 		case "tool_input_invalid":
+			key := toolInputInvalidDedupeKey(rec)
+			if seenInvalid[key] {
+				stats.Recent = appendRecentToolInput(stats.Recent, rec)
+				continue
+			}
+			seenInvalid[key] = true
 			stats.Invalid++
 			if rec.ErrorCode != "" {
 				stats.ByErrorCode[rec.ErrorCode]++
@@ -61,6 +68,16 @@ func readToolInputEventFile(path string, stats *toolInputStats) {
 		}
 		stats.Recent = appendRecentToolInput(stats.Recent, rec)
 	}
+}
+
+func toolInputInvalidDedupeKey(rec telemetry.ToolInputEvent) string {
+	parts := []string{
+		nonEmpty(rec.Session, "(unknown-session)"),
+		nonEmpty(rec.ToolCallID, "(unknown-call)"),
+		nonEmpty(rec.Tool, "(unknown-tool)"),
+		nonEmpty(rec.ErrorCode, "(unknown-code)"),
+	}
+	return strings.Join(parts, "\x1f")
 }
 
 func updateToolInputToolStats(stats *toolInputStats, tool string, repaired bool) {

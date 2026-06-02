@@ -119,6 +119,31 @@ func TestFetchRejectsMissingPromptAndOldFormatOnlyInput(t *testing.T) {
 	}
 }
 
+func TestFetchFileURLIncludesRecoveryHint(t *testing.T) {
+	ts, _ := NewToolset(t.TempDir())
+	res, err := ts.fetch(context.Background(), core.ToolCall{
+		ID:    "1",
+		Name:  "fetch",
+		Input: `{"url":"file:///tmp/result.txt","prompt":"read"}`,
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected error, got: %+v", res)
+	}
+	for _, want := range []string{
+		`"code":"invalid_args"`,
+		`valid url is required`,
+		"fetch only supports http/https URLs; use read_file for local file paths or tool result files.",
+		`"recovery"`,
+	} {
+		if !strings.Contains(res.Content, want) {
+			t.Fatalf("result missing %q:\n%s", want, res.Content)
+		}
+	}
+}
+
 func TestFetchHTTPErrorIncludesRecoveryHint(t *testing.T) {
 	ts, _ := NewToolset(t.TempDir())
 	ts.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {

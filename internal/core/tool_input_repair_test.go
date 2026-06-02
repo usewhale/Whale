@@ -104,6 +104,48 @@ func TestRepairToolInputForSpecLeavesUnknownFieldInvalid(t *testing.T) {
 	}
 }
 
+func TestRepairToolInputForSpecCoercesSemanticBooleanString(t *testing.T) {
+	spec := grepRepairTestSpec()
+	out, repairs := RepairToolInputForSpec(spec, `{"pattern":"needle","literal_text":"false"}`)
+	if len(repairs) != 1 || repairs[0].Path != "literal_text" {
+		t.Fatalf("unexpected repairs: %+v", repairs)
+	}
+	if repairs[0].BeforeType != "string" || repairs[0].AfterType != "boolean" {
+		t.Fatalf("unexpected type telemetry: %+v", repairs[0])
+	}
+	got := decodeRepairOutput(t, out)
+	if got["literal_text"] != false {
+		t.Fatalf("expected literal_text=false, got %#v from %s", got["literal_text"], out)
+	}
+}
+
+func TestRepairToolInputForSpecCoercesSemanticIntegerString(t *testing.T) {
+	spec := grepRepairTestSpec()
+	out, repairs := RepairToolInputForSpec(spec, `{"pattern":"needle","limit":"30"}`)
+	if len(repairs) != 1 || repairs[0].Path != "limit" {
+		t.Fatalf("unexpected repairs: %+v", repairs)
+	}
+	if repairs[0].BeforeType != "string" || repairs[0].AfterType != "number" {
+		t.Fatalf("unexpected type telemetry: %+v", repairs[0])
+	}
+	got := decodeRepairOutput(t, out)
+	if got["limit"] != float64(30) {
+		t.Fatalf("expected limit=30, got %#v from %s", got["limit"], out)
+	}
+}
+
+func TestRepairToolInputForSpecLeavesInvalidSemanticBooleanString(t *testing.T) {
+	spec := grepRepairTestSpec()
+	raw := `{"pattern":"needle","literal_text":"no"}`
+	out, repairs := RepairToolInputForSpec(spec, raw)
+	if out != raw {
+		t.Fatalf("unexpected output: %s", out)
+	}
+	if len(repairs) != 0 {
+		t.Fatalf("unexpected repairs: %+v", repairs)
+	}
+}
+
 func TestRepairToolInputForSpecUnwrapsMarkdownAutolinkFilePath(t *testing.T) {
 	spec := pathRepairTestSpec()
 	out, repairs := RepairToolInputForSpec(spec, `{"file_path":"[README.md](http://README.md)","content":"x"}`)
@@ -200,6 +242,22 @@ func TestRepairToolInputForSpecRepairsNestedArrayPath(t *testing.T) {
 	options, ok := first["options"].([]any)
 	if !ok || len(options) != 2 || options[0] != "yes" || options[1] != "no" {
 		t.Fatalf("unexpected options: %#v from %s", first["options"], out)
+	}
+}
+
+func grepRepairTestSpec() ToolSpec {
+	return ToolSpec{
+		Name: "grep",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"pattern":      map[string]any{"type": "string"},
+				"literal_text": map[string]any{"type": "boolean"},
+				"limit":        map[string]any{"type": "integer"},
+			},
+			"required":             []string{"pattern"},
+			"additionalProperties": false,
+		},
 	}
 }
 

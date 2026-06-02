@@ -257,6 +257,42 @@ func TestToolInputTelemetryRecordsInvalidArgs(t *testing.T) {
 	assertToolInputEvent(t, events, "tool_input_invalid", "", "invalid_args")
 }
 
+func TestInvalidArgsDoesNotTriggerRecoveryRetry(t *testing.T) {
+	dir := t.TempDir()
+	provider := &telemetryToolProvider{tool: "decode_args", input: `{"count":"bad"}`}
+	a := NewAgentWithRegistry(
+		provider,
+		NewInMemoryStore(),
+		NewToolRegistry([]Tool{decodeArgsTool{}}),
+		WithSessionsDir(dir),
+		WithToolPolicy(policyNever()),
+	)
+	stream, err := a.RunStream(context.Background(), "s-invalid-args-no-retry", "go")
+	if err != nil {
+		t.Fatalf("run stream: %v", err)
+	}
+	var sawRecovery bool
+	for ev := range stream {
+		switch ev.Type {
+		case AgentEventTypeError:
+			t.Fatalf("agent error: %v", ev.Err)
+		case AgentEventTypeToolRecoveryScheduled, AgentEventTypeToolRecoveryAttempt, AgentEventTypeToolRecoveryExhausted, AgentEventTypeReplanRequiredSet:
+			sawRecovery = true
+		}
+	}
+	if sawRecovery {
+		t.Fatal("invalid_args should be returned to the model without recovery retry")
+	}
+	if provider.calls != 2 {
+		t.Fatalf("expected one follow-up model turn after invalid tool result, got provider calls=%d", provider.calls)
+	}
+	events := readToolInputEvents(t, dir, "s-invalid-args-no-retry")
+	if len(events) != 1 {
+		t.Fatalf("expected one invalid telemetry event, got %+v", events)
+	}
+	assertToolInputEvent(t, events, "tool_input_invalid", "", "invalid_args")
+}
+
 func TestToolInputTelemetryConcurrentInvalidInputAppend(t *testing.T) {
 	dir := t.TempDir()
 	a := &Agent{sessionsDir: dir}

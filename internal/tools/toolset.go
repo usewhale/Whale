@@ -130,7 +130,12 @@ func marshalToolResultWithMetadata(call core.ToolCall, data any, metadata map[st
 }
 
 func marshalToolError(call core.ToolCall, code, msg string) core.ToolResult {
-	content, err := core.MarshalToolEnvelope(core.NewToolErrorEnvelope(code, msg))
+	env := core.NewToolErrorEnvelope(code, msg)
+	if hint, ok := core.ToolInputRecoveryHint(call.Name, msg); ok {
+		env.Summary = hint
+		env.Data = map[string]any{"recovery": hint}
+	}
+	content, err := core.MarshalToolEnvelope(env)
 	if err != nil {
 		content = fmt.Sprintf(`{"success":false,"code":%q,"message":%q}`, code, msg)
 	}
