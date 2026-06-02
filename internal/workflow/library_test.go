@@ -131,6 +131,141 @@ log('named')
 	}
 }
 
+func TestLibrarySaveGeneratedWritesProjectWorkflow(t *testing.T) {
+	root := t.TempDir()
+	lib := NewLibraryWithRoots([]LibraryRoot{{Path: root, Source: "project", Rank: 0}})
+	script := `export const meta = { name: 'generated-review', description: 'generated review' }
+log('generated')
+`
+
+	resolved, err := lib.SaveGenerated(context.Background(), script, "generated-review")
+	if err != nil {
+		t.Fatalf("SaveGenerated: %v", err)
+	}
+	wantPath := filepath.Join(root, "generated-review.js")
+	if resolved.Definition.Path != wantPath || resolved.Definition.Source != "project" {
+		t.Fatalf("resolved = %+v", resolved)
+	}
+	b, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatalf("read saved workflow: %v", err)
+	}
+	if !strings.Contains(string(b), "export const meta") || !strings.HasSuffix(string(b), "\n") {
+		t.Fatalf("saved script = %q", string(b))
+	}
+}
+
+func TestLibrarySaveGeneratedRejectsOverwriteAndMismatchedName(t *testing.T) {
+	root := t.TempDir()
+	lib := NewLibraryWithRoots([]LibraryRoot{{Path: root, Source: "project", Rank: 0}})
+	script := `export const meta = { name: 'generated-review', description: 'generated review' }
+log('generated')
+`
+	if _, err := lib.SaveGenerated(context.Background(), script, "other-name"); err == nil || !strings.Contains(err.Error(), "must match meta.name") {
+		t.Fatalf("expected mismatched saveAs error, got %v", err)
+	}
+	if _, err := lib.SaveGenerated(context.Background(), script, "generated-review"); err != nil {
+		t.Fatalf("SaveGenerated: %v", err)
+	}
+	if _, err := lib.SaveGenerated(context.Background(), script, "generated-review"); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("expected overwrite error, got %v", err)
+	}
+}
+
+func TestLibrarySaveGeneratedRejectsCommonAuthoringMistakes(t *testing.T) {
+	root := t.TempDir()
+	lib := NewLibraryWithRoots([]LibraryRoot{{Path: root, Source: "project", Rank: 0}})
+	for _, tt := range []struct {
+		name    string
+		script  string
+		wantErr string
+	}{
+		{
+			name: "phase wrapper",
+			script: `export const meta = { name: 'bad-phase', description: 'bad phase' }
+await phase("Review", async () => agent("review", { label: "review" }))
+`,
+			wantErr: "phase() is not a callback",
+		},
+		{
+			name: "structured opts",
+			script: `export const meta = { name: 'bad-structured', description: 'bad structured' }
+await agent("review", { label: "review", structured: { type: "object" } })
+`,
+			wantErr: "use schema, not structured",
+		},
+		{
+			name: "bare async assignment",
+			script: `export const meta = { name: 'bad-await', description: 'bad await' }
+const review = agent("review", { label: "review" })
+return review
+`,
+			wantErr: "must await async workflow primitives",
+		},
+		{
+			name: "claude model",
+			script: `export const meta = { name: 'bad-model', description: 'bad model' }
+await agent("review", { label: "review", model: "claude-sonnet-4-20250514" })
+`,
+			wantErr: "must not hard-code Claude model names",
+		},
+		{
+			name: "quoted claude model key",
+			script: `export const meta = { name: 'bad-quoted-model', description: 'bad model' }
+await agent("review", { label: "review", "model": "haiku" })
+`,
+			wantErr: "must not hard-code Claude model names",
+		},
+		{
+			name: "assigned claude model",
+			script: `export const meta = { name: 'bad-assigned-model', description: 'bad model' }
+const opts = { label: "review" }
+opts.model = "opus"
+await agent("review", opts)
+`,
+			wantErr: "must not hard-code Claude model names",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := lib.SaveGenerated(context.Background(), tt.script, ""); err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected %q error, got %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestLibrarySaveGeneratedAllowsClaudeReferencesOutsideModelFields(t *testing.T) {
+	root := t.TempDir()
+	lib := NewLibraryWithRoots([]LibraryRoot{{Path: root, Source: "project", Rank: 0}})
+	script := `export const meta = {
+  name: 'compare-claude-code',
+  description: 'Compare Whale with Claude Code, Sonnet, Opus, and Haiku workflows.'
+}
+await agent("Review prompts that mention Claude Code and Sonnet migration notes.", { label: "review" })
+const instructions = "Do not copy this prompt text into options: model: \"claude-sonnet-4-20250514\""
+return { summary: "Claude references in ordinary text are allowed", instructions }
+`
+	if _, err := lib.SaveGenerated(context.Background(), script, ""); err != nil {
+		t.Fatalf("SaveGenerated: %v", err)
+	}
+}
+
+func TestLibrarySaveGeneratedAllowsStructuredReferencesOutsideOptionFields(t *testing.T) {
+	root := t.TempDir()
+	lib := NewLibraryWithRoots([]LibraryRoot{{Path: root, Source: "project", Rank: 0}})
+	script := `export const meta = {
+  name: 'structured-reference',
+  description: 'Mention structured option migration.'
+}
+// This workflow explains why old generated code used structured: and why schema is preferred.
+await agent("Explain the old structured: option in prose only.", { label: "review", schema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } } })
+return { ok: true }
+`
+	if _, err := lib.SaveGenerated(context.Background(), script, ""); err != nil {
+		t.Fatalf("SaveGenerated: %v", err)
+	}
+}
+
 func TestLibraryIncludesBuiltinDeepResearch(t *testing.T) {
 	lib := NewLibraryWithRoots(nil)
 	defs, err := lib.List(context.Background())

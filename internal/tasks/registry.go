@@ -7,13 +7,14 @@ import (
 	"strings"
 
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/mcp"
 )
 
 const (
 	CapabilityWorkspaceRead  = "workspace.read"
 	CapabilityWorkspaceWrite = "workspace.write"
 	CapabilityShellRead      = "shell.read"
-	CapabilityShellWrite     = "shell.write"
+	CapabilityShellRun       = "shell.run"
 	CapabilityWebSearch      = "web.search"
 	CapabilityWebFetch       = "web.fetch"
 	CapabilityMCPRead        = "mcp.read"
@@ -23,7 +24,7 @@ var knownSubagentCapabilities = map[string]bool{
 	CapabilityWorkspaceRead:  true,
 	CapabilityWorkspaceWrite: true,
 	CapabilityShellRead:      true,
-	CapabilityShellWrite:     true,
+	CapabilityShellRun:       true,
 	CapabilityWebSearch:      true,
 	CapabilityWebFetch:       true,
 	CapabilityMCPRead:        true,
@@ -46,66 +47,75 @@ func BuildReadOnlyRegistry(parent *core.ToolRegistry) (*core.ToolRegistry, error
 }
 
 func BuildCapabilityRegistry(parent *core.ToolRegistry, capabilities []string) (*core.ToolRegistry, error) {
-	tools, err := CapabilityTools(parent, capabilities)
+	tools, err := CapabilityToolsForPermission(parent, capabilities, AgentPermissionReadOnly)
 	if err != nil {
 		return nil, err
 	}
 	return core.NewToolRegistryChecked(tools)
 }
 
-func filterAgentTools(registry *core.ToolRegistry, def AgentDefinition) (*core.ToolRegistry, error) {
-	if registry == nil {
-		return registry, nil
+func BuildAgentRegistry(parent *core.ToolRegistry, capabilities []string, permissionMode string) (*core.ToolRegistry, error) {
+	return BuildAgentRegistryForMCPServers(parent, capabilities, permissionMode, nil)
+}
+
+func BuildAgentRegistryForMCPServers(parent *core.ToolRegistry, capabilities []string, permissionMode string, mcpServers []string, disallowed ...[]string) (*core.ToolRegistry, error) {
+	tools, err := CapabilityToolsForPermission(parent, capabilities, permissionMode, firstStringSlice(disallowed))
+	if err != nil {
+		return nil, err
 	}
-	allow := stringSet(def.AllowedTools)
-	deny := stringSet(def.DisallowedTools)
-	if len(allow) == 0 && len(deny) == 0 {
-		return registry, nil
-	}
-	var tools []core.Tool
-	for _, tool := range registry.Tools() {
-		if tool == nil {
-			continue
-		}
-		name := tool.Name()
-		if len(allow) > 0 && !allow[name] {
-			continue
-		}
-		if deny[name] {
-			continue
-		}
-		tools = append(tools, tool)
-	}
+	tools = filterMCPServerTools(tools, mcpServers)
 	return core.NewToolRegistryChecked(tools)
 }
 
 func AllowedCapabilityToolNames(parent *core.ToolRegistry, capabilities []string) ([]string, error) {
-	tools, err := CapabilityTools(parent, capabilities)
+	tools, err := CapabilityToolsForPermission(parent, capabilities, AgentPermissionReadOnly)
 	if err != nil {
 		return nil, err
 	}
+	return toolNames(tools), nil
+}
+
+func AllowedAgentToolNames(parent *core.ToolRegistry, capabilities []string, permissionMode string) ([]string, error) {
+	return AllowedAgentToolNamesForMCPServers(parent, capabilities, permissionMode, nil)
+}
+
+func AllowedAgentToolNamesForMCPServers(parent *core.ToolRegistry, capabilities []string, permissionMode string, mcpServers []string, disallowed ...[]string) ([]string, error) {
+	tools, err := CapabilityToolsForPermission(parent, capabilities, permissionMode, firstStringSlice(disallowed))
+	if err != nil {
+		return nil, err
+	}
+	tools = filterMCPServerTools(tools, mcpServers)
+	return toolNames(tools), nil
+}
+
+func toolNames(tools []core.Tool) []string {
 	out := make([]string, 0, len(tools))
 	for _, tool := range tools {
 		if tool != nil {
 			out = append(out, tool.Name())
 		}
 	}
-	return out, nil
+	return out
 }
 
 func ReadOnlyTools(parent *core.ToolRegistry) []core.Tool {
-	tools, _ := CapabilityTools(parent, nil)
+	tools, _ := CapabilityToolsForPermission(parent, nil, AgentPermissionReadOnly)
 	return tools
 }
 
 func CapabilityTools(parent *core.ToolRegistry, capabilities []string) ([]core.Tool, error) {
+	return CapabilityToolsForPermission(parent, capabilities, AgentPermissionReadOnly)
+}
+
+func CapabilityToolsForPermission(parent *core.ToolRegistry, capabilities []string, permissionMode string, disallowed ...[]string) ([]core.Tool, error) {
 	if parent == nil {
 		return nil, nil
 	}
-	capSet, err := normalizeCapabilities(capabilities)
+	selection, err := normalizeToolSelection(parent, capabilities, firstStringSlice(disallowed))
 	if err != nil {
 		return nil, err
 	}
+	readonly := strings.TrimSpace(permissionMode) == "" || strings.TrimSpace(permissionMode) == AgentPermissionReadOnly
 	out := []core.Tool{}
 	for _, tool := range parent.Tools() {
 		if tool == nil {
@@ -115,61 +125,97 @@ func CapabilityTools(parent *core.ToolRegistry, capabilities []string) ([]core.T
 		if excludedChildTools[spec.Name] {
 			continue
 		}
-		mutatingAllowed := allowsMutatingTool(spec, capSet)
-		if !mutatingAllowed && !spec.ReadOnly && spec.ReadOnlyCheck == nil {
+		if !toolSelectionAllowed(spec, selection) {
 			continue
 		}
-		if !capabilityAllowed(spec, capSet) {
-			continue
-		}
-		if mutatingAllowed {
-			out = append(out, tool)
-		} else {
+		if readonly {
+			if !spec.ReadOnly && spec.ReadOnlyCheck == nil {
+				continue
+			}
 			out = append(out, guardedReadOnlyTool{tool: tool, spec: spec})
-		}
-	}
-	return out, nil
-}
-
-func KnownCapabilityNames() []string {
-	out := make([]string, 0, len(knownSubagentCapabilities))
-	for cap := range knownSubagentCapabilities {
-		out = append(out, cap)
-	}
-	slices.Sort(out)
-	return out
-}
-
-func normalizeCapabilities(capabilities []string) (map[string]bool, error) {
-	if capabilities == nil {
-		capabilities = []string{CapabilityWorkspaceRead}
-	}
-	out := map[string]bool{}
-	for _, cap := range capabilities {
-		cap = strings.TrimSpace(cap)
-		if cap == "" {
 			continue
 		}
-		if !knownSubagentCapabilities[cap] {
-			return nil, fmt.Errorf("unknown subagent capability %q; allowed: %s", cap, strings.Join(KnownCapabilityNames(), ", "))
+		if shouldGuardCapabilityReadOnly(spec, selection) {
+			out = append(out, guardedReadOnlyTool{tool: tool, spec: spec})
+			continue
 		}
-		out[cap] = true
+		out = append(out, tool)
 	}
 	return out, nil
 }
 
-func capabilityAllowed(spec core.ToolSpec, capSet map[string]bool) bool {
-	if len(capSet) == 0 {
+type toolSelection struct {
+	capabilities map[string]bool
+	tools        map[string]bool
+	denyCaps     map[string]bool
+	denyTools    map[string]bool
+}
+
+func normalizeToolSelection(parent *core.ToolRegistry, selectors, disallowed []string) (toolSelection, error) {
+	if selectors == nil {
+		selectors = []string{CapabilityWorkspaceRead}
+	}
+	out := toolSelection{
+		capabilities: map[string]bool{},
+		tools:        map[string]bool{},
+		denyCaps:     map[string]bool{},
+		denyTools:    map[string]bool{},
+	}
+	if err := addToolSelectors(parent, selectors, out.capabilities, out.tools, "tools"); err != nil {
+		return toolSelection{}, err
+	}
+	if err := addToolSelectors(parent, disallowed, out.denyCaps, out.denyTools, "disallowedTools"); err != nil {
+		return toolSelection{}, err
+	}
+	return out, nil
+}
+
+func addToolSelectors(parent *core.ToolRegistry, selectors []string, caps, tools map[string]bool, field string) error {
+	for _, selector := range selectors {
+		selector = strings.TrimSpace(selector)
+		if selector == "" {
+			continue
+		}
+		if knownSubagentCapabilities[selector] {
+			caps[selector] = true
+			continue
+		}
+		if parent == nil || parent.Get(selector) == nil {
+			known := []string{CapabilityWorkspaceRead, CapabilityWorkspaceWrite, CapabilityShellRead, CapabilityShellRun, CapabilityWebSearch, CapabilityWebFetch, CapabilityMCPRead}
+			return fmt.Errorf("unknown agent %s selector %q; use a known capability (%s) or an available tool name", field, selector, strings.Join(known, ", "))
+		}
+		if excludedChildTools[selector] {
+			return fmt.Errorf("agent %s selector %q is not allowed for child agents", field, selector)
+		}
+		tools[selector] = true
+	}
+	return nil
+}
+
+func toolSelectionAllowed(spec core.ToolSpec, selection toolSelection) bool {
+	if selection.denyTools[spec.Name] || specHasDeniedCapability(spec, selection.denyCaps) {
 		return false
 	}
+	if len(selection.capabilities) == 0 && len(selection.tools) == 0 {
+		return false
+	}
+	if selection.tools[spec.Name] {
+		return true
+	}
+	if spec.Name == "shell_run" && selection.capabilities[CapabilityShellRead] && spec.ReadOnlyCheck != nil {
+		return true
+	}
+	if (spec.Name == "shell_wait" || spec.Name == "shell_cancel") && (selection.capabilities[CapabilityShellRead] || selection.capabilities[CapabilityShellRun]) {
+		return true
+	}
 	for _, cap := range spec.Capabilities {
-		if capSet[strings.TrimSpace(cap)] {
+		if selection.capabilities[strings.TrimSpace(cap)] {
 			return true
 		}
 	}
 	// Compatibility for read-only MCP tools that predate the explicit mcp.read
 	// capability marker.
-	if capSet[CapabilityMCPRead] && spec.ReadOnly && slices.ContainsFunc(spec.Capabilities, func(cap string) bool {
+	if selection.capabilities[CapabilityMCPRead] && spec.ReadOnly && slices.ContainsFunc(spec.Capabilities, func(cap string) bool {
 		return strings.HasPrefix(cap, "mcp_") || strings.HasPrefix(cap, "mcp.")
 	}) {
 		return true
@@ -177,22 +223,56 @@ func capabilityAllowed(spec core.ToolSpec, capSet map[string]bool) bool {
 	return false
 }
 
-func allowsMutatingTool(spec core.ToolSpec, capSet map[string]bool) bool {
-	if capSet[CapabilityWorkspaceWrite] && slices.Contains(spec.Capabilities, CapabilityWorkspaceWrite) {
-		return true
+func specHasDeniedCapability(spec core.ToolSpec, denyCaps map[string]bool) bool {
+	for _, cap := range spec.Capabilities {
+		if denyCaps[strings.TrimSpace(cap)] {
+			return true
+		}
 	}
-	if capSet[CapabilityShellWrite] && slices.Contains(spec.Capabilities, CapabilityShellWrite) {
+	if denyCaps[CapabilityMCPRead] && spec.ReadOnly && slices.ContainsFunc(spec.Capabilities, func(cap string) bool {
+		return strings.HasPrefix(cap, "mcp_") || strings.HasPrefix(cap, "mcp.")
+	}) {
 		return true
 	}
 	return false
 }
 
-func stringSet(values []string) map[string]bool {
-	out := map[string]bool{}
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			out[trimmed] = true
+func shouldGuardCapabilityReadOnly(spec core.ToolSpec, selection toolSelection) bool {
+	return spec.Name == "shell_run" && selection.capabilities[CapabilityShellRead] && !selection.capabilities[CapabilityShellRun] && !selection.tools[spec.Name]
+}
+
+func firstStringSlice(values [][]string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	return values[0]
+}
+
+func filterMCPServerTools(tools []core.Tool, mcpServers []string) []core.Tool {
+	if len(mcpServers) == 0 {
+		return tools
+	}
+	allowed := map[string]bool{}
+	for _, server := range mcpServers {
+		server = strings.TrimSpace(server)
+		if server == "" {
+			continue
 		}
+		allowed[mcp.NormalizeServerNameForToolName(server)] = true
+	}
+	if len(allowed) == 0 {
+		return tools
+	}
+	out := make([]core.Tool, 0, len(tools))
+	for _, tool := range tools {
+		if tool == nil {
+			continue
+		}
+		server, _, ok := mcp.ParseQualifiedToolName(tool.Name())
+		if ok && !allowed[server] {
+			continue
+		}
+		out = append(out, tool)
 	}
 	return out
 }

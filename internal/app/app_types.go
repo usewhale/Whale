@@ -100,6 +100,7 @@ type App struct {
 	msgStore              *store.JSONLStore
 	toolRegistry          *core.ToolRegistry
 	baseToolRegistry      *core.ToolRegistry
+	subagentToolRegistry  *core.ToolRegistry
 	toolset               *tools.Toolset
 	baseTools             []core.Tool
 	taskTools             []core.Tool

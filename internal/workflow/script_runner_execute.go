@@ -194,7 +194,7 @@ if (typeof URL === 'undefined') {
 			WorkflowName:    exec.workflowName,
 			Phase:           spec.Phase,
 			Label:           spec.Label,
-			Role:            spec.Role,
+			Role:            firstNonEmpty(spec.Role, spec.Agent.Name),
 			CallKey:         call.resumeCallKey,
 			SpecHash:        call.resumeSpecHash,
 			Sequence:        call.resumeSequence,

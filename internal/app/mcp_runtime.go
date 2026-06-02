@@ -41,8 +41,14 @@ func (a *App) refreshMCPTools() error {
 	if err := a.baseToolRegistry.ReplaceTools(base); err != nil {
 		return err
 	}
-	full := append([]core.Tool{}, base...)
-	full = append(full, a.pluginTools...)
+	subagent := append([]core.Tool{}, base...)
+	subagent = append(subagent, a.pluginTools...)
+	if a.subagentToolRegistry != nil {
+		if err := a.subagentToolRegistry.ReplaceTools(subagent); err != nil {
+			return err
+		}
+	}
+	full := append([]core.Tool{}, subagent...)
 	full = append(full, a.taskTools...)
 	full = append(full, a.workflowTools...)
 	return a.toolRegistry.ReplaceTools(full)

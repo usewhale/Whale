@@ -185,6 +185,12 @@ func (p RulePolicy) requestsFor(spec core.ToolSpec, call core.ToolCall) []permis
 	}
 	requests = append(requests, permissionRequestsFromEffects(p.effectPlanFor(spec, call))...)
 	switch spec.Name {
+	case "spawn_subagent":
+		if core.IsReadOnlyToolCall(spec, call) {
+			requests[0].Pattern = "readonly"
+		} else {
+			requests[0].Pattern = "mutating"
+		}
 	case "grep", "search_files":
 		// These read-scoped tools carry a search regex/glob in their non-path
 		// fields. Evaluate read rules against the directory being searched,
@@ -210,7 +216,7 @@ func (p RulePolicy) requestsFor(spec core.ToolSpec, call core.ToolCall) []permis
 // unmapped custom or plugin tool name.
 func isMappedPermissionKind(kind string) bool {
 	switch kind {
-	case "read", "edit", "shell", "memory", "task", "mcp":
+	case "read", "edit", "shell", "memory", "task", "mcp", "web_search", "web_fetch":
 		return true
 	default:
 		return false

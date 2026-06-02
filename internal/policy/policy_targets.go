@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/usewhale/whale/internal/core"
@@ -21,6 +22,12 @@ func permissionKind(toolName string) string {
 		return "memory"
 	case "spawn_subagent":
 		return "task"
+	case "cancel_subagent":
+		return "mutating_tool"
+	case "web_search":
+		return "web_search"
+	case "fetch", "web_fetch":
+		return "web_fetch"
 	default:
 		if strings.HasPrefix(toolName, "mcp__") {
 			return "mcp"
@@ -49,6 +56,11 @@ func permissionTarget(call core.ToolCall) string {
 	}
 	var body map[string]any
 	if err := json.Unmarshal([]byte(call.Input), &body); err == nil {
+		if call.Name == "fetch" || call.Name == "web_fetch" {
+			if host := webFetchPermissionHost(body); host != "" {
+				return "host:" + host
+			}
+		}
 		for _, key := range []string{"file_path", "path", "pattern", "url", "query", "name"} {
 			if v, ok := body[key].(string); ok && strings.TrimSpace(v) != "" {
 				return strings.TrimSpace(v)
@@ -64,6 +76,19 @@ func permissionTarget(call core.ToolCall) string {
 		return strings.TrimSpace(call.Input)
 	}
 	return "*"
+}
+func webFetchPermissionHost(body map[string]any) string {
+	raw, _ := body["url"].(string)
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || strings.TrimSpace(u.Hostname()) == "" {
+		return ""
+	}
+	host := strings.ToLower(strings.TrimSpace(u.Hostname()))
+	return strings.TrimPrefix(host, "www.")
 }
 func hashString(v string) string {
 	sum := sha256.Sum256([]byte(v))

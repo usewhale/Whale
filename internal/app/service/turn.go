@@ -149,6 +149,9 @@ func (s *Service) runTurnWith(start func(context.Context) (<-chan agent.AgentEve
 		case agent.AgentEventTypeToolResult:
 			if ev.Result != nil {
 				deltas.flushReliable()
+				if s.maybeEmitWorkflowLaunchConfirmationToolResult(ev.Result) {
+					continue
+				}
 				s.maybeWatchWorkflowToolResult(ev.Result)
 				s.emit(Event{Kind: EventToolResult, ToolCallID: ev.Result.ToolCallID, ToolName: ev.Result.Name, Text: ev.Result.Content, Metadata: ev.Result.Metadata})
 			}

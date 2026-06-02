@@ -48,6 +48,20 @@ func TestApprovalKeysKeepShellCommandScope(t *testing.T) {
 	}
 }
 
+func TestApprovalKeysUseWebCommandAndHostScopes(t *testing.T) {
+	search := core.ToolCall{Name: "web_search", Input: `{"query":"Node.js permission model"}`}
+	if got, want := ApprovalKeys(search), []string{"web_search:*"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("web search keys = %v, want %v", got, want)
+	}
+	fetch := core.ToolCall{Name: "fetch", Input: `{"url":"https://www.nodejs.org/api/permissions.html","prompt":"extract"}`}
+	if got, want := ApprovalKeys(fetch), []string{"web_fetch:host:nodejs.org"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("fetch keys = %v, want %v", got, want)
+	}
+	if got := ApprovalSessionScope(fetch); got != "nodejs.org" {
+		t.Fatalf("fetch session scope = %q", got)
+	}
+}
+
 func TestApprovalKeysKeepExactScopeForUnclassifiedShellCommand(t *testing.T) {
 	call := core.ToolCall{ID: "shell-1", Name: "shell_run", Input: `{"command":"npm install lodash"}`}
 

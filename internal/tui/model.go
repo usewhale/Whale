@@ -42,6 +42,7 @@ const (
 	modeHelp
 	modeWorktreeExit
 	modeWorkflowLaunch
+	modeWorkflowRawScript
 	modeWorkflowPanel
 )
 
@@ -52,6 +53,14 @@ const (
 	pageLogs
 	pageDiff
 )
+
+type approvalPromptState struct {
+	toolCallID string
+	toolName   string
+	reason     string
+	metadata   map[string]any
+	selected   int
+}
 
 type model struct {
 	runtime                Runtime
@@ -108,16 +117,12 @@ type model struct {
 	cwd                    string
 	cwdPath                string
 	gitBranch              string
-	approval               struct {
-		toolCallID string
-		toolName   string
-		reason     string
-		metadata   map[string]any
-		selected   int
-	}
-	workflowLaunch struct {
-		result   *protocol.LocalResult
-		selected int
+	approval               approvalPromptState
+	approvalQueue          []approvalPromptState
+	workflowLaunch         struct {
+		result    *protocol.LocalResult
+		selected  int
+		rawScroll int
 	}
 	workflowPanel  workflowPanelState
 	resumeMenu     bool

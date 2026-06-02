@@ -179,7 +179,7 @@ func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 			return CommandExecution{Handled: true}, err
 		}
 		if !opts.Confirmed && !trusted {
-			res, err := a.buildWorkflowLaunchConfirmation(workflow.BuiltinDeepResearchName, opts)
+			res, err := a.buildWorkflowLaunchConfirmation(workflow.BuiltinDeepResearchName, opts.Question, opts.ResumeFromRunID)
 			if err != nil {
 				return CommandExecution{Handled: true}, err
 			}

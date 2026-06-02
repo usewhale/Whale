@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -181,6 +182,12 @@ func ApprovalKeys(call core.ToolCall) []string {
 	case "shell_run":
 		if v, _ := body["command"].(string); strings.TrimSpace(v) != "" {
 			return ShellApprovalKeys(v)
+		}
+	case "web_search":
+		return []string{"web_search:*"}
+	case "fetch", "web_fetch":
+		if host := approvalURLHost(body); host != "" {
+			return []string{"web_fetch:host:" + host}
 		}
 	case "remember":
 		scope, _ := body["scope"].(string)
@@ -363,6 +370,10 @@ func ApprovalKind(call core.ToolCall) string {
 		return "file_diff_review"
 	case "shell_run":
 		return "shell"
+	case "web_search":
+		return "web_search"
+	case "fetch", "web_fetch":
+		return "web_fetch"
 	default:
 		return "tool"
 	}
@@ -377,6 +388,15 @@ func ApprovalSessionScope(call core.ToolCall) string {
 				return decision.SessionScope
 			}
 			return "this shell command"
+		}
+		if call.Name == "web_search" {
+			return "Web Search commands"
+		}
+		if call.Name == "fetch" || call.Name == "web_fetch" {
+			if host := approvalCallURLHost(call); host != "" {
+				return host
+			}
+			return "this host"
 		}
 		return "this tool request"
 	case 1:
@@ -492,6 +512,14 @@ func ApprovalSummary(call core.ToolCall) string {
 			return fmt.Sprintf("apply_patch: %s", formatApprovalFiles(files))
 		}
 		return "apply_patch: patch payload"
+	case "web_search":
+		if v := approvalSearchQuery(body); v != "" {
+			return fmt.Sprintf("web_search: %s", v)
+		}
+	case "fetch", "web_fetch":
+		if v, _ := body["url"].(string); strings.TrimSpace(v) != "" {
+			return fmt.Sprintf("%s: %s", call.Name, strings.TrimSpace(v))
+		}
 	}
 	return call.Name
 }
@@ -521,6 +549,49 @@ func ApprovalScope(call core.ToolCall) string {
 		return "shell"
 	}
 	return "workspace"
+}
+
+func approvalSearchQuery(body map[string]any) string {
+	for _, key := range []string{"query", "q"} {
+		if v, _ := body[key].(string); strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	if raw, ok := body["search_query"].([]any); ok {
+		for _, item := range raw {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			for _, key := range []string{"q", "query"} {
+				if v, _ := m[key].(string); strings.TrimSpace(v) != "" {
+					return strings.TrimSpace(v)
+				}
+			}
+		}
+	}
+	return ""
+}
+
+func approvalCallURLHost(call core.ToolCall) string {
+	var body map[string]any
+	if err := json.Unmarshal([]byte(call.Input), &body); err != nil {
+		return ""
+	}
+	return approvalURLHost(body)
+}
+
+func approvalURLHost(body map[string]any) string {
+	raw, _ := body["url"].(string)
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || strings.TrimSpace(u.Hostname()) == "" {
+		return ""
+	}
+	return strings.ToLower(strings.TrimPrefix(u.Hostname(), "www."))
 }
 
 func approvalFileKey(path string) string {

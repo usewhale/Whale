@@ -71,6 +71,7 @@ Ask mode is active.
 	systemBlocks = append(systemBlocks, renderRuntimeBlock(a.workspaceRoot, runtimeWorktreeContext{WorktreeRoot: a.worktreeRoot, OriginalWorkspace: a.originalWorkspace}, shell.DescribeRuntime()))
 	systemBlocks = append(systemBlocks, "For questions about the current date or time, use an available read-only shell/time command to verify the answer instead of guessing from model memory.")
 	systemBlocks = append(systemBlocks, renderToolSpecsBlock(tools.Specs()))
+	systemBlocks = append(systemBlocks, renderWorkflowAuthoringBlock())
 	if strings.TrimSpace(a.workspaceRoot) != "" {
 		discovered := skills.Filter(skills.Discover(skills.DefaultRoots(a.workspaceRoot)), a.disabledSkills)
 		discovered = append(discovered, skills.Filter(a.extraSkills, a.disabledSkills)...)
@@ -88,6 +89,27 @@ Ask mode is active.
 		}
 	}
 	return systemBlocks
+}
+
+func renderWorkflowAuthoringBlock() string {
+	return strings.TrimSpace(`
+Workflow authoring.
+
+- When the user asks to create, generate, or write a new workflow, use the workflow tool with both script and saveAs. Do not answer by only describing a workflow.
+- Do not inspect existing workflow directories, load skills, or pre-read repository files before creating the workflow unless the user explicitly asks for a preflight. Put needed inspection work inside the generated workflow's agent prompts.
+- The generated script must be a Claude Code-compatible raw JavaScript workflow: first statement export const meta as a pure literal with name, description, optional whenToUse, and optional phases.
+- If meta.phases is present, it must be an array of objects such as { title: "Review", detail: "one reviewer per dimension" }, not strings and not { name, description } objects.
+- Use only portable workflow globals in generated scripts: args, budget, phase(), log(), agent(), workflow(), parallel(), and pipeline(). Do not use Whale-only APIs or host APIs such as require, import, fs, fetch, process, Date.now, Math.random, or new Date.
+- Workflow agent leaves are capability-defined workers. Use agent definitions and opts.tools/opts.disallowedTools to state required capabilities. Supported capabilities include workspace.read, workspace.write, shell.read, shell.run, web.search, web.fetch, and mcp.read; shell.run or workspace.write require an explicit non-read-only permissionMode. If a needed capability is not exposed by the runtime, make the workflow report the missing evidence instead of assuming shell, edit, or host access.
+- Call phase("Name") only as a statement. Do not write phase("Name", async () => ...); phase() is not a callback wrapper and returns nothing.
+- Await async workflow primitives before reading their results: const result = await agent(...), await parallel(...), await pipeline(...), or await workflow(...). Inside parallel(), thunks may return agent(...).
+- Call agent(prompt, { label, phase, schema, max_tool_calls?, agent?, tools?, disallowedTools?, effort?, permissionMode?, maxTurns? }). The first argument is the complete prompt string. Do not use opts.system, opts.prompt, opts.structured, or a first-argument label.
+- Do not set opts.model in generated workflows unless the user explicitly asks for a provider-supported model. By default, omit model so Whale uses the current configured model. Never hard-code Claude model names such as sonnet, opus, or haiku for Whale-generated workflows.
+- saveAs must exactly match meta.name and must be kebab-case. The tool saves the script to the project .whale/workflows directory before launching it.
+- Use standard JSON Schema for structured output. If a property uses enum, include an explicit type such as type: "string" so the script can run in both Whale and Claude Code.
+- End generated workflows by returning a final JSON-serializable result, usually the synthesis/report object.
+- For create-workflow launches, tell the user the workflow was saved and that /workflows opens the workflow panel. Do not mention /workflows with run ids or hidden subcommands.
+`)
 }
 
 func renderOutputStyleBlock(viewMode string) string {
@@ -159,11 +181,11 @@ Delegation policy.
 - Do not use parallel_reason or spawn_subagent just because they are available.
 - Use a single agent for direct questions, known-file reads, small localized edits, tightly coupled work, or tasks where the next step depends on the current result.
 - Use parallel_reason for 2-8 independent, cheap, model-only subqueries that need comparison, classification, critique, or brainstorming and do not need tools, files, shell, or web access.
-- Use spawn_subagent for one bounded exploration, research, review, or plugin-provided role. Prefer read-only capabilities; writable or shell capabilities are policy-gated and should only be used when the role and task require them.
+- Use spawn_subagent for one bounded capability-defined exploration, research, or review task. Child agents receive only the tools listed in their agent definition/capabilities.
 - Do not ask the user to name these tools. Infer the right path from natural language such as "parallelize this" or "send a reviewer/explorer".
 - If the user explicitly asks for a subagent, delegated reviewer, or explorer, spawn the appropriate subagent directly. Do not load a skill first unless the user explicitly names one.
 - The parent agent owns the final answer. Summarize and reconcile child results before responding to the user.
-- Do not delegate writable or high-risk work unless the runtime explicitly provides a policy-gated writable or shell capability for that subagent role.
+- Do not delegate writable or high-risk work unless the runtime explicitly provides an isolated writable worker capability.
 `)
 }
 

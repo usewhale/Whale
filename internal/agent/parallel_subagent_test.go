@@ -310,6 +310,9 @@ func newCancelObservedSpawnSubagentTool(n int) *mockSpawnSubagentTool {
 }
 
 func (t *mockSpawnSubagentTool) Name() string { return "spawn_subagent" }
+func (t *mockSpawnSubagentTool) ReadOnly() bool {
+	return true
+}
 func (t *mockSpawnSubagentTool) Run(ctx context.Context, call ToolCall) (ToolResult, error) {
 	return t.RunWithProgress(ctx, call, nil)
 }

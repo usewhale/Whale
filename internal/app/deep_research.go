@@ -94,14 +94,9 @@ func (a *App) startDeepResearchWorkflow(opts deepResearchOptions) (*LocalResult,
 	if strings.TrimSpace(out.Error) != "" {
 		return nil, errors.New(out.Error)
 	}
-	lines := []string{
-		"Workflow(dynamic workflow: " + def.Name + ")",
-		"/workflows to view dynamic workflow runs",
-		"",
-		"The " + def.Name + " workflow is now running in the background.",
-	}
+	lines := workflowLaunchNoticeLines(def, opts.ResumeFromRunID)
 	if len(def.Phases) > 0 {
-		lines = append(lines, "It will:", "")
+		lines = append(lines, "", "It will:")
 		for i, phase := range def.Phases {
 			title := strings.TrimSpace(phase.Title)
 			if title == "" {
@@ -113,17 +108,7 @@ func (a *App) startDeepResearchWorkflow(opts deepResearchOptions) (*LocalResult,
 			}
 			lines = append(lines, line)
 		}
-	} else if description := strings.TrimSpace(def.Description); description != "" {
-		lines = append(lines, description)
 	}
-	if opts.ResumeFromRunID != "" {
-		lines = append(lines, "", "Resumed from: "+opts.ResumeFromRunID)
-	}
-	lines = append(lines,
-		"",
-		"You can watch live progress with /workflows. I'll report back when it completes.",
-		"",
-		"✻ Waiting for 1 dynamic workflow to finish")
 	fields := []LocalResultField{
 		{Label: "Status", Value: out.Status, Tone: "info"},
 		{Label: "Run", Value: string(out.RunID)},
@@ -155,17 +140,174 @@ func (a *App) StartWorkflowFromConfirmation(name, args, resumeFromRunID string, 
 			Remember:        trust,
 		})
 	default:
-		return nil, fmt.Errorf("unknown workflow %q", name)
+		return a.startNamedWorkflowFromConfirmation(name, args, resumeFromRunID, trust)
 	}
 }
 
-func (a *App) buildWorkflowLaunchConfirmation(name string, opts deepResearchOptions) (*LocalResult, error) {
-	def, err := a.workflowDefinition(name)
+func (a *App) StartGeneratedWorkflowFromConfirmation(script, saveAs, args, resumeFromRunID string, trust bool) (*LocalResult, error) {
+	if a == nil || a.workflowRunner == nil || a.workflowRunner.Library == nil {
+		return nil, errors.New("workflow runner is unavailable")
+	}
+	saved, err := a.workflowRunner.Library.SaveGenerated(context.Background(), script, saveAs)
 	if err != nil {
 		return nil, err
 	}
+	return a.startNamedWorkflowFromConfirmation(saved.Definition.Name, args, resumeFromRunID, trust)
+}
+
+func (a *App) StartScriptPathWorkflowFromConfirmation(scriptPath, args, resumeFromRunID string) (*LocalResult, error) {
+	if a == nil || a.workflowRunner == nil {
+		return nil, errors.New("workflow runner is unavailable")
+	}
+	resolved, err := workflow.ResolveScriptPath(context.Background(), scriptPath)
+	if err != nil {
+		return nil, err
+	}
+	def := resolved.Definition
+	out, err := a.workflowRunner.StartWorkflow(context.Background(), a.sessionID, workflow.WorkflowInput{
+		ScriptPath:      strings.TrimSpace(scriptPath),
+		Args:            workflowConfirmationArgs(args),
+		ResumeFromRunID: strings.TrimSpace(resumeFromRunID),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(out.Error) != "" {
+		return nil, errors.New(out.Error)
+	}
+	lines := workflowLaunchNoticeLines(def, resumeFromRunID)
+	fields := workflowRunFields(out, def, args, resumeFromRunID)
+	return &LocalResult{
+		Kind:      "workflow-run",
+		Title:     def.Name + " is running in background",
+		Fields:    fields,
+		PlainText: strings.Join(lines, "\n"),
+	}, nil
+}
+
+func (a *App) startNamedWorkflowFromConfirmation(name, args, resumeFromRunID string, trust bool) (*LocalResult, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, errors.New("workflow name is required")
+	}
+	if a == nil || a.workflowRunner == nil {
+		return nil, errors.New("workflow runner is unavailable")
+	}
+	resolved, err := a.workflowResolvedScript(name)
+	if err != nil {
+		return nil, err
+	}
+	def := resolved.Definition
 	if def.Name == "" {
 		def = workflow.Definition{Name: name, Description: "Dynamic workflow"}
+	}
+	if trust {
+		if _, err := a.trustWorkflow(def.Name); err != nil {
+			return nil, err
+		}
+	}
+	out, err := a.workflowRunner.StartWorkflow(context.Background(), a.sessionID, workflow.WorkflowInput{
+		Name:            def.Name,
+		Args:            workflowConfirmationArgs(args),
+		ResumeFromRunID: strings.TrimSpace(resumeFromRunID),
+	})
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(out.Error) != "" {
+		return nil, errors.New(out.Error)
+	}
+	lines := workflowLaunchNoticeLines(def, resumeFromRunID)
+	fields := workflowRunFields(out, def, args, resumeFromRunID)
+	return &LocalResult{
+		Kind:      "workflow-run",
+		Title:     def.Name + " is running in background",
+		Fields:    fields,
+		PlainText: strings.Join(lines, "\n"),
+	}, nil
+}
+
+func workflowLaunchNoticeLines(def workflow.Definition, resumeFromRunID string) []string {
+	name := strings.TrimSpace(def.Name)
+	if name == "" {
+		name = "workflow"
+	}
+	lines := []string{fmt.Sprintf("Started the %s workflow in the background.", name)}
+	if description := strings.TrimSpace(def.Description); description != "" {
+		lines = append(lines, "", description)
+	}
+	if resumeFromRunID = strings.TrimSpace(resumeFromRunID); resumeFromRunID != "" {
+		lines = append(lines, "", "Resumed from: "+resumeFromRunID)
+	}
+	lines = append(lines, "", "Open /workflows to watch progress and inspect details. I'll report back here when it completes.")
+	return lines
+}
+
+func workflowRunFields(out workflow.WorkflowOutput, def workflow.Definition, args, resumeFromRunID string) []LocalResultField {
+	fields := []LocalResultField{
+		{Label: "Status", Value: out.Status, Tone: "info"},
+		{Label: "Run", Value: string(out.RunID)},
+		{Label: "Workflow", Value: def.Name},
+	}
+	if argText := strings.TrimSpace(args); argText != "" {
+		fields = append(fields, LocalResultField{Label: "Args", Value: argText})
+	}
+	if resumeFromRunID != "" {
+		fields = append(fields, LocalResultField{Label: "Resume", Value: resumeFromRunID})
+	}
+	if out.ScriptPath != "" {
+		fields = append(fields, LocalResultField{Label: "Script", Value: out.ScriptPath})
+	}
+	return fields
+}
+
+func workflowConfirmationArgs(args string) any {
+	args = strings.TrimSpace(args)
+	if args == "" {
+		return nil
+	}
+	var decoded any
+	if json.Unmarshal([]byte(args), &decoded) == nil {
+		return decoded
+	}
+	return args
+}
+
+func (a *App) BuildWorkflowLaunchConfirmation(name, args, resumeFromRunID string) (*LocalResult, error) {
+	return a.buildWorkflowLaunchConfirmation(name, strings.TrimSpace(args), strings.TrimSpace(resumeFromRunID))
+}
+
+func (a *App) BuildGeneratedWorkflowLaunchConfirmation(script, saveAs, args, resumeFromRunID string) (*LocalResult, error) {
+	if a == nil || a.workflowRunner == nil || a.workflowRunner.Library == nil {
+		return nil, errors.New("workflow runner is unavailable")
+	}
+	resolved, err := a.workflowRunner.Library.PrepareGenerated(context.Background(), script, saveAs)
+	if err != nil {
+		return nil, err
+	}
+	return a.buildWorkflowLaunchConfirmationForResolved(resolved, strings.TrimSpace(args), strings.TrimSpace(resumeFromRunID), script, saveAs, "")
+}
+
+func (a *App) BuildScriptPathWorkflowLaunchConfirmation(scriptPath, args, resumeFromRunID string) (*LocalResult, error) {
+	resolved, err := workflow.ResolveScriptPath(context.Background(), scriptPath)
+	if err != nil {
+		return nil, err
+	}
+	return a.buildWorkflowLaunchConfirmationForResolved(resolved, strings.TrimSpace(args), strings.TrimSpace(resumeFromRunID), "", "", strings.TrimSpace(scriptPath))
+}
+
+func (a *App) buildWorkflowLaunchConfirmation(name, args, resumeFromRunID string) (*LocalResult, error) {
+	resolved, err := a.workflowResolvedScript(name)
+	if err != nil {
+		return nil, err
+	}
+	return a.buildWorkflowLaunchConfirmationForResolved(resolved, args, resumeFromRunID, "", "", "")
+}
+
+func (a *App) buildWorkflowLaunchConfirmationForResolved(resolved workflow.ResolvedScript, args, resumeFromRunID, pendingScript, pendingSaveAs, pendingScriptPath string) (*LocalResult, error) {
+	def := resolved.Definition
+	if def.Name == "" {
+		def = workflow.Definition{Name: strings.TrimSpace(pendingSaveAs), Description: "Dynamic workflow"}
 	}
 	lines := []string{
 		"Workflow(dynamic workflow: " + def.Name + ")",
@@ -185,7 +327,9 @@ func (a *App) buildWorkflowLaunchConfirmation(name string, opts deepResearchOpti
 			lines = append(lines, line)
 		}
 	}
-	lines = append(lines, "", "args: "+opts.Question)
+	if args != "" {
+		lines = append(lines, "", "args: "+args)
+	}
 	if note := strings.TrimSpace(def.RiskNote); note != "" {
 		lines = append(lines, "", note)
 	}
@@ -194,10 +338,12 @@ func (a *App) buildWorkflowLaunchConfirmation(name string, opts deepResearchOpti
 
 	fields := []LocalResultField{
 		{Label: "Workflow", Value: def.Name, Tone: "info"},
-		{Label: "Args", Value: opts.Question},
 	}
-	if opts.ResumeFromRunID != "" {
-		fields = append(fields, LocalResultField{Label: "Resume", Value: opts.ResumeFromRunID})
+	if args != "" {
+		fields = append(fields, LocalResultField{Label: "Args", Value: args})
+	}
+	if resumeFromRunID != "" {
+		fields = append(fields, LocalResultField{Label: "Resume", Value: resumeFromRunID})
 	}
 	if def.EstimatedAgents > 0 {
 		fields = append(fields, LocalResultField{Label: "Estimated agents", Value: strconv.Itoa(def.EstimatedAgents), Tone: "warn"})
@@ -208,18 +354,28 @@ func (a *App) buildWorkflowLaunchConfirmation(name string, opts deepResearchOpti
 	if note := strings.TrimSpace(def.RiskNote); note != "" {
 		fields = append(fields, LocalResultField{Label: "Risk", Value: note, Tone: "warn"})
 	}
+	runAction := LocalResultAction{Label: "Yes, run it", WorkflowName: def.Name, WorkflowArgs: args, WorkflowResume: resumeFromRunID, WorkflowScript: pendingScript, WorkflowSaveAs: pendingSaveAs, WorkflowScriptPath: pendingScriptPath}
+	trustAction := LocalResultAction{Label: "Yes, and don't ask again for " + def.Name + " in this workspace", WorkflowName: def.Name, WorkflowArgs: args, WorkflowResume: resumeFromRunID, WorkflowTrust: true, WorkflowScript: pendingScript, WorkflowSaveAs: pendingSaveAs, WorkflowScriptPath: pendingScriptPath}
+	actions := []LocalResultAction{runAction}
+	if strings.TrimSpace(pendingScriptPath) == "" {
+		actions = append(actions, trustAction)
+	}
+	actions = append(actions,
+		LocalResultAction{Label: "View raw script", Description: "Open a read-only raw script view"},
+		LocalResultAction{Label: "No", Description: "Cancel this workflow launch", Tone: "muted"},
+	)
 	return &LocalResult{
-		Kind:     "workflow-launch",
-		Title:    "Run a dynamic workflow?",
-		Fields:   fields,
-		Sections: []LocalResultSection{workflowPhaseSection(def.Phases)},
-		Actions: []LocalResultAction{
-			{Label: "Yes, run it", WorkflowName: def.Name, WorkflowArgs: opts.Question, WorkflowResume: opts.ResumeFromRunID},
-			{Label: "Yes, and don't ask again for " + def.Name + " in this workspace", WorkflowName: def.Name, WorkflowArgs: opts.Question, WorkflowResume: opts.ResumeFromRunID, WorkflowTrust: true},
-			{Label: "No", Description: "Cancel this workflow launch", Tone: "muted"},
-		},
+		Kind:      "workflow-launch",
+		Title:     "Run a dynamic workflow?",
+		Fields:    fields,
+		Sections:  workflowLaunchSections(def, resolved.Script),
+		Actions:   actions,
 		PlainText: strings.Join(lines, "\n"),
 	}, nil
+}
+
+func (a *App) WorkflowTrusted(name string) (bool, error) {
+	return a.workflowTrusted(name)
 }
 
 func (a *App) workflowDefinition(name string) (workflow.Definition, error) {
@@ -329,6 +485,34 @@ func workflowPhaseSection(phases []workflow.ScriptPhase) LocalResultSection {
 		return LocalResultSection{}
 	}
 	return LocalResultSection{Title: "Phases", Fields: fields}
+}
+
+func workflowLaunchSections(def workflow.Definition, script string) []LocalResultSection {
+	sections := []LocalResultSection{}
+	if phaseSection := workflowPhaseSection(def.Phases); len(phaseSection.Fields) > 0 {
+		sections = append(sections, phaseSection)
+	}
+	if rawSection := workflowRawScriptSection(def, script); len(rawSection.Fields) > 0 {
+		sections = append(sections, rawSection)
+	}
+	return sections
+}
+
+func workflowRawScriptSection(def workflow.Definition, script string) LocalResultSection {
+	fields := []LocalResultField{}
+	if source := strings.TrimSpace(def.Source); source != "" {
+		fields = append(fields, LocalResultField{Label: "Source", Value: source})
+	}
+	if path := strings.TrimSpace(def.Path); path != "" {
+		fields = append(fields, LocalResultField{Label: "Path", Value: path})
+	}
+	if strings.TrimSpace(script) != "" {
+		fields = append(fields, LocalResultField{Label: "Script", Value: script})
+	}
+	if len(fields) == 0 {
+		return LocalResultSection{}
+	}
+	return LocalResultSection{Title: "Raw script", Fields: fields}
 }
 
 func workflowResultDisplayFields(result any) []LocalResultField {

@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/usewhale/whale/internal/llm"
+	"github.com/usewhale/whale/internal/tasks"
 )
 
 type workflowResumeState struct {
@@ -85,21 +86,33 @@ func (s *workflowResumeState) lookup(callKey, specHash string) (workflowResumeEn
 
 func workflowSpecHash(spec AgentTaskSpec) (string, error) {
 	canonical := struct {
-		Prompt       string         `json:"prompt"`
-		Role         string         `json:"role,omitempty"`
-		Model        string         `json:"model,omitempty"`
-		MaxToolIters int            `json:"max_tool_iters,omitempty"`
-		MaxToolCalls int            `json:"max_tool_calls,omitempty"`
-		Capabilities []string       `json:"capabilities,omitempty"`
-		OutputSchema map[string]any `json:"output_schema,omitempty"`
+		Prompt         string                `json:"prompt"`
+		Role           string                `json:"role,omitempty"`
+		Agent          tasks.AgentDefinition `json:"agent,omitempty"`
+		Model          string                `json:"model,omitempty"`
+		Effort         string                `json:"effort,omitempty"`
+		PermissionMode string                `json:"permissionMode,omitempty"`
+		MaxTurns       int                   `json:"maxTurns,omitempty"`
+		Background     bool                  `json:"background,omitempty"`
+		MCPServers     []string              `json:"mcpServers,omitempty"`
+		MaxToolIters   int                   `json:"max_tool_iters,omitempty"`
+		MaxToolCalls   int                   `json:"max_tool_calls,omitempty"`
+		Capabilities   []string              `json:"capabilities,omitempty"`
+		OutputSchema   map[string]any        `json:"output_schema,omitempty"`
 	}{
-		Prompt:       strings.TrimSpace(spec.Prompt),
-		Role:         strings.TrimSpace(spec.Role),
-		Model:        strings.TrimSpace(spec.Model),
-		MaxToolIters: spec.MaxToolIters,
-		MaxToolCalls: spec.MaxToolCalls,
-		Capabilities: cloneStringSlice(spec.Capabilities),
-		OutputSchema: cloneMap(spec.OutputSchema),
+		Prompt:         strings.TrimSpace(spec.Prompt),
+		Role:           strings.TrimSpace(spec.Role),
+		Agent:          workflowAgentDefinition(spec),
+		Model:          strings.TrimSpace(spec.Model),
+		Effort:         strings.TrimSpace(spec.Effort),
+		PermissionMode: strings.TrimSpace(spec.PermissionMode),
+		MaxTurns:       spec.MaxTurns,
+		Background:     spec.Background,
+		MCPServers:     cloneStringSlice(spec.MCPServers),
+		MaxToolIters:   spec.MaxToolIters,
+		MaxToolCalls:   spec.MaxToolCalls,
+		Capabilities:   cloneStringSlice(spec.Capabilities),
+		OutputSchema:   cloneMap(spec.OutputSchema),
 	}
 	b, err := json.Marshal(canonical)
 	if err != nil {

@@ -1895,6 +1895,132 @@ await agent('research', {
 	}
 }
 
+func TestScriptRunnerPassesAgentDefinitionOptions(t *testing.T) {
+	store := &memoryRunEventStore{}
+	spawner := &fakeAgentSpawner{}
+	manager := NewRunManager(store, NewTaskScheduler(store, spawner))
+	runner := NewScriptRunner(t.TempDir(), manager)
+	out, err := runner.StartWorkflow(context.Background(), "parent", WorkflowInput{Script: `export const meta = { name: 'agent-def', description: 'agent def' }
+await agent('review local changes', {
+  label: 'review:bugs',
+  agent: {
+    name: 'reviewer',
+    description: 'Review local changes',
+    whenToUse: 'Use when reviewing local diffs',
+    tools: ['workspace.read', 'web.fetch'],
+    disallowedTools: ['web.fetch'],
+    model: 'deepseek-v4-flash',
+    effort: 'high',
+    permissionMode: 'read_only',
+    maxTurns: 12,
+    skills: ['agent-skill'],
+    mcpServers: ['docs'],
+    hooks: { PreToolUse: [{ matcher: 'read_file', hooks: [{ type: 'command', command: 'echo nested' }] }] },
+    initialPrompt: 'Inspect context before acting.',
+    memory: 'project',
+    background: true,
+    isolation: 'none',
+  },
+  model: 'deepseek-v4-pro',
+  effort: 'medium',
+  permissionMode: 'ask',
+  maxTurns: 4,
+  skills: ['override-skill'],
+  mcpServers: ['github'],
+  hooks: { SubagentStart: [{ command: 'echo top-level' }] },
+  initialPrompt: 'Override context first.',
+  memory: 'local',
+  background: false,
+  isolation: 'worktree',
+})
+`})
+	if err != nil {
+		t.Fatalf("StartWorkflow: %v", err)
+	}
+	waitRunStatus(t, store, out.RunID, RunStatusCompleted)
+	spawner.mu.Lock()
+	requests := append([]tasks.SpawnSubagentRequest(nil), spawner.requests...)
+	spawner.mu.Unlock()
+	if len(requests) != 1 {
+		t.Fatalf("requests = %+v", requests)
+	}
+	req := requests[0]
+	if req.Agent.Name != "reviewer" || req.Agent.Description != "Review local changes" || req.Agent.WhenToUse == "" {
+		t.Fatalf("agent definition = %+v", req.Agent)
+	}
+	if req.Model != "deepseek-v4-pro" || req.Agent.Model != "deepseek-v4-pro" {
+		t.Fatalf("model not propagated: req=%q agent=%q", req.Model, req.Agent.Model)
+	}
+	if req.Agent.Effort != "medium" || req.Agent.PermissionMode != "ask" || req.Agent.MaxTurns != 4 || !req.Agent.Background || req.Agent.Isolation != "worktree" {
+		t.Fatalf("runtime fields = %+v", req.Agent)
+	}
+	if strings.Join(req.Agent.Skills, ",") != "override-skill" || req.Agent.InitialPrompt != "Override context first." || req.Agent.Memory != "local" {
+		t.Fatalf("agent context fields = %+v", req.Agent)
+	}
+	if strings.Join(req.Agent.MCPServers, ",") != "github" {
+		t.Fatalf("mcp servers = %+v", req.Agent.MCPServers)
+	}
+	if req.Agent.Hooks == nil {
+		t.Fatalf("hooks not propagated: %+v", req.Agent)
+	}
+	hooks, err := tasks.ResolveAgentHooks(req.Agent)
+	if err != nil {
+		t.Fatalf("resolve hooks: %v", err)
+	}
+	if len(hooks) != 1 || hooks[0].Event != "SubagentStart" || hooks[0].Command != "echo top-level" {
+		t.Fatalf("hooks = %+v", hooks)
+	}
+	if strings.Join(req.Capabilities, ",") != "workspace.read,web.fetch" {
+		t.Fatalf("capabilities = %#v", req.Capabilities)
+	}
+	events, err := store.List(context.Background(), out.RunID)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var sawStartedData bool
+	for _, ev := range events {
+		if ev.Type != EventTaskStarted {
+			continue
+		}
+		if got, _ := ev.Data["max_turns"].(int); got != 4 {
+			t.Fatalf("max_turns event data = %v", ev.Data["max_turns"])
+		}
+		if got, _ := ev.Data["background"].(bool); got != true {
+			t.Fatalf("background event data = %v", ev.Data["background"])
+		}
+		sawStartedData = true
+	}
+	if !sawStartedData {
+		t.Fatalf("missing task_started event: %+v", events)
+	}
+}
+
+func TestWorkflowSpecHashIncludesMaxTurnsAndBackground(t *testing.T) {
+	base := AgentTaskSpec{Prompt: "inspect", Role: "review"}
+	same, err := workflowSpecHash(base)
+	if err != nil {
+		t.Fatalf("workflowSpecHash: %v", err)
+	}
+	withMaxTurns := base
+	withMaxTurns.MaxTurns = 2
+	maxTurnsHash, err := workflowSpecHash(withMaxTurns)
+	if err != nil {
+		t.Fatalf("workflowSpecHash maxTurns: %v", err)
+	}
+	if same == maxTurnsHash {
+		t.Fatal("maxTurns did not affect workflow spec hash")
+	}
+	withBackground := base
+	withBackground.Background = true
+	backgroundHash, err := workflowSpecHash(withBackground)
+	if err != nil {
+		t.Fatalf("workflowSpecHash background: %v", err)
+	}
+	if same == backgroundHash {
+		t.Fatal("background did not affect workflow spec hash")
+	}
+}
+
 func TestScriptRunnerRecordsReturnedResult(t *testing.T) {
 	store := &memoryRunEventStore{}
 	manager := NewRunManager(store, NewTaskScheduler(store, &fakeAgentSpawner{}))

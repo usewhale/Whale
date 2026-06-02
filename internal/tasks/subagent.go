@@ -2,6 +2,8 @@ package tasks
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,30 +17,30 @@ import (
 	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/store"
+	"github.com/usewhale/whale/internal/worktree"
 )
 
 type SpawnSubagentRequest struct {
-	Task              string         `json:"task"`
-	Role              string         `json:"role,omitempty"`
-	Model             string         `json:"model,omitempty"`
-	Effort            string         `json:"effort,omitempty"`
-	MaxToolIters      int            `json:"max_tool_iters,omitempty"`
-	MaxToolCalls      int            `json:"max_tool_calls,omitempty"`
-	Capabilities      []string       `json:"capabilities,omitempty"`
-	OutputSchema      map[string]any `json:"output_schema,omitempty"`
-	ParentToolCallID  string         `json:"-"`
-	WorkflowRunID     string         `json:"-"`
-	WorkflowName      string         `json:"-"`
-	WorkflowPhase     string         `json:"-"`
-	WorkflowTaskID    string         `json:"-"`
-	WorkflowTaskLabel string         `json:"-"`
+	Task              string          `json:"task"`
+	Role              string          `json:"role,omitempty"`
+	Agent             AgentDefinition `json:"agent,omitempty"`
+	Model             string          `json:"model,omitempty"`
+	MaxToolIters      int             `json:"max_tool_iters,omitempty"`
+	MaxToolCalls      int             `json:"max_tool_calls,omitempty"`
+	Capabilities      []string        `json:"capabilities,omitempty"`
+	OutputSchema      map[string]any  `json:"output_schema,omitempty"`
+	ParentToolCallID  string          `json:"-"`
+	WorkflowRunID     string          `json:"-"`
+	WorkflowName      string          `json:"-"`
+	WorkflowPhase     string          `json:"-"`
+	WorkflowTaskID    string          `json:"-"`
+	WorkflowTaskLabel string          `json:"-"`
 }
 
 type SpawnSubagentResponse struct {
 	SessionID         string    `json:"session_id"`
 	Role              string    `json:"role"`
 	Model             string    `json:"model"`
-	Effort            string    `json:"effort,omitempty"`
 	PermissionProfile string    `json:"permission_profile"`
 	Status            string    `json:"status"`
 	Summary           string    `json:"summary"`
@@ -46,6 +48,7 @@ type SpawnSubagentResponse struct {
 	Error             string    `json:"error,omitempty"`
 	Truncated         bool      `json:"truncated"`
 	ToolCalls         []string  `json:"tool_calls,omitempty"`
+	Capabilities      []string  `json:"capabilities,omitempty"`
 	Usage             llm.Usage `json:"usage,omitempty"`
 	DurationMS        int64     `json:"duration_ms"`
 	CompletedAt       string    `json:"completed_at"`
@@ -83,7 +86,94 @@ func (r *Runner) SpawnSubagent(ctx context.Context, req SpawnSubagentRequest) (S
 }
 
 func (r *Runner) AllowedSubagentTools(req SpawnSubagentRequest) ([]string, error) {
-	return AllowedCapabilityToolNames(r.parentTools, req.Capabilities)
+	cfg, err := ResolveAgentRuntimeConfigWithLibrary(req, RunnerDefaults{
+		Model:        r.defaultModel,
+		MaxToolIters: r.defaultMaxToolIters,
+	}, r.agentDefinitions)
+	if err != nil {
+		return nil, err
+	}
+	return AllowedAgentToolNamesForMCPServers(r.parentTools, cfg.Capabilities, cfg.PermissionProfile, cfg.MCPServers, cfg.DisallowedTools)
+}
+
+func (r *Runner) SubagentStatus(sessionID string) (session.SessionMeta, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return session.SessionMeta{}, errors.New("session_id is required")
+	}
+	if strings.TrimSpace(r.sessionsDir) == "" {
+		return session.SessionMeta{}, errors.New("sessions directory is not configured")
+	}
+	return session.LoadSessionMeta(r.sessionsDir, sessionID)
+}
+
+func (r *Runner) CancelBackgroundSubagent(sessionID string) (session.SessionMeta, bool, error) {
+	if strings.TrimSpace(sessionID) == "" {
+		return session.SessionMeta{}, false, errors.New("session_id is required")
+	}
+	r.backgroundMu.Lock()
+	cancel := r.backgroundCancels[strings.TrimSpace(sessionID)]
+	if cancel != nil {
+		delete(r.backgroundCancels, strings.TrimSpace(sessionID))
+	}
+	r.backgroundMu.Unlock()
+	if cancel == nil {
+		meta, err := r.SubagentStatus(sessionID)
+		return meta, false, err
+	}
+	cancel()
+	meta, err := session.PatchSessionMeta(r.sessionsDir, sessionID, session.SessionMetaPatch{
+		Status:      "cancelling",
+		CompletedAt: time.Now().UTC(),
+	})
+	return meta, true, err
+}
+
+func childSessionMode(permissionMode string) session.Mode {
+	switch strings.TrimSpace(permissionMode) {
+	case AgentPermissionAsk, AgentPermissionAuto, AgentPermissionTrusted:
+		return session.ModeAgent
+	default:
+		return session.ModeAsk
+	}
+}
+
+func childToolPolicy(parent policy.ToolPolicy, permissionMode, workspaceRoot string, capabilities []string) policy.ToolPolicy {
+	base := childBasePolicy(parent, workspaceRoot)
+	switch strings.TrimSpace(permissionMode) {
+	case AgentPermissionAsk:
+		return childToolApprovalPolicy{Base: base, Capabilities: capabilities}
+	default:
+		return base
+	}
+}
+
+func childBasePolicy(parent policy.ToolPolicy, workspaceRoot string) policy.ToolPolicy {
+	if parent == nil {
+		return policy.RulePolicy{Default: policy.PermissionAllow, Rules: policy.DefaultRules(), WorkspaceRoot: workspaceRoot}
+	}
+	switch typed := parent.(type) {
+	case policy.RulePolicy:
+		typed.WorkspaceRoot = workspaceRoot
+		typed.WorktreeRoot = ""
+		return typed
+	case *policy.RulePolicy:
+		if typed == nil {
+			return policy.RulePolicy{Default: policy.PermissionAllow, Rules: policy.DefaultRules(), WorkspaceRoot: workspaceRoot}
+		}
+		clone := *typed
+		clone.WorkspaceRoot = workspaceRoot
+		clone.WorktreeRoot = ""
+		return clone
+	default:
+		return parent
+	}
+}
+
+func childFallbackApproval(permissionMode string) policy.ApprovalDecision {
+	if strings.TrimSpace(permissionMode) == AgentPermissionAsk {
+		return policy.ApprovalDeny
+	}
+	return policy.ApprovalAllow
 }
 
 func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagentRequest, progress func(core.ToolProgress)) (SpawnSubagentResponse, error) {
@@ -91,54 +181,37 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 	if task == "" {
 		return SpawnSubagentResponse{}, errors.New("task is required")
 	}
-	if r.providerFactory == nil {
+	if r.providerFactory == nil && r.providerFactoryWithOptions == nil {
 		return SpawnSubagentResponse{}, errors.New("provider factory is not configured")
 	}
-	role := strings.TrimSpace(req.Role)
-	if role == "" {
-		role = "explore"
-	}
-	registry := r.agentRegistry
-	if registry == nil {
-		registry = NewAgentRegistry(nil)
-	}
-	agentDef, ok := registry.Resolve(role)
-	if !ok {
-		return SpawnSubagentResponse{}, fmt.Errorf("unsupported subagent role %q", role)
-	}
-	model := strings.TrimSpace(req.Model)
-	if model == "" {
-		model = agentDef.Model
-	}
-	if model == "" {
-		model = r.defaultModel
-	}
-	effort := strings.TrimSpace(req.Effort)
-	if effort == "" {
-		effort = agentDef.Effort
-	}
-	if effort == "" {
-		effort = r.defaultEffort
-	}
-	maxToolIters := req.MaxToolIters
-	if maxToolIters <= 0 {
-		maxToolIters = agentDef.MaxToolIters
-	}
-	if maxToolIters <= 0 {
-		maxToolIters = r.defaultMaxToolIters
-	}
-	maxToolCalls := req.MaxToolCalls
-	if maxToolCalls <= 0 {
-		maxToolCalls = agentDef.MaxToolCalls
-	}
-	if req.Capabilities == nil && len(agentDef.Capabilities) > 0 {
-		req.Capabilities = append([]string(nil), agentDef.Capabilities...)
-	}
-	childTools, err := BuildCapabilityRegistry(r.parentTools, req.Capabilities)
+	cfg, err := ResolveAgentRuntimeConfigWithLibrary(req, RunnerDefaults{
+		Model:        r.defaultModel,
+		MaxToolIters: r.defaultMaxToolIters,
+	}, r.agentDefinitions)
 	if err != nil {
 		return SpawnSubagentResponse{}, err
 	}
-	childTools, err = filterAgentTools(childTools, agentDef)
+	role := cfg.Definition.Name
+	model := cfg.Model
+	maxToolIters := cfg.MaxToolIters
+	maxToolCalls := cfg.MaxToolCalls
+	sessionID := r.childSessionID(req.ParentToolCallID)
+	workspace, err := r.resolveSubagentWorkspace(cfg, sessionID, role)
+	if err != nil {
+		return SpawnSubagentResponse{}, err
+	}
+	parentTools := r.parentTools
+	if workspace.WorktreeRoot != "" {
+		workspaceTools, err := r.toolsForWorkspace(workspace)
+		if err != nil {
+			return SpawnSubagentResponse{}, err
+		}
+		parentTools, err = mergeWorkspaceAndParentTools(parentTools, workspaceTools)
+		if err != nil {
+			return SpawnSubagentResponse{}, err
+		}
+	}
+	childTools, err := BuildAgentRegistryForMCPServers(parentTools, cfg.Capabilities, cfg.PermissionProfile, cfg.MCPServers, cfg.DisallowedTools)
 	if err != nil {
 		return SpawnSubagentResponse{}, err
 	}
@@ -152,11 +225,10 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 			return SpawnSubagentResponse{}, err
 		}
 	}
-	provider, err := r.providerFactory(model, effort, 0)
+	provider, err := r.newProvider(model, 0, cfg.Effort)
 	if err != nil {
 		return SpawnSubagentResponse{}, err
 	}
-	sessionID := r.childSessionID(req.ParentToolCallID)
 	childStore := r.messageStore
 	if childStore == nil {
 		childStore = store.NewInMemoryStore()
@@ -164,265 +236,291 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 	start := time.Now()
 	parentSessionID := r.currentParentSessionID()
 	r.saveSubagentMeta(sessionID, session.SessionMeta{
-		Kind:            "subagent",
-		ParentSessionID: parentSessionID,
-		Role:            role,
-		Model:           model,
-		Task:            task,
-		Status:          "running",
-		Workspace:       r.workspaceRoot,
-		StartedAt:       start.UTC(),
+		Kind:               "subagent",
+		ParentSessionID:    parentSessionID,
+		Role:               role,
+		Model:              model,
+		Task:               task,
+		Status:             "running",
+		Workspace:          workspace.WorkspaceRoot,
+		WorktreeName:       workspace.WorktreeName,
+		WorktreePath:       workspace.WorktreeRoot,
+		WorktreeBranch:     workspace.WorktreeBranch,
+		OriginalWorkspace:  workspace.OriginalWorkspace,
+		OriginalBranch:     workspace.OriginalBranch,
+		OriginalHeadCommit: workspace.OriginalHeadCommit,
+		StartedAt:          start.UTC(),
 	})
-	extraBlocks := []string{strings.TrimSpace(agentDef.SystemPrompt)}
-	if extraBlocks[0] == "" {
-		extraBlocks[0] = strings.TrimSpace(builtinExplorePrompt)
-	}
+	extraBlocks := []string{agentDefinitionSystemBlock(cfg.Definition, cfg.Capabilities)}
 	if workflowBlock := workflowContextSystemBlock(req); workflowBlock != "" {
 		extraBlocks = append(extraBlocks, workflowBlock)
 	}
 	if schemaBlock := outputSchemaSystemBlock(req.OutputSchema); schemaBlock != "" {
 		extraBlocks = append(extraBlocks, schemaBlock)
 	}
-	basePolicy := r.parentPolicy
-	if basePolicy == nil {
-		basePolicy = policy.RulePolicy{Default: policy.PermissionAllow, Rules: policy.DefaultRules(), WorkspaceRoot: r.workspaceRoot}
+	if skillBlock := preloadedSkillsSystemBlock(workspace.WorkspaceRoot, cfg.Skills, r.skillsDisabled, r.extraSkills); skillBlock != "" {
+		extraBlocks = append(extraBlocks, skillBlock)
 	}
-	childPolicy := childToolApprovalPolicy{Base: basePolicy, Capabilities: append([]string(nil), req.Capabilities...)}
-	childMode := session.ModeAsk
-	if capabilitiesAllowMutatingTools(req.Capabilities) {
-		childMode = session.ModeAgent
+	if memoryBlock := agentMemorySystemBlock(workspace.WorkspaceRoot, role, cfg.Memory); memoryBlock != "" {
+		extraBlocks = append(extraBlocks, memoryBlock)
+	}
+	prompt := task
+	if cfg.InitialPrompt != "" {
+		prompt = cfg.InitialPrompt + "\n\n" + task
+	}
+	promptHookExecutor := r.hookModelExecutor(model, cfg.Effort, "prompt")
+	agentHookExecutor := r.hookModelExecutor(model, cfg.Effort, "agent")
+	if hookBlock, err := runSubagentStartHooks(ctx, cfg.Hooks, sessionID, workspace.WorkspaceRoot, role, model, cfg.PermissionProfile, prompt, promptHookExecutor, agentHookExecutor); err != nil {
+		r.patchSubagentMeta(sessionID, session.SessionMeta{Status: "failed", Error: err.Error(), CompletedAt: time.Now().UTC()})
+		return SpawnSubagentResponse{}, &SpawnSubagentError{SessionID: sessionID, Code: "subagent_start_hook_blocked", Message: err.Error(), Err: err}
+	} else if hookBlock != "" {
+		extraBlocks = append(extraBlocks, hookBlock)
 	}
 	newChild := func(registry *core.ToolRegistry, maxIters int) *agent.Agent {
 		return agent.NewAgentWithRegistry(provider, childStore, registry,
-			agent.WithSessionMode(childMode),
-			agent.WithToolPolicy(childPolicy),
+			agent.WithSessionMode(childSessionMode(cfg.PermissionProfile)),
+			agent.WithToolPolicy(childToolPolicy(r.parentPolicy, cfg.PermissionProfile, workspace.WorkspaceRoot, cfg.Capabilities)),
+			// The child registry is capability-restricted, but policy decisions
+			// still flow through the parent approval path so workspace/user
+			// permission rules remain effective inside subagents.
 			agent.WithApprovalFunc(func(approvalReq policy.ApprovalRequest) policy.ApprovalDecision {
 				if r.approvalFunc == nil {
-					if capabilitiesNeedApproval(req.Capabilities) {
-						return policy.ApprovalDeny
-					}
-					return policy.ApprovalAllow
+					return childFallbackApproval(cfg.PermissionProfile)
 				}
 				approvalReq.Metadata = workflowApprovalMetadata(approvalReq.Metadata, req)
 				return r.approvalFunc(approvalReq)
 			}),
 			agent.WithSessionsDir(r.sessionsDir),
 			agent.WithAutoCompact(r.autoCompact, r.autoCompactThreshold, r.contextWindowForModel(model)),
-			agent.WithProjectMemory(r.memoryEnabled, r.memoryMaxChars, r.memoryFileOrder, r.workspaceRoot),
+			agent.WithProjectMemory(r.memoryEnabled, r.memoryMaxChars, r.memoryFileOrder, workspace.WorkspaceRoot),
+			agent.WithWorktreeContext(workspace.WorktreeRoot, workspace.OriginalWorkspace),
+			agent.WithDisabledSkills(r.skillsDisabled),
+			agent.WithExtraSkills(r.extraSkills),
 			agent.WithUsageLogPath(r.usageLogPath),
+			agent.WithHooks(cfg.Hooks, workspace.WorkspaceRoot),
+			agent.WithHookExecutors(promptHookExecutor, agentHookExecutor),
 			agent.WithMaxToolIters(maxIters),
 			agent.WithMaxToolCalls(maxToolCalls),
+			agent.WithMaxTurns(cfg.MaxTurns),
 			agent.WithExtraSystemBlocks(extraBlocks...),
 		)
 	}
-	child := newChild(childTools, maxToolIters)
-	events, err := child.RunStream(ctx, sessionID, task)
-	if err != nil {
-		r.patchSubagentMeta(sessionID, session.SessionMeta{Status: "failed", Error: err.Error(), CompletedAt: time.Now().UTC()})
-		return SpawnSubagentResponse{}, &SpawnSubagentError{SessionID: sessionID, Code: "spawn_subagent_failed", Message: err.Error(), Err: err}
-	}
-	var summary string
-	var usage llm.Usage
-	var truncated bool
-	var toolCalls []string
-	childActions := map[string]childToolAction{}
-	progressCount := 0
-	var progressMessages []core.SubagentStep
-	fail := func(code string, err error) (SpawnSubagentResponse, error) {
-		msg := "subagent failed"
-		if code == "cancelled" {
-			msg = "turn cancelled"
-		}
+	runChild := func(runCtx context.Context, progress func(core.ToolProgress)) (SpawnSubagentResponse, error) {
+		child := newChild(childTools, maxToolIters)
+		events, err := child.RunStream(runCtx, sessionID, prompt)
 		if err != nil {
-			msg = err.Error()
+			r.patchSubagentMeta(sessionID, session.SessionMeta{Status: "failed", Error: err.Error(), CompletedAt: time.Now().UTC()})
+			return SpawnSubagentResponse{}, &SpawnSubagentError{SessionID: sessionID, Code: "spawn_subagent_failed", Message: err.Error(), Err: err}
 		}
-		r.patchSubagentMeta(sessionID, session.SessionMeta{Status: code, Error: msg, CompletedAt: time.Now().UTC()})
-		return SpawnSubagentResponse{}, &SpawnSubagentError{SessionID: sessionID, Code: code, Message: msg, Err: err}
-	}
-	drainEvents := func(events <-chan agent.AgentEvent) (string, error) {
-		for ev := range events {
-			switch ev.Type {
-			case agent.AgentEventTypeToolCall:
-				if ev.ToolCall != nil {
-					internalStructuredOutput := ev.ToolCall.Name == structuredOutputToolName
-					if !internalStructuredOutput {
-						toolCalls = append(toolCalls, ev.ToolCall.Name)
-					}
-					action := summarizeChildToolCall(*ev.ToolCall)
-					childActions[ev.ToolCall.ID] = action
-					if internalStructuredOutput {
-						continue
-					}
-					progressCount++
-					step := core.SubagentStep{
-						ToolName: ev.ToolCall.Name,
-						Status:   "running",
-						Summary:  action.Running,
-					}
-					progressMessages = append(progressMessages, step)
-					emitSubagentProgressWithSteps(progress, role, model, progressCount, "running", action.Running, progressMessages, map[string]any{
-						"child_session_id": sessionID,
-						"child_tool":       ev.ToolCall.Name,
-					})
-				}
-			case agent.AgentEventTypeToolResult:
-				if ev.Result != nil {
-					if ev.Result.Name == structuredOutputToolName {
-						continue
-					}
-					progressCount++
-					status := "running"
-					if ev.Result.IsError {
-						status = "tool_failed"
-					}
-					action := childActions[ev.Result.ToolCallID]
-					summary := summarizeChildToolResult(*ev.Result, action)
-					step := core.SubagentStep{
-						ToolName: ev.Result.Name,
-						Status:   status,
-						Summary:  summary,
-					}
-					progressMessages = append(progressMessages, step)
-					emitSubagentProgressWithSteps(progress, role, model, progressCount, status, summary, progressMessages, map[string]any{
-						"child_session_id": sessionID,
-						"child_tool":       ev.Result.Name,
-					})
-				}
-			case agent.AgentEventTypeDone:
-				if ev.Message != nil {
-					summary, truncated = truncateString(strings.TrimSpace(ev.Message.Text), r.summaryMaxChars)
-					progressSummary := summary
-					if progressSummary == "" {
-						progressSummary = "child completed"
-					}
-					progressMessages = append(progressMessages, core.SubagentStep{
-						ToolName: "subagent",
-						Status:   "completed",
-						Summary:  progressSummary,
-					})
-					emitSubagentProgressWithSteps(progress, role, model, progressCount, "completed", progressSummary, progressMessages, map[string]any{
-						"child_session_id": sessionID,
-						"truncated":        truncated,
-					})
-				}
-			case agent.AgentEventTypeUsage:
-				if ev.Usage != nil {
-					usage = addUsage(usage, ev.Usage.Usage)
-				}
-			case agent.AgentEventTypeError:
-				if ev.Err != nil {
-					return "failed", ev.Err
-				}
-				return "failed", errors.New("subagent failed")
-			case agent.AgentEventTypeTurnCancelled:
-				return "cancelled", ctx.Err()
-			default:
-				if status, eventSummary, metadata, ok := summarizeChildAgentEvent(ev); ok {
-					progressCount++
-					if metadata == nil {
-						metadata = map[string]any{}
-					}
-					metadata["child_session_id"] = sessionID
-					step := core.SubagentStep{
-						ToolName: "agent_event",
-						Status:   status,
-						Summary:  eventSummary,
-					}
-					progressMessages = append(progressMessages, step)
-					emitSubagentProgressWithSteps(progress, role, model, progressCount, status, eventSummary, progressMessages, metadata)
-				}
-				// Other child events are intentionally drained here. The parent only
-				// exposes stable subagent lifecycle/progress updates, not every
-				// internal child-agent stream event.
+		var summary string
+		var usage llm.Usage
+		var truncated bool
+		var toolCalls []string
+		childActions := map[string]childToolAction{}
+		progressCount := 0
+		var progressMessages []core.SubagentStep
+		fail := func(code string, err error) (SpawnSubagentResponse, error) {
+			msg := "subagent failed"
+			if code == "cancelled" {
+				msg = "turn cancelled"
 			}
-			if err := ctx.Err(); err != nil {
-				return "cancelled", err
-			}
-		}
-		return "", nil
-	}
-	if code, err := drainEvents(events); err != nil {
-		return fail(code, err)
-	}
-	if len(req.OutputSchema) > 0 {
-		if _, ok := structuredCapture.get(); !ok {
-			repairPrompt := structuredOutputRepairPrompt(structuredCapture.error(), summary)
-			repairTools, err := core.NewToolRegistryChecked([]core.Tool{structuredOutputTool{schema: req.OutputSchema, capture: structuredCapture}})
 			if err != nil {
-				return fail("structured_output_missing", err)
+				msg = err.Error()
 			}
-			repairChild := newChild(repairTools, 1)
-			repairEvents, err := repairChild.RunStreamWithOptions(ctx, sessionID, repairPrompt, true)
-			if err != nil {
-				return fail("structured_output_missing", err)
+			r.patchSubagentMeta(sessionID, session.SessionMeta{Status: code, Error: msg, CompletedAt: time.Now().UTC()})
+			return SpawnSubagentResponse{}, &SpawnSubagentError{SessionID: sessionID, Code: code, Message: msg, Err: err}
+		}
+		drainEvents := func(events <-chan agent.AgentEvent) (string, error) {
+			for ev := range events {
+				switch ev.Type {
+				case agent.AgentEventTypeToolCall:
+					if ev.ToolCall != nil {
+						internalStructuredOutput := ev.ToolCall.Name == structuredOutputToolName
+						if !internalStructuredOutput {
+							toolCalls = append(toolCalls, ev.ToolCall.Name)
+						}
+						action := summarizeChildToolCall(*ev.ToolCall)
+						childActions[ev.ToolCall.ID] = action
+						if internalStructuredOutput {
+							continue
+						}
+						progressCount++
+						step := core.SubagentStep{
+							ToolName: ev.ToolCall.Name,
+							Status:   "running",
+							Summary:  action.Running,
+						}
+						progressMessages = append(progressMessages, step)
+						emitSubagentProgressWithSteps(progress, role, model, progressCount, "running", action.Running, progressMessages, map[string]any{
+							"child_session_id": sessionID,
+							"child_tool":       ev.ToolCall.Name,
+						})
+					}
+				case agent.AgentEventTypeToolResult:
+					if ev.Result != nil {
+						if ev.Result.Name == structuredOutputToolName {
+							continue
+						}
+						progressCount++
+						status := "running"
+						if ev.Result.IsError {
+							status = "tool_failed"
+						}
+						action := childActions[ev.Result.ToolCallID]
+						summary := summarizeChildToolResult(*ev.Result, action)
+						step := core.SubagentStep{
+							ToolName: ev.Result.Name,
+							Status:   status,
+							Summary:  summary,
+						}
+						progressMessages = append(progressMessages, step)
+						emitSubagentProgressWithSteps(progress, role, model, progressCount, status, summary, progressMessages, map[string]any{
+							"child_session_id": sessionID,
+							"child_tool":       ev.Result.Name,
+						})
+					}
+				case agent.AgentEventTypeDone:
+					if ev.Message != nil {
+						summary, truncated = truncateString(strings.TrimSpace(ev.Message.Text), r.summaryMaxChars)
+						progressSummary := summary
+						if progressSummary == "" {
+							progressSummary = "child completed"
+						}
+						progressMessages = append(progressMessages, core.SubagentStep{
+							ToolName: "subagent",
+							Status:   "completed",
+							Summary:  progressSummary,
+						})
+						emitSubagentProgressWithSteps(progress, role, model, progressCount, "completed", progressSummary, progressMessages, map[string]any{
+							"child_session_id": sessionID,
+							"truncated":        truncated,
+						})
+					}
+				case agent.AgentEventTypeUsage:
+					if ev.Usage != nil {
+						usage = addUsage(usage, ev.Usage.Usage)
+					}
+				case agent.AgentEventTypeError:
+					if ev.Err != nil {
+						return "failed", ev.Err
+					}
+					return "failed", errors.New("subagent failed")
+				case agent.AgentEventTypeTurnCancelled:
+					return "cancelled", ctx.Err()
+				default:
+					if status, eventSummary, metadata, ok := summarizeChildAgentEvent(ev); ok {
+						progressCount++
+						if metadata == nil {
+							metadata = map[string]any{}
+						}
+						metadata["child_session_id"] = sessionID
+						step := core.SubagentStep{
+							ToolName: "agent_event",
+							Status:   status,
+							Summary:  eventSummary,
+						}
+						progressMessages = append(progressMessages, step)
+						emitSubagentProgressWithSteps(progress, role, model, progressCount, status, eventSummary, progressMessages, metadata)
+					}
+					// Other child events are intentionally drained here. The parent only
+					// exposes stable subagent lifecycle/progress updates, not every
+					// internal child-agent stream event.
+				}
+				if err := runCtx.Err(); err != nil {
+					return "cancelled", err
+				}
 			}
-			if code, err := drainEvents(repairEvents); err != nil {
-				return fail(code, err)
+			return "", nil
+		}
+		if code, err := drainEvents(events); err != nil {
+			return fail(code, err)
+		}
+		if err := runCtx.Err(); err != nil {
+			return fail("cancelled", err)
+		}
+		if len(req.OutputSchema) > 0 {
+			if _, ok := structuredCapture.get(); !ok {
+				repairPrompt := structuredOutputRepairPrompt(structuredCapture.error(), summary)
+				repairTools, err := core.NewToolRegistryChecked([]core.Tool{structuredOutputTool{schema: req.OutputSchema, capture: structuredCapture}})
+				if err != nil {
+					return fail("structured_output_missing", err)
+				}
+				repairChild := newChild(repairTools, 1)
+				repairEvents, err := repairChild.RunStreamWithOptions(runCtx, sessionID, repairPrompt, true)
+				if err != nil {
+					return fail("structured_output_missing", err)
+				}
+				if code, err := drainEvents(repairEvents); err != nil {
+					return fail(code, err)
+				}
 			}
 		}
-	}
-	completedAt := time.Now().UTC()
-	var structuredResult any
-	if len(req.OutputSchema) > 0 {
-		value, ok := structuredCapture.get()
-		if !ok {
-			code := "structured_output_missing"
-			msg := "subagent finished without calling structured_output"
-			if lastErr := structuredCapture.error(); lastErr != "" {
-				code = "structured_output_invalid"
-				msg = "subagent did not submit valid structured output: " + lastErr
+		completedAt := time.Now().UTC()
+		var structuredResult any
+		if len(req.OutputSchema) > 0 {
+			value, ok := structuredCapture.get()
+			if !ok {
+				code := "structured_output_missing"
+				msg := "subagent finished without calling structured_output"
+				if lastErr := structuredCapture.error(); lastErr != "" {
+					code = "structured_output_invalid"
+					msg = "subagent did not submit valid structured output: " + lastErr
+				}
+				err := errors.New(msg)
+				r.patchSubagentMeta(sessionID, session.SessionMeta{Status: "failed", Error: err.Error(), CompletedAt: completedAt})
+				return SpawnSubagentResponse{}, &SpawnSubagentError{SessionID: sessionID, Code: code, Message: err.Error(), Err: err}
 			}
-			err := errors.New(msg)
+			structuredResult = value
+			if strings.TrimSpace(summary) == "" {
+				if b, err := json.Marshal(value); err == nil {
+					summary, truncated = truncateString(string(b), r.summaryMaxChars)
+				}
+			}
+		}
+		if err := runSubagentStopHooks(runCtx, cfg.Hooks, sessionID, workspace.WorkspaceRoot, role, model, cfg.PermissionProfile, summary, promptHookExecutor, agentHookExecutor); err != nil {
 			r.patchSubagentMeta(sessionID, session.SessionMeta{Status: "failed", Error: err.Error(), CompletedAt: completedAt})
-			return SpawnSubagentResponse{}, &SpawnSubagentError{SessionID: sessionID, Code: code, Message: err.Error(), Err: err}
+			return SpawnSubagentResponse{}, &SpawnSubagentError{SessionID: sessionID, Code: "subagent_stop_hook_failed", Message: err.Error(), Err: err}
 		}
-		structuredResult = value
-		if strings.TrimSpace(summary) == "" {
-			if b, err := json.Marshal(value); err == nil {
-				summary, truncated = truncateString(string(b), r.summaryMaxChars)
-			}
-		}
+		r.patchSubagentMeta(sessionID, session.SessionMeta{Status: "completed", Summary: summary, CompletedAt: completedAt})
+		return SpawnSubagentResponse{
+			SessionID:         sessionID,
+			Role:              role,
+			Model:             model,
+			PermissionProfile: cfg.PermissionProfile,
+			Status:            "completed",
+			Summary:           summary,
+			StructuredResult:  structuredResult,
+			Truncated:         truncated,
+			ToolCalls:         toolCalls,
+			Capabilities:      cloneStrings(cfg.Capabilities),
+			Usage:             usage,
+			DurationMS:        time.Since(start).Milliseconds(),
+			CompletedAt:       completedAt.Format(time.RFC3339),
+		}, nil
 	}
-	r.patchSubagentMeta(sessionID, session.SessionMeta{Status: "completed", Summary: summary, CompletedAt: completedAt})
-	permissionProfile := "read_only"
-	if capabilitiesNeedApproval(req.Capabilities) {
-		permissionProfile = "policy_gated"
+	if cfg.Definition.Background {
+		bgCtx, cancel := context.WithCancel(context.Background())
+		r.registerBackgroundSubagent(sessionID, cancel)
+		emitSubagentProgress(progress, role, model, 0, "background_started", "background subagent launched", map[string]any{
+			"child_session_id": sessionID,
+			"background":       true,
+		})
+		go func() {
+			defer r.unregisterBackgroundSubagent(sessionID)
+			_, _ = runChild(bgCtx, nil)
+		}()
+		return SpawnSubagentResponse{
+			SessionID:         sessionID,
+			Role:              role,
+			Model:             model,
+			PermissionProfile: cfg.PermissionProfile,
+			Status:            "running",
+			Summary:           "background subagent launched",
+			Capabilities:      cloneStrings(cfg.Capabilities),
+			DurationMS:        time.Since(start).Milliseconds(),
+		}, nil
 	}
-	return SpawnSubagentResponse{
-		SessionID:         sessionID,
-		Role:              role,
-		Model:             model,
-		Effort:            effort,
-		PermissionProfile: permissionProfile,
-		Status:            "completed",
-		Summary:           summary,
-		StructuredResult:  structuredResult,
-		Truncated:         truncated,
-		ToolCalls:         toolCalls,
-		Usage:             usage,
-		DurationMS:        time.Since(start).Milliseconds(),
-		CompletedAt:       completedAt.Format(time.RFC3339),
-	}, nil
-}
-
-func capabilitiesNeedApproval(capabilities []string) bool {
-	for _, cap := range capabilities {
-		switch strings.TrimSpace(cap) {
-		case CapabilityWorkspaceWrite, CapabilityShellRead, CapabilityShellWrite:
-			return true
-		}
-	}
-	return false
-}
-
-func capabilitiesAllowMutatingTools(capabilities []string) bool {
-	for _, cap := range capabilities {
-		switch strings.TrimSpace(cap) {
-		case CapabilityWorkspaceWrite, CapabilityShellWrite:
-			return true
-		}
-	}
-	return false
+	return runChild(ctx, progress)
 }
 
 func workflowContextSystemBlock(req SpawnSubagentRequest) string {
@@ -474,6 +572,88 @@ func workflowApprovalMetadata(existing map[string]any, req SpawnSubagentRequest)
 		out["workflow_task_label"] = req.WorkflowTaskLabel
 	}
 	return out
+}
+
+func (r *Runner) resolveSubagentWorkspace(cfg AgentRuntimeConfig, sessionID, role string) (ToolWorkspace, error) {
+	root := strings.TrimSpace(r.workspaceRoot)
+	if root == "" {
+		root = "."
+	}
+	workspace := ToolWorkspace{WorkspaceRoot: root}
+	if cfg.Isolation != AgentIsolationWorktree {
+		return workspace, nil
+	}
+	name := isolatedWorktreeName(role, sessionID)
+	sess, err := worktree.Start(root, name)
+	if err != nil {
+		return ToolWorkspace{}, fmt.Errorf("create isolated subagent worktree: %w", err)
+	}
+	workspace.WorkspaceRoot = sess.Path
+	workspace.WorktreeRoot = sess.Path
+	workspace.OriginalWorkspace = sess.OriginalWorkspace
+	workspace.WorktreeName = sess.Name
+	workspace.WorktreeBranch = sess.Branch
+	workspace.OriginalBranch = sess.OriginalBranch
+	workspace.OriginalHeadCommit = sess.OriginalHeadCommit
+	return workspace, nil
+}
+
+func (r *Runner) toolsForWorkspace(workspace ToolWorkspace) (*core.ToolRegistry, error) {
+	factory := r.workspaceTools
+	if factory == nil {
+		factory = defaultWorkspaceTools
+	}
+	return factory(workspace)
+}
+
+func mergeWorkspaceAndParentTools(parent, workspace *core.ToolRegistry) (*core.ToolRegistry, error) {
+	if workspace == nil {
+		if parent == nil {
+			return core.NewToolRegistryChecked(nil)
+		}
+		return parent.Snapshot(), nil
+	}
+	workspaceTools := workspace.Tools()
+	workspaceNames := map[string]bool{}
+	for _, tool := range workspaceTools {
+		if tool != nil && strings.TrimSpace(tool.Name()) != "" {
+			workspaceNames[tool.Name()] = true
+		}
+	}
+	merged := append([]core.Tool{}, workspaceTools...)
+	if parent != nil {
+		for _, tool := range parent.Tools() {
+			if tool == nil || workspaceNames[tool.Name()] {
+				continue
+			}
+			merged = append(merged, tool)
+		}
+	}
+	return core.NewToolRegistryChecked(merged)
+}
+
+func isolatedWorktreeName(role, sessionID string) string {
+	role = safeSessionPart(role)
+	if role == "" {
+		role = "agent"
+	}
+	sum := sha1.Sum([]byte(sessionID))
+	suffix := hex.EncodeToString(sum[:])[:10]
+	name := "agent-" + role + "-" + suffix
+	if len(name) > 64 {
+		keep := 64 - len("agent--") - len(suffix)
+		if keep < 1 {
+			keep = 1
+		}
+		if len(role) > keep {
+			role = strings.Trim(role[:keep], "-_.")
+			if role == "" {
+				role = "agent"
+			}
+		}
+		name = "agent-" + role + "-" + suffix
+	}
+	return name
 }
 
 func (r *Runner) contextWindowForModel(model string) int {
@@ -542,4 +722,25 @@ func (r *Runner) patchSubagentMeta(sessionID string, meta session.SessionMeta) {
 		return
 	}
 	_, _ = session.PatchSessionMeta(r.sessionsDir, sessionID, session.SessionMetaPatchFromMeta(meta))
+}
+
+func (r *Runner) registerBackgroundSubagent(sessionID string, cancel context.CancelFunc) {
+	if strings.TrimSpace(sessionID) == "" || cancel == nil {
+		return
+	}
+	r.backgroundMu.Lock()
+	defer r.backgroundMu.Unlock()
+	if r.backgroundCancels == nil {
+		r.backgroundCancels = map[string]context.CancelFunc{}
+	}
+	r.backgroundCancels[strings.TrimSpace(sessionID)] = cancel
+}
+
+func (r *Runner) unregisterBackgroundSubagent(sessionID string) {
+	if strings.TrimSpace(sessionID) == "" {
+		return
+	}
+	r.backgroundMu.Lock()
+	defer r.backgroundMu.Unlock()
+	delete(r.backgroundCancels, strings.TrimSpace(sessionID))
 }

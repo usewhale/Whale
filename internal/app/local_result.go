@@ -22,12 +22,15 @@ type LocalResultField struct {
 }
 
 type LocalResultAction struct {
-	Label          string
-	Description    string
-	Command        string
-	Tone           string
-	WorkflowName   string
-	WorkflowArgs   string
-	WorkflowResume string
-	WorkflowTrust  bool
+	Label              string
+	Description        string
+	Command            string
+	Tone               string
+	WorkflowName       string
+	WorkflowArgs       string
+	WorkflowResume     string
+	WorkflowTrust      bool
+	WorkflowScript     string
+	WorkflowSaveAs     string
+	WorkflowScriptPath string
 }

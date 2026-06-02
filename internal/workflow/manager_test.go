@@ -215,6 +215,54 @@ func TestRunManagerRunAgentsRunsConcurrentlyAndPreservesResultOrder(t *testing.T
 	}
 }
 
+func TestRunManagerRunAgentsRecordsBackgroundLaunchAsCompletedTask(t *testing.T) {
+	store := &memoryRunEventStore{}
+	spawner := &fakeAgentSpawner{
+		respond: func(req tasks.SpawnSubagentRequest) (tasks.SpawnSubagentResponse, bool) {
+			return tasks.SpawnSubagentResponse{
+				SessionID: "child-bg",
+				Role:      req.Role,
+				Status:    TaskStatusRunning,
+				Summary:   "background subagent launched",
+			}, true
+		},
+	}
+	manager := NewRunManager(store, NewTaskScheduler(store, spawner))
+	runID, err := manager.StartRun(context.Background(), "parent", "background")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	results, err := manager.RunAgents(context.Background(), runID, "parent", []AgentTaskSpec{
+		{Prompt: "watch", Agent: tasks.AgentDefinition{Name: "watcher", Background: true}},
+	}, 1)
+	if err != nil {
+		t.Fatalf("RunAgents: %v", err)
+	}
+	if results[0].Status != TaskStatusRunning || results[0].ChildSessionID != "child-bg" {
+		t.Fatalf("background result = %+v", results[0])
+	}
+	events, err := store.List(context.Background(), runID)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	var completed *RunEvent
+	for i := range events {
+		if events[i].Type == EventTaskCompleted {
+			completed = &events[i]
+			break
+		}
+	}
+	if completed == nil {
+		t.Fatalf("missing task completed event: %+v", events)
+	}
+	if completed.Status != TaskStatusCompleted {
+		t.Fatalf("background task completed status = %q, want completed", completed.Status)
+	}
+	if got, _ := completed.Data["child_status"].(string); got != TaskStatusRunning {
+		t.Fatalf("child_status = %q, want running", got)
+	}
+}
+
 func TestRunManagerRunAgentsRecordsFailure(t *testing.T) {
 	store := &memoryRunEventStore{}
 	spawner := &fakeAgentSpawner{failPrompt: "fail"}

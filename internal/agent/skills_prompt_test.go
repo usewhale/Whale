@@ -75,7 +75,7 @@ func TestImmutableSystemPromptIncludesDelegationPolicyBeforeToolSpecs(t *testing
 	if policyIx > toolIx {
 		t.Fatalf("delegation policy should appear before tool specs:\n%s", joined)
 	}
-	for _, want := range []string{"Use parallel_reason for 2-8 independent", "Use spawn_subagent for one bounded exploration", "Use a single agent for direct questions", "Do not load a skill first unless the user explicitly names one"} {
+	for _, want := range []string{"Use parallel_reason for 2-8 independent", "Use spawn_subagent for one bounded capability-defined", "Use a single agent for direct questions", "Do not load a skill first unless the user explicitly names one"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("delegation policy missing %q:\n%s", want, joined)
 		}

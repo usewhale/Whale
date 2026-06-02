@@ -14,6 +14,8 @@ var supportedSchemaKeys = map[string]bool{
 	"required":             true,
 	"items":                true,
 	"enum":                 true,
+	"description":          true,
+	"title":                true,
 	"minItems":             true,
 	"maxItems":             true,
 	"additionalProperties": true,

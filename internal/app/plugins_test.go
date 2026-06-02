@@ -28,6 +28,9 @@ func TestMemoryPluginToolsRegisteredByDefault(t *testing.T) {
 	if app.baseToolRegistry.Get("remember") != nil {
 		t.Fatal("memory tools should not be in base subagent registry")
 	}
+	if app.subagentToolRegistry.Get("remember") == nil {
+		t.Fatal("memory tools should be available to subagents by exact selector")
+	}
 }
 
 func TestMemoryPluginCanBeDisabledByConfig(t *testing.T) {

@@ -54,6 +54,8 @@ type FilePermissionsConfig struct {
 	MCP               map[string]string `toml:"mcp,omitempty"`
 	Memory            map[string]string `toml:"memory,omitempty"`
 	Task              map[string]string `toml:"task,omitempty"`
+	WebSearch         map[string]string `toml:"web_search,omitempty"`
+	WebFetch          map[string]string `toml:"web_fetch,omitempty"`
 	MutatingTool      map[string]string `toml:"mutating_tool,omitempty"`
 }
 
