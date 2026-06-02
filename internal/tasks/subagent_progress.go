@@ -93,6 +93,29 @@ func summarizeChildAgentEvent(ev agent.AgentEvent) (status, summary string, meta
 			"spent_usd":      ev.Budget.SpentUSD,
 			"turn_cost_usd":  ev.Budget.TurnCostUSD,
 		}, true
+	case agent.AgentEventTypeForcedSummaryStarted:
+		reason := strings.TrimSpace(ev.Content)
+		if reason == "" {
+			reason = "turn cap reached"
+		}
+		return "forced_summary_started", "Summarizing child agent because " + reason, map[string]any{
+			"reason": reason,
+		}, true
+	case agent.AgentEventTypeForcedSummaryDone:
+		summary := strings.TrimSpace(ev.Content)
+		if summary == "" {
+			summary = "Forced child summary completed"
+		}
+		return "forced_summary_done", summary, nil, true
+	case agent.AgentEventTypeForcedSummaryFailed:
+		reason := strings.TrimSpace(ev.Content)
+		if reason == "" && ev.Err != nil {
+			reason = ev.Err.Error()
+		}
+		if reason == "" {
+			reason = "forced child summary failed"
+		}
+		return "forced_summary_failed", reason, nil, true
 	default:
 		return "", "", nil, false
 	}

@@ -91,6 +91,9 @@ func ApplyFileConfig(cfg *Config, file FileConfig) error {
 		}
 		cfg.RetryMaxDelay = d
 	}
+	if file.Experimental.DeepSeekPrefixCompletion != nil {
+		cfg.DeepSeekPrefixCompletion = *file.Experimental.DeepSeekPrefixCompletion
+	}
 	if file.Tasks.MaxParallelSubagents != nil {
 		if *file.Tasks.MaxParallelSubagents <= 0 {
 			return fmt.Errorf("invalid tasks.max_parallel_subagents: must be greater than 0")
@@ -208,6 +211,9 @@ func overlayExplicitConfig(dst *Config, src Config) {
 	if src.RetryMaxDelay != 0 && src.RetryMaxDelay != def.RetryMaxDelay {
 		dst.RetryMaxDelay = src.RetryMaxDelay
 	}
+	if src.DeepSeekPrefixCompletion != def.DeepSeekPrefixCompletion {
+		dst.DeepSeekPrefixCompletion = src.DeepSeekPrefixCompletion
+	}
 	if src.MaxParallelSubagents != 0 && src.MaxParallelSubagents != def.MaxParallelSubagents {
 		dst.MaxParallelSubagents = src.MaxParallelSubagents
 	}
@@ -312,6 +318,8 @@ func applyPermissionsConfig(cfg *Config, file FilePermissionsConfig) error {
 		MCP:               file.MCP,
 		Memory:            file.Memory,
 		Task:              file.Task,
+		WebSearch:         file.WebSearch,
+		WebFetch:          file.WebFetch,
 		MutatingTool:      file.MutatingTool,
 	})
 	if err != nil {

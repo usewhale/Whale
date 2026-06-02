@@ -91,6 +91,31 @@ func TestImmutableSystemBlocksIncludeDynamicSystemBlocks(t *testing.T) {
 	}
 }
 
+func TestImmutableSystemBlocksIncludeWorkflowAuthoringGuidance(t *testing.T) {
+	a := NewAgentWithRegistry(nil, nil, core.NewToolRegistry(nil), WithProjectMemory(false, 0, nil, "/repo"))
+	joined := strings.Join(a.buildImmutableSystemBlocks(), "\n\n")
+
+	for _, want := range []string{
+		"Workflow authoring.",
+		"use the workflow tool with both script and saveAs",
+		"Do not inspect existing workflow directories, load skills, or pre-read repository files",
+		"Claude Code-compatible raw JavaScript workflow",
+		"array of objects such as { title:",
+		"capability-defined workers",
+		"Call phase(\"Name\") only as a statement",
+		"Await async workflow primitives before reading their results",
+		"Call agent(prompt, { label, phase, schema",
+		"Never hard-code Claude model names",
+		"saveAs must exactly match meta.name",
+		"enum, include an explicit type",
+		"returning a final JSON-serializable result",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("system blocks missing %q:\n%s", want, joined)
+		}
+	}
+}
+
 func TestNaturalLanguageWorkflowPromptCanUseNamedWorkflowTool(t *testing.T) {
 	provider := &catalogWorkflowProvider{}
 	tool := &recordingWorkflowTool{}

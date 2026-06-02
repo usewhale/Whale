@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"strconv"
 	"strings"
 )
 
@@ -141,6 +142,8 @@ func classifySlashFields(head string, fields []string, line string) SubmitClass 
 			return SubmitUsageError
 		}
 		return SubmitTurnStarting
+	case "/goal":
+		return classifyGoalFields(fields)
 	case "/new":
 		if len(fields) <= 2 {
 			return SubmitLocalMutating
@@ -217,6 +220,78 @@ func classifyDeepResearchFields(fields []string) SubmitClass {
 		}
 	}
 	return SubmitUsageError
+}
+
+func classifyGoalFields(fields []string) SubmitClass {
+	if len(fields) == 1 {
+		return SubmitLocalReadOnly
+	}
+	if len(fields) == 2 {
+		switch fields[1] {
+		case "status":
+			return SubmitLocalReadOnly
+		case "pause", "clear":
+			return SubmitLocalMutating
+		case "resume":
+			return SubmitTurnStarting
+		}
+	}
+	if fields[1] == "status" || fields[1] == "pause" || fields[1] == "resume" || fields[1] == "clear" {
+		return SubmitUsageError
+	}
+	objectiveWords := 0
+	for i := 1; i < len(fields); i++ {
+		field := fields[i]
+		if objectiveWords > 0 {
+			objectiveWords += len(fields) - i
+			break
+		}
+		switch {
+		case field == "--tokens":
+			i++
+			if i >= len(fields) || !validGoalTokenBudget(fields[i]) {
+				return SubmitUsageError
+			}
+		case strings.HasPrefix(field, "--tokens="):
+			parts := strings.SplitN(field, "=", 2)
+			if len(parts) != 2 || !validGoalTokenBudget(parts[1]) {
+				return SubmitUsageError
+			}
+		case strings.HasPrefix(field, "--"):
+			return SubmitUsageError
+		default:
+			objectiveWords++
+		}
+	}
+	if objectiveWords == 0 {
+		return SubmitUsageError
+	}
+	return SubmitTurnStarting
+}
+
+func validGoalTokenBudget(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.HasPrefix(raw, "--") {
+		return false
+	}
+	multiplier := 1
+	last := raw[len(raw)-1]
+	if last == 'k' || last == 'K' || last == 'm' || last == 'M' {
+		raw = raw[:len(raw)-1]
+		if raw == "" {
+			return false
+		}
+		if last == 'm' || last == 'M' {
+			multiplier = 1_000_000
+		} else {
+			multiplier = 1_000
+		}
+	}
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || value <= 0 {
+		return false
+	}
+	return int(value*float64(multiplier)+0.5) > 0
 }
 
 func classifyWorkflowsFields(fields []string) SubmitClass {

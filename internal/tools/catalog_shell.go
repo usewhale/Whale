@@ -27,7 +27,7 @@ func (b *Toolset) shellTools() []core.Tool {
 				"required": []string{"command"},
 			},
 			readOnlyCheck: shellReadOnlyCheckFor(rt),
-			capabilities:  []string{"shell.read", "shell.write"},
+			capabilities:  []string{"shell.read", "shell.run"},
 			fn:            b.shellRun,
 		},
 		toolFn{
@@ -43,7 +43,7 @@ func (b *Toolset) shellTools() []core.Tool {
 				"required": []string{"task_id"},
 			},
 			readOnly:     true,
-			capabilities: []string{"shell.read", "shell.write"},
+			capabilities: []string{"shell.read", "shell.run"},
 			fn:           b.shellWait,
 		},
 		toolFn{
@@ -58,7 +58,7 @@ func (b *Toolset) shellTools() []core.Tool {
 				"required": []string{"task_id"},
 			},
 			readOnly:     true,
-			capabilities: []string{"shell.read", "shell.write"},
+			capabilities: []string{"shell.read", "shell.run"},
 			fn:           b.shellCancel,
 		},
 	}

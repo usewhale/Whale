@@ -64,7 +64,7 @@ func statsTitle(view string) string {
 
 func statsSummaryFields(view string, usage usageStats, toolInput toolInputStats) []LocalResultField {
 	totalTokens := usage.PromptTokens + usage.CompletionTokens
-	return []LocalResultField{
+	fields := []LocalResultField{
 		{Label: "View", Value: view, Tone: "info"},
 		{Label: "Turns", Value: fmt.Sprintf("%d", usage.Turns)},
 		{Label: "Sessions", Value: fmt.Sprintf("%d", len(usage.Sessions))},
@@ -72,6 +72,10 @@ func statsSummaryFields(view string, usage usageStats, toolInput toolInputStats)
 		{Label: "Cost", Value: fmt.Sprintf("$%.4f total · $%.4f last 7d · $%.4f cache saved", usage.CostUSD, usage.Last7CostUSD, usage.CacheSavingsUSD)},
 		{Label: "Tool input", Value: fmt.Sprintf("%d repaired · %d invalid", toolInput.Repaired, toolInput.Invalid)},
 	}
+	if usage.PrefixCompletionRequests > 0 {
+		fields = append(fields, LocalResultField{Label: "Prefix completion", Value: fmt.Sprintf("%d requests", usage.PrefixCompletionRequests)})
+	}
+	return fields
 }
 
 func usageOverviewFields(usage usageStats) []LocalResultField {
@@ -83,6 +87,9 @@ func usageOverviewFields(usage usageStats) []LocalResultField {
 	}
 	if model := topUsageModel(usage.ByModel); model != nil {
 		fields = append(fields, LocalResultField{Label: "Top model", Value: fmt.Sprintf("%s · %d turns · $%.4f", model.Model, model.Turns, model.CostUSD)})
+	}
+	if usage.PrefixCompletionRequests > 0 {
+		fields = append(fields, LocalResultField{Label: "Prefix completion", Value: fmt.Sprintf("%d requests", usage.PrefixCompletionRequests)})
 	}
 	return fields
 }
@@ -114,17 +121,28 @@ func usageStatsSections(stats usageStats) []LocalResultSection {
 	if stats.SubagentTurns > 0 {
 		sections[0].Fields = append(sections[0].Fields, LocalResultField{Label: "Subagents", Value: fmt.Sprintf("%d turns · %s tokens · $%.4f", stats.SubagentTurns, formatCount(stats.SubagentPromptTokens+stats.SubagentOutputTokens), stats.SubagentCostUSD)})
 	}
+	if stats.PrefixCompletionRequests > 0 {
+		sections[0].Fields = append(sections[0].Fields, LocalResultField{Label: "Prefix completion", Value: fmt.Sprintf("%d requests", stats.PrefixCompletionRequests)})
+	}
 	if len(stats.Buckets) > 0 {
 		fields := make([]LocalResultField, 0, len(stats.Buckets))
 		for _, b := range stats.Buckets {
-			fields = append(fields, LocalResultField{Label: b.Label, Value: fmt.Sprintf("%d turns · %s tokens · %.1f%% cache · $%.4f cost · $%.4f cache saved", b.Turns, formatCount(b.PromptTokens+b.CompletionTokens), ratioPercent(b.CacheHit, b.CacheHit+b.CacheMiss), b.CostUSD, b.CacheSavingsUSD)})
+			prefixDetail := ""
+			if b.PrefixCompletionRequests > 0 {
+				prefixDetail = fmt.Sprintf(" · Prefix completion %d", b.PrefixCompletionRequests)
+			}
+			fields = append(fields, LocalResultField{Label: b.Label, Value: fmt.Sprintf("%d turns · %s tokens · %.1f%% cache · $%.4f cost · $%.4f cache saved%s", b.Turns, formatCount(b.PromptTokens+b.CompletionTokens), ratioPercent(b.CacheHit, b.CacheHit+b.CacheMiss), b.CostUSD, b.CacheSavingsUSD, prefixDetail)})
 		}
 		sections = append(sections, LocalResultSection{Title: "By window", Fields: fields})
 	}
 	if len(stats.ByModel) > 0 {
 		fields := make([]LocalResultField, 0, statsRecentLimit)
 		for _, ms := range topUsageModels(stats.ByModel, statsRecentLimit) {
-			fields = append(fields, LocalResultField{Label: ms.Model, Value: fmt.Sprintf("%d turns · %s tokens · %.1f%% cache · $%.4f", ms.Turns, formatCount(ms.Tokens), ratioPercent(ms.CacheHit, ms.CacheHit+ms.CacheMiss), ms.CostUSD)})
+			prefixDetail := ""
+			if ms.PrefixCompletionRequests > 0 {
+				prefixDetail = fmt.Sprintf(" · Prefix completion %d", ms.PrefixCompletionRequests)
+			}
+			fields = append(fields, LocalResultField{Label: ms.Model, Value: fmt.Sprintf("%d turns · %s tokens · %.1f%% cache · $%.4f%s", ms.Turns, formatCount(ms.Tokens), ratioPercent(ms.CacheHit, ms.CacheHit+ms.CacheMiss), ms.CostUSD, prefixDetail)})
 		}
 		sections = append(sections, LocalResultSection{Title: "By model", Fields: fields})
 	}

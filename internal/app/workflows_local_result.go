@@ -441,11 +441,11 @@ func workflowRunSummary(run workflow.Run) workflowSummary {
 			}
 		case workflow.EventTaskStarted, workflow.EventTaskProgress:
 			if ev.TaskID != "" {
-				tasks[ev.TaskID] = workflow.TaskStatusRunning
+				tasks[ev.TaskID] = workflowTaskStatusFromEvent(ev)
 			}
 		case workflow.EventTaskCompleted:
 			if ev.TaskID != "" {
-				tasks[ev.TaskID] = workflow.TaskStatusCompleted
+				tasks[ev.TaskID] = workflowTaskStatusFromEvent(ev)
 			}
 			if workflowEventCached(ev) {
 				s.TasksCached++

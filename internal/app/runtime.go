@@ -16,7 +16,7 @@ func (a *App) RunUserPromptSubmitHook(input string) (blocked bool, output string
 }
 
 func (a *App) RunUserPromptSubmitHookWithObserver(input string, observer agent.HookRunObserver) (blocked bool, output string, updatedInput string) {
-	if a.hookRunner.Empty() {
+	if a == nil || a.hookRunner == nil || a.hookRunner.Empty() {
 		return false, "", input
 	}
 	report := a.hookRunner.RunHookWithObserver(a.ctx, agent.NewUserPromptSubmitPayload(a.sessionID, a.workspaceRoot, input), observer)
@@ -80,14 +80,15 @@ func (a *App) ensureAgent() (*agent.Agent, error) {
 			pluginBlocks = a.pluginManager.StartupBlocks(a.ctx)
 		}
 		provider, err := newDeepSeekProvider(providerOptions{
-			APIKey:            a.apiKey,
-			BaseURL:           a.cfg.APIBaseURL,
-			Model:             a.model,
-			ReasoningEffort:   a.reasoningEffort,
-			ThinkingEnabled:   a.thinkingEnabled,
-			RetryPolicy:       retryPolicyFromConfig(a.cfg),
-			StreamMaxAttempts: a.cfg.RetryStreamMaxAttempts,
-			StreamIdleTimeout: a.cfg.RetryStreamIdleTimeout,
+			APIKey:                   a.apiKey,
+			BaseURL:                  a.cfg.APIBaseURL,
+			Model:                    a.model,
+			ReasoningEffort:          a.reasoningEffort,
+			ThinkingEnabled:          a.thinkingEnabled,
+			RetryPolicy:              retryPolicyFromConfig(a.cfg),
+			StreamMaxAttempts:        a.cfg.RetryStreamMaxAttempts,
+			StreamIdleTimeout:        a.cfg.RetryStreamIdleTimeout,
+			DeepSeekPrefixCompletion: a.cfg.DeepSeekPrefixCompletion,
 		})
 		if err != nil {
 			return nil, err
@@ -138,9 +139,11 @@ func (a *App) RunTurnWithOptions(ctx context.Context, input string, opts agent.R
 	if !opts.HiddenInput && strings.TrimSpace(input) != "" {
 		_, _ = session.PatchSessionMeta(a.sessionsDir, a.sessionID, session.SessionMetaPatch{Title: input})
 	}
+	a.pendingGoalTurn = opts.GoalContinuation
 	opts = a.applyRunOptionsDefaults(opts)
 	ag, err := a.ensureAgent()
 	if err != nil {
+		a.pendingGoalTurn = false
 		return nil, err
 	}
 	return ag.RunStreamWithTurnOptions(ctx, a.sessionID, input, opts)
@@ -166,7 +169,10 @@ func (a *App) applyRunOptionsDefaults(opts agent.RunOptions) agent.RunOptions {
 	return opts
 }
 
-func (a *App) FinalizeTurn(lastAssistantText string) error {
+func (a *App) FinalizeTurn(lastAssistantText string, completed bool) error {
+	if err := a.finalizeGoalTurn(lastAssistantText, completed); err != nil {
+		return err
+	}
 	meta, err := session.LoadSessionMeta(a.sessionsDir, a.sessionID)
 	if err != nil {
 		return nil
@@ -178,4 +184,23 @@ func (a *App) FinalizeTurn(lastAssistantText string) error {
 	}
 	_, err = session.PatchSessionMeta(a.sessionsDir, a.sessionID, session.SessionMetaPatch{Workspace: a.workspaceRoot, Branch: a.branch, TurnCount: &nextTurn, Summary: summary})
 	return err
+}
+
+func (a *App) finalizeGoalTurn(lastAssistantText string, completed bool) error {
+	if a == nil || !a.pendingGoalTurn {
+		return nil
+	}
+	a.pendingGoalTurn = false
+	if !completed {
+		return nil
+	}
+	st, ok, err := session.LoadGoalState(a.sessionsDir, a.sessionID)
+	if err != nil || !ok {
+		return err
+	}
+	if st.Status != session.GoalStatusCompleted {
+		return nil
+	}
+	st = refreshCompletedGoalUsageWithTotal(st, a.currentSessionGoalTokens())
+	return session.SaveGoalState(a.sessionsDir, a.sessionID, st)
 }

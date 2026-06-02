@@ -8,32 +8,35 @@ import (
 
 func (s *Service) DispatchProtocol(in protocol.Intent) {
 	s.Dispatch(Intent{
-		Kind:              serviceIntentKind(in.Kind),
-		Input:             in.Input,
-		HiddenInput:       in.HiddenInput,
-		ToolCallID:        in.ToolCallID,
-		UserInput:         coreUserInputResponse(in.UserInput),
-		SessionInput:      in.SessionInput,
-		MessageID:         in.MessageID,
-		Model:             in.Model,
-		Effort:            in.Effort,
-		Thinking:          in.Thinking,
-		ApprovalMode:      in.ApprovalMode,
-		ViewMode:          in.ViewMode,
-		SkillName:         in.SkillName,
-		SkillEnabled:      in.SkillEnabled,
-		PluginID:          in.PluginID,
-		PluginEnabled:     in.PluginEnabled,
-		HookKey:           in.HookKey,
-		HookEnabled:       in.HookEnabled,
-		HooksReviewAction: in.HooksReviewAction,
-		SkillBinding:      appSkillBinding(in.SkillBinding),
-		WorktreeAction:    in.WorktreeAction,
-		WorkflowRunID:     in.WorkflowRunID,
-		WorkflowName:      in.WorkflowName,
-		WorkflowArgs:      in.WorkflowArgs,
-		WorkflowResume:    in.WorkflowResume,
-		WorkflowTrust:     in.WorkflowTrust,
+		Kind:               serviceIntentKind(in.Kind),
+		Input:              in.Input,
+		HiddenInput:        in.HiddenInput,
+		ToolCallID:         in.ToolCallID,
+		UserInput:          coreUserInputResponse(in.UserInput),
+		SessionInput:       in.SessionInput,
+		MessageID:          in.MessageID,
+		Model:              in.Model,
+		Effort:             in.Effort,
+		Thinking:           in.Thinking,
+		ApprovalMode:       in.ApprovalMode,
+		ViewMode:           in.ViewMode,
+		SkillName:          in.SkillName,
+		SkillEnabled:       in.SkillEnabled,
+		PluginID:           in.PluginID,
+		PluginEnabled:      in.PluginEnabled,
+		HookKey:            in.HookKey,
+		HookEnabled:        in.HookEnabled,
+		HooksReviewAction:  in.HooksReviewAction,
+		SkillBinding:       appSkillBinding(in.SkillBinding),
+		WorktreeAction:     in.WorktreeAction,
+		WorkflowRunID:      in.WorkflowRunID,
+		WorkflowName:       in.WorkflowName,
+		WorkflowArgs:       in.WorkflowArgs,
+		WorkflowResume:     in.WorkflowResume,
+		WorkflowTrust:      in.WorkflowTrust,
+		WorkflowScript:     in.WorkflowScript,
+		WorkflowSaveAs:     in.WorkflowSaveAs,
+		WorkflowScriptPath: in.WorkflowScriptPath,
 	})
 }
 
@@ -69,6 +72,8 @@ func serviceIntentKind(kind protocol.IntentKind) IntentKind {
 		return IntentSetModelAndEffort
 	case protocol.IntentSetApprovalMode:
 		return IntentSetApprovalMode
+	case protocol.IntentEnableAutoAccept:
+		return IntentEnableAutoAccept
 	case protocol.IntentSetViewMode:
 		return IntentSetViewMode
 	case protocol.IntentToggleMode:

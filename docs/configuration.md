@@ -81,6 +81,15 @@ tools = ["web_search", "web_fetch"]
 
 需要在会话开始、用户提交 prompt、工具执行前后或结束前运行脚本？见 [Hooks 文档](hooks.md)。
 
+### 实验功能
+
+```toml
+[experimental]
+deepseek_prefix_completion = true
+```
+
+启用 DeepSeek Beta 的 Prefix completion。Whale 只会在明确适合的无工具、强格式文本请求中使用它，例如需要模型直接返回 JSON 的内部 hook prompt。这个功能主要提升格式稳定性，不承诺节省 token。
+
 ---
 
 ## 参考
@@ -131,6 +140,9 @@ enabled = []                           # 强制启用的技能
 
 [plugins.memory]
 enabled = true                         # 每个插件单独配置启用状态
+
+[experimental]
+deepseek_prefix_completion = false     # DeepSeek Prefix completion（实验功能）
 
 [logging]
 level = "info"                         # debug | info | warn | error

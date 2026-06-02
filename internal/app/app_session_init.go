@@ -23,17 +23,18 @@ type appSessionInit struct {
 }
 
 type appToolInit struct {
-	toolset          *tools.Toolset
-	mcpManager       *whalemcp.Manager
-	pluginManager    *plugins.Manager
-	pluginTools      []core.Tool
-	pluginAgents     []plugins.AgentDefinition
-	baseTools        []core.Tool
-	baseToolRegistry *core.ToolRegistry
-	hooks            []agent.ResolvedHook
-	hookStates       agent.HookStates
-	hookRunner       *agent.HookRunner
-	hookSources      []string
+	toolset              *tools.Toolset
+	mcpManager           *whalemcp.Manager
+	pluginManager        *plugins.Manager
+	pluginTools          []core.Tool
+	pluginAgents         []plugins.AgentDefinition
+	baseTools            []core.Tool
+	baseToolRegistry     *core.ToolRegistry
+	subagentToolRegistry *core.ToolRegistry
+	hooks                []agent.ResolvedHook
+	hookStates           agent.HookStates
+	hookRunner           *agent.HookRunner
+	hookSources          []string
 }
 
 type appRuntimeInit struct {
@@ -44,6 +45,7 @@ type appRuntimeInit struct {
 	contextWindow   int
 	apiKey          string
 	taskTools       []core.Tool
+	goalTools       []core.Tool
 	workflowTools   []core.Tool
 	workflowManager *workflow.RunManager
 	workflowRunner  *workflow.ScriptRunner

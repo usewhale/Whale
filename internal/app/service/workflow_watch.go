@@ -52,6 +52,71 @@ func (s *Service) maybeWatchWorkflowToolResult(result *core.ToolResult) {
 	})
 }
 
+func (s *Service) maybeEmitWorkflowLaunchConfirmationToolResult(result *core.ToolResult) bool {
+	name, args, resume, script, saveAs, scriptPath, ok := workflowConfirmationFromToolResult(result)
+	if !ok {
+		return false
+	}
+	if strings.TrimSpace(script) == "" && strings.TrimSpace(scriptPath) == "" {
+		trusted, err := s.app.WorkflowTrusted(name)
+		if err != nil {
+			s.emit(Event{Kind: EventError, Text: err.Error()})
+			return true
+		}
+		if trusted {
+			out, err := s.app.StartWorkflowFromConfirmation(name, args, resume, false)
+			if err != nil {
+				s.emit(Event{Kind: EventError, Text: err.Error()})
+				return true
+			}
+			s.maybeWatchWorkflowRun(out)
+			ev := localSubmitResultEvent("info", out.PlainText)
+			ev.LocalResult = protocolLocalResult(out)
+			s.emit(ev)
+			return true
+		}
+	}
+	var (
+		out *app.LocalResult
+		err error
+	)
+	if strings.TrimSpace(script) != "" {
+		out, err = s.app.BuildGeneratedWorkflowLaunchConfirmation(script, saveAs, args, resume)
+	} else if strings.TrimSpace(scriptPath) != "" {
+		out, err = s.app.BuildScriptPathWorkflowLaunchConfirmation(scriptPath, args, resume)
+	} else {
+		out, err = s.app.BuildWorkflowLaunchConfirmation(name, args, resume)
+	}
+	if err != nil {
+		s.emit(Event{Kind: EventError, Text: err.Error()})
+		return true
+	}
+	ev := localSubmitResultEvent("info", out.PlainText)
+	ev.LocalResult = protocolLocalResult(out)
+	s.emit(ev)
+	return true
+}
+
+func workflowConfirmationFromToolResult(result *core.ToolResult) (name, args, resume, script, saveAs, scriptPath string, ok bool) {
+	if result == nil || strings.TrimSpace(result.Name) != "workflow" {
+		return "", "", "", "", "", "", false
+	}
+	env, parsed := core.ParseToolEnvelope(result.Content)
+	if !parsed || strings.TrimSpace(env.Code) != "workflow_confirmation_required" {
+		return "", "", "", "", "", "", false
+	}
+	name = strings.TrimSpace(asWorkflowString(env.Data["workflowName"]))
+	if name == "" {
+		return "", "", "", "", "", "", false
+	}
+	args = strings.TrimSpace(asWorkflowString(env.Data["workflowArgs"]))
+	resume = strings.TrimSpace(asWorkflowString(env.Data["workflowResume"]))
+	script = asWorkflowString(env.Data["workflowScript"])
+	saveAs = strings.TrimSpace(asWorkflowString(env.Data["workflowSaveAs"]))
+	scriptPath = strings.TrimSpace(asWorkflowString(env.Data["workflowScriptPath"]))
+	return name, args, resume, script, saveAs, scriptPath, true
+}
+
 func workflowRunIDFromToolResult(result *core.ToolResult) string {
 	if result == nil || strings.TrimSpace(result.Name) != "workflow" {
 		return ""

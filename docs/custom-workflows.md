@@ -82,6 +82,9 @@ Whale 会自动识别并调用该 workflow。
 
 启动一个子 agent。
 
+如果你只是想定义一个可复用的 reviewer、researcher 或 architect 角色，先看
+[自定义 Subagent](agents.md)。Workflow 适合把多个 subagent 调用编排成固定流程。
+
 ```javascript
 const result = await agent("分析这段代码", {
   label: "code-reviewer",        // 面板中显示的名字
@@ -91,6 +94,15 @@ const result = await agent("分析这段代码", {
   capabilities: [],              // 可选，限制工具权限
   max_tool_iters: 10,            // 最大工具调用轮次
   max_tool_calls: 20,            // 最大工具调用次数
+});
+```
+
+也可以复用 `.whale/agents` 中的自定义角色：
+
+```javascript
+const review = await agent("审查当前改动", {
+  agent: { name: "reviewer" },
+  label: "reviewer",
 });
 ```
 

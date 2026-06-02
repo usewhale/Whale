@@ -469,7 +469,79 @@ func agentSpecFromJS(prompt, currentPhase string, args []*qjs.Value) (AgentTaskS
 	if phase := stringProperty(opts, "phase"); phase != "" {
 		spec.Phase = phase
 	}
+	if hasDefinedProperty(opts, "agent") {
+		agentDef, err := agentDefinitionProperty(opts, "agent")
+		if err != nil {
+			return spec, err
+		}
+		spec.Agent = agentDef
+	}
 	spec.Model = stringProperty(opts, "model")
+	spec.Effort = stringProperty(opts, "effort")
+	spec.PermissionMode = stringProperty(opts, "permissionMode")
+	if hasDefinedProperty(opts, "maxTurns") {
+		maxTurns, err := intProperty(opts, "maxTurns")
+		if err != nil {
+			return spec, err
+		}
+		spec.MaxTurns = maxTurns
+	}
+	if hasDefinedProperty(opts, "background") {
+		background, err := boolProperty(opts, "background")
+		if err != nil {
+			return spec, err
+		}
+		spec.Background = background
+	}
+	if hasDefinedProperty(opts, "isolation") {
+		spec.Isolation = stringProperty(opts, "isolation")
+		spec.Agent.Isolation = spec.Isolation
+	}
+	if hasDefinedProperty(opts, "skills") {
+		skillNames, err := stringArrayProperty(opts, "skills")
+		if err != nil {
+			return spec, err
+		}
+		spec.Skills = skillNames
+		spec.Agent.Skills = skillNames
+	}
+	if hasDefinedProperty(opts, "mcpServers") {
+		serverNames, err := stringArrayProperty(opts, "mcpServers")
+		if err != nil {
+			return spec, err
+		}
+		spec.MCPServers = serverNames
+		spec.Agent.MCPServers = serverNames
+	}
+	if hasDefinedProperty(opts, "initialPrompt") {
+		spec.InitialPrompt = stringProperty(opts, "initialPrompt")
+		spec.Agent.InitialPrompt = spec.InitialPrompt
+	}
+	if hasDefinedProperty(opts, "memory") {
+		spec.Memory = stringProperty(opts, "memory")
+		spec.Agent.Memory = spec.Memory
+	}
+	if hasDefinedProperty(opts, "hooks") {
+		hooks, err := anyProperty(opts, "hooks")
+		if err != nil {
+			return spec, err
+		}
+		spec.Agent.Hooks = hooks
+	}
+	if hasDefinedProperty(opts, "tools") {
+		tools, err := stringArrayProperty(opts, "tools")
+		if err != nil {
+			return spec, err
+		}
+		spec.Agent.Tools = tools
+	}
+	if hasDefinedProperty(opts, "disallowedTools") {
+		disallowed, err := stringArrayProperty(opts, "disallowedTools")
+		if err != nil {
+			return spec, err
+		}
+		spec.Agent.DisallowedTools = disallowed
+	}
 	if hasDefinedProperty(opts, "max_tool_iters") {
 		maxToolIters, err := intProperty(opts, "max_tool_iters")
 		if err != nil {
@@ -490,6 +562,8 @@ func agentSpecFromJS(prompt, currentPhase string, args []*qjs.Value) (AgentTaskS
 			return spec, err
 		}
 		spec.Capabilities = caps
+	} else if spec.Agent.Tools != nil {
+		spec.Capabilities = cloneStringSlice(spec.Agent.Tools)
 	} else if caps := inferAgentCapabilities(prompt); len(caps) > 0 {
 		spec.Capabilities = caps
 	}
@@ -623,13 +697,14 @@ func (r *ScriptRunner) recordCachedAgent(exec *workflowExecution, call collected
 		WorkflowName:    exec.workflowName,
 		Phase:           spec.Phase,
 		Label:           spec.Label,
-		Role:            spec.Role,
+		Role:            firstNonEmpty(spec.Role, spec.Agent.Name),
 		CallKey:         call.resumeCallKey,
 		SpecHash:        call.resumeSpecHash,
 		Sequence:        call.resumeSequence,
 	}
 	resumeData := workflowCachedResumeData(*call.cached)
 	result := workflowCachedResult(*call.cached, taskID)
+	def := workflowAgentDefinition(spec)
 	if err := r.Store.Append(exec.ctx, RunEvent{
 		RunID:        actor.RunID,
 		TaskID:       actor.TaskID,
@@ -645,7 +720,17 @@ func (r *ScriptRunner) recordCachedAgent(exec *workflowExecution, call collected
 		Data: map[string]any{
 			"actor_kind":        actor.ActorKind,
 			"parent_session_id": actor.ParentSessionID,
-			"model":             strings.TrimSpace(spec.Model),
+			"model":             strings.TrimSpace(def.Model),
+			"agent":             def,
+			"effort":            strings.TrimSpace(def.Effort),
+			"permission_mode":   strings.TrimSpace(def.PermissionMode),
+			"max_turns":         def.MaxTurns,
+			"background":        def.Background,
+			"isolation":         strings.TrimSpace(def.Isolation),
+			"skills":            def.Skills,
+			"mcp_servers":       def.MCPServers,
+			"initial_prompt":    strings.TrimSpace(def.InitialPrompt),
+			"memory":            strings.TrimSpace(def.Memory),
 			"max_tool_iters":    spec.MaxToolIters,
 			"max_tool_calls":    spec.MaxToolCalls,
 			"capabilities":      spec.Capabilities,
@@ -752,6 +837,35 @@ func schemaProperty(v *qjs.Value, name string) (map[string]any, error) {
 		return nil, errors.New("agent output schema must be a non-empty object")
 	}
 	return schema, nil
+}
+
+func agentDefinitionProperty(v *qjs.Value, name string) (tasks.AgentDefinition, error) {
+	prop := v.GetPropertyStr(name)
+	defer prop.Free()
+	if prop.IsUndefined() || prop.IsNull() {
+		return tasks.AgentDefinition{}, nil
+	}
+	if !prop.IsObject() || prop.IsArray() {
+		return tasks.AgentDefinition{}, fmt.Errorf("agent opts %s must be an object", name)
+	}
+	def, err := qjs.ToGoValue[tasks.AgentDefinition](prop)
+	if err != nil {
+		return tasks.AgentDefinition{}, fmt.Errorf("agent definition must be JSON-serializable: %w", err)
+	}
+	return def, nil
+}
+
+func anyProperty(v *qjs.Value, name string) (any, error) {
+	prop := v.GetPropertyStr(name)
+	defer prop.Free()
+	if prop.IsUndefined() || prop.IsNull() {
+		return nil, nil
+	}
+	value, err := qjs.ToGoValue[any](prop)
+	if err != nil {
+		return nil, fmt.Errorf("agent opts %s must be JSON-serializable: %w", name, err)
+	}
+	return value, nil
 }
 
 func stringArrayProperty(v *qjs.Value, name string) ([]string, error) {
@@ -989,6 +1103,19 @@ func intProperty(v *qjs.Value, name string) (int, error) {
 		return 0, fmt.Errorf("%s must be positive", name)
 	}
 	return int(value), nil
+}
+
+func boolProperty(v *qjs.Value, name string) (bool, error) {
+	prop := v.GetPropertyStr(name)
+	defer prop.Free()
+	if prop.IsUndefined() || prop.IsNull() {
+		return false, nil
+	}
+	value, err := qjs.ToGoValue[bool](prop)
+	if err != nil {
+		return false, fmt.Errorf("%s must be a boolean", name)
+	}
+	return value, nil
 }
 
 func (r *ScriptRunner) recordRunCompleted(ctx context.Context, runID RunID, message string, result any) error {

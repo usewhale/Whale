@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/usewhale/whale/internal/llm"
+	"github.com/usewhale/whale/internal/tasks"
 )
 
 type RunID string
@@ -60,15 +61,25 @@ type ActorContext struct {
 }
 
 type AgentTaskSpec struct {
-	Prompt       string         `json:"prompt"`
-	Role         string         `json:"role,omitempty"`
-	Model        string         `json:"model,omitempty"`
-	MaxToolIters int            `json:"max_tool_iters,omitempty"`
-	MaxToolCalls int            `json:"max_tool_calls,omitempty"`
-	Phase        string         `json:"phase,omitempty"`
-	Label        string         `json:"label,omitempty"`
-	Capabilities []string       `json:"capabilities,omitempty"`
-	OutputSchema map[string]any `json:"output_schema,omitempty"`
+	Prompt         string                `json:"prompt"`
+	Role           string                `json:"role,omitempty"`
+	Agent          tasks.AgentDefinition `json:"agent,omitempty"`
+	Model          string                `json:"model,omitempty"`
+	Effort         string                `json:"effort,omitempty"`
+	PermissionMode string                `json:"permissionMode,omitempty"`
+	MaxTurns       int                   `json:"maxTurns,omitempty"`
+	Background     bool                  `json:"background,omitempty"`
+	Isolation      string                `json:"isolation,omitempty"`
+	Skills         []string              `json:"skills,omitempty"`
+	MCPServers     []string              `json:"mcpServers,omitempty"`
+	InitialPrompt  string                `json:"initialPrompt,omitempty"`
+	Memory         string                `json:"memory,omitempty"`
+	MaxToolIters   int                   `json:"max_tool_iters,omitempty"`
+	MaxToolCalls   int                   `json:"max_tool_calls,omitempty"`
+	Phase          string                `json:"phase,omitempty"`
+	Label          string                `json:"label,omitempty"`
+	Capabilities   []string              `json:"capabilities,omitempty"`
+	OutputSchema   map[string]any        `json:"output_schema,omitempty"`
 }
 
 type AgentTaskResult struct {
@@ -114,6 +125,7 @@ type WorkflowInput struct {
 	Name            string `json:"name,omitempty"`
 	Args            any    `json:"args,omitempty"`
 	ScriptPath      string `json:"scriptPath,omitempty"`
+	SaveAs          string `json:"saveAs,omitempty"`
 	ResumeFromRunID string `json:"resumeFromRunId,omitempty"`
 	BudgetTokens    *int   `json:"budgetTokens,omitempty"`
 }

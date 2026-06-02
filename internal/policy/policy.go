@@ -41,6 +41,8 @@ type PermissionConfig struct {
 	MCP               map[string]string
 	Memory            map[string]string
 	Task              map[string]string
+	WebSearch         map[string]string
+	WebFetch          map[string]string
 	MutatingTool      map[string]string
 }
 type RulePolicy struct {

@@ -3,6 +3,9 @@
 Whale 支持 **dynamic workflows**：JavaScript 脚本编排多个子 agent，
 控制流由脚本决定（循环、扇出、barrier），每个 `agent()` 调用做实际的 LLM 工作。
 
+如果你想先定义可复用的 reviewer、researcher 或 architect 角色，见
+[自定义 Subagent](agents.md)。
+
 > **Claude Code 兼容**
 >
 > Whale 的 workflow 脚本格式与 **Claude Code raw script 完全兼容**。

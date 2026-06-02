@@ -4,6 +4,9 @@ Whale supports **dynamic workflows**: JavaScript scripts that orchestrate multip
 sub-agents deterministically. The script controls the flow — loops, fan-outs, barriers —
 while each `agent()` call does the actual LLM work.
 
+If you want reusable reviewer, researcher, or architect roles first, see
+[Custom Subagents](agents.en.md).
+
 > **Claude Code Compatible**
 >
 > Whale's workflow script format is **fully compatible with Claude Code raw scripts**.

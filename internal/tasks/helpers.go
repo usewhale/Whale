@@ -25,6 +25,7 @@ func addUsage(a, b llm.Usage) llm.Usage {
 	a.TotalTokens += b.TotalTokens
 	a.PromptCacheHitTokens += b.PromptCacheHitTokens
 	a.PromptCacheMissTokens += b.PromptCacheMissTokens
+	a.PrefixCompletionRequests += b.PrefixCompletionRequests
 	a.ReasoningReplayTokens += b.ReasoningReplayTokens
 	a.ToolResultRawChars += b.ToolResultRawChars
 	a.ToolResultReplayChars += b.ToolResultReplayChars

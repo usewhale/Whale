@@ -10,15 +10,16 @@ import (
 )
 
 type providerOptions struct {
-	APIKey            string
-	BaseURL           string
-	Model             string
-	ReasoningEffort   string
-	ThinkingEnabled   bool
-	MaxTokens         int
-	RetryPolicy       llmretry.Policy
-	StreamMaxAttempts int
-	StreamIdleTimeout time.Duration
+	APIKey                   string
+	BaseURL                  string
+	Model                    string
+	ReasoningEffort          string
+	ThinkingEnabled          bool
+	MaxTokens                int
+	RetryPolicy              llmretry.Policy
+	StreamMaxAttempts        int
+	StreamIdleTimeout        time.Duration
+	DeepSeekPrefixCompletion bool
 }
 
 func newDeepSeekProvider(opts providerOptions) (llm.Provider, error) {
@@ -47,6 +48,9 @@ func newDeepSeekProvider(opts providerOptions) (llm.Provider, error) {
 	}
 	if opts.MaxTokens > 0 {
 		dsOpts = append(dsOpts, deepseek.WithMaxTokens(opts.MaxTokens))
+	}
+	if opts.DeepSeekPrefixCompletion {
+		dsOpts = append(dsOpts, deepseek.WithPrefixCompletion(true))
 	}
 	return deepseek.New(dsOpts...)
 }

@@ -39,6 +39,10 @@ func ParseQualifiedToolName(name string) (server, tool string, ok bool) {
 	return server, tool, true
 }
 
+func NormalizeServerNameForToolName(server string) string {
+	return sanitizeComponent(server, "server")
+}
+
 func UniqueToolName(base string, seen map[string]bool) string {
 	if !seen[base] {
 		seen[base] = true

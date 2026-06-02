@@ -6,10 +6,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/usewhale/whale/internal/agent"
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/store"
+	"github.com/usewhale/whale/internal/telemetry"
 )
 
 func TestHandleLocalCommandCompactUsageError(t *testing.T) {
@@ -183,5 +185,176 @@ func TestRunOptionsKeepExplicitViewMode(t *testing.T) {
 	got := a.applyRunOptionsDefaults(agent.RunOptions{ViewMode: ViewModeDefault})
 	if got.ViewMode != ViewModeDefault {
 		t.Fatalf("view mode: want explicit %q, got %q", ViewModeDefault, got.ViewMode)
+	}
+}
+
+func TestFinalizeTurnDoesNotCompletePendingGoalWithoutUpdateTool(t *testing.T) {
+	dir := t.TempDir()
+	a := &App{
+		sessionID:       "goal-session",
+		sessionsDir:     filepath.Join(dir, "sessions"),
+		cfg:             Config{DataDir: dir},
+		workspaceRoot:   dir,
+		pendingGoalTurn: true,
+	}
+	if err := session.SaveGoalState(a.sessionsDir, a.sessionID, session.GoalState{
+		ID:        "goal-active",
+		Objective: "ship it",
+		Status:    session.GoalStatusActive,
+		CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("save goal: %v", err)
+	}
+
+	if err := a.FinalizeTurn("done", true); err != nil {
+		t.Fatalf("FinalizeTurn: %v", err)
+	}
+	st, ok, err := session.LoadGoalState(a.sessionsDir, a.sessionID)
+	if err != nil || !ok {
+		t.Fatalf("load goal state ok=%v err=%v", ok, err)
+	}
+	if st.Status != session.GoalStatusActive {
+		t.Fatalf("goal status = %q, want active", st.Status)
+	}
+	if a.pendingGoalTurn {
+		t.Fatal("pendingGoalTurn should be cleared")
+	}
+}
+
+func TestFinalizeTurnRefreshesCompletedGoalUsage(t *testing.T) {
+	dir := t.TempDir()
+	a := &App{
+		sessionID:       "goal-session",
+		sessionsDir:     filepath.Join(dir, "sessions"),
+		cfg:             Config{DataDir: dir},
+		workspaceRoot:   dir,
+		pendingGoalTurn: true,
+	}
+	if err := session.SaveGoalState(a.sessionsDir, a.sessionID, session.GoalState{
+		ID:            "goal-complete",
+		Objective:     "ship it",
+		Status:        session.GoalStatusCompleted,
+		TokenBaseline: 10,
+		TokensUsed:    20,
+		CreatedAt:     time.Now(),
+		CompletedAt:   time.Now(),
+	}); err != nil {
+		t.Fatalf("save goal: %v", err)
+	}
+	writeUsageRecord(t, filepath.Join(dir, "usage.jsonl"), telemetry.UsageRecord{
+		Session:          "goal-session",
+		Model:            "deepseek-v4-flash",
+		PromptTokens:     50,
+		CompletionTokens: 15,
+	})
+
+	if err := a.FinalizeTurn("done", true); err != nil {
+		t.Fatalf("FinalizeTurn: %v", err)
+	}
+	st, ok, err := session.LoadGoalState(a.sessionsDir, a.sessionID)
+	if err != nil || !ok {
+		t.Fatalf("load goal state ok=%v err=%v", ok, err)
+	}
+	if st.Status != session.GoalStatusCompleted {
+		t.Fatalf("goal status = %q, want completed", st.Status)
+	}
+	if st.TokensUsed != 75 {
+		t.Fatalf("tokens used = %d, want 75", st.TokensUsed)
+	}
+	if a.pendingGoalTurn {
+		t.Fatal("pendingGoalTurn should be cleared")
+	}
+}
+
+func TestFinalizeTurnDoesNotCompleteOrdinaryActiveGoal(t *testing.T) {
+	dir := t.TempDir()
+	a := &App{
+		sessionID:     "goal-session",
+		sessionsDir:   filepath.Join(dir, "sessions"),
+		cfg:           Config{DataDir: dir},
+		workspaceRoot: dir,
+	}
+	if err := session.SaveGoalState(a.sessionsDir, a.sessionID, session.GoalState{
+		ID:        "goal-active",
+		Objective: "ship it",
+		Status:    session.GoalStatusActive,
+		CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("save goal: %v", err)
+	}
+
+	if err := a.FinalizeTurn("ordinary response", true); err != nil {
+		t.Fatalf("FinalizeTurn: %v", err)
+	}
+	st, ok, err := session.LoadGoalState(a.sessionsDir, a.sessionID)
+	if err != nil || !ok {
+		t.Fatalf("load goal state ok=%v err=%v", ok, err)
+	}
+	if st.Status != session.GoalStatusActive {
+		t.Fatalf("goal status = %q, want active", st.Status)
+	}
+}
+
+func TestFinalizeTurnDoesNotCompleteInterruptedGoalTurn(t *testing.T) {
+	dir := t.TempDir()
+	a := &App{
+		sessionID:       "goal-session",
+		sessionsDir:     filepath.Join(dir, "sessions"),
+		cfg:             Config{DataDir: dir},
+		workspaceRoot:   dir,
+		pendingGoalTurn: true,
+	}
+	if err := session.SaveGoalState(a.sessionsDir, a.sessionID, session.GoalState{
+		ID:        "goal-active",
+		Objective: "ship it",
+		Status:    session.GoalStatusActive,
+		CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("save goal: %v", err)
+	}
+
+	if err := a.FinalizeTurn("partial progress", false); err != nil {
+		t.Fatalf("FinalizeTurn: %v", err)
+	}
+	st, ok, err := session.LoadGoalState(a.sessionsDir, a.sessionID)
+	if err != nil || !ok {
+		t.Fatalf("load goal state ok=%v err=%v", ok, err)
+	}
+	if st.Status != session.GoalStatusActive {
+		t.Fatalf("goal status = %q, want active", st.Status)
+	}
+	if a.pendingGoalTurn {
+		t.Fatal("pendingGoalTurn should be cleared")
+	}
+}
+
+func TestFinalizeTurnDoesNotCompletePendingWorkflowGoalTurn(t *testing.T) {
+	dir := t.TempDir()
+	a := &App{
+		sessionID:       "goal-session",
+		sessionsDir:     filepath.Join(dir, "sessions"),
+		cfg:             Config{DataDir: dir},
+		workspaceRoot:   dir,
+		pendingGoalTurn: true,
+	}
+	if err := session.SaveGoalState(a.sessionsDir, a.sessionID, session.GoalState{
+		ID:        "goal-active",
+		Objective: "research it",
+		Status:    session.GoalStatusActive,
+		CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("save goal: %v", err)
+	}
+
+	text := "The workflow is running asynchronously. When it completes, I'll share the results."
+	if err := a.FinalizeTurn(text, true); err != nil {
+		t.Fatalf("FinalizeTurn: %v", err)
+	}
+	st, ok, err := session.LoadGoalState(a.sessionsDir, a.sessionID)
+	if err != nil || !ok {
+		t.Fatalf("load goal state ok=%v err=%v", ok, err)
+	}
+	if st.Status != session.GoalStatusActive {
+		t.Fatalf("goal status = %q, want active", st.Status)
 	}
 }

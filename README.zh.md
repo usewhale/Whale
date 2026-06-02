@@ -104,6 +104,7 @@ return agent("综合两边的发现，写一份简洁指南");
 |---|---|---|
 | **MCP 服务器** | 接入 1,000+ 工具（数据库、API、浏览器自动化） | [docs/mcp.md](docs/mcp.md) |
 | **Skills 技能** | 加载领域知识——代码审查、git-worktree 等 | [docs/skills.md](docs/skills.md) |
+| **Subagents 子智能体** | 定义 reviewer、researcher 等专注角色 | [docs/agents.md](docs/agents.md) |
 | **插件** | 扩展 Whale 运行时 | [docs/plugins.md](docs/plugins.md) |
 | **Hooks** | 在生命周期事件上运行脚本 | [docs/hooks.md](docs/hooks.md) |
 

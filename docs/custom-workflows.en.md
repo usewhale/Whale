@@ -83,6 +83,10 @@ Whale will auto-detect and invoke the workflow by name.
 
 Spawns a sub-agent.
 
+If you only want to define a reusable reviewer, researcher, or architect role,
+start with [Custom Subagents](agents.en.md). Workflows are for orchestrating
+multiple subagent calls into a fixed process.
+
 ```javascript
 const result = await agent("Review this code", {
   label: "code-reviewer",         // Display name in the panel
@@ -92,6 +96,15 @@ const result = await agent("Review this code", {
   capabilities: [],               // Optional, restrict tool access
   max_tool_iters: 10,             // Max tool-call rounds
   max_tool_calls: 20,             // Max total tool calls
+});
+```
+
+You can also reuse a custom role from `.whale/agents`:
+
+```javascript
+const review = await agent("Review the current changes", {
+  agent: { name: "reviewer" },
+  label: "reviewer",
 });
 ```
 

@@ -32,6 +32,7 @@ const (
 	IntentShutdown                  IntentKind = "shutdown"
 	IntentSetModelAndEffort         IntentKind = "set_model_and_effort"
 	IntentSetApprovalMode           IntentKind = "set_approval_mode"
+	IntentEnableAutoAccept          IntentKind = "enable_auto_accept"
 	IntentSetViewMode               IntentKind = "set_view_mode"
 	IntentToggleMode                IntentKind = "toggle_mode"
 	IntentImplementPlan             IntentKind = "implement_plan"
@@ -51,32 +52,35 @@ const (
 )
 
 type Intent struct {
-	Kind              IntentKind
-	Input             string
-	HiddenInput       bool
-	ToolCallID        string
-	UserInput         *core.UserInputResponse
-	SessionInput      string
-	MessageID         string
-	Model             string
-	Effort            string
-	Thinking          string
-	ApprovalMode      string
-	ViewMode          string
-	SkillName         string
-	SkillEnabled      bool
-	PluginID          string
-	PluginEnabled     bool
-	HookKey           string
-	HookEnabled       bool
-	HooksReviewAction string
-	SkillBinding      *app.SkillBinding
-	WorktreeAction    string
-	WorkflowRunID     string
-	WorkflowName      string
-	WorkflowArgs      string
-	WorkflowResume    string
-	WorkflowTrust     bool
+	Kind               IntentKind
+	Input              string
+	HiddenInput        bool
+	ToolCallID         string
+	UserInput          *core.UserInputResponse
+	SessionInput       string
+	MessageID          string
+	Model              string
+	Effort             string
+	Thinking           string
+	ApprovalMode       string
+	ViewMode           string
+	SkillName          string
+	SkillEnabled       bool
+	PluginID           string
+	PluginEnabled      bool
+	HookKey            string
+	HookEnabled        bool
+	HooksReviewAction  string
+	SkillBinding       *app.SkillBinding
+	WorktreeAction     string
+	WorkflowRunID      string
+	WorkflowName       string
+	WorkflowArgs       string
+	WorkflowResume     string
+	WorkflowTrust      bool
+	WorkflowScript     string
+	WorkflowSaveAs     string
+	WorkflowScriptPath string
 }
 
 type EventKind = protocol.EventKind

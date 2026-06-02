@@ -282,6 +282,7 @@ type Agent struct {
 	budgetWarned80         sync.Map
 	maxToolIters           int
 	maxToolCalls           int
+	maxTurns               int
 	maxParallelSubagents   int
 	active                 sync.Map
 }
@@ -467,6 +468,15 @@ func WithHookHandlers(handlers ...HookHandler) AgentOption {
 	}
 }
 
+func WithHookExecutors(promptExecutor, agentExecutor HookExecutor) AgentOption {
+	return func(a *Agent) {
+		if a.hooks == nil {
+			a.hooks = NewHookRunner(nil, "")
+		}
+		a.hooks.SetExecutors(promptExecutor, agentExecutor)
+	}
+}
+
 func WithProjectMemory(enabled bool, maxChars int, fileOrder []string, workspaceRoot string) AgentOption {
 	return func(a *Agent) {
 		a.projectMemoryEnabled = enabled
@@ -523,6 +533,14 @@ func WithMaxToolCalls(maxCalls int) AgentOption {
 	return func(a *Agent) {
 		if maxCalls > 0 {
 			a.maxToolCalls = maxCalls
+		}
+	}
+}
+
+func WithMaxTurns(maxTurns int) AgentOption {
+	return func(a *Agent) {
+		if maxTurns > 0 {
+			a.maxTurns = maxTurns
 		}
 	}
 }

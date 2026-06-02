@@ -654,6 +654,119 @@ func TestWithBaseURLOverridesEnvironment(t *testing.T) {
 	}
 }
 
+func TestStreamResponseWithPrefixUsesBetaPayload(t *testing.T) {
+	var payload map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/beta/chat/completions" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		if _, ok := payload["tools"]; ok {
+			t.Fatalf("prefix completion request should not include tools: %+v", payload["tools"])
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"\\\"decision\\\":\\\"pass\\\"}\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":4,\"total_tokens\":7}}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	t.Setenv("DEEPSEEK_API_KEY", "test-key")
+	c, err := New(WithBaseURL(srv.URL+"/beta"), WithHTTPClient(srv.Client()), WithPrefixCompletion(true))
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	var final string
+	var usage llm.Usage
+	for ev := range c.StreamResponseWithPrefix(context.Background(), []core.Message{{Role: core.RoleUser, Text: "return json"}}, "{", nil) {
+		if ev.Type == llm.EventError {
+			t.Fatalf("provider error: %v", ev.Err)
+		}
+		if ev.Type == llm.EventComplete {
+			final = ev.Response.Content
+			usage = ev.Response.Usage
+		}
+	}
+	if final != `{"decision":"pass"}` {
+		t.Fatalf("final content = %q", final)
+	}
+	if usage.PrefixCompletionRequests != 1 {
+		t.Fatalf("prefix completion requests = %d, want 1", usage.PrefixCompletionRequests)
+	}
+	messages, ok := payload["messages"].([]any)
+	if !ok || len(messages) != 2 {
+		t.Fatalf("messages = %+v", payload["messages"])
+	}
+	last, ok := messages[len(messages)-1].(map[string]any)
+	if !ok || last["role"] != "assistant" || last["content"] != "{" || last["prefix"] != true {
+		t.Fatalf("last message should be assistant prefix, got %+v", last)
+	}
+}
+
+func TestStreamResponseWithPrefixMapsDocumentedV1BaseToBeta(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "test-key")
+	c, err := New(WithBaseURL(defaultBaseURL+"/v1"), WithPrefixCompletion(true))
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	got, ok := c.prefixCompletionBaseURL()
+	if !ok {
+		t.Fatal("documented /v1 base should support prefix completion")
+	}
+	if got != defaultBaseURL+"/beta" {
+		t.Fatalf("prefix base = %q, want %q", got, defaultBaseURL+"/beta")
+	}
+}
+
+func TestStreamResponseWithPrefixFallsBackForCustomNonBetaBaseURL(t *testing.T) {
+	var path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		messages, _ := payload["messages"].([]any)
+		last, _ := messages[len(messages)-1].(map[string]any)
+		if last["prefix"] == true {
+			t.Fatalf("custom non-beta base should not send prefix message: %+v", last)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	t.Setenv("DEEPSEEK_API_KEY", "test-key")
+	c, err := New(WithBaseURL(srv.URL), WithHTTPClient(srv.Client()), WithPrefixCompletion(true))
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	var final string
+	var usage llm.Usage
+	for ev := range c.StreamResponseWithPrefix(context.Background(), []core.Message{{Role: core.RoleUser, Text: "hi"}}, "{", nil) {
+		if ev.Type == llm.EventError {
+			t.Fatalf("provider error: %v", ev.Err)
+		}
+		if ev.Type == llm.EventComplete {
+			final = ev.Response.Content
+			usage = ev.Response.Usage
+		}
+	}
+	if path != "/chat/completions" {
+		t.Fatalf("path = %q, want /chat/completions", path)
+	}
+	if final != "ok" {
+		t.Fatalf("final = %q", final)
+	}
+	if usage.PrefixCompletionRequests != 0 {
+		t.Fatalf("prefix completion requests = %d, want 0", usage.PrefixCompletionRequests)
+	}
+}
+
 func TestToDeepSeekMessagesRecoversMissingToolResults(t *testing.T) {
 	history := []core.Message{
 		{

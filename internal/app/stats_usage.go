@@ -40,6 +40,7 @@ func readUsageStats(path string, now time.Time) usageStats {
 		stats.CompletionTokens += rec.CompletionTokens
 		stats.CacheHit += rec.PromptCacheHit
 		stats.CacheMiss += rec.PromptCacheMiss
+		stats.PrefixCompletionRequests += rec.PrefixCompletionRequests
 		stats.ReasoningReplayTokens += rec.ReasoningReplayTok
 		cost := telemetry.EstimateUsageRecordUSD(rec)
 		cacheSavings := telemetry.EstimateUsageRecordCacheSavingsUSD(rec)
@@ -68,6 +69,7 @@ func readUsageStats(path string, now time.Time) usageStats {
 		ms.PromptTokens += rec.PromptTokens
 		ms.CompletionTokens += rec.CompletionTokens
 		ms.Tokens += rec.PromptTokens + rec.CompletionTokens
+		ms.PrefixCompletionRequests += rec.PrefixCompletionRequests
 		ms.ReasoningReplayTokens += rec.ReasoningReplayTok
 		ms.CostUSD += cost
 		ms.CacheHit += rec.PromptCacheHit
@@ -167,6 +169,7 @@ func addUsageBuckets(buckets []usageBucketStats, rec telemetry.UsageRecord, cost
 		buckets[i].CompletionTokens += rec.CompletionTokens
 		buckets[i].CacheHit += rec.PromptCacheHit
 		buckets[i].CacheMiss += rec.PromptCacheMiss
+		buckets[i].PrefixCompletionRequests += rec.PrefixCompletionRequests
 		buckets[i].CostUSD += cost
 		buckets[i].CacheSavingsUSD += cacheSavings
 		buckets[i].ReasoningReplay += rec.ReasoningReplayTok

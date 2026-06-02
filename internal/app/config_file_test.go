@@ -24,12 +24,15 @@ func TestConfigFileRoundTrip(t *testing.T) {
 		Model:           "deepseek-v4-pro",
 		ReasoningEffort: "max",
 		ThinkingEnabled: &enabled,
+		Experimental:    FileExperimentalConfig{DeepSeekPrefixCompletion: &enabled},
 		UI:              FileUIConfig{ViewMode: ViewModeFocus, ShowReasoning: &showReasoning, CheckForUpdateOnStartup: &checkUpdates},
 		API:             FileAPIConfig{BaseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1/"},
 		Permissions: FilePermissionsConfig{
 			Default:    "ask",
 			AutoAccept: &enabled,
 			Shell:      map[string]string{"git push*": "ask"},
+			WebSearch:  map[string]string{"*": "ask"},
+			WebFetch:   map[string]string{"host:nodejs.org": "allow"},
 		},
 	}
 	if err := SaveConfigFile(path, cfg); err != nil {
@@ -60,6 +63,9 @@ func TestConfigFileRoundTrip(t *testing.T) {
 	if loaded.ThinkingEnabled == nil || !*loaded.ThinkingEnabled {
 		t.Fatal("thinking_enabled: want true")
 	}
+	if loaded.Experimental.DeepSeekPrefixCompletion == nil || !*loaded.Experimental.DeepSeekPrefixCompletion {
+		t.Fatal("experimental.deepseek_prefix_completion: want true")
+	}
 	if loaded.API.BaseURL != "https://dashscope.aliyuncs.com/compatible-mode/v1/" {
 		t.Fatalf("api base_url: %+v", loaded.API)
 	}
@@ -72,7 +78,10 @@ func TestConfigFileRoundTrip(t *testing.T) {
 	if loaded.UI.CheckForUpdateOnStartup == nil || *loaded.UI.CheckForUpdateOnStartup {
 		t.Fatalf("ui.check_for_update_on_startup: want false, got %+v", loaded.UI.CheckForUpdateOnStartup)
 	}
-	if loaded.Permissions.Default != "ask" || loaded.Permissions.AutoAccept == nil || !*loaded.Permissions.AutoAccept || loaded.Permissions.Shell["git push*"] != "ask" {
+	if loaded.Permissions.Default != "ask" || loaded.Permissions.AutoAccept == nil || !*loaded.Permissions.AutoAccept ||
+		loaded.Permissions.Shell["git push*"] != "ask" ||
+		loaded.Permissions.WebSearch["*"] != "ask" ||
+		loaded.Permissions.WebFetch["host:nodejs.org"] != "allow" {
 		t.Fatalf("permissions config: %+v", loaded.Permissions)
 	}
 }
@@ -84,6 +93,27 @@ func TestApplyFileConfigSupportsMaxParallelSubagents(t *testing.T) {
 	}
 	if cfg.MaxParallelSubagents != 3 {
 		t.Fatalf("max parallel subagents: want 3, got %d", cfg.MaxParallelSubagents)
+	}
+}
+
+func TestApplyFileConfigSupportsDeepSeekPrefixCompletion(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.DeepSeekPrefixCompletion {
+		t.Fatal("deepseek prefix completion should default to disabled")
+	}
+	enabled := true
+	if err := ApplyFileConfig(&cfg, FileConfig{Experimental: FileExperimentalConfig{DeepSeekPrefixCompletion: &enabled}}); err != nil {
+		t.Fatalf("ApplyFileConfig: %v", err)
+	}
+	if !cfg.DeepSeekPrefixCompletion {
+		t.Fatal("expected deepseek prefix completion to be enabled")
+	}
+	disabled := false
+	if err := ApplyFileConfig(&cfg, FileConfig{Experimental: FileExperimentalConfig{DeepSeekPrefixCompletion: &disabled}}); err != nil {
+		t.Fatalf("ApplyFileConfig: %v", err)
+	}
+	if cfg.DeepSeekPrefixCompletion {
+		t.Fatal("expected deepseek prefix completion to be disabled")
 	}
 }
 
@@ -494,6 +524,8 @@ func TestApplyFileConfigLoadsPermissionRules(t *testing.T) {
 			Read:       map[string]string{"*": "allow", "*.env": "ask"},
 			Shell:      map[string]string{"*": "allow", "git push*": "ask", "rm -rf*": "deny"},
 			MCP:        map[string]string{"*": "ask"},
+			WebSearch:  map[string]string{"*": "ask"},
+			WebFetch:   map[string]string{"host:nodejs.org": "allow"},
 			MutatingTool: map[string]string{
 				"delete_project": "deny",
 			},
@@ -507,15 +539,30 @@ func TestApplyFileConfigLoadsPermissionRules(t *testing.T) {
 	if !cfg.AutoAcceptPermissions {
 		t.Fatal("auto accept not applied")
 	}
-	if len(cfg.PermissionRules) != 7 {
-		t.Fatalf("permission rules = %d, want 7: %+v", len(cfg.PermissionRules), cfg.PermissionRules)
+	if len(cfg.PermissionRules) != 9 {
+		t.Fatalf("permission rules = %d, want 9: %+v", len(cfg.PermissionRules), cfg.PermissionRules)
 	}
 	if got := cfg.PermissionRules[0]; got.Permission != "read" || got.Pattern != "*" || got.Action != policy.PermissionAllow {
 		t.Fatalf("first rule = %+v", got)
 	}
+	if !hasPermissionRule(cfg.PermissionRules, "web_search", "*", policy.PermissionAsk) {
+		t.Fatalf("missing web_search rule: %+v", cfg.PermissionRules)
+	}
+	if !hasPermissionRule(cfg.PermissionRules, "web_fetch", "host:nodejs.org", policy.PermissionAllow) {
+		t.Fatalf("missing web_fetch rule: %+v", cfg.PermissionRules)
+	}
 	if got := cfg.PermissionRules[len(cfg.PermissionRules)-1]; got.Permission != "mutating_tool" || got.Pattern != "delete_project" || got.Action != policy.PermissionDeny {
 		t.Fatalf("last rule = %+v", got)
 	}
+}
+
+func hasPermissionRule(rules []policy.PermissionRule, permission, pattern string, action policy.PermissionAction) bool {
+	for _, rule := range rules {
+		if rule.Permission == permission && rule.Pattern == pattern && rule.Action == action {
+			return true
+		}
+	}
+	return false
 }
 
 func TestLoadAndApplyConfigKeepsFilePermissionRulesWithDefaultCLIConfig(t *testing.T) {

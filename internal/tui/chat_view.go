@@ -23,6 +23,14 @@ func (m *model) appendNotice(text string) {
 	m.refreshLiveViewportContent()
 }
 
+func (m *model) appendLiveAssistantMessage(text string) {
+	if m.assembler == nil {
+		m.assembler = tuirender.NewAssembler()
+	}
+	m.assembler.AddAssistantMessage(text)
+	m.refreshLiveViewportContent()
+}
+
 func (m *model) appendSystemNotice(notice *tuirender.SystemNotice) {
 	if notice == nil {
 		return

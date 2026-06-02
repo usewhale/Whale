@@ -181,8 +181,19 @@ func (a *Agent) dispatchToolCalls(ctx context.Context, sc streamDispatchContext,
 			continue
 		}
 
-		if err := a.dispatchStandardTool(ctx, sc, prepared, &results); err != nil {
+		abortTurn, err := a.dispatchStandardTool(ctx, sc, prepared, &results)
+		if err != nil {
 			return nil, false, err
+		}
+		if abortTurn {
+			if err := appendAbortSkippedToolResults(ctx, sc, &results); err != nil {
+				return nil, false, err
+			}
+			toolMsg, err := a.createDispatchToolMessage(ctx, sc, results)
+			if err != nil {
+				return nil, false, err
+			}
+			return &toolMsg, true, nil
 		}
 	}
 	if err := flushPendingParallelSubagents(); err != nil {
@@ -206,6 +217,30 @@ func emitDispatchEvent(ctx context.Context, sc streamDispatchContext, ev AgentEv
 func appendToolResult(ctx context.Context, sc streamDispatchContext, results *[]core.ToolResult, tr core.ToolResult) error {
 	*results = append(*results, tr)
 	return emitDispatchEvent(ctx, sc, AgentEvent{Type: AgentEventTypeToolResult, Result: &tr})
+}
+
+func appendAbortSkippedToolResults(ctx context.Context, sc streamDispatchContext, results *[]core.ToolResult) error {
+	answered := make(map[string]bool, len(*results))
+	for _, result := range *results {
+		if result.ToolCallID != "" {
+			answered[result.ToolCallID] = true
+		}
+	}
+	for _, call := range sc.Assistant.ToolCalls {
+		if call.ID == "" || answered[call.ID] {
+			continue
+		}
+		if err := appendToolResult(ctx, sc, results, core.ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			Content:    `{"success":false,"error":"tool skipped because another tool requested a runtime handoff","code":"turn_aborted"}`,
+			IsError:    true,
+		}); err != nil {
+			return err
+		}
+		answered[call.ID] = true
+	}
+	return nil
 }
 
 func appendBlockedToolResults(ctx context.Context, sc streamDispatchContext, blocked []core.ToolResult, results *[]core.ToolResult) error {
@@ -517,6 +552,9 @@ func (a *Agent) resolveToolApproval(ctx context.Context, sc streamDispatchContex
 	if err := appendToolResult(ctx, sc, results, tr); err != nil {
 		return toolApprovalResult{}, err
 	}
+	if err := appendAbortSkippedToolResults(ctx, sc, results); err != nil {
+		return toolApprovalResult{}, err
+	}
 	toolMsg, err := a.store.Create(ctx, core.Message{SessionID: sc.SessionID, Role: core.RoleTool, ToolResults: *results})
 	if err != nil {
 		return toolApprovalResult{}, fmt.Errorf("create tool message: %w", err)
@@ -549,18 +587,18 @@ func (a *Agent) dispatchPostApprovalSpecialTool(ctx context.Context, sc streamDi
 	}
 }
 
-func (a *Agent) dispatchStandardTool(ctx context.Context, sc streamDispatchContext, prepared preparedToolDispatch, results *[]core.ToolResult) error {
+func (a *Agent) dispatchStandardTool(ctx context.Context, sc streamDispatchContext, prepared preparedToolDispatch, results *[]core.ToolResult) (bool, error) {
 	finalRes, ok, primarySucceeded := a.dispatchWithRecovery(ctx, sc.SessionID, sc.Assistant.ID, sc.CheckpointMessageID, sc.Model, prepared.Call, prepared.ExternalReadRoots, sc.Events, sc.Tools)
 	if err := ctx.Err(); err != nil {
-		return err
+		return false, err
 	}
 	if !ok {
-		return nil
+		return false, nil
 	}
 	if !a.appendDispatchedToolResult(ctx, sc.SessionID, prepared, finalRes, primarySucceeded, sc.Events, results) {
-		return ctx.Err()
+		return false, ctx.Err()
 	}
-	return nil
+	return toolResultRequestsTurnAbort(finalRes), nil
 }
 
 func (a *Agent) createDispatchToolMessage(ctx context.Context, sc streamDispatchContext, results []core.ToolResult) (core.Message, error) {
@@ -569,4 +607,22 @@ func (a *Agent) createDispatchToolMessage(ctx context.Context, sc streamDispatch
 		return core.Message{}, fmt.Errorf("create tool message: %w", err)
 	}
 	return toolMsg, nil
+}
+
+func toolResultRequestsTurnAbort(res core.ToolResult) bool {
+	if res.Metadata == nil {
+		return false
+	}
+	v, ok := res.Metadata["abort_turn_after_tool_result"]
+	if !ok {
+		return false
+	}
+	switch x := v.(type) {
+	case bool:
+		return x
+	case string:
+		return strings.EqualFold(strings.TrimSpace(x), "true")
+	default:
+		return false
+	}
 }

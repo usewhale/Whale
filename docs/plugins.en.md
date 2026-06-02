@@ -169,6 +169,9 @@ capabilities: workspace.read
 You are an expert on {{plugin_id}}. Review the code against this plugin's conventions.
 ```
 
+If you are not building a plugin and only want a project-level or personal
+subagent, start with [Custom Subagents](agents.en.md).
+
 #### Session Rules (Rules)
 
 Rules under `rules/` are injected into every session's startup context:

@@ -169,6 +169,9 @@ capabilities: workspace.read
 你是 {{plugin_id}} 的专家，审查代码是否符合这个插件的惯例。
 ```
 
+如果你不是在写插件，只是想给当前项目或自己添加一个 subagent，
+优先看 [自定义 Subagent](agents.md)。
+
 #### 会话规则（Rules）
 
 `rules/` 下的 `.md` 文件内容会在每次会话启动时注入到上下文：

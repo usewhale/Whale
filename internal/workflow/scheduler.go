@@ -31,6 +31,47 @@ func NewTaskScheduler(store RunEventStore, spawner AgentSpawner) *TaskScheduler 
 	return &TaskScheduler{Store: store, Spawner: spawner, Now: time.Now}
 }
 
+func workflowAgentDefinition(spec AgentTaskSpec) tasks.AgentDefinition {
+	def := spec.Agent
+	if strings.TrimSpace(def.Name) == "" {
+		def.Name = strings.TrimSpace(spec.Role)
+	}
+	if strings.TrimSpace(spec.Model) != "" {
+		def.Model = strings.TrimSpace(spec.Model)
+	}
+	if strings.TrimSpace(spec.Effort) != "" {
+		def.Effort = strings.TrimSpace(spec.Effort)
+	}
+	if strings.TrimSpace(spec.PermissionMode) != "" {
+		def.PermissionMode = strings.TrimSpace(spec.PermissionMode)
+	}
+	if spec.MaxTurns > 0 {
+		def.MaxTurns = spec.MaxTurns
+	}
+	if spec.Background {
+		def.Background = true
+	}
+	if strings.TrimSpace(spec.Isolation) != "" {
+		def.Isolation = strings.TrimSpace(spec.Isolation)
+	}
+	if spec.Skills != nil {
+		def.Skills = cloneStringSlice(spec.Skills)
+	}
+	if spec.MCPServers != nil {
+		def.MCPServers = cloneStringSlice(spec.MCPServers)
+	}
+	if strings.TrimSpace(spec.InitialPrompt) != "" {
+		def.InitialPrompt = strings.TrimSpace(spec.InitialPrompt)
+	}
+	if strings.TrimSpace(spec.Memory) != "" {
+		def.Memory = strings.TrimSpace(spec.Memory)
+	}
+	if spec.Capabilities != nil {
+		def.Tools = cloneStringSlice(spec.Capabilities)
+	}
+	return def
+}
+
 func (s *TaskScheduler) SpawnAgent(ctx context.Context, actor ActorContext, spec AgentTaskSpec) (AgentTaskResult, error) {
 	if strings.TrimSpace(spec.Prompt) == "" {
 		return AgentTaskResult{}, errors.New("prompt is required")
@@ -48,12 +89,14 @@ func (s *TaskScheduler) SpawnAgent(ctx context.Context, actor ActorContext, spec
 		actor.TaskID = TaskID("task-" + uuid.NewString())
 	}
 	actor.ActorKind = firstNonEmpty(actor.ActorKind, ActorKindSubagent)
-	actor.Role = firstNonEmpty(actor.Role, spec.Role)
+	actor.Role = firstNonEmpty(actor.Role, spec.Role, spec.Agent.Name)
 	actor.Phase = firstNonEmpty(actor.Phase, spec.Phase)
 	actor.Label = firstNonEmpty(actor.Label, spec.Label)
+	def := workflowAgentDefinition(spec)
 	req := tasks.SpawnSubagentRequest{
 		Task:              spec.Prompt,
 		Role:              actor.Role,
+		Agent:             def,
 		Model:             spec.Model,
 		MaxToolIters:      spec.MaxToolIters,
 		MaxToolCalls:      spec.MaxToolCalls,
@@ -90,7 +133,17 @@ func (s *TaskScheduler) SpawnAgent(ctx context.Context, actor ActorContext, spec
 		Data: map[string]any{
 			"actor_kind":        actor.ActorKind,
 			"parent_session_id": actor.ParentSessionID,
-			"model":             strings.TrimSpace(spec.Model),
+			"model":             strings.TrimSpace(def.Model),
+			"agent":             def,
+			"effort":            strings.TrimSpace(def.Effort),
+			"permission_mode":   strings.TrimSpace(def.PermissionMode),
+			"max_turns":         def.MaxTurns,
+			"background":        def.Background,
+			"isolation":         strings.TrimSpace(def.Isolation),
+			"skills":            def.Skills,
+			"mcp_servers":       def.MCPServers,
+			"initial_prompt":    strings.TrimSpace(def.InitialPrompt),
+			"memory":            strings.TrimSpace(def.Memory),
 			"max_tool_iters":    spec.MaxToolIters,
 			"max_tool_calls":    spec.MaxToolCalls,
 			"capabilities":      spec.Capabilities,
@@ -194,10 +247,15 @@ func (s *TaskScheduler) SpawnAgent(ctx context.Context, actor ActorContext, spec
 	if result.Status == "" {
 		result.Status = TaskStatusCompleted
 	}
+	eventStatus := result.Status
+	if eventStatus == TaskStatusRunning {
+		eventStatus = TaskStatusCompleted
+	}
 	data := map[string]any{
-		"tool_calls":  result.ToolCalls,
-		"duration_ms": result.DurationMS,
-		"usage":       usageEventData(result.Usage),
+		"tool_calls":   result.ToolCalls,
+		"duration_ms":  result.DurationMS,
+		"usage":        usageEventData(result.Usage),
+		"child_status": result.Status,
 	}
 	if resumeData := workflowResumeData(actor.CallKey, actor.SpecHash, actor.Sequence); resumeData != nil {
 		data["resume"] = resumeData
@@ -210,7 +268,7 @@ func (s *TaskScheduler) SpawnAgent(ctx context.Context, actor ActorContext, spec
 		TaskID:       actor.TaskID,
 		Type:         EventTaskCompleted,
 		Time:         s.now().UTC(),
-		Status:       result.Status,
+		Status:       eventStatus,
 		ParentTaskID: actor.ParentTaskID,
 		WorkflowName: actor.WorkflowName,
 		Phase:        actor.Phase,

@@ -17,6 +17,9 @@ func formatUsageStats(stats usageStats) []string {
 	if stats.ReasoningReplayTokens > 0 {
 		lines = append(lines, fmt.Sprintf("- reasoning replay: %s tokens · %.1f%% of input", formatCount(stats.ReasoningReplayTokens), ratioPercent(stats.ReasoningReplayTokens, stats.PromptTokens)))
 	}
+	if stats.PrefixCompletionRequests > 0 {
+		lines = append(lines, fmt.Sprintf("- Prefix completion: %d requests", stats.PrefixCompletionRequests))
+	}
 	if stats.SubagentTurns > 0 {
 		lines = append(lines, fmt.Sprintf("- subagents: %d turns · %s tokens · $%.4f", stats.SubagentTurns, formatCount(stats.SubagentPromptTokens+stats.SubagentOutputTokens), stats.SubagentCostUSD))
 	}
@@ -27,7 +30,11 @@ func formatUsageStats(stats usageStats) []string {
 			if b.SubagentTurns > 0 {
 				subagentDetail = fmt.Sprintf(" · subagents %d/$%.4f", b.SubagentTurns, b.SubagentCostUSD)
 			}
-			lines = append(lines, fmt.Sprintf("- %s: %d turns · %s tokens · %.1f%% cache · $%.4f cost · $%.4f cache saved%s", b.Label, b.Turns, formatCount(b.PromptTokens+b.CompletionTokens), ratioPercent(b.CacheHit, b.CacheHit+b.CacheMiss), b.CostUSD, b.CacheSavingsUSD, subagentDetail))
+			prefixDetail := ""
+			if b.PrefixCompletionRequests > 0 {
+				prefixDetail = fmt.Sprintf(" · Prefix completion %d", b.PrefixCompletionRequests)
+			}
+			lines = append(lines, fmt.Sprintf("- %s: %d turns · %s tokens · %.1f%% cache · $%.4f cost · $%.4f cache saved%s%s", b.Label, b.Turns, formatCount(b.PromptTokens+b.CompletionTokens), ratioPercent(b.CacheHit, b.CacheHit+b.CacheMiss), b.CostUSD, b.CacheSavingsUSD, prefixDetail, subagentDetail))
 		}
 	}
 	if len(stats.ByModel) > 0 {
@@ -37,7 +44,11 @@ func formatUsageStats(stats usageStats) []string {
 			if ms.ReasoningReplayTokens > 0 {
 				replayDetail = fmt.Sprintf(" · %s reasoning replay", formatCount(ms.ReasoningReplayTokens))
 			}
-			lines = append(lines, fmt.Sprintf("- %s: %d turns · %s tokens%s · %.1f%% cache · $%.4f", ms.Model, ms.Turns, formatCount(ms.Tokens), replayDetail, ratioPercent(ms.CacheHit, ms.CacheHit+ms.CacheMiss), ms.CostUSD))
+			prefixDetail := ""
+			if ms.PrefixCompletionRequests > 0 {
+				prefixDetail = fmt.Sprintf(" · Prefix completion %d", ms.PrefixCompletionRequests)
+			}
+			lines = append(lines, fmt.Sprintf("- %s: %d turns · %s tokens%s%s · %.1f%% cache · $%.4f", ms.Model, ms.Turns, formatCount(ms.Tokens), replayDetail, prefixDetail, ratioPercent(ms.CacheHit, ms.CacheHit+ms.CacheMiss), ms.CostUSD))
 		}
 	}
 	return lines
@@ -187,6 +198,9 @@ func formatStatsOverview(usage usageStats, toolInput toolInputStats) []string {
 	}
 	if usage.ReasoningReplayTokens > 0 {
 		lines = append(lines, fmt.Sprintf("- reasoning replay: %s tokens", formatCount(usage.ReasoningReplayTokens)))
+	}
+	if usage.PrefixCompletionRequests > 0 {
+		lines = append(lines, fmt.Sprintf("- Prefix completion: %d requests", usage.PrefixCompletionRequests))
 	}
 	if model := topUsageModel(usage.ByModel); model != nil {
 		lines = append(lines, fmt.Sprintf("- top model: %s · %d turns · $%.4f", model.Model, model.Turns, model.CostUSD))

@@ -12,28 +12,29 @@ import (
 )
 
 type UsageRecord struct {
-	TS                     int64   `json:"ts"`
-	Session                string  `json:"session"`
-	Model                  string  `json:"model"`
-	PrefixFingerprint      string  `json:"prefix_fingerprint,omitempty"`
-	PromptTokens           int     `json:"prompt_tokens"`
-	CompletionTokens       int     `json:"completion_tokens"`
-	PromptCacheHit         int     `json:"prompt_cache_hit_tokens"`
-	PromptCacheMiss        int     `json:"prompt_cache_miss_tokens"`
-	CacheHitRatio          float64 `json:"cache_hit_ratio,omitempty"`
-	ReasoningReplayTok     int     `json:"reasoning_replay_tokens,omitempty"`
-	ToolResultRawChars     int     `json:"tool_result_raw_chars,omitempty"`
-	ToolResultReplayChars  int     `json:"tool_result_replay_chars,omitempty"`
-	ToolResultRawTokens    int     `json:"tool_result_raw_tokens,omitempty"`
-	ToolResultReplayTokens int     `json:"tool_result_replay_tokens,omitempty"`
-	ToolResultTokensSaved  int     `json:"tool_result_tokens_saved,omitempty"`
-	ToolResultsCompacted   int     `json:"tool_results_compacted,omitempty"`
-	Kind                   string  `json:"kind,omitempty"`
-	ParentSessionID        string  `json:"parent_session_id,omitempty"`
-	SubagentRole           string  `json:"subagent_role,omitempty"`
-	SubagentTaskPreview    string  `json:"subagent_task_preview,omitempty"`
-	CacheSavingsUSD        float64 `json:"cache_savings_usd,omitempty"`
-	CostUSD                float64 `json:"cost_usd"`
+	TS                       int64   `json:"ts"`
+	Session                  string  `json:"session"`
+	Model                    string  `json:"model"`
+	PrefixFingerprint        string  `json:"prefix_fingerprint,omitempty"`
+	PromptTokens             int     `json:"prompt_tokens"`
+	CompletionTokens         int     `json:"completion_tokens"`
+	PromptCacheHit           int     `json:"prompt_cache_hit_tokens"`
+	PromptCacheMiss          int     `json:"prompt_cache_miss_tokens"`
+	PrefixCompletionRequests int     `json:"prefix_completion_requests,omitempty"`
+	CacheHitRatio            float64 `json:"cache_hit_ratio,omitempty"`
+	ReasoningReplayTok       int     `json:"reasoning_replay_tokens,omitempty"`
+	ToolResultRawChars       int     `json:"tool_result_raw_chars,omitempty"`
+	ToolResultReplayChars    int     `json:"tool_result_replay_chars,omitempty"`
+	ToolResultRawTokens      int     `json:"tool_result_raw_tokens,omitempty"`
+	ToolResultReplayTokens   int     `json:"tool_result_replay_tokens,omitempty"`
+	ToolResultTokensSaved    int     `json:"tool_result_tokens_saved,omitempty"`
+	ToolResultsCompacted     int     `json:"tool_results_compacted,omitempty"`
+	Kind                     string  `json:"kind,omitempty"`
+	ParentSessionID          string  `json:"parent_session_id,omitempty"`
+	SubagentRole             string  `json:"subagent_role,omitempty"`
+	SubagentTaskPreview      string  `json:"subagent_task_preview,omitempty"`
+	CacheSavingsUSD          float64 `json:"cache_savings_usd,omitempty"`
+	CostUSD                  float64 `json:"cost_usd"`
 }
 
 type UsageMetadata struct {
@@ -72,24 +73,25 @@ func AppendUsage(path, sessionID, model, prefixFingerprint string, usage llm.Usa
 	defer unlock()
 
 	rec := UsageRecord{
-		TS:                     now.UnixMilli(),
-		Session:                sessionID,
-		Model:                  model,
-		PrefixFingerprint:      prefixFingerprint,
-		PromptTokens:           usage.PromptTokens,
-		CompletionTokens:       usage.CompletionTokens,
-		PromptCacheHit:         usage.PromptCacheHitTokens,
-		PromptCacheMiss:        usage.PromptCacheMissTokens,
-		CacheHitRatio:          cacheHitRatio(usage),
-		ReasoningReplayTok:     usage.ReasoningReplayTokens,
-		ToolResultRawChars:     usage.ToolResultRawChars,
-		ToolResultReplayChars:  usage.ToolResultReplayChars,
-		ToolResultRawTokens:    usage.ToolResultRawTokens,
-		ToolResultReplayTokens: usage.ToolResultReplayTokens,
-		ToolResultTokensSaved:  usage.ToolResultTokensSaved,
-		ToolResultsCompacted:   usage.ToolResultsCompacted,
-		CacheSavingsUSD:        EstimateCacheSavingsUSD(model, usage.PromptCacheHitTokens),
-		CostUSD:                cost,
+		TS:                       now.UnixMilli(),
+		Session:                  sessionID,
+		Model:                    model,
+		PrefixFingerprint:        prefixFingerprint,
+		PromptTokens:             usage.PromptTokens,
+		CompletionTokens:         usage.CompletionTokens,
+		PromptCacheHit:           usage.PromptCacheHitTokens,
+		PromptCacheMiss:          usage.PromptCacheMissTokens,
+		PrefixCompletionRequests: usage.PrefixCompletionRequests,
+		CacheHitRatio:            cacheHitRatio(usage),
+		ReasoningReplayTok:       usage.ReasoningReplayTokens,
+		ToolResultRawChars:       usage.ToolResultRawChars,
+		ToolResultReplayChars:    usage.ToolResultReplayChars,
+		ToolResultRawTokens:      usage.ToolResultRawTokens,
+		ToolResultReplayTokens:   usage.ToolResultReplayTokens,
+		ToolResultTokensSaved:    usage.ToolResultTokensSaved,
+		ToolResultsCompacted:     usage.ToolResultsCompacted,
+		CacheSavingsUSD:          EstimateCacheSavingsUSD(model, usage.PromptCacheHitTokens),
+		CostUSD:                  cost,
 	}
 	if len(metadata) > 0 {
 		rec.Kind = metadata[0].Kind

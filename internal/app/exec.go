@@ -38,7 +38,7 @@ func RunExec(ctx context.Context, cfg Config, start StartOptions, prompt string)
 	if err != nil {
 		return res, err
 	}
-	if err := a.FinalizeTurn(res.Output); err != nil {
+	if err := a.FinalizeTurn(res.Output, res.Status == "completed"); err != nil {
 		res.Status = "error"
 		res.Error = err.Error()
 		return res, err

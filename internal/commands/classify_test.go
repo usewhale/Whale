@@ -1,6 +1,9 @@
 package commands
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDiffCommandIsLocalReadOnly(t *testing.T) {
 	got := ClassifySubmit("/diff", CommandsHelp())
@@ -51,5 +54,44 @@ func TestDeepResearchCommandIsLocalMutating(t *testing.T) {
 		if got.Class != SubmitUsageError {
 			t.Fatalf("%s class = %v, want SubmitUsageError", line, got.Class)
 		}
+	}
+}
+
+func TestGoalCommandClassification(t *testing.T) {
+	cases := []struct {
+		line string
+		want SubmitClass
+	}{
+		{"/goal", SubmitLocalReadOnly},
+		{"/goal status", SubmitLocalReadOnly},
+		{"/goal pause", SubmitLocalMutating},
+		{"/goal resume", SubmitTurnStarting},
+		{"/goal clear", SubmitLocalMutating},
+		{"/goal ship the goal command", SubmitTurnStarting},
+		{"/goal fix --help output", SubmitTurnStarting},
+		{"/goal --tokens 50k ship the goal command", SubmitTurnStarting},
+		{"/goal --tokens 50k fix --help output", SubmitTurnStarting},
+		{"/goal --tokens=50k ship the goal command", SubmitTurnStarting},
+		{"/goal --tokens", SubmitUsageError},
+		{"/goal --tokens 50k", SubmitUsageError},
+		{"/goal --tokens nope ship", SubmitUsageError},
+		{"/goal --tokens 0 ship", SubmitUsageError},
+		{"/goal --tokens 0.1 ship", SubmitUsageError},
+		{"/goal --tokens=-1 ship", SubmitUsageError},
+		{"/goal --tokens= ship", SubmitUsageError},
+		{"/goal --unknown ship", SubmitUsageError},
+		{"/goal status extra", SubmitUsageError},
+	}
+	for _, tc := range cases {
+		got := ClassifySubmit(tc.line, CommandsHelp())
+		if got.Class != tc.want {
+			t.Fatalf("%s class = %v, want %v", tc.line, got.Class, tc.want)
+		}
+	}
+}
+
+func TestCommandsHelpIncludesGoal(t *testing.T) {
+	if !strings.Contains(CommandsHelp(), "/goal [--tokens 50k] <objective>|status|pause|resume|clear") {
+		t.Fatalf("CommandsHelp missing /goal: %s", CommandsHelp())
 	}
 }

@@ -32,17 +32,18 @@ const (
 var errIncompleteStream = errors.New("stream disconnected before completion")
 
 type Client struct {
-	apiKey            string
-	baseURL           string
-	httpClient        *http.Client
-	model             string
-	reasoningEffort   string
-	thinkingEnabled   bool
-	maxTokens         int
-	retryPolicy       llmretry.Policy
-	retrySleeper      llmretry.Sleeper
-	streamMaxAttempts int
-	streamIdleTimeout time.Duration
+	apiKey                  string
+	baseURL                 string
+	httpClient              *http.Client
+	model                   string
+	reasoningEffort         string
+	thinkingEnabled         bool
+	maxTokens               int
+	retryPolicy             llmretry.Policy
+	retrySleeper            llmretry.Sleeper
+	streamMaxAttempts       int
+	streamIdleTimeout       time.Duration
+	prefixCompletionEnabled bool
 }
 
 type Option func(*Client)
@@ -73,6 +74,10 @@ func WithThinking(enabled bool) Option {
 
 func WithMaxTokens(v int) Option {
 	return func(c *Client) { c.maxTokens = v }
+}
+
+func WithPrefixCompletion(enabled bool) Option {
+	return func(c *Client) { c.prefixCompletionEnabled = enabled }
 }
 
 func WithRetryPolicy(policy llmretry.Policy) Option {
@@ -161,6 +166,17 @@ func (c *Client) StreamResponse(ctx context.Context, history []core.Message, too
 	return out
 }
 
+func (c *Client) StreamResponseWithPrefix(ctx context.Context, history []core.Message, prefix string, stop []string) <-chan llm.ProviderEvent {
+	out := make(chan llm.ProviderEvent)
+	go func() {
+		defer close(out)
+		if err := c.streamPrefix(ctx, history, prefix, stop, out); err != nil {
+			out <- llm.ProviderEvent{Type: llm.EventError, Err: err}
+		}
+	}()
+	return out
+}
+
 func (c *Client) stream(ctx context.Context, history []core.Message, tools []core.Tool, out chan<- llm.ProviderEvent) error {
 	msgs, sanitizeDiag := sanitizeDeepSeekMessagesForRequest(toDeepSeekMessages(history), c.thinkingEnabled)
 	replayDiag := toolResultReplayDiagnostics(history, msgs)
@@ -189,15 +205,115 @@ func (c *Client) stream(ctx context.Context, history []core.Message, tools []cor
 		return fmt.Errorf("marshal payload: %w", err)
 	}
 
-	return c.streamWithRetries(ctx, body, msgs, sanitizeDiag, replayDiag, out)
+	return c.streamWithRetries(ctx, c.baseURL, body, msgs, sanitizeDiag, replayDiag, out)
 }
 
-func (c *Client) streamWithRetries(ctx context.Context, body []byte, msgs []map[string]any, sanitizeDiag deepSeekMessageDiagnostics, replayDiag deepSeekReplayDiagnostics, out chan<- llm.ProviderEvent) error {
+func (c *Client) streamPrefix(ctx context.Context, history []core.Message, prefix string, stop []string, out chan<- llm.ProviderEvent) error {
+	if !c.prefixCompletionEnabled || strings.TrimSpace(prefix) == "" {
+		return c.stream(ctx, history, nil, out)
+	}
+	requestBaseURL, ok := c.prefixCompletionBaseURL()
+	if !ok {
+		return c.stream(ctx, history, nil, out)
+	}
+	msgs, sanitizeDiag := sanitizeDeepSeekMessagesForRequest(toDeepSeekMessages(history), c.thinkingEnabled)
+	msgs = append(msgs, map[string]any{
+		"role":    "assistant",
+		"content": prefix,
+		"prefix":  true,
+	})
+	replayDiag := toolResultReplayDiagnostics(history, msgs)
+	payload := map[string]any{
+		"model":          c.model,
+		"stream":         true,
+		"stream_options": map[string]any{"include_usage": true},
+		"messages":       msgs,
+		"thinking":       map[string]any{"type": "disabled"},
+	}
+	if c.thinkingEnabled {
+		payload["thinking"] = map[string]any{"type": "enabled"}
+		if strings.TrimSpace(c.reasoningEffort) != "" {
+			payload["reasoning_effort"] = c.reasoningEffort
+		}
+	}
+	if len(stop) > 0 {
+		payload["stop"] = append([]string(nil), stop...)
+	}
+	if c.maxTokens > 0 {
+		payload["max_tokens"] = c.maxTokens
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal payload: %w", err)
+	}
+	inner := make(chan llm.ProviderEvent, 16)
+	done := make(chan error, 1)
+	go func() {
+		done <- c.streamWithRetries(ctx, requestBaseURL, body, msgs, sanitizeDiag, replayDiag, inner)
+		close(inner)
+	}()
+	prefixSent := false
+	for ev := range inner {
+		switch ev.Type {
+		case llm.EventContentDelta:
+			if !prefixSent {
+				if strings.HasPrefix(ev.Content, prefix) {
+					prefixSent = true
+					out <- ev
+					continue
+				}
+				out <- llm.ProviderEvent{Type: llm.EventContentDelta, Content: prefix}
+				prefixSent = true
+			}
+			if ev.Content != "" {
+				out <- ev
+			}
+		case llm.EventComplete:
+			if ev.Response != nil {
+				resp := *ev.Response
+				resp.Content = joinPrefixCompletionContent(prefix, resp.Content)
+				resp.Usage.PrefixCompletionRequests++
+				ev.Response = &resp
+				if !prefixSent && strings.TrimSpace(resp.Content) != "" {
+					out <- llm.ProviderEvent{Type: llm.EventContentDelta, Content: prefix}
+					prefixSent = true
+				}
+			}
+			out <- ev
+		default:
+			out <- ev
+		}
+	}
+	return <-done
+}
+
+func (c *Client) prefixCompletionBaseURL() (string, bool) {
+	base := strings.TrimRight(strings.TrimSpace(c.baseURL), "/")
+	if base == "" {
+		base = defaultBaseURL
+	}
+	if base == defaultBaseURL || base == defaultBaseURL+"/v1" {
+		return defaultBaseURL + "/beta", true
+	}
+	if strings.HasSuffix(base, "/beta") {
+		return base, true
+	}
+	return "", false
+}
+
+func joinPrefixCompletionContent(prefix, content string) string {
+	if strings.HasPrefix(content, prefix) {
+		return content
+	}
+	return prefix + content
+}
+
+func (c *Client) streamWithRetries(ctx context.Context, requestBaseURL string, body []byte, msgs []map[string]any, sanitizeDiag deepSeekMessageDiagnostics, replayDiag deepSeekReplayDiagnostics, out chan<- llm.ProviderEvent) error {
 	policy := llmretry.NormalizePolicy(c.retryPolicy)
 	requestAttempt := 1
 	streamAttempt := 1
 	for {
-		resp, err := c.sendStreamRequest(ctx, body)
+		resp, err := c.sendStreamRequest(ctx, requestBaseURL, body)
 		if err != nil {
 			var buildErr *requestBuildError
 			if errors.As(err, &buildErr) {
@@ -232,8 +348,12 @@ func (c *Client) streamWithRetries(ctx context.Context, body []byte, msgs []map[
 	}
 }
 
-func (c *Client) sendStreamRequest(ctx context.Context, body []byte) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
+func (c *Client) sendStreamRequest(ctx context.Context, requestBaseURL string, body []byte) (*http.Response, error) {
+	requestBaseURL = strings.TrimRight(strings.TrimSpace(requestBaseURL), "/")
+	if requestBaseURL == "" {
+		requestBaseURL = c.baseURL
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestBaseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, &requestBuildError{err: fmt.Errorf("new request: %w", err)}
 	}

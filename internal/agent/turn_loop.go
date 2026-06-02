@@ -14,6 +14,7 @@ import (
 type RunOptions struct {
 	HiddenInput        bool
 	ReadOnly           bool
+	GoalContinuation   bool
 	ShellAllowPrefixes []string
 	ViewMode           string
 }
@@ -89,6 +90,7 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 		}
 		rt := memory.HydrateRuntime(memory.NewImmutablePrefix(a.buildImmutableSystemBlocksWithTools(toolSnapshot, opts)), history)
 		expectedPrefixFingerprint := rt.Prefix.Fingerprint()
+		modelTurns := 0
 		toolIters := 0
 		toolCalls := 0
 		if a.repairer != nil {
@@ -177,6 +179,7 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 				emit(AgentEvent{Type: AgentEventTypeError, Err: sErr})
 				return
 			}
+			modelTurns++
 			turnCost := a.recordTurnCost(sessionID, usage, modelName, rt.Prefix.Fingerprint())
 			if !emit(AgentEvent{Type: AgentEventTypeUsage, Usage: &UsageInfo{Model: modelName, Usage: usage}}) {
 				return
@@ -206,6 +209,24 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 				rt.Log.Append(assistant)
 				rt.Log.Append(*toolMsg)
 				history = append(history, assistant, *toolMsg)
+				if a.maxTurns > 0 && modelTurns >= a.maxTurns {
+					if !emit(AgentEvent{Type: AgentEventTypeForcedSummaryStarted, Content: "turn cap reached"}) {
+						return
+					}
+					sum, serr := a.forceSummary(ctx, sessionID, history, "turn cap reached")
+					if serr != nil {
+						if !emit(AgentEvent{Type: AgentEventTypeForcedSummaryFailed, Content: serr.Error()}) {
+							return
+						}
+						emit(AgentEvent{Type: AgentEventTypeError, Err: serr})
+						return
+					}
+					if !emit(AgentEvent{Type: AgentEventTypeForcedSummaryDone, Content: "forced summary completed"}) {
+						return
+					}
+					emit(AgentEvent{Type: AgentEventTypeDone, Message: &sum})
+					return
+				}
 				if a.maxToolCalls > 0 && toolCalls >= a.maxToolCalls {
 					if !emit(AgentEvent{Type: AgentEventTypeForcedSummaryStarted, Content: "tool call cap reached"}) {
 						return

@@ -29,3 +29,26 @@ func TestWorkflowRunIDFromToolResultIgnoresNonWorkflowTools(t *testing.T) {
 		t.Fatalf("non-workflow tool should not start workflow watch, got %q", got)
 	}
 }
+
+func TestWorkflowConfirmationFromToolResult(t *testing.T) {
+	content, err := core.MarshalToolEnvelope(core.ToolEnvelope{
+		OK:      true,
+		Success: true,
+		Code:    "workflow_confirmation_required",
+		Data: map[string]any{
+			"workflowName":   "review-spa",
+			"workflowArgs":   `{"topic":"ok"}`,
+			"workflowResume": "run-source",
+		},
+	})
+	if err != nil {
+		t.Fatalf("MarshalToolEnvelope: %v", err)
+	}
+	name, args, resume, script, saveAs, scriptPath, ok := workflowConfirmationFromToolResult(&core.ToolResult{
+		Name:    "workflow",
+		Content: content,
+	})
+	if !ok || name != "review-spa" || args != `{"topic":"ok"}` || resume != "run-source" || script != "" || saveAs != "" || scriptPath != "" {
+		t.Fatalf("confirmation = %q %q %q %q %q %q %v", name, args, resume, script, saveAs, scriptPath, ok)
+	}
+}

@@ -81,6 +81,15 @@ tools = ["web_search", "web_fetch"]
 
 Need to run scripts when a session starts, when the user submits a prompt, before or after tools run, or before Whale ends a turn? See [Hooks](hooks.en.md).
 
+### Experimental Features
+
+```toml
+[experimental]
+deepseek_prefix_completion = true
+```
+
+Enables DeepSeek Beta Prefix completion. Whale only uses it for explicit no-tool, strongly formatted text requests, such as internal hook prompts that must return JSON. This is a format-stability feature, not a promised token-saving feature.
+
 ---
 
 ## Reference
@@ -131,6 +140,9 @@ enabled = []                           # force-enable even if project disables
 
 [plugins.memory]
 enabled = true                         # configure each plugin by id
+
+[experimental]
+deepseek_prefix_completion = false     # DeepSeek Prefix completion (experimental)
 
 [logging]
 level = "info"                         # debug | info | warn | error

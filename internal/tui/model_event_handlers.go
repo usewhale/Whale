@@ -123,7 +123,7 @@ func (m *model) handleLocalSubmitResultEvent(ev protocol.Event) tea.Cmd {
 			return m.openWorkflowLaunch(ev.LocalResult)
 		}
 		if ev.LocalResult != nil && ev.LocalResult.Kind == "workflow-run" {
-			m.appendLocalSubmitResult(role, ev.Text, nil)
+			m.appendWorkflowLaunchNotice(ev.Text)
 		} else if shouldOpenWorkflowPanelForLocalResult(ev.LocalResult) {
 			m.addLog(logEntry{Kind: role, Source: "system", Summary: ev.Text, Raw: ev.Text})
 			return m.openWorkflowPanel(ev.LocalResult)
@@ -150,21 +150,38 @@ func (m *model) handleLocalSubmitResultEvent(ev protocol.Event) tea.Cmd {
 	return nil
 }
 
+func (m *model) appendWorkflowLaunchNotice(text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	if m.busy {
+		m.appendLiveAssistantMessage(text)
+		return
+	}
+	if m.assembler != nil && m.assembler.Len() > 0 {
+		m.commitLiveTranscript(false)
+	}
+	m.appendTranscript("assistant", tuirender.KindText, text)
+}
+
 func (m *model) handleWorkflowTerminalEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
+	text := strings.TrimSpace(ev.Text)
+	if ev.LocalResult != nil {
+		if plain := strings.TrimSpace(ev.LocalResult.PlainText); plain != "" {
+			text = plain
+		}
+	}
 	if m.assembler != nil && m.assembler.Len() > 0 {
-		if ev.LocalResult != nil {
-			m.appendLiveLocalResult(ev.LocalResult)
-		} else if strings.TrimSpace(ev.Text) != "" {
-			m.appendNotice(ev.Text)
+		if text != "" {
+			m.appendLiveAssistantMessage(text)
 		}
 		if !m.hasPendingToolCalls() {
 			m.commitLiveTranscript(false)
 		}
-	} else if ev.LocalResult != nil {
-		m.appendLocalResult(ev.LocalResult)
-	} else if strings.TrimSpace(ev.Text) != "" {
-		m.appendTranscript("notice", tuirender.KindNotice, ev.Text)
+	} else if text != "" {
+		m.appendTranscript("assistant", tuirender.KindText, text)
 	}
 	m.addLog(logEntry{Kind: "workflow_terminal", Source: "workflow", Summary: truncateLine(ev.Text, 120), Raw: ev.Text})
 	m.status = "ready"
@@ -314,13 +331,21 @@ func (m *model) handleApprovalRequiredEvent(ev protocol.Event) {
 		m.addLog(logEntry{Kind: "approval_required_stale", Source: ev.ToolName, Summary: ev.Text, Raw: ev.Text})
 		return
 	}
-	m.mode = modeApproval
-	m.approval.toolCallID = ev.ToolCallID
-	m.approval.toolName = ev.ToolName
-	m.approval.reason = ev.Text
-	m.approval.metadata = ev.Metadata
-	m.approval.selected = 0
+	prompt := approvalPromptState{
+		toolCallID: ev.ToolCallID,
+		toolName:   ev.ToolName,
+		reason:     ev.Text,
+		metadata:   ev.Metadata,
+		selected:   0,
+	}
 	m.addLog(logEntry{Kind: "approval_required", Source: ev.ToolName, Summary: ev.Text, Raw: ev.Text})
+	if m.mode == modeApproval && m.approval.toolCallID != "" {
+		m.approvalQueue = append(m.approvalQueue, prompt)
+		m.status = "approval required"
+		return
+	}
+	m.mode = modeApproval
+	m.approval = prompt
 	m.status = "approval required"
 	// Desktop notification for approval request (only if user is idle).
 	if m.notifier != nil && time.Since(m.lastUserInput) > 6*time.Second {

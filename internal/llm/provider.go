@@ -27,18 +27,19 @@ type ToolArgsDelta struct {
 }
 
 type Usage struct {
-	PromptTokens           int
-	CompletionTokens       int
-	TotalTokens            int
-	PromptCacheHitTokens   int
-	PromptCacheMissTokens  int
-	ReasoningReplayTokens  int
-	ToolResultRawChars     int
-	ToolResultReplayChars  int
-	ToolResultRawTokens    int
-	ToolResultReplayTokens int
-	ToolResultTokensSaved  int
-	ToolResultsCompacted   int
+	PromptTokens             int
+	CompletionTokens         int
+	TotalTokens              int
+	PromptCacheHitTokens     int
+	PromptCacheMissTokens    int
+	PrefixCompletionRequests int
+	ReasoningReplayTokens    int
+	ToolResultRawChars       int
+	ToolResultReplayChars    int
+	ToolResultRawTokens      int
+	ToolResultReplayTokens   int
+	ToolResultTokensSaved    int
+	ToolResultsCompacted     int
 }
 
 type ProviderEvent struct {
@@ -63,4 +64,8 @@ type ProviderResponse struct {
 
 type Provider interface {
 	StreamResponse(ctx context.Context, history []core.Message, tools []core.Tool) <-chan ProviderEvent
+}
+
+type PrefixCompletionProvider interface {
+	StreamResponseWithPrefix(ctx context.Context, history []core.Message, prefix string, stop []string) <-chan ProviderEvent
 }

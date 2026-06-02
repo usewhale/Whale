@@ -283,10 +283,62 @@ func TestDefaultToolPolicyRequiresApprovalForMutatingCapability(t *testing.T) {
 	}
 }
 
+func TestDefaultToolPolicyRequiresApprovalForWebTools(t *testing.T) {
+	p := DefaultToolPolicy{}
+	cases := []struct {
+		spec core.ToolSpec
+		call core.ToolCall
+	}{
+		{
+			spec: core.ToolSpec{Name: "web_search", ReadOnly: true},
+			call: core.ToolCall{Name: "web_search", Input: `{"query":"Node.js permission model"}`},
+		},
+		{
+			spec: core.ToolSpec{Name: "fetch", ReadOnly: true},
+			call: core.ToolCall{Name: "fetch", Input: `{"url":"https://nodejs.org/api/permissions.html","prompt":"extract"}`},
+		},
+		{
+			spec: core.ToolSpec{Name: "web_fetch", ReadOnly: true},
+			call: core.ToolCall{Name: "web_fetch", Input: `{"url":"https://nodejs.org/api/permissions.html","prompt":"extract"}`},
+		},
+	}
+	for _, tc := range cases {
+		decision := p.Decide(tc.spec, tc.call)
+		if !decision.Allow || !decision.RequiresApproval || decision.Code != "permission_required" {
+			t.Fatalf("%s decision: %+v", tc.call.Name, decision)
+		}
+	}
+}
+
+func TestDefaultToolPolicyRequiresApprovalForCancelSubagent(t *testing.T) {
+	decision := DefaultToolPolicy{}.Decide(
+		core.ToolSpec{Name: "cancel_subagent", ReadOnly: false},
+		core.ToolCall{Name: "cancel_subagent", Input: `{"session_id":"child-1"}`},
+	)
+	if !decision.Allow || !decision.RequiresApproval || decision.Permission != "mutating_tool" || decision.Code != "permission_required" {
+		t.Fatalf("decision: %+v", decision)
+	}
+}
+
 func TestRulePolicyAllowDefaultAllowsMutatingCapability(t *testing.T) {
 	decision := RulePolicy{Default: PermissionAllow}.Decide(
 		core.ToolSpec{Name: "remember", Capabilities: []string{"mutates_state"}},
 		core.ToolCall{Name: "remember", Input: `{}`},
+	)
+	if !decision.Allow || decision.RequiresApproval || decision.Code != "permission_allow" {
+		t.Fatalf("decision: %+v", decision)
+	}
+}
+
+func TestRulePolicyMatchesWebFetchRulesByHost(t *testing.T) {
+	decision := RulePolicy{
+		Default: PermissionAsk,
+		Rules: []PermissionRule{
+			{Permission: "web_fetch", Pattern: "host:nodejs.org", Action: PermissionAllow},
+		},
+	}.Decide(
+		core.ToolSpec{Name: "web_fetch", ReadOnly: true},
+		core.ToolCall{Name: "web_fetch", Input: `{"url":"https://www.nodejs.org/api/permissions.html","prompt":"extract"}`},
 	)
 	if !decision.Allow || decision.RequiresApproval || decision.Code != "permission_allow" {
 		t.Fatalf("decision: %+v", decision)

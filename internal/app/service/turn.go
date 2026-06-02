@@ -106,6 +106,7 @@ func (s *Service) runTurnWith(start func(context.Context) (<-chan agent.AgentEve
 		return
 	}
 	last := ""
+	completed := false
 	deltas := newTurnDeltaCoalescers(s)
 	for ev := range events {
 		switch ev.Type {
@@ -149,6 +150,9 @@ func (s *Service) runTurnWith(start func(context.Context) (<-chan agent.AgentEve
 		case agent.AgentEventTypeToolResult:
 			if ev.Result != nil {
 				deltas.flushReliable()
+				if s.maybeEmitWorkflowLaunchConfirmationToolResult(ev.Result) {
+					continue
+				}
 				s.maybeWatchWorkflowToolResult(ev.Result)
 				s.emit(Event{Kind: EventToolResult, ToolCallID: ev.Result.ToolCallID, ToolName: ev.Result.Name, Text: ev.Result.Content, Metadata: ev.Result.Metadata})
 			}
@@ -200,6 +204,13 @@ func (s *Service) runTurnWith(start func(context.Context) (<-chan agent.AgentEve
 		case agent.AgentEventTypeUserInputSubmitted, agent.AgentEventTypeUserInputCancelled:
 			deltas.flushReliable()
 			s.emit(Event{Kind: EventUserInputDone})
+		case agent.AgentEventTypeDone:
+			if ev.Message != nil {
+				if last == "" {
+					last = ev.Message.Text
+				}
+				completed = ev.Message.FinishReason == core.FinishReasonEndTurn
+			}
 		case agent.AgentEventTypeError:
 			if ev.Err != nil {
 				if shouldSuppressCancelledTurnError(turnCtx, ev.Err) {
@@ -211,7 +222,7 @@ func (s *Service) runTurnWith(start func(context.Context) (<-chan agent.AgentEve
 		}
 	}
 	deltas.flushReliable()
-	_ = s.app.FinalizeTurn(last)
+	_ = s.app.FinalizeTurn(last, completed)
 	if out := s.app.RunStopHookWithObserver(last, 0, s.hookObserver()); out != "" {
 		s.emit(Event{Kind: EventInfo, Text: out})
 	}
