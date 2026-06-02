@@ -45,8 +45,36 @@ func (a *Agent) RunStreamWithInjectedInputOptions(ctx context.Context, sessionID
 	}, opts)
 }
 
+func (a *Agent) InjectTurnInput(ctx context.Context, sessionID string, newMessages []core.Message) (bool, error) {
+	state, ok := a.active.Load(sessionID)
+	if !ok {
+		return false, nil
+	}
+	turnState, ok := state.(*activeTurnState)
+	if !ok {
+		return false, nil
+	}
+	createdMessages := make([]core.Message, 0, len(newMessages))
+	for _, msg := range newMessages {
+		msg.SessionID = sessionID
+		created, err := a.store.Create(ctx, msg)
+		if err != nil {
+			return true, fmt.Errorf("create injected user message: %w", err)
+		}
+		createdMessages = append(createdMessages, created)
+	}
+	if checkpointMessageID := firstVisibleMessageID(createdMessages); checkpointMessageID != "" && a.checkpoints != nil {
+		if err := a.checkpoints.CreateSnapshot(sessionID, checkpointMessageID); err != nil {
+			return true, fmt.Errorf("create injected checkpoint: %w", err)
+		}
+	}
+	turnState.appendPending(createdMessages)
+	return true, nil
+}
+
 func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, newMessages []core.Message, opts RunOptions) (<-chan AgentEvent, error) {
-	if _, loaded := a.active.LoadOrStore(sessionID, struct{}{}); loaded {
+	turnState := &activeTurnState{}
+	if _, loaded := a.active.LoadOrStore(sessionID, turnState); loaded {
 		return nil, ErrSessionBusy
 	}
 	if spent, blocked := a.budgetExceeded(sessionID); blocked {
@@ -113,6 +141,12 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 		}
 		firstRequest := true
 		for {
+			if pending := turnState.drainPending(); len(pending) > 0 {
+				for _, msg := range pending {
+					rt.Log.Append(msg)
+					history = append(history, msg)
+				}
+			}
 			rt.Scratch.ResetTurn()
 			if !firstRequest {
 				var err error
@@ -200,6 +234,12 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 					rt.Log.Append(*toolMsg)
 					history = append(history, assistant, *toolMsg)
 				}
+				if turnState.hasPending() {
+					if !emit(AgentEvent{Type: AgentEventTypeResponseReset}) {
+						return
+					}
+					continue
+				}
 				done := assistant
 				done.FinishReason = core.FinishReasonEndTurn
 				emit(AgentEvent{Type: AgentEventTypeDone, Message: &done})
@@ -263,6 +303,19 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 						return
 					}
 					emit(AgentEvent{Type: AgentEventTypeDone, Message: &sum})
+					return
+				}
+				if turnState.hasPending() {
+					if !emit(AgentEvent{Type: AgentEventTypeResponseReset}) {
+						return
+					}
+				}
+				continue
+			}
+			if turnState.hasPending() {
+				rt.Log.Append(assistant)
+				history = append(history, assistant)
+				if !emit(AgentEvent{Type: AgentEventTypeResponseReset}) {
 					return
 				}
 				continue

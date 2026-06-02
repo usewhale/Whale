@@ -980,7 +980,7 @@ func TestRenderQueuedPromptsShowsPreviewLimit(t *testing.T) {
 	}
 
 	view := m.renderQueuedPrompts(80)
-	for _, want := range []string{"queued (4)", "first queued", "second queued", "third queued", "... 1 more"} {
+	for _, want := range []string{"queued follow-up (4)", "first queued", "second queued", "third queued", "... 1 more"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("expected queued preview to contain %q:\n%s", want, view)
 		}

@@ -8,6 +8,7 @@ import (
 func TestEventJSONRoundTrip(t *testing.T) {
 	events := []Event{
 		{Kind: EventAssistantDelta, Text: "hello"},
+		{Kind: EventResponseReset},
 		{
 			Kind:       EventToolResult,
 			ToolCallID: "tc-1",

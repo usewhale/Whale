@@ -188,6 +188,37 @@ func TestRunOptionsKeepExplicitViewMode(t *testing.T) {
 	}
 }
 
+func TestInjectTurnInputHiddenDoesNotPatchSessionTitle(t *testing.T) {
+	dir := t.TempDir()
+	sessionsDir := filepath.Join(dir, "sessions")
+	msgStore, err := store.NewJSONLStore(sessionsDir)
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	a := &App{
+		ctx:         context.Background(),
+		sessionID:   "hidden-inject",
+		sessionsDir: sessionsDir,
+		cfg:         Config{DataDir: dir},
+		a:           agent.NewAgent(nil, msgStore, nil),
+	}
+
+	injected, err := a.InjectTurnInputWithHidden(context.Background(), "secret queued prompt", "", agent.RunOptions{HiddenInput: true})
+	if err != nil {
+		t.Fatalf("InjectTurnInputWithHidden: %v", err)
+	}
+	if injected {
+		t.Fatal("expected no active turn to inject into")
+	}
+	meta, err := session.LoadSessionMeta(sessionsDir, a.sessionID)
+	if err != nil {
+		t.Fatalf("LoadSessionMeta: %v", err)
+	}
+	if meta.Title != "" {
+		t.Fatalf("hidden injected input should not patch title, got %q", meta.Title)
+	}
+}
+
 func TestFinalizeTurnDoesNotCompletePendingGoalWithoutUpdateTool(t *testing.T) {
 	dir := t.TempDir()
 	a := &App{

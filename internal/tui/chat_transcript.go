@@ -86,6 +86,40 @@ func (m *model) commitLiveTranscript(forceBottom bool) {
 	m.refreshViewportContentFollow(forceBottom)
 }
 
+func (m *model) discardCurrentTurnModelOutput() {
+	start := m.turnTranscriptStart
+	if start < 0 || start > len(m.transcript) {
+		start = len(m.transcript)
+	}
+	out := make([]tuirender.UIMessage, 0, len(m.transcript))
+	out = append(out, m.transcript[:start]...)
+	changed := false
+	for _, msg := range m.transcript[start:] {
+		if isResettableModelOutput(msg) {
+			changed = true
+			continue
+		}
+		out = append(out, msg)
+	}
+	if !changed {
+		return
+	}
+	m.transcript = out
+	if m.nativeScrollbackPrinted > start {
+		m.nativeScrollbackPrinted = start
+	}
+}
+
+func isResettableModelOutput(msg tuirender.UIMessage) bool {
+	if msg.Local != nil {
+		return false
+	}
+	return (msg.Role == "assistant" && msg.Kind == tuirender.KindText) ||
+		msg.Role == "think" ||
+		msg.Kind == tuirender.KindThinking ||
+		msg.Kind == tuirender.KindPlan
+}
+
 const maxHydratedTranscriptLines = 300
 
 func (m *model) trimHydratedTranscriptForDisplay(maxLines int) {

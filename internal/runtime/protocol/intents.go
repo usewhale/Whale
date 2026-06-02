@@ -40,6 +40,7 @@ const (
 type Intent struct {
 	Kind               IntentKind         `json:"kind"`
 	Input              string             `json:"input,omitempty"`
+	ClientInputID      string             `json:"client_input_id,omitempty"`
 	HiddenInput        bool               `json:"hidden_input,omitempty"`
 	ToolCallID         string             `json:"tool_call_id,omitempty"`
 	UserInput          *UserInputResponse `json:"user_input,omitempty"`

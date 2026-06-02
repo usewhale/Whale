@@ -1326,7 +1326,7 @@ func TestChatBusyViewIgnoresStaleBlockedSlashStatusForNormalDraft(t *testing.T) 
 	if strings.Contains(view, "/model disabled while working") {
 		t.Fatalf("stale blocked slash status should not label normal drafts:\n%s", view)
 	}
-	if !strings.Contains(view, "Working (12s) · Enter to queue · Esc to interrupt · Ctrl+C clears draft") {
+	if !strings.Contains(view, "Working (12s) · Enter to queue · Esc interrupts and sends · Ctrl+C clears draft") {
 		t.Fatalf("expected normal draft queue guidance after slash edit:\n%s", view)
 	}
 }

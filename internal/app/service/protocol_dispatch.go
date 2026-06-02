@@ -10,6 +10,7 @@ func (s *Service) DispatchProtocol(in protocol.Intent) {
 	s.Dispatch(Intent{
 		Kind:               serviceIntentKind(in.Kind),
 		Input:              in.Input,
+		ClientInputID:      in.ClientInputID,
 		HiddenInput:        in.HiddenInput,
 		ToolCallID:         in.ToolCallID,
 		UserInput:          coreUserInputResponse(in.UserInput),

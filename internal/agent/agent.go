@@ -47,6 +47,7 @@ const (
 	AgentEventTypePlanUpdate             AgentEventType = "plan_update"
 	AgentEventTypePlanStepBlocked        AgentEventType = "plan_step_blocked"
 	AgentEventTypeProviderRetryScheduled AgentEventType = "provider_retry_scheduled"
+	AgentEventTypeResponseReset          AgentEventType = "response_reset"
 	AgentEventTypeToolRecoveryScheduled  AgentEventType = "tool_recovery_scheduled"
 	AgentEventTypeToolRecoveryAttempt    AgentEventType = "tool_recovery_attempt"
 	AgentEventTypeToolRecoveryExhausted  AgentEventType = "tool_recovery_exhausted"
@@ -285,6 +286,43 @@ type Agent struct {
 	maxTurns               int
 	maxParallelSubagents   int
 	active                 sync.Map
+}
+
+type activeTurnState struct {
+	mu      sync.Mutex
+	pending []core.Message
+}
+
+func (s *activeTurnState) appendPending(messages []core.Message) {
+	if s == nil || len(messages) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pending = append(s.pending, messages...)
+}
+
+func (s *activeTurnState) drainPending() []core.Message {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.pending) == 0 {
+		return nil
+	}
+	out := append([]core.Message(nil), s.pending...)
+	s.pending = nil
+	return out
+}
+
+func (s *activeTurnState) hasPending() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.pending) > 0
 }
 
 const defaultMaxParallelSubagentCap = 128

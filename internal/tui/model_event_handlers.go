@@ -76,6 +76,12 @@ func (m *model) handleProviderRetryEvent(ev protocol.Event) {
 	m.addLog(logEntry{Kind: "api_retry", Source: "provider", Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Metadata)})
 }
 
+func (m *model) handleResponseResetEvent(ev protocol.Event) {
+	m.clearProviderRetryStatus()
+	m.resetLiveAttemptForResponseReset()
+	m.addLog(logEntry{Kind: "response_reset", Source: "assistant", Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Metadata)})
+}
+
 func (m *model) handleInfoEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	if !isEnvironmentInventoryBlock(ev.Text) {

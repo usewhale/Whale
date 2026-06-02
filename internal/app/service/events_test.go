@@ -299,6 +299,52 @@ func TestRunTurnWithStreamResetClearsLastResponse(t *testing.T) {
 	}
 }
 
+func TestRunTurnWithResponseResetClearsLastResponse(t *testing.T) {
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+
+	ch := make(chan agent.AgentEvent, 5)
+	ch <- agent.AgentEvent{Type: agent.AgentEventTypeAssistantDelta, Content: "first answer"}
+	ch <- agent.AgentEvent{Type: agent.AgentEventTypeResponseReset}
+	ch <- agent.AgentEvent{Type: agent.AgentEventTypeAssistantDelta, Content: "steered answer"}
+	ch <- agent.AgentEvent{Type: agent.AgentEventTypeDone, Message: &core.Message{Text: "steered answer", FinishReason: core.FinishReasonEndTurn}}
+	close(ch)
+
+	svc.runTurnWith(func(context.Context) (<-chan agent.AgentEvent, error) {
+		return ch, nil
+	})
+
+	deadline := time.After(2 * time.Second)
+	sawReset := false
+	for {
+		select {
+		case ev := <-svc.Events():
+			if ev.Kind == EventResponseReset {
+				sawReset = true
+				continue
+			}
+			if ev.Kind != EventTurnDone {
+				continue
+			}
+			if !sawReset {
+				t.Fatal("expected response reset event before turn done")
+			}
+			if ev.LastResponse != "steered answer" {
+				t.Fatalf("last response should exclude pre-steering delta, got %q", ev.LastResponse)
+			}
+			return
+		case <-deadline:
+			t.Fatal("timed out waiting for turn done")
+		}
+	}
+}
+
 func TestTurnDeltaCoalescerPreservesCrossKindOrder(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -18,6 +18,7 @@ const (
 	EventPlanCompleted        EventKind = "plan_completed"
 	EventPlanUpdate           EventKind = "plan_update"
 	EventProviderRetry        EventKind = "provider_retry"
+	EventResponseReset        EventKind = "response_reset"
 	EventToolCall             EventKind = "tool_call"
 	EventToolResult           EventKind = "tool_result"
 	EventHookStarted          EventKind = "hook_started"
@@ -38,6 +39,8 @@ const (
 	EventBtwDelta             EventKind = "btw_delta"
 	EventBtwDone              EventKind = "btw_done"
 	EventBtwError             EventKind = "btw_error"
+	EventPendingInputAccepted EventKind = "pending_input_accepted"
+	EventPendingInputRejected EventKind = "pending_input_rejected"
 	EventTurnDone             EventKind = "turn_done"
 	EventViewModeChanged      EventKind = "view_mode_changed"
 	EventSkillLoaded          EventKind = "skill_loaded"
@@ -64,6 +67,7 @@ const (
 type Event struct {
 	Kind             EventKind            `json:"kind"`
 	Text             string               `json:"text,omitempty"`
+	ClientInputID    string               `json:"client_input_id,omitempty"`
 	ToolCallID       string               `json:"tool_call_id,omitempty"`
 	ToolName         string               `json:"tool_name,omitempty"`
 	Metadata         map[string]any       `json:"metadata,omitempty"`

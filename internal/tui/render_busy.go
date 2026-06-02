@@ -50,7 +50,7 @@ func (m model) renderBusyStatusLine(width int) string {
 			} else if strings.TrimSpace(input) == "" {
 				line += " · Type follow-up · Esc to interrupt · Ctrl+C clears draft"
 			} else {
-				line += " · Enter to queue · Esc to interrupt · Ctrl+C clears draft"
+				line += " · Enter to queue · Esc interrupts and sends · Ctrl+C clears draft"
 			}
 		} else {
 			line += " · Ctrl+C to interrupt"
@@ -106,27 +106,52 @@ func busySlashDraftImmediate(input string) bool {
 }
 
 func (m model) renderQueuedPrompts(width int) string {
-	if len(m.queuedPrompts) == 0 || width <= 0 {
+	if (len(m.pendingSteers) == 0 && len(m.queuedPrompts) == 0) || width <= 0 {
 		return ""
 	}
-	limit := 3
-	if len(m.queuedPrompts) < limit {
-		limit = len(m.queuedPrompts)
-	}
-	rows := make([]string, 0, limit+2)
-	rows = append(rows, lipgloss.NewStyle().
-		Foreground(tuitheme.Default.Warn).
-		Render(fmt.Sprintf("queued (%d)", len(m.queuedPrompts))))
-	for i := 0; i < limit; i++ {
-		preview := queuedPromptPreview(m.queuedPrompts[i].Text, max(1, width-4))
+	rows := []string{}
+	if len(m.pendingSteers) > 0 {
+		limit := 3
+		if len(m.pendingSteers) < limit {
+			limit = len(m.pendingSteers)
+		}
 		rows = append(rows, lipgloss.NewStyle().
-			Foreground(tuitheme.Default.Muted).
-			Render("  "+preview))
+			Foreground(tuitheme.Default.Warn).
+			Render(fmt.Sprintf("pending steer (%d)", len(m.pendingSteers))))
+		for i := 0; i < limit; i++ {
+			preview := queuedPromptPreview(m.pendingSteers[i].Text, max(1, width-4))
+			rows = append(rows, lipgloss.NewStyle().
+				Foreground(tuitheme.Default.Muted).
+				Render("  "+preview))
+		}
+		if hidden := len(m.pendingSteers) - limit; hidden > 0 {
+			rows = append(rows, lipgloss.NewStyle().
+				Foreground(tuitheme.Default.Muted).
+				Render(fmt.Sprintf("  ... %d more", hidden)))
+		}
 	}
-	if hidden := len(m.queuedPrompts) - limit; hidden > 0 {
+	if len(m.queuedPrompts) > 0 {
+		if len(rows) > 0 {
+			rows = append(rows, "")
+		}
+		limit := 3
+		if len(m.queuedPrompts) < limit {
+			limit = len(m.queuedPrompts)
+		}
 		rows = append(rows, lipgloss.NewStyle().
-			Foreground(tuitheme.Default.Muted).
-			Render(fmt.Sprintf("  ... %d more", hidden)))
+			Foreground(tuitheme.Default.Warn).
+			Render(fmt.Sprintf("queued follow-up (%d)", len(m.queuedPrompts))))
+		for i := 0; i < limit; i++ {
+			preview := queuedPromptPreview(m.queuedPrompts[i].Text, max(1, width-4))
+			rows = append(rows, lipgloss.NewStyle().
+				Foreground(tuitheme.Default.Muted).
+				Render("  "+preview))
+		}
+		if hidden := len(m.queuedPrompts) - limit; hidden > 0 {
+			rows = append(rows, lipgloss.NewStyle().
+				Foreground(tuitheme.Default.Muted).
+				Render(fmt.Sprintf("  ... %d more", hidden)))
+		}
 	}
 	return lipgloss.NewStyle().Width(width).MaxWidth(width).Render(strings.Join(rows, "\n"))
 }
