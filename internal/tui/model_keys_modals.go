@@ -62,7 +62,7 @@ func (m *model) submitApprovalAndEnableAutoAccept() tea.Cmd {
 	toolName := m.approval.toolName
 	notice := m.approvalNotice("allow_session")
 	m.dispatchIntent(protocol.Intent{Kind: protocol.IntentAllowToolForSession, ToolCallID: toolCallID})
-	m.dispatchIntent(protocol.Intent{Kind: protocol.IntentSetApprovalMode, ApprovalMode: "auto_accept"})
+	m.dispatchIntent(protocol.Intent{Kind: protocol.IntentEnableAutoAccept})
 	m.addLog(logEntry{Kind: "approval_allow_session_auto", Source: toolName, Summary: "allow for session and enable auto mode", Raw: "allow_session_auto"})
 	m.appendSystemNotice(notice)
 	m.advanceApprovalPrompt("approved for session")

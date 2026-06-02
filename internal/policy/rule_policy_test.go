@@ -33,6 +33,16 @@ func TestRulePolicyDefaultPosture(t *testing.T) {
 		t.Fatalf("git push decision = %+v, want approval", push)
 	}
 
+	task := p.Decide(core.ToolSpec{Name: "spawn_subagent"}, core.ToolCall{Name: "spawn_subagent", Input: `{"task":"edit files","agent":{"permissionMode":"trusted"}}`})
+	if !task.Allow || !task.RequiresApproval || task.Permission != "task" || task.Pattern != "mutating" || task.MatchedRule != "task:mutating=ask" {
+		t.Fatalf("spawn_subagent decision = %+v, want task approval", task)
+	}
+
+	readonlyTask := p.Decide(core.ToolSpec{Name: "spawn_subagent", ReadOnly: true}, core.ToolCall{Name: "spawn_subagent", Input: `{"task":"inspect files"}`})
+	if !readonlyTask.Allow || readonlyTask.RequiresApproval || readonlyTask.Permission != "" {
+		t.Fatalf("read-only spawn_subagent decision = %+v, want allow without approval", readonlyTask)
+	}
+
 	deny := p.Decide(core.ToolSpec{Name: "shell_run"}, core.ToolCall{Name: "shell_run", Input: `{"command":"rm -rf /tmp/x"}`})
 	if deny.Allow || deny.Code != "permission_denied" {
 		t.Fatalf("rm -rf decision = %+v, want deny", deny)

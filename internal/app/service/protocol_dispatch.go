@@ -72,6 +72,8 @@ func serviceIntentKind(kind protocol.IntentKind) IntentKind {
 		return IntentSetModelAndEffort
 	case protocol.IntentSetApprovalMode:
 		return IntentSetApprovalMode
+	case protocol.IntentEnableAutoAccept:
+		return IntentEnableAutoAccept
 	case protocol.IntentSetViewMode:
 		return IntentSetViewMode
 	case protocol.IntentToggleMode:

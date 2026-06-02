@@ -89,6 +89,20 @@ func TestAgentDefinitionSystemBlockShowsDefaultWorkspaceReadTools(t *testing.T) 
 	}
 }
 
+func TestBuiltinResearchAgentIncludesWebTools(t *testing.T) {
+	cfg, err := ResolveAgentRuntimeConfig(SpawnSubagentRequest{
+		Role: "research",
+		Task: "research sources",
+	}, RunnerDefaults{Model: "deepseek-v4-flash", MaxToolIters: 3})
+	if err != nil {
+		t.Fatalf("ResolveAgentRuntimeConfig: %v", err)
+	}
+	want := []string{CapabilityWorkspaceRead, CapabilityWebSearch, CapabilityWebFetch}
+	if !reflect.DeepEqual(cfg.Capabilities, want) {
+		t.Fatalf("research capabilities = %#v, want %#v", cfg.Capabilities, want)
+	}
+}
+
 func TestAgentDefinitionLibraryLoadsWhaleMarkdownAgent(t *testing.T) {
 	root := t.TempDir()
 	agentDir := filepath.Join(root, ".whale", "agents")
@@ -98,6 +112,7 @@ func TestAgentDefinitionLibraryLoadsWhaleMarkdownAgent(t *testing.T) {
 	content := `---
 name: local-reviewer
 description: "Review local changes"
+whenToUse: "Use only when reviewing a local diff"
 tools: workspace.read, shell.run
 disallowedTools:
   - web.fetch
@@ -130,6 +145,9 @@ Focus on correctness risks and missing tests.
 	if cfg.Definition.Name != "local-reviewer" || cfg.Definition.Prompt != "Focus on correctness risks and missing tests." {
 		t.Fatalf("definition = %+v", cfg.Definition)
 	}
+	if cfg.Definition.WhenToUse != "Use only when reviewing a local diff" {
+		t.Fatalf("whenToUse = %q", cfg.Definition.WhenToUse)
+	}
 	if cfg.Model != "deepseek-v4-flash" || cfg.Effort != "max" || cfg.PermissionProfile != AgentPermissionAuto {
 		t.Fatalf("runtime fields = %+v", cfg)
 	}
@@ -141,6 +159,124 @@ Focus on correctness risks and missing tests.
 	}
 	if !reflect.DeepEqual(cfg.DisallowedTools, []string{CapabilityWebFetch}) || !reflect.DeepEqual(cfg.Skills, []string{"review-skill"}) || !reflect.DeepEqual(cfg.MCPServers, []string{"github"}) {
 		t.Fatalf("lists = tools:%#v skills:%#v mcp:%#v", cfg.DisallowedTools, cfg.Skills, cfg.MCPServers)
+	}
+}
+
+func TestAgentDefinitionLibraryUsesMemoryDefinitionsAsFallback(t *testing.T) {
+	root := t.TempDir()
+	agentDir := filepath.Join(root, ".whale", "agents")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir agents: %v", err)
+	}
+	projectAgent := `---
+name: plugin-reviewer
+description: "Project reviewer"
+tools: [workspace.read]
+---
+
+Project prompt.
+`
+	if err := os.WriteFile(filepath.Join(agentDir, "plugin-reviewer.md"), []byte(projectAgent), 0o644); err != nil {
+		t.Fatalf("write project agent: %v", err)
+	}
+	library := NewAgentDefinitionLibraryWithDefinitions(root, []AgentDefinition{
+		{
+			Name:           "plugin-reviewer",
+			Description:    "Plugin reviewer",
+			Prompt:         "Plugin prompt.",
+			Tools:          []string{CapabilityShellRun},
+			PermissionMode: AgentPermissionAsk,
+		},
+		{
+			Name:           "plugin-only",
+			Description:    "Plugin only reviewer",
+			Prompt:         "Plugin only prompt.",
+			Tools:          []string{CapabilityWorkspaceRead},
+			PermissionMode: AgentPermissionReadOnly,
+		},
+	})
+	cfg, err := ResolveAgentRuntimeConfigWithLibrary(SpawnSubagentRequest{
+		Role: "plugin-reviewer",
+		Task: "review",
+	}, RunnerDefaults{Model: "deepseek-v4-flash", MaxToolIters: 3}, library)
+	if err != nil {
+		t.Fatalf("Resolve project override: %v", err)
+	}
+	if cfg.Definition.Prompt != "Project prompt." || !reflect.DeepEqual(cfg.Capabilities, []string{CapabilityWorkspaceRead}) {
+		t.Fatalf("project definition should override plugin fallback: %+v", cfg)
+	}
+	cfg, err = ResolveAgentRuntimeConfigWithLibrary(SpawnSubagentRequest{
+		Role: "plugin-only",
+		Task: "review",
+	}, RunnerDefaults{Model: "deepseek-v4-flash", MaxToolIters: 3}, library)
+	if err != nil {
+		t.Fatalf("Resolve plugin-only: %v", err)
+	}
+	if cfg.Definition.Prompt != "Plugin only prompt." || cfg.PermissionProfile != AgentPermissionReadOnly {
+		t.Fatalf("plugin definition not used: %+v", cfg)
+	}
+}
+
+func TestAgentDefinitionLibraryLoadsMarkdownHooks(t *testing.T) {
+	root := t.TempDir()
+	agentDir := filepath.Join(root, ".whale", "agents")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir agents: %v", err)
+	}
+	content := `---
+name: hooked-reviewer
+description: "Review with hooks"
+hooks:
+  PreToolUse:
+    - type: prompt
+      prompt: "Check this tool call"
+      match: read_file
+      model: haiku
+    - type: http
+      url: "https://example.com/hook"
+      headers:
+        X-Test: ok
+      allowedEnvVars:
+        - TOKEN
+  Stop:
+    - command: "echo stop"
+---
+
+Review with guardrails.
+`
+	if err := os.WriteFile(filepath.Join(agentDir, "hooked-reviewer.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write agent: %v", err)
+	}
+	library := NewAgentDefinitionLibrary(root)
+	cfg, err := ResolveAgentRuntimeConfigWithLibrary(SpawnSubagentRequest{
+		Role: "hooked-reviewer",
+		Task: "review",
+	}, RunnerDefaults{Model: "deepseek-v4-flash", MaxToolIters: 3}, library)
+	if err != nil {
+		t.Fatalf("ResolveAgentRuntimeConfigWithLibrary: %v", err)
+	}
+	if len(cfg.Hooks) != 3 {
+		t.Fatalf("hooks = %+v", cfg.Hooks)
+	}
+	var promptHook, httpHook, stopHook *agent.ResolvedHook
+	for i := range cfg.Hooks {
+		switch {
+		case cfg.Hooks[i].Type == "prompt":
+			promptHook = &cfg.Hooks[i]
+		case cfg.Hooks[i].Type == "http":
+			httpHook = &cfg.Hooks[i]
+		case cfg.Hooks[i].Command == "echo stop":
+			stopHook = &cfg.Hooks[i]
+		}
+	}
+	if promptHook == nil || promptHook.Prompt != "Check this tool call" || promptHook.Match != "read_file" || promptHook.Model != "haiku" {
+		t.Fatalf("prompt hook = %+v", promptHook)
+	}
+	if httpHook == nil || httpHook.URL != "https://example.com/hook" || httpHook.Headers["X-Test"] != "ok" || !reflect.DeepEqual(httpHook.AllowedEnvVars, []string{"TOKEN"}) {
+		t.Fatalf("http hook = %+v", httpHook)
+	}
+	if stopHook == nil || stopHook.Event != agent.HookEventSubagentStop {
+		t.Fatalf("stop hook = %+v", stopHook)
 	}
 }
 

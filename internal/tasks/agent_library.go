@@ -17,7 +17,8 @@ const AgentDefinitionFileExt = ".md"
 var agentDefinitionNamePattern = regexp.MustCompile(`^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$`)
 
 type AgentDefinitionLibrary struct {
-	Roots []AgentDefinitionRoot
+	Roots       []AgentDefinitionRoot
+	Definitions []AgentDefinition
 }
 
 type AgentDefinitionRoot struct {
@@ -39,6 +40,15 @@ func NewAgentDefinitionLibrary(workspaceRoot string) *AgentDefinitionLibrary {
 		)
 	}
 	return NewAgentDefinitionLibraryWithRoots(roots)
+}
+
+func NewAgentDefinitionLibraryWithDefinitions(workspaceRoot string, definitions []AgentDefinition) *AgentDefinitionLibrary {
+	library := NewAgentDefinitionLibrary(workspaceRoot)
+	if library == nil {
+		library = &AgentDefinitionLibrary{}
+	}
+	library.Definitions = cloneAgentDefinitions(definitions)
+	return library
 }
 
 func NewAgentDefinitionLibraryWithRoots(roots []AgentDefinitionRoot) *AgentDefinitionLibrary {
@@ -100,6 +110,17 @@ func (l *AgentDefinitionLibrary) Resolve(name string) (AgentDefinition, bool, er
 		bestRank = root.Rank
 		found = true
 	}
+	for _, def := range l.Definitions {
+		if def.Name != name {
+			continue
+		}
+		if found && bestRank <= 2 {
+			continue
+		}
+		best = def
+		bestRank = 2
+		found = true
+	}
 	return best, found, nil
 }
 
@@ -125,6 +146,17 @@ func (l *AgentDefinitionLibrary) List(ctx context.Context) ([]AgentDefinition, e
 			byName[def.Name] = def
 			nameRank[def.Name] = root.Rank
 		}
+	}
+	for _, def := range l.Definitions {
+		if strings.TrimSpace(def.Name) == "" {
+			continue
+		}
+		rank, exists := nameRank[def.Name]
+		if exists && rank <= 2 {
+			continue
+		}
+		byName[def.Name] = def
+		nameRank[def.Name] = 2
 	}
 	out := make([]AgentDefinition, 0, len(byName))
 	for _, def := range byName {
@@ -268,7 +300,7 @@ func parseMarkdownAgentDefinition(content, filename, _ string) (AgentDefinition,
 	def := AgentDefinition{
 		Name:            name,
 		Description:     desc,
-		WhenToUse:       desc,
+		WhenToUse:       stringFrontmatterValue(values, "whenToUse"),
 		Prompt:          strings.TrimSpace(body),
 		Tools:           stringListFrontmatterValue(values, "tools"),
 		DisallowedTools: stringListFrontmatterValue(values, "disallowedTools"),
@@ -280,6 +312,7 @@ func parseMarkdownAgentDefinition(content, filename, _ string) (AgentDefinition,
 		MaxTurns:        intFrontmatterValue(values, "maxTurns"),
 		InitialPrompt:   stringFrontmatterValue(values, "initialPrompt"),
 		Memory:          stringFrontmatterValue(values, "memory"),
+		Hooks:           hooksFrontmatterValue(frontmatter),
 		Background:      boolFrontmatterValue(values, "background"),
 		Isolation:       stringFrontmatterValue(values, "isolation"),
 	}
@@ -364,6 +397,169 @@ func parseAgentFrontmatter(frontmatter string) map[string]any {
 	return values
 }
 
+func hooksFrontmatterValue(frontmatter string) any {
+	lines := strings.Split(frontmatter, "\n")
+	start := -1
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") || isIndentedYAMLLine(line) {
+			continue
+		}
+		key, raw, ok := strings.Cut(line, ":")
+		if !ok || strings.TrimSpace(key) != "hooks" {
+			continue
+		}
+		if strings.TrimSpace(raw) != "" {
+			return parseAgentScalar(raw)
+		}
+		start = i + 1
+		break
+	}
+	if start < 0 {
+		return nil
+	}
+	hooks := map[string]any{}
+	var currentEvent string
+	var current map[string]any
+	var nestedKey string
+	nestedIndent := 0
+	for i := start; i < len(lines); i++ {
+		line := strings.TrimRight(lines[i], " \t")
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		indent := yamlIndent(line)
+		if indent == 0 {
+			break
+		}
+		if current != nil && nestedKey != "" && indent > nestedIndent {
+			if strings.HasPrefix(trimmed, "- ") {
+				appendNestedListValue(current, nestedKey, strings.TrimSpace(trimmed[2:]))
+				continue
+			}
+			if key, raw, ok := strings.Cut(trimmed, ":"); ok {
+				putNestedMapValue(current, nestedKey, strings.TrimSpace(key), strings.TrimSpace(raw))
+				continue
+			}
+		}
+		if current != nil && nestedKey != "" && indent <= nestedIndent {
+			nestedKey = ""
+			nestedIndent = 0
+		}
+		if indent <= 2 && !strings.HasPrefix(trimmed, "- ") && strings.HasSuffix(trimmed, ":") {
+			event := strings.TrimSpace(strings.TrimSuffix(trimmed, ":"))
+			if event == "" {
+				continue
+			}
+			currentEvent = event
+			if _, ok := hooks[currentEvent]; !ok {
+				hooks[currentEvent] = []any{}
+			}
+			current = nil
+			continue
+		}
+		if currentEvent == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "- ") {
+			current = map[string]any{}
+			hooks[currentEvent] = append(hooks[currentEvent].([]any), current)
+			nestedKey = ""
+			nestedIndent = 0
+			item := strings.TrimSpace(trimmed[2:])
+			if item == "" {
+				continue
+			}
+			key, raw, ok := strings.Cut(item, ":")
+			if !ok {
+				continue
+			}
+			key = strings.TrimSpace(key)
+			raw = strings.TrimSpace(raw)
+			if raw == "" {
+				current[key] = map[string]any{}
+				nestedKey = key
+				nestedIndent = indent
+			} else {
+				current[key] = parseAgentScalar(raw)
+			}
+			continue
+		}
+		if current == nil {
+			continue
+		}
+		key, raw, ok := strings.Cut(trimmed, ":")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			current[key] = map[string]any{}
+			nestedKey = key
+			nestedIndent = indent
+			continue
+		}
+		current[key] = parseAgentScalar(raw)
+	}
+	if len(hooks) == 0 {
+		return nil
+	}
+	return hooks
+}
+
+func isIndentedYAMLLine(line string) bool {
+	return strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")
+}
+
+func yamlIndent(line string) int {
+	indent := 0
+	for _, ch := range line {
+		switch ch {
+		case ' ':
+			indent++
+		case '\t':
+			indent += 2
+		default:
+			return indent
+		}
+	}
+	return indent
+}
+
+func appendNestedListValue(target map[string]any, key, raw string) {
+	value := parseAgentScalar(raw)
+	switch existing := target[key].(type) {
+	case []any:
+		target[key] = append(existing, value)
+	case []string:
+		if s, ok := value.(string); ok {
+			target[key] = append(existing, s)
+			return
+		}
+		out := make([]any, 0, len(existing)+1)
+		for _, item := range existing {
+			out = append(out, item)
+		}
+		target[key] = append(out, value)
+	default:
+		target[key] = []any{value}
+	}
+}
+
+func putNestedMapValue(target map[string]any, key, nestedKey, raw string) {
+	if nestedKey == "" {
+		return
+	}
+	existing, ok := target[key].(map[string]any)
+	if !ok {
+		existing = map[string]any{}
+	}
+	existing[nestedKey] = parseAgentScalar(raw)
+	target[key] = existing
+}
+
 func parseAgentScalar(raw string) any {
 	raw = strings.TrimSpace(raw)
 	if strings.HasPrefix(raw, "[") && strings.HasSuffix(raw, "]") {
@@ -396,6 +592,25 @@ func cleanScalar(raw string) string {
 	raw = strings.TrimSpace(raw)
 	raw = strings.Trim(raw, `"'`)
 	return strings.ReplaceAll(raw, `\n`, "\n")
+}
+
+func cloneAgentDefinitions(definitions []AgentDefinition) []AgentDefinition {
+	if len(definitions) == 0 {
+		return nil
+	}
+	out := make([]AgentDefinition, 0, len(definitions))
+	for _, def := range definitions {
+		def.Name = strings.TrimSpace(def.Name)
+		if !ValidAgentDefinitionName(def.Name) {
+			continue
+		}
+		def.Tools = cloneStrings(def.Tools)
+		def.DisallowedTools = cloneStrings(def.DisallowedTools)
+		def.Skills = cloneStrings(def.Skills)
+		def.MCPServers = cloneStrings(def.MCPServers)
+		out = append(out, def)
+	}
+	return out
 }
 
 func stringFrontmatterValue(values map[string]any, key string) string {

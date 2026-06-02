@@ -90,6 +90,9 @@ func (s *Service) Dispatch(in Intent) {
 		s.app.SetAutoAcceptPermissions(enabled)
 		s.emit(Event{Kind: EventInfo, Text: autoAcceptMessage(enabled), AutoAccept: enabled, AutoAcceptKnown: true})
 		s.emit(Event{Kind: EventTurnDone})
+	case IntentEnableAutoAccept:
+		s.app.SetAutoAcceptPermissions(true)
+		s.emit(Event{Kind: EventInfo, Text: autoAcceptMessage(true), AutoAccept: true, AutoAcceptKnown: true})
 	case IntentSetViewMode:
 		if err := s.app.SetViewMode(in.ViewMode); err != nil {
 			s.emit(Event{Kind: EventError, Text: err.Error()})

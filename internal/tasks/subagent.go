@@ -137,29 +137,36 @@ func childSessionMode(permissionMode string) session.Mode {
 	}
 }
 
-func childToolPolicy(permissionMode, workspaceRoot string) policy.RulePolicy {
+func childToolPolicy(parent policy.ToolPolicy, permissionMode, workspaceRoot string, capabilities []string) policy.ToolPolicy {
+	base := childBasePolicy(parent, workspaceRoot)
 	switch strings.TrimSpace(permissionMode) {
 	case AgentPermissionAsk:
-		return policy.RulePolicy{Default: policy.PermissionAsk, Rules: childAskRules(), WorkspaceRoot: workspaceRoot}
-	case AgentPermissionAuto, AgentPermissionTrusted:
-		return policy.RulePolicy{Default: policy.PermissionAllow, Rules: policy.DefaultRules(), WorkspaceRoot: workspaceRoot}
+		return childToolApprovalPolicy{Base: base, Capabilities: capabilities}
 	default:
-		return policy.RulePolicy{Default: policy.PermissionAllow, Rules: policy.DefaultRules(), WorkspaceRoot: workspaceRoot}
+		return base
 	}
 }
 
-func childAskRules() []policy.PermissionRule {
-	rules := policy.DefaultRules()
-	for i := range rules {
-		if rules[i].Action != policy.PermissionAllow {
-			continue
-		}
-		switch strings.TrimSpace(rules[i].Permission) {
-		case "shell", "edit", "mutating_tool":
-			rules[i].Action = policy.PermissionAsk
-		}
+func childBasePolicy(parent policy.ToolPolicy, workspaceRoot string) policy.ToolPolicy {
+	if parent == nil {
+		return policy.RulePolicy{Default: policy.PermissionAllow, Rules: policy.DefaultRules(), WorkspaceRoot: workspaceRoot}
 	}
-	return rules
+	switch typed := parent.(type) {
+	case policy.RulePolicy:
+		typed.WorkspaceRoot = workspaceRoot
+		typed.WorktreeRoot = ""
+		return typed
+	case *policy.RulePolicy:
+		if typed == nil {
+			return policy.RulePolicy{Default: policy.PermissionAllow, Rules: policy.DefaultRules(), WorkspaceRoot: workspaceRoot}
+		}
+		clone := *typed
+		clone.WorkspaceRoot = workspaceRoot
+		clone.WorktreeRoot = ""
+		return clone
+	default:
+		return parent
+	}
 }
 
 func childFallbackApproval(permissionMode string) policy.ApprovalDecision {
@@ -263,7 +270,7 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 	}
 	promptHookExecutor := r.hookModelExecutor(model, cfg.Effort, "prompt")
 	agentHookExecutor := r.hookModelExecutor(model, cfg.Effort, "agent")
-	if hookBlock, err := runSubagentStartHooks(ctx, cfg.Hooks, sessionID, workspace.WorkspaceRoot, role, prompt, promptHookExecutor, agentHookExecutor); err != nil {
+	if hookBlock, err := runSubagentStartHooks(ctx, cfg.Hooks, sessionID, workspace.WorkspaceRoot, role, model, cfg.PermissionProfile, prompt, promptHookExecutor, agentHookExecutor); err != nil {
 		r.patchSubagentMeta(sessionID, session.SessionMeta{Status: "failed", Error: err.Error(), CompletedAt: time.Now().UTC()})
 		return SpawnSubagentResponse{}, &SpawnSubagentError{SessionID: sessionID, Code: "subagent_start_hook_blocked", Message: err.Error(), Err: err}
 	} else if hookBlock != "" {
@@ -272,12 +279,10 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 	newChild := func(registry *core.ToolRegistry, maxIters int) *agent.Agent {
 		return agent.NewAgentWithRegistry(provider, childStore, registry,
 			agent.WithSessionMode(childSessionMode(cfg.PermissionProfile)),
-			agent.WithToolPolicy(childToolPolicy(cfg.PermissionProfile, workspace.WorkspaceRoot)),
-			// The child registry is already restricted to the requested agent
-			// capabilities and a subagent has no interactive approval path, so
-			// auto-approve "ask" decisions instead of defaulting them to denied.
-			// Deny rules still produce a non-Allow decision and are enforced
-			// before the approval callback runs.
+			agent.WithToolPolicy(childToolPolicy(r.parentPolicy, cfg.PermissionProfile, workspace.WorkspaceRoot, cfg.Capabilities)),
+			// The child registry is capability-restricted, but policy decisions
+			// still flow through the parent approval path so workspace/user
+			// permission rules remain effective inside subagents.
 			agent.WithApprovalFunc(func(approvalReq policy.ApprovalRequest) policy.ApprovalDecision {
 				if r.approvalFunc == nil {
 					return childFallbackApproval(cfg.PermissionProfile)
@@ -300,7 +305,7 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 			agent.WithExtraSystemBlocks(extraBlocks...),
 		)
 	}
-	runChild := func(runCtx context.Context) (SpawnSubagentResponse, error) {
+	runChild := func(runCtx context.Context, progress func(core.ToolProgress)) (SpawnSubagentResponse, error) {
 		child := newChild(childTools, maxToolIters)
 		events, err := child.RunStream(runCtx, sessionID, prompt)
 		if err != nil {
@@ -472,7 +477,7 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 				}
 			}
 		}
-		if err := runSubagentStopHooks(runCtx, cfg.Hooks, sessionID, workspace.WorkspaceRoot, role, summary, promptHookExecutor, agentHookExecutor); err != nil {
+		if err := runSubagentStopHooks(runCtx, cfg.Hooks, sessionID, workspace.WorkspaceRoot, role, model, cfg.PermissionProfile, summary, promptHookExecutor, agentHookExecutor); err != nil {
 			r.patchSubagentMeta(sessionID, session.SessionMeta{Status: "failed", Error: err.Error(), CompletedAt: completedAt})
 			return SpawnSubagentResponse{}, &SpawnSubagentError{SessionID: sessionID, Code: "subagent_stop_hook_failed", Message: err.Error(), Err: err}
 		}
@@ -502,7 +507,7 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 		})
 		go func() {
 			defer r.unregisterBackgroundSubagent(sessionID)
-			_, _ = runChild(bgCtx)
+			_, _ = runChild(bgCtx, nil)
 		}()
 		return SpawnSubagentResponse{
 			SessionID:         sessionID,
@@ -515,7 +520,7 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 			DurationMS:        time.Since(start).Milliseconds(),
 		}, nil
 	}
-	return runChild(ctx)
+	return runChild(ctx, progress)
 }
 
 func workflowContextSystemBlock(req SpawnSubagentRequest) string {

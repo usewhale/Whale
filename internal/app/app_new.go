@@ -29,7 +29,7 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 		return nil, err
 	}
 	var appRef *App
-	runtimeInit, err := initAppRuntime(cfg, sessionInit, toolInit, workspaceRoot, func() string {
+	runtimeInit, err := initAppRuntime(cfg, sessionInit, toolInit, workspaceRoot, start.Worktree.Path, func() string {
 		if appRef != nil {
 			return appRef.sessionID
 		}

@@ -15,7 +15,7 @@ import (
 	"github.com/usewhale/whale/internal/workflow"
 )
 
-func initAppRuntime(cfg Config, sessionInit appSessionInit, toolInit appToolInit, workspaceRoot string, parentSessionIDFunc func() string, approvalFunc policy.ApprovalFunc) (appRuntimeInit, error) {
+func initAppRuntime(cfg Config, sessionInit appSessionInit, toolInit appToolInit, workspaceRoot, worktreeRoot string, parentSessionIDFunc func() string, approvalFunc policy.ApprovalFunc) (appRuntimeInit, error) {
 	model := core.FirstNonEmpty(strings.TrimSpace(cfg.Model), defaults.DefaultModel)
 	effort := normalizeEffort(core.FirstNonEmpty(strings.TrimSpace(cfg.ReasoningEffort), defaults.DefaultReasoningEffort))
 	viewMode, err := NormalizeViewMode(cfg.ViewMode)
@@ -92,7 +92,8 @@ func initAppRuntime(cfg Config, sessionInit appSessionInit, toolInit appToolInit
 		ProviderFactoryWithOptions: providerFactoryWithOptions,
 		ParentTools:                toolInit.subagentToolRegistry,
 		WorkspaceTools:             workspaceTools,
-		AgentDefinitions:           tasks.NewAgentDefinitionLibrary(workspaceRoot),
+		AgentDefinitions:           tasks.NewAgentDefinitionLibraryWithDefinitions(workspaceRoot, taskAgentDefinitions(toolInit.pluginAgents)),
+		ParentPolicy:               policy.RulePolicy{Default: cfg.PermissionDefault, Rules: append([]policy.PermissionRule{}, cfg.PermissionRules...), WorkspaceRoot: workspaceRoot, WorktreeRoot: worktreeRoot},
 		MessageStore:               sessionInit.msgStore,
 		SessionsDir:                sessionInit.sessionsDir,
 		ParentSessionID:            sessionInit.sessionID,

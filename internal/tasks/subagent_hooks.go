@@ -12,13 +12,16 @@ import (
 	"github.com/usewhale/whale/internal/llm"
 )
 
-func runSubagentStartHooks(ctx context.Context, hooks []agent.ResolvedHook, sessionID, workspaceRoot, role, prompt string, promptExecutor, agentExecutor agent.HookExecutor) (string, error) {
+func runSubagentStartHooks(ctx context.Context, hooks []agent.ResolvedHook, sessionID, workspaceRoot, role, model, permissionMode, prompt string, promptExecutor, agentExecutor agent.HookExecutor) (string, error) {
 	if len(hooks) == 0 {
 		return "", nil
 	}
+	if err := validateSubagentHookPermissions(hooks, permissionMode); err != nil {
+		return "", err
+	}
 	runner := agent.NewHookRunner(hooks, workspaceRoot)
 	runner.SetExecutors(promptExecutor, agentExecutor)
-	payload := agent.NewSubagentHookPayload(agent.HookEventSubagentStart, sessionID, workspaceRoot, role, "", "")
+	payload := agent.NewSubagentHookPayload(agent.HookEventSubagentStart, sessionID, workspaceRoot, role, model, "")
 	payload.Prompt = prompt
 	report := runner.RunHook(ctx, payload)
 	if report.Blocked {
@@ -32,17 +35,44 @@ func runSubagentStartHooks(ctx context.Context, hooks []agent.ResolvedHook, sess
 	return "Subagent start hook context:\n" + ctxText, nil
 }
 
-func runSubagentStopHooks(ctx context.Context, hooks []agent.ResolvedHook, sessionID, workspaceRoot, role, summary string, promptExecutor, agentExecutor agent.HookExecutor) error {
+func runSubagentStopHooks(ctx context.Context, hooks []agent.ResolvedHook, sessionID, workspaceRoot, role, model, permissionMode, summary string, promptExecutor, agentExecutor agent.HookExecutor) error {
 	if len(hooks) == 0 {
 		return nil
 	}
+	if err := validateSubagentHookPermissions(hooks, permissionMode); err != nil {
+		return err
+	}
 	runner := agent.NewHookRunner(hooks, workspaceRoot)
 	runner.SetExecutors(promptExecutor, agentExecutor)
-	report := runner.RunHook(ctx, agent.NewSubagentHookPayload(agent.HookEventSubagentStop, sessionID, workspaceRoot, role, "", summary))
+	report := runner.RunHook(ctx, agent.NewSubagentHookPayload(agent.HookEventSubagentStop, sessionID, workspaceRoot, role, model, summary))
 	if report.Halted {
 		return errors.New(firstHookMessage(report, "subagent stop hook halted"))
 	}
 	return nil
+}
+
+func validateSubagentHookPermissions(hooks []agent.ResolvedHook, permissionMode string) error {
+	if strings.TrimSpace(permissionMode) != AgentPermissionReadOnly {
+		return nil
+	}
+	for _, h := range hooks {
+		if subagentHookRunsCommand(h) {
+			name := strings.TrimSpace(h.Description)
+			if name == "" {
+				name = strings.TrimSpace(h.Command)
+			}
+			if name == "" {
+				name = string(h.Event)
+			}
+			return fmt.Errorf("read-only subagent cannot run command/shell hook %q", name)
+		}
+	}
+	return nil
+}
+
+func subagentHookRunsCommand(h agent.ResolvedHook) bool {
+	typ := strings.ToLower(strings.TrimSpace(h.Type))
+	return strings.TrimSpace(h.Command) != "" || typ == "" || typ == "command" || typ == "shell"
 }
 
 func firstHookMessage(report agent.HookReport, fallback string) string {

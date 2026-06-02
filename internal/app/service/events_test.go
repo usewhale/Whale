@@ -1552,6 +1552,30 @@ func TestPermissionsCommandOpensMenuAndSetsSessionAutoAccept(t *testing.T) {
 	}
 }
 
+func TestEnableAutoAcceptIntentDoesNotEndActiveTurn(t *testing.T) {
+	work := t.TempDir()
+	t.Chdir(work)
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+
+	svc.Dispatch(Intent{Kind: IntentEnableAutoAccept})
+	info := waitForServiceEvent(t, svc, EventInfo)
+	if info.Text != "Session auto-accept enabled" || !info.AutoAccept || !info.AutoAcceptKnown {
+		t.Fatalf("unexpected auto accept info: %+v", info)
+	}
+	select {
+	case ev := <-svc.Events():
+		t.Fatalf("enable auto accept should not emit another event, got %+v", ev)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestReviewCommandOpensMenu(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
 	cfg := app.DefaultConfig()

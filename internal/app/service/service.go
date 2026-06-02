@@ -32,6 +32,7 @@ const (
 	IntentShutdown                  IntentKind = "shutdown"
 	IntentSetModelAndEffort         IntentKind = "set_model_and_effort"
 	IntentSetApprovalMode           IntentKind = "set_approval_mode"
+	IntentEnableAutoAccept          IntentKind = "enable_auto_accept"
 	IntentSetViewMode               IntentKind = "set_view_mode"
 	IntentToggleMode                IntentKind = "toggle_mode"
 	IntentImplementPlan             IntentKind = "implement_plan"

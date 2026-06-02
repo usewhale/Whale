@@ -49,6 +49,7 @@ type RunnerConfig struct {
 	ParentTools                *core.ToolRegistry
 	WorkspaceTools             WorkspaceToolRegistryFactory
 	AgentDefinitions           *AgentDefinitionLibrary
+	ParentPolicy               policy.ToolPolicy
 	MessageStore               store.MessageStore
 	SessionsDir                string
 	ParentSessionID            string
@@ -75,6 +76,7 @@ type Runner struct {
 	parentTools                *core.ToolRegistry
 	workspaceTools             WorkspaceToolRegistryFactory
 	agentDefinitions           *AgentDefinitionLibrary
+	parentPolicy               policy.ToolPolicy
 	messageStore               store.MessageStore
 	sessionsDir                string
 	parentSessionID            string
@@ -120,6 +122,7 @@ func NewRunner(cfg RunnerConfig) *Runner {
 		parentTools:                cfg.ParentTools,
 		workspaceTools:             cfg.WorkspaceTools,
 		agentDefinitions:           cfg.AgentDefinitions,
+		parentPolicy:               cfg.ParentPolicy,
 		messageStore:               cfg.MessageStore,
 		sessionsDir:                strings.TrimSpace(cfg.SessionsDir),
 		parentSessionID:            strings.TrimSpace(cfg.ParentSessionID),

@@ -26,6 +26,7 @@ func TestServiceIntentKindMapsProtocolKinds(t *testing.T) {
 		{protocol.IntentShutdown, IntentShutdown},
 		{protocol.IntentSetModelAndEffort, IntentSetModelAndEffort},
 		{protocol.IntentSetApprovalMode, IntentSetApprovalMode},
+		{protocol.IntentEnableAutoAccept, IntentEnableAutoAccept},
 		{protocol.IntentSetViewMode, IntentSetViewMode},
 		{protocol.IntentToggleMode, IntentToggleMode},
 		{protocol.IntentImplementPlan, IntentImplementPlan},

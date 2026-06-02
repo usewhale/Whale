@@ -57,6 +57,30 @@ func TestApprovalDecisionAppendsStructuredNotice(t *testing.T) {
 	}
 }
 
+func TestWorkflowApprovalAutoModeDoesNotUseLocalSettingsIntent(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.mode = modeApproval
+	m.approval.toolCallID = "tool-1"
+	m.approval.toolName = "web_search"
+	m.approval.reason = "web_search: Node.js permission model"
+	m.approval.metadata = map[string]any{"workflow_name": "deep-research"}
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("3")})
+	m = next.(model)
+	if len(*intents) != 2 {
+		t.Fatalf("unexpected intents: %+v", *intents)
+	}
+	if (*intents)[0].Kind != protocol.IntentAllowToolForSession || (*intents)[0].ToolCallID != "tool-1" {
+		t.Fatalf("unexpected allow intent: %+v", (*intents)[0])
+	}
+	if (*intents)[1].Kind != protocol.IntentEnableAutoAccept {
+		t.Fatalf("unexpected auto intent: %+v", (*intents)[1])
+	}
+	if m.mode != modeChat {
+		t.Fatalf("expected approval modal to close, got mode %v", m.mode)
+	}
+}
+
 func TestApprovalDecisionPreservesPendingLiveRowsBeforeNotice(t *testing.T) {
 	m, _ := newModelWithDispatchSpy()
 	m.width = 120

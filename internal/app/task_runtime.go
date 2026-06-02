@@ -79,9 +79,10 @@ func (a *App) rebuildTaskRuntimeLocked() error {
 	taskRunner := tasks.NewRunner(tasks.RunnerConfig{
 		ProviderFactory:            providerFactory,
 		ProviderFactoryWithOptions: providerFactoryWithOptions,
-		ParentTools:                a.baseToolRegistry,
+		ParentTools:                a.subagentToolRegistry,
 		WorkspaceTools:             workspaceTools,
-		AgentDefinitions:           tasks.NewAgentDefinitionLibrary(a.workspaceRoot),
+		AgentDefinitions:           tasks.NewAgentDefinitionLibraryWithDefinitions(a.workspaceRoot, taskAgentDefinitions(a.pluginAgents)),
+		ParentPolicy:               a.permissionPolicy,
 		MessageStore:               a.msgStore,
 		SessionsDir:                a.sessionsDir,
 		ParentSessionIDFunc:        func() string { return a.sessionID },

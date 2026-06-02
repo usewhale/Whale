@@ -254,6 +254,7 @@ func builtinAgentDefinition(name string) (AgentDefinition, bool) {
 			Name:           "research",
 			Description:    "Source-backed research child agent",
 			WhenToUse:      "Use for bounded source-backed research using workspace, web, or model-only tools.",
+			Tools:          []string{CapabilityWorkspaceRead, CapabilityWebSearch, CapabilityWebFetch},
 			PermissionMode: AgentPermissionReadOnly,
 		}, true
 	case "review":

@@ -16,6 +16,7 @@ import (
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/defaults"
 	"github.com/usewhale/whale/internal/llm"
+	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/store"
 )
@@ -556,16 +557,16 @@ func TestMergeWorkspaceAndParentToolsPreservesNonWorkspaceTools(t *testing.T) {
 }
 
 func TestChildAskPolicyRequiresApprovalForMutableTools(t *testing.T) {
-	p := childToolPolicy(AgentPermissionAsk, "/repo")
+	p := childToolPolicy(nil, AgentPermissionAsk, "/repo", []string{CapabilityShellRun, CapabilityWorkspaceWrite})
 	shellDecision := p.Decide(
-		core.ToolSpec{Name: "shell_run"},
+		core.ToolSpec{Name: "shell_run", Capabilities: []string{CapabilityShellRun}},
 		core.ToolCall{Name: "shell_run", Input: `{"command":"go test ./..."}`},
 	)
 	if !shellDecision.Allow || !shellDecision.RequiresApproval {
 		t.Fatalf("ask shell should require approval, got %+v", shellDecision)
 	}
 	editDecision := p.Decide(
-		core.ToolSpec{Name: "write"},
+		core.ToolSpec{Name: "write", Capabilities: []string{CapabilityWorkspaceWrite}},
 		core.ToolCall{Name: "write", Input: `{"file_path":"out.txt","content":"x"}`},
 	)
 	if !editDecision.Allow || !editDecision.RequiresApproval {
@@ -577,6 +578,32 @@ func TestChildAskPolicyRequiresApprovalForMutableTools(t *testing.T) {
 	)
 	if denied.Allow {
 		t.Fatalf("ask policy should preserve deny rules, got %+v", denied)
+	}
+}
+
+func TestChildToolPolicyHonorsParentPermissionRules(t *testing.T) {
+	parent := policy.RulePolicy{
+		Default: policy.PermissionAllow,
+		Rules: append(policy.DefaultRules(),
+			policy.PermissionRule{Permission: "shell", Pattern: "git push*", Action: policy.PermissionDeny},
+			policy.PermissionRule{Permission: "web_fetch", Pattern: "host:example.com", Action: policy.PermissionDeny},
+		),
+		WorkspaceRoot: "/parent",
+	}
+	p := childToolPolicy(parent, AgentPermissionTrusted, "/child", []string{CapabilityShellRun, CapabilityWebFetch})
+	shellDecision := p.Decide(
+		core.ToolSpec{Name: "shell_run"},
+		core.ToolCall{Name: "shell_run", Input: `{"command":"git push origin main"}`},
+	)
+	if shellDecision.Allow || shellDecision.Permission != "shell" {
+		t.Fatalf("child policy should preserve parent shell deny, got %+v", shellDecision)
+	}
+	fetchDecision := p.Decide(
+		core.ToolSpec{Name: "web_fetch"},
+		core.ToolCall{Name: "web_fetch", Input: `{"url":"https://example.com/docs"}`},
+	)
+	if fetchDecision.Allow || fetchDecision.Permission != "web_fetch" {
+		t.Fatalf("child policy should preserve parent web_fetch deny, got %+v", fetchDecision)
 	}
 }
 
@@ -781,6 +808,71 @@ func TestSpawnSubagentBackgroundLifecycleStatusAndResultRecovery(t *testing.T) {
 	}
 	if final.Status != "completed" || final.Summary != "background done" {
 		t.Fatalf("completed meta = %+v", final)
+	}
+}
+
+func TestSpawnSubagentBackgroundDetachesFromTurnProgress(t *testing.T) {
+	release := make(chan struct{})
+	factory := func(_ string, _ int) (llm.Provider, error) {
+		return providerFunc(func(ctx context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
+			out := make(chan llm.ProviderEvent, 1)
+			go func() {
+				defer close(out)
+				select {
+				case <-ctx.Done():
+					out <- llm.ProviderEvent{Type: llm.EventError, Err: ctx.Err()}
+				case <-release:
+					out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
+						FinishReason: core.FinishReasonEndTurn,
+						Content:      "background done",
+					}}
+				}
+			}()
+			return out
+		}), nil
+	}
+	r := NewRunner(RunnerConfig{
+		ProviderFactory: factory,
+		ParentTools:     core.NewToolRegistry(nil),
+		SessionsDir:     t.TempDir(),
+	})
+	var progress []core.ToolProgress
+	res, err := r.SpawnSubagentWithProgress(context.Background(), SpawnSubagentRequest{
+		Task: "inspect",
+		Agent: AgentDefinition{
+			Name:       "background-reviewer",
+			Background: true,
+		},
+	}, func(p core.ToolProgress) {
+		progress = append(progress, p)
+	})
+	if err != nil {
+		t.Fatalf("SpawnSubagentWithProgress: %v", err)
+	}
+	if res.Status != "running" || res.SessionID == "" {
+		t.Fatalf("background launch response = %+v", res)
+	}
+	if len(progress) != 1 || progress[0].Status != "background_started" {
+		t.Fatalf("launch progress = %+v, want only background_started", progress)
+	}
+	close(release)
+	var final session.SessionMeta
+	for i := 0; i < 50; i++ {
+		meta, err := r.SubagentStatus(res.SessionID)
+		if err != nil {
+			t.Fatalf("SubagentStatus: %v", err)
+		}
+		final = meta
+		if meta.Status == "completed" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if final.Status != "completed" || final.Summary != "background done" {
+		t.Fatalf("completed meta = %+v", final)
+	}
+	if len(progress) != 1 {
+		t.Fatalf("background child wrote to parent progress after launch: %+v", progress)
 	}
 }
 
@@ -1207,7 +1299,8 @@ func TestSpawnSubagentAppliesAgentPreToolHooks(t *testing.T) {
 	res, err := r.SpawnSubagent(context.Background(), SpawnSubagentRequest{
 		Task: "inspect",
 		Agent: AgentDefinition{
-			Name: "hooked-reviewer",
+			Name:           "hooked-reviewer",
+			PermissionMode: AgentPermissionAsk,
 			Hooks: map[string]any{
 				"PreToolUse": []any{map[string]any{
 					"matcher": "read_file",
@@ -1250,7 +1343,8 @@ func TestSpawnSubagentUsesSubagentStartHookContext(t *testing.T) {
 	_, err := r.SpawnSubagent(context.Background(), SpawnSubagentRequest{
 		Task: "inspect",
 		Agent: AgentDefinition{
-			Name: "start-hooked",
+			Name:           "start-hooked",
+			PermissionMode: AgentPermissionAsk,
 			Hooks: map[string]any{
 				"SubagentStart": []any{map[string]any{
 					"command": `printf '{"additional_context":"extra start context"}\n'`,

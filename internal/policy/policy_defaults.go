@@ -62,6 +62,10 @@ func DefaultPermissionConfig() PermissionConfig {
 		Memory: map[string]string{
 			"*": "ask",
 		},
+		Task: map[string]string{
+			"readonly": "allow",
+			"mutating": "ask",
+		},
 		WebSearch: map[string]string{
 			"*": "ask",
 		},
