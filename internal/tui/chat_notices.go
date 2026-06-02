@@ -68,3 +68,10 @@ func (m model) turnInterruptedNoticeText() string {
 		Bold(true).
 		Render("■ Conversation interrupted - tell the model what to do differently.")
 }
+
+func (m model) turnInterruptedForQueuedPromptNoticeText() string {
+	return lipgloss.NewStyle().
+		Foreground(tuitheme.Default.Warn).
+		Bold(true).
+		Render("• Interrupted to submit queued follow-up.")
+}

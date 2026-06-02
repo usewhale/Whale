@@ -211,24 +211,27 @@ type model struct {
 	planImplementation struct {
 		index int
 	}
-	lastProposedPlan               string
-	sawPlanThisTurn                bool
-	sawAssistantThisTurn           bool
-	sawReasoningThisTurn           bool
-	sawTerminalToolOutcomeThisTurn bool
-	visibleAssistantThisTurn       string
-	turnTranscriptStart            int
-	quitArmedUntil                 time.Time
-	promptHistory                  []string
-	historyIndex                   int
-	historyDraft                   string
-	lastHistoryText                string
-	inHistoryNav                   bool
-	queuedPrompts                  []queuedPrompt
-	nativeScrollbackPrinted        int
-	pendingMouseCSIFragment        bool
-	windowsPaste                   windowsPasteFallbackState
-	viewCache                      *modelViewCache
+	lastProposedPlan                 string
+	sawPlanThisTurn                  bool
+	sawAssistantThisTurn             bool
+	sawReasoningThisTurn             bool
+	sawTerminalToolOutcomeThisTurn   bool
+	visibleAssistantThisTurn         string
+	turnTranscriptStart              int
+	quitArmedUntil                   time.Time
+	promptHistory                    []string
+	historyIndex                     int
+	historyDraft                     string
+	lastHistoryText                  string
+	inHistoryNav                     bool
+	queuedPrompts                    []queuedPrompt
+	pendingSteers                    []pendingSteer
+	nextClientInputID                int
+	submitQueuedPromptAfterInterrupt bool
+	nativeScrollbackPrinted          int
+	pendingMouseCSIFragment          bool
+	windowsPaste                     windowsPasteFallbackState
+	viewCache                        *modelViewCache
 }
 
 type modelViewCache struct {
@@ -243,6 +246,13 @@ type modelViewCache struct {
 type queuedPrompt struct {
 	Text         string
 	SkillBinding *protocol.SkillBinding
+}
+
+type pendingSteer struct {
+	ID           string
+	Text         string
+	SkillBinding *protocol.SkillBinding
+	Accepted     bool
 }
 
 type paletteAction struct {

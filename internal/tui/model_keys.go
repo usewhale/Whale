@@ -141,7 +141,11 @@ func (m *model) interruptBusyTurn() tea.Cmd {
 		m.stopping = true
 		m.markWindowsBusyInputStopped()
 		m.cancelWindowsDeferredEnter()
-		m.appendNotice(m.turnInterruptedNoticeText())
+		if m.submitQueuedPromptAfterInterrupt {
+			m.appendNotice(m.turnInterruptedForQueuedPromptNoticeText())
+		} else {
+			m.appendNotice(m.turnInterruptedNoticeText())
+		}
 	}
 	m.commitLiveTranscript(false)
 	return m.flushNativeScrollbackCmd()

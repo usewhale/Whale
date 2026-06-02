@@ -36,6 +36,37 @@ func (s *Service) runInjectedTurnWithOptions(visibleInput, hiddenInput string, o
 	})
 }
 
+func (s *Service) injectActiveTurn(line string, opts agent.RunOptions, clientInputID string) bool {
+	return s.injectActiveTurnWithHidden(line, "", opts, clientInputID)
+}
+
+func (s *Service) injectActiveTurnWithHidden(visibleInput, hiddenInput string, opts agent.RunOptions, clientInputID string) bool {
+	s.cancelMu.Lock()
+	active := s.active
+	s.cancelMu.Unlock()
+	if !active {
+		return false
+	}
+	opts = s.tuiRunOptions(opts)
+	injected, err := s.app.InjectTurnInputWithHidden(s.ctx, visibleInput, hiddenInput, opts)
+	if err != nil {
+		if clientInputID != "" {
+			s.emit(Event{Kind: EventPendingInputRejected, ClientInputID: clientInputID, Text: visibleInput})
+		}
+		s.emit(Event{Kind: EventError, Text: err.Error()})
+		return true
+	}
+	if !injected {
+		if clientInputID != "" {
+			s.emit(Event{Kind: EventPendingInputRejected, ClientInputID: clientInputID, Text: visibleInput})
+		}
+		s.emit(Event{Kind: EventError, Text: agent.ErrSessionBusy.Error()})
+	} else if clientInputID != "" {
+		s.emit(Event{Kind: EventPendingInputAccepted, ClientInputID: clientInputID, Text: visibleInput})
+	}
+	return true
+}
+
 func (s *Service) tuiRunOptions(opts agent.RunOptions) agent.RunOptions {
 	if strings.TrimSpace(opts.ViewMode) == "" && s != nil && s.app != nil {
 		opts.ViewMode = s.app.ViewMode()

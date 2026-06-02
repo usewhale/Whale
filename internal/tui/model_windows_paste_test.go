@@ -855,7 +855,7 @@ func TestWindowsUnbracketedPasteFallbackPreservesBlankLines(t *testing.T) {
 		t.Fatalf("unexpected submit intent: %+v", got)
 	}
 }
-func TestWindowsUnbracketedPasteFallbackQueuesWhileBusy(t *testing.T) {
+func TestWindowsUnbracketedPasteFallbackSteersWhileBusy(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.windowsPaste.enabled = true
 	m.busy = true
@@ -896,7 +896,7 @@ func TestWindowsUnbracketedPasteFallbackQueuesWhileBusy(t *testing.T) {
 
 	m, _ = updateTestModel(t, m, windowsDeferredEnterMsg{id: queueID})
 	if len(m.queuedPrompts) != 1 || m.queuedPrompts[0].Text != "line one\nline two" {
-		t.Fatalf("expected one queued multiline prompt, got %+v", m.queuedPrompts)
+		t.Fatalf("expected queued multiline prompt, got %+v", m.queuedPrompts)
 	}
 	if len(*intents) != 0 {
 		t.Fatalf("expected no submitted intent while busy, got %+v", *intents)
@@ -965,7 +965,7 @@ func TestWindowsPasteFallbackBackspaceClearsEmptyComposerState(t *testing.T) {
 		t.Fatalf("expected empty composer to reset paste fallback state, got %+v", m.windowsPaste)
 	}
 }
-func TestWindowsDeferredBusyEnterQueuesSingleLine(t *testing.T) {
+func TestWindowsDeferredBusyEnterSteersSingleLine(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.windowsPaste.enabled = true
 	m.busy = true
@@ -981,7 +981,7 @@ func TestWindowsDeferredBusyEnterQueuesSingleLine(t *testing.T) {
 	next, _ = m.Update(windowsDeferredEnterMsg{id: deferredID})
 	m = next.(model)
 	if len(m.queuedPrompts) != 1 || m.queuedPrompts[0].Text != "follow up while working" {
-		t.Fatalf("expected one queued prompt, got %+v", m.queuedPrompts)
+		t.Fatalf("expected queued prompt, got %+v", m.queuedPrompts)
 	}
 	if len(*intents) != 0 {
 		t.Fatalf("expected no submitted intent while busy, got %+v", *intents)
@@ -1232,13 +1232,13 @@ func TestWindowsDeferredBusyEnterSurvivesQueuedDrainBeforeTick(t *testing.T) {
 	next, _ = m.Update(windowsDeferredEnterMsg{id: deferredID})
 	m = next.(model)
 	if len(*intents) != 1 {
-		t.Fatalf("deferred follow-up should queue behind running turn, got intents %+v", *intents)
+		t.Fatalf("deferred follow-up should not submit while the queued turn is running, got intents %+v", *intents)
 	}
 	if len(m.queuedPrompts) != 1 || m.queuedPrompts[0].Text != "new follow up" {
-		t.Fatalf("expected new follow-up queued after deferred tick, got %+v", m.queuedPrompts)
+		t.Fatalf("expected deferred follow-up queued after tick, got %+v", m.queuedPrompts)
 	}
 	if got := m.input.Value(); got != "" {
-		t.Fatalf("expected composer cleared after deferred queue, got %q", got)
+		t.Fatalf("expected composer cleared after queueing, got %q", got)
 	}
 }
 func TestWindowsActiveBusyPasteSuppressesPlanPickerWhenTurnDoneArrivesFirst(t *testing.T) {
@@ -1367,7 +1367,7 @@ func TestWindowsActiveBusyPasteSurvivesQueuedDrainBeforeFinalEnter(t *testing.T)
 	submitID := m.windowsPaste.pendingEnterID
 	m, _ = updateTestModel(t, m, windowsDeferredEnterMsg{id: submitID})
 	if len(*intents) != 1 {
-		t.Fatalf("final paste should queue behind running turn, got intents %+v", *intents)
+		t.Fatalf("final paste should not submit while the queued turn is running, got intents %+v", *intents)
 	}
 	if len(m.queuedPrompts) != 1 || m.queuedPrompts[0].Text != "line one\nline two" {
 		t.Fatalf("expected pasted follow-up queued after final enter, got %+v", m.queuedPrompts)
@@ -1414,7 +1414,7 @@ func TestWindowsExpiredActiveBusyPasteSurvivesQueuedDrainBeforeFinalEnter(t *tes
 	submitID := m.windowsPaste.pendingEnterID
 	m, _ = updateTestModel(t, m, windowsDeferredEnterMsg{id: submitID})
 	if len(*intents) != 1 {
-		t.Fatalf("final paste should queue behind running turn, got intents %+v", *intents)
+		t.Fatalf("final paste should not submit while the queued turn is running, got intents %+v", *intents)
 	}
 	if len(m.queuedPrompts) != 1 || m.queuedPrompts[0].Text != "line one\nline two" {
 		t.Fatalf("expected pasted follow-up queued after final enter, got %+v", m.queuedPrompts)
@@ -1538,7 +1538,7 @@ func TestWindowsDeferredStoppingBusyEnterDoesNotSubmitAfterTurnDoneArrivesFirst(
 		t.Fatal("expected deferred enter state cleared")
 	}
 }
-func TestWindowsDeferredBusyEnterInterruptedBeforeTickStaysInComposer(t *testing.T) {
+func TestWindowsDeferredBusyEnterInterruptedBeforeTickSubmitsAfterInterrupt(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.windowsPaste.enabled = true
 	m.busy = true
@@ -1562,8 +1562,8 @@ func TestWindowsDeferredBusyEnterInterruptedBeforeTickStaysInComposer(t *testing
 	if m.windowsPaste.pendingEnter {
 		t.Fatal("expected interrupt to clear pending Windows enter")
 	}
-	if !m.windowsPaste.busyInput {
-		t.Fatal("expected interrupt to preserve busy-input marker so plan picker stays suppressed")
+	if !m.submitQueuedPromptAfterInterrupt {
+		t.Fatal("expected interrupt to queue the draft for immediate submit after turn done")
 	}
 
 	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
@@ -1571,17 +1571,20 @@ func TestWindowsDeferredBusyEnterInterruptedBeforeTickStaysInComposer(t *testing
 	if m.mode == modePlanImplementation {
 		t.Fatal("pending interrupted enter should suppress plan implementation picker")
 	}
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentSubmit || (*intents)[0].Input != "follow up before interrupt" {
+		t.Fatalf("interrupted deferred enter should submit after turn done, got %+v", *intents)
+	}
 
 	next, _ = m.Update(windowsDeferredEnterMsg{id: deferredID})
 	m = next.(model)
-	if len(*intents) != 0 {
-		t.Fatalf("interrupted deferred enter should not submit after turn done, got %+v", *intents)
+	if len(*intents) != 1 {
+		t.Fatalf("stale deferred enter should not submit again, got %+v", *intents)
 	}
 	if len(m.queuedPrompts) != 0 {
-		t.Fatalf("expected no queued prompt after interrupted turn, got %+v", m.queuedPrompts)
+		t.Fatalf("expected queued prompt consumed after interrupted turn, got %+v", m.queuedPrompts)
 	}
-	if got := m.input.Value(); got != "follow up before interrupt" {
-		t.Fatalf("expected interrupted follow-up to remain in composer, got %q", got)
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected interrupted follow-up to clear after submit, got %q", got)
 	}
 	if m.windowsPaste.pendingEnter {
 		t.Fatal("expected deferred enter state cleared")

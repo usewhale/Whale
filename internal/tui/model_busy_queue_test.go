@@ -95,6 +95,9 @@ func TestEnterWhileBusyQueuesInputWithoutSubmitting(t *testing.T) {
 	if len(m.queuedPrompts) != 1 || m.queuedPrompts[0].Text != "follow up while working" {
 		t.Fatalf("expected queued prompt, got %+v", m.queuedPrompts)
 	}
+	if len(m.pendingSteers) != 0 {
+		t.Fatalf("expected no pending steers, got %+v", m.pendingSteers)
+	}
 	if len(*intents) != 0 {
 		t.Fatalf("expected no submitted intent while busy, got %+v", *intents)
 	}
@@ -106,6 +109,49 @@ func TestEnterWhileBusyQueuesInputWithoutSubmitting(t *testing.T) {
 	}
 	if got := strings.Join(tuirender.ChatLines(m.assembler.Snapshot(), 80), "\n"); strings.Contains(got, "follow up while working") {
 		t.Fatalf("queued prompt should not be written to live transcript:\n%s", got)
+	}
+}
+
+func TestTabWhileBusyDoesNotQueueFollowUp(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.busy = true
+	m.input.SetValue("follow up later")
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyTab})
+	m = next.(model)
+
+	if len(*intents) != 0 {
+		t.Fatalf("expected no submitted intent for busy Tab, got %+v", *intents)
+	}
+	if len(m.pendingSteers) != 0 {
+		t.Fatalf("expected no pending steers for busy Tab, got %+v", m.pendingSteers)
+	}
+	if len(m.queuedPrompts) != 0 {
+		t.Fatalf("expected no queued follow-up for busy Tab, got %+v", m.queuedPrompts)
+	}
+	if got := m.input.Value(); got != "follow up later" {
+		t.Fatalf("expected input preserved after busy Tab, got %q", got)
+	}
+}
+
+func TestPendingInputAcceptedAndRejectedEventsUpdateSteerState(t *testing.T) {
+	m, _ := newModelWithDispatchSpy()
+	m.pendingSteers = []pendingSteer{{ID: "pending-1", Text: "accepted"}, {ID: "pending-2", Text: "rejected"}}
+	m.input.SetValue("current draft")
+
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventPendingInputAccepted, ClientInputID: "pending-1"}))
+	m = next.(model)
+	if !m.pendingSteers[0].Accepted {
+		t.Fatalf("expected first pending steer accepted, got %+v", m.pendingSteers)
+	}
+
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventPendingInputRejected, ClientInputID: "pending-2"}))
+	m = next.(model)
+	if len(m.pendingSteers) != 1 || m.pendingSteers[0].ID != "pending-1" {
+		t.Fatalf("expected rejected steer removed, got %+v", m.pendingSteers)
+	}
+	if got := m.input.Value(); got != "rejected\ncurrent draft" {
+		t.Fatalf("expected rejected steer restored before draft, got %q", got)
 	}
 }
 func TestDiffPageCtrlCInterruptsBusyTurn(t *testing.T) {
@@ -422,6 +468,17 @@ func TestTurnInterruptedNoticeText(t *testing.T) {
 		t.Fatalf("unexpected interrupt notice: %q", got)
 	}
 }
+
+func TestTurnInterruptedForQueuedPromptNoticeText(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	got := m.turnInterruptedForQueuedPromptNoticeText()
+	if !strings.Contains(got, "queued follow-up") {
+		t.Fatalf("unexpected queued interrupt notice: %q", got)
+	}
+	if strings.Contains(got, "tell the model what to do differently") {
+		t.Fatalf("queued interrupt notice should not use generic guidance: %q", got)
+	}
+}
 func TestEscWhileBusyKeepsTurnBusyUntilTurnDone(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 80, height: 24, busy: true}
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -446,6 +503,70 @@ func TestEscWhileBusyKeepsTurnBusyUntilTurnDone(t *testing.T) {
 	m = next.(model)
 	if m.busy || m.stopping {
 		t.Fatalf("expected turn done to clear busy/stopping, busy=%v stopping=%v", m.busy, m.stopping)
+	}
+}
+
+func TestEscWithQueuedPromptSubmitsItAfterInterrupt(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.runtime = &testRuntime{}
+	m.busy = true
+	m.queuedPrompts = []queuedPrompt{{Text: "queued draft"}}
+	m.input.SetValue("current draft")
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(model)
+	if !m.submitQueuedPromptAfterInterrupt {
+		t.Fatal("expected Esc with queued prompt to request immediate submit after interrupt")
+	}
+	renderedAfterEsc := strings.Join(tuirender.ChatLines(m.chatMessages(), 80), "\n")
+	if strings.Contains(renderedAfterEsc, "tell the model what to do differently") {
+		t.Fatalf("queued Esc interrupt should not show generic interruption guidance:\n%s", renderedAfterEsc)
+	}
+	if !strings.Contains(renderedAfterEsc, "Interrupted to submit queued follow-up") {
+		t.Fatalf("queued Esc interrupt should show queued follow-up notice:\n%s", renderedAfterEsc)
+	}
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentShutdown {
+		t.Fatalf("expected shutdown intent from Esc, got %+v", *intents)
+	}
+
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
+	m = next.(model)
+	if len(*intents) != 2 || (*intents)[1].Kind != protocol.IntentSubmit || (*intents)[1].Input != "queued draft" {
+		t.Fatalf("expected queued prompt to submit after interrupt, got %+v", *intents)
+	}
+	if len(m.queuedPrompts) != 1 || m.queuedPrompts[0].Text != "current draft" {
+		t.Fatalf("expected current draft to remain queued, got %+v", m.queuedPrompts)
+	}
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected current draft moved into queue, got %q", got)
+	}
+	if !m.busy || m.stopping {
+		t.Fatalf("expected queued prompt turn running, busy=%v stopping=%v", m.busy, m.stopping)
+	}
+}
+
+func TestEscWithDraftQueuesAndSubmitsItAfterInterrupt(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.runtime = &testRuntime{}
+	m.busy = true
+	m.input.SetValue("send after interrupt")
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(model)
+	if !m.submitQueuedPromptAfterInterrupt {
+		t.Fatal("expected Esc with draft to queue and request immediate submit")
+	}
+	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentShutdown {
+		t.Fatalf("expected shutdown intent from Esc, got %+v", *intents)
+	}
+
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
+	m = next.(model)
+	if len(*intents) != 2 || (*intents)[1].Kind != protocol.IntentSubmit || (*intents)[1].Input != "send after interrupt" {
+		t.Fatalf("expected draft to submit after interrupt, got %+v", *intents)
+	}
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected submitted draft to clear composer, got %q", got)
 	}
 }
 func TestEscInterruptDuringThinkingDoesNotShowReasoningOnly(t *testing.T) {
@@ -1104,7 +1225,7 @@ func TestChatBusyViewShowsDraftSpecificBusyHint(t *testing.T) {
 	m.input.SetValue("follow up")
 
 	view := m.View()
-	if !strings.Contains(view, "Working (12s) · Enter to queue · Esc to interrupt · Ctrl+C clears draft") {
+	if !strings.Contains(view, "Working (12s) · Enter to queue · Esc interrupts and sends · Ctrl+C clears draft") {
 		t.Fatalf("expected draft-specific busy status line:\n%s", view)
 	}
 	if strings.Contains(view, "Esc/Ctrl+C to interrupt") {

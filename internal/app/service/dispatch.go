@@ -12,7 +12,7 @@ import (
 func (s *Service) Dispatch(in Intent) {
 	switch in.Kind {
 	case IntentSubmit:
-		s.goTracked(func() { s.handleSubmit(in.Input, in.HiddenInput, in.SkillBinding) })
+		s.goTracked(func() { s.handleSubmit(in.Input, in.HiddenInput, in.SkillBinding, in.ClientInputID) })
 	case IntentSubmitLocal:
 		s.enqueueLocalSubmit(in.Input)
 	case IntentAllowTool:

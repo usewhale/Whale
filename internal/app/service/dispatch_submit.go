@@ -9,12 +9,13 @@ import (
 	"strings"
 )
 
-func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.SkillBinding) {
+func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.SkillBinding, clientInputID string) {
 	state := submitState{
-		line:         strings.TrimSpace(line),
-		hiddenInput:  hiddenInput,
-		turnOptions:  agent.RunOptions{HiddenInput: hiddenInput},
-		skillBinding: skillBinding,
+		line:          strings.TrimSpace(line),
+		clientInputID: clientInputID,
+		hiddenInput:   hiddenInput,
+		turnOptions:   agent.RunOptions{HiddenInput: hiddenInput},
+		skillBinding:  skillBinding,
 	}
 	if state.line == "" {
 		return
@@ -41,6 +42,7 @@ func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.
 
 type submitState struct {
 	line               string
+	clientInputID      string
 	hiddenInput        bool
 	prevSessionID      string
 	skipHooks          bool
@@ -238,6 +240,9 @@ func (s *Service) applySubmitHooks(state *submitState) bool {
 
 func (s *Service) startSubmitTurn(state *submitState) {
 	if state.hiddenInput || state.skipSkillInjection {
+		if s.injectActiveTurn(state.line, state.turnOptions, state.clientInputID) {
+			return
+		}
 		s.goTracked(func() { s.runTurnWithOptions(state.line, state.turnOptions) })
 		return
 	}
@@ -251,7 +256,13 @@ func (s *Service) startSubmitTurn(state *submitState) {
 		if skillOut != "" {
 			s.emit(Event{Kind: EventSkillLoaded, Text: skillOut})
 		}
+		if s.injectActiveTurnWithHidden(state.line, skillSynthetic, agent.RunOptions{}, state.clientInputID) {
+			return
+		}
 		s.goTracked(func() { s.runInjectedTurn(state.line, skillSynthetic) })
+		return
+	}
+	if s.injectActiveTurn(state.line, state.turnOptions, state.clientInputID) {
 		return
 	}
 	s.goTracked(func() { s.runTurn(state.line, state.hiddenInput) })

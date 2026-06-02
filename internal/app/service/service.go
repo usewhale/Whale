@@ -54,6 +54,7 @@ const (
 type Intent struct {
 	Kind               IntentKind
 	Input              string
+	ClientInputID      string
 	HiddenInput        bool
 	ToolCallID         string
 	UserInput          *core.UserInputResponse
@@ -120,6 +121,8 @@ const (
 	EventBtwDelta                      = protocol.EventBtwDelta
 	EventBtwDone                       = protocol.EventBtwDone
 	EventBtwError                      = protocol.EventBtwError
+	EventPendingInputAccepted          = protocol.EventPendingInputAccepted
+	EventPendingInputRejected          = protocol.EventPendingInputRejected
 	EventTurnDone                      = protocol.EventTurnDone
 	EventModelSelectionRequested       = protocol.EventModelSelectionRequested
 	EventPermissionsSelectionRequested = protocol.EventPermissionsSelectionRequested

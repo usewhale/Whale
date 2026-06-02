@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -136,6 +137,105 @@ func TestAgentLoopWithToolRoundTrip(t *testing.T) {
 	}
 }
 
+type steeredInputProvider struct {
+	firstStarted chan struct{}
+	releaseFirst chan struct{}
+	mu           sync.Mutex
+	calls        int
+	inputs       [][]Message
+}
+
+func newSteeredInputProvider() *steeredInputProvider {
+	return &steeredInputProvider{
+		firstStarted: make(chan struct{}),
+		releaseFirst: make(chan struct{}),
+	}
+}
+
+func (p *steeredInputProvider) StreamResponse(_ context.Context, input []Message, _ []Tool) <-chan ProviderEvent {
+	p.mu.Lock()
+	p.calls++
+	call := p.calls
+	p.inputs = append(p.inputs, append([]Message(nil), input...))
+	p.mu.Unlock()
+	out := make(chan ProviderEvent, 1)
+	go func() {
+		if call == 1 {
+			close(p.firstStarted)
+			<-p.releaseFirst
+			out <- endTurnEvent("first answer")
+		} else {
+			out <- endTurnEvent("steered answer")
+		}
+		close(out)
+	}()
+	return out
+}
+
+func (p *steeredInputProvider) snapshot() (int, [][]Message) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls, append([][]Message(nil), p.inputs...)
+}
+
+func TestActiveTurnInjectedInputContinuesCurrentTurn(t *testing.T) {
+	store := NewInMemoryStore()
+	prov := newSteeredInputProvider()
+	a := NewAgent(prov, store, nil)
+
+	events, err := a.RunStream(context.Background(), "s-steer", "start")
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+	<-prov.firstStarted
+	injected, err := a.InjectTurnInput(context.Background(), "s-steer", []Message{{
+		Role: RoleUser,
+		Text: "change direction",
+	}})
+	if err != nil {
+		t.Fatalf("InjectTurnInput: %v", err)
+	}
+	if !injected {
+		t.Fatal("expected input to inject into active turn")
+	}
+	close(prov.releaseFirst)
+	for ev := range events {
+		if ev.Type == AgentEventTypeError {
+			t.Fatalf("unexpected error: %v", ev.Err)
+		}
+	}
+
+	calls, inputs := prov.snapshot()
+	if calls != 2 {
+		t.Fatalf("provider calls = %d, want 2", calls)
+	}
+	if len(inputs) != 2 {
+		t.Fatalf("captured inputs = %d, want 2", len(inputs))
+	}
+	var sawSteer bool
+	for _, msg := range inputs[1] {
+		if msg.Role == RoleUser && msg.Text == "change direction" {
+			sawSteer = true
+		}
+	}
+	if !sawSteer {
+		t.Fatalf("second request did not include injected input: %+v", inputs[1])
+	}
+	all, err := store.List(context.Background(), "s-steer")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var sawPersisted bool
+	for _, msg := range all {
+		if msg.Role == RoleUser && msg.Text == "change direction" {
+			sawPersisted = true
+		}
+	}
+	if !sawPersisted {
+		t.Fatalf("injected input was not persisted: %+v", all)
+	}
+}
+
 type abortAfterToolResultTool struct{}
 
 func (t abortAfterToolResultTool) Name() string { return "confirm_later" }
@@ -159,6 +259,47 @@ func (p *abortPlusEchoProvider) StreamResponse(_ context.Context, _ []Message, _
 	))
 }
 
+type abortWithSteerProvider struct {
+	firstStarted chan struct{}
+	releaseFirst chan struct{}
+	mu           sync.Mutex
+	calls        int
+	inputs       [][]Message
+}
+
+func newAbortWithSteerProvider() *abortWithSteerProvider {
+	return &abortWithSteerProvider{
+		firstStarted: make(chan struct{}),
+		releaseFirst: make(chan struct{}),
+	}
+}
+
+func (p *abortWithSteerProvider) StreamResponse(_ context.Context, input []Message, _ []Tool) <-chan ProviderEvent {
+	p.mu.Lock()
+	p.calls++
+	call := p.calls
+	p.inputs = append(p.inputs, append([]Message(nil), input...))
+	p.mu.Unlock()
+	out := make(chan ProviderEvent, 1)
+	go func() {
+		if call == 1 {
+			close(p.firstStarted)
+			<-p.releaseFirst
+			out <- toolUseEvent(toolCall("tc-confirm", "confirm_later", "{}"))
+		} else {
+			out <- endTurnEvent("handled steering")
+		}
+		close(out)
+	}()
+	return out
+}
+
+func (p *abortWithSteerProvider) snapshot() (int, [][]Message) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls, append([][]Message(nil), p.inputs...)
+}
+
 func TestAgentLoopAbortsAfterToolResultWhenToolRequestsRuntimeHandoff(t *testing.T) {
 	store := NewInMemoryStore()
 	prov := &oneToolProvider{tool: "confirm_later", input: "{}"}
@@ -180,6 +321,47 @@ func TestAgentLoopAbortsAfterToolResultWhenToolRequestsRuntimeHandoff(t *testing
 	}
 	if all[2].Role != RoleTool || len(all[2].ToolResults) != 1 {
 		t.Fatalf("expected terminal tool message, got %+v", all[2])
+	}
+}
+
+func TestAbortTurnToolResultContinuesWhenSteeredInputIsPending(t *testing.T) {
+	store := NewInMemoryStore()
+	prov := newAbortWithSteerProvider()
+	a := NewAgent(prov, store, []Tool{abortAfterToolResultTool{}})
+
+	events, err := a.RunStream(context.Background(), "s-abort-steer", "run workflow")
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+	<-prov.firstStarted
+	injected, err := a.InjectTurnInput(context.Background(), "s-abort-steer", []Message{{
+		Role: RoleUser,
+		Text: "do not launch the workflow; publish directly",
+	}})
+	if err != nil {
+		t.Fatalf("InjectTurnInput: %v", err)
+	}
+	if !injected {
+		t.Fatal("expected steering input to inject into active turn")
+	}
+	close(prov.releaseFirst)
+	for ev := range events {
+		if ev.Type == AgentEventTypeError {
+			t.Fatalf("unexpected error: %v", ev.Err)
+		}
+	}
+	calls, inputs := prov.snapshot()
+	if calls != 2 {
+		t.Fatalf("provider calls = %d, want 2", calls)
+	}
+	var sawSteer bool
+	for _, msg := range inputs[1] {
+		if msg.Role == RoleUser && msg.Text == "do not launch the workflow; publish directly" {
+			sawSteer = true
+		}
+	}
+	if !sawSteer {
+		t.Fatalf("second request did not include steered input after abort-turn tool result: %+v", inputs[1])
 	}
 }
 
