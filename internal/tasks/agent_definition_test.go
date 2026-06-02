@@ -32,6 +32,10 @@ func TestResolveAgentRuntimeConfigMergesDefinitionAndOverrides(t *testing.T) {
 			},
 			InitialPrompt: "Load review context first.",
 			Memory:        "project",
+			Generation: AgentGenerationConfig{
+				AssistantPrefix:  "Review:",
+				PrefixCompletion: true,
+			},
 		},
 	}, RunnerDefaults{
 		Model:        "deepseek-v4-flash",
@@ -72,6 +76,9 @@ func TestResolveAgentRuntimeConfigMergesDefinitionAndOverrides(t *testing.T) {
 	}
 	if cfg.PermissionProfile != AgentPermissionReadOnly {
 		t.Fatalf("permission profile = %q", cfg.PermissionProfile)
+	}
+	if cfg.Generation.AssistantPrefix != "Review:" || !cfg.Generation.PrefixCompletion {
+		t.Fatalf("generation = %+v", cfg.Generation)
 	}
 }
 
@@ -127,6 +134,9 @@ initialPrompt: "Read the diff first."
 memory: project
 background: true
 isolation: worktree
+generation:
+  assistantPrefix: "Review:"
+  prefixCompletion: true
 ---
 
 Focus on correctness risks and missing tests.
@@ -159,6 +169,41 @@ Focus on correctness risks and missing tests.
 	}
 	if !reflect.DeepEqual(cfg.DisallowedTools, []string{CapabilityWebFetch}) || !reflect.DeepEqual(cfg.Skills, []string{"review-skill"}) || !reflect.DeepEqual(cfg.MCPServers, []string{"github"}) {
 		t.Fatalf("lists = tools:%#v skills:%#v mcp:%#v", cfg.DisallowedTools, cfg.Skills, cfg.MCPServers)
+	}
+	if cfg.Generation.AssistantPrefix != "Review:" || !cfg.Generation.PrefixCompletion {
+		t.Fatalf("generation = %+v", cfg.Generation)
+	}
+}
+
+func TestAgentDefinitionGenerationPreservesAssistantPrefixWhitespace(t *testing.T) {
+	root := t.TempDir()
+	agentDir := filepath.Join(root, ".whale", "agents")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir agents: %v", err)
+	}
+	content := `---
+description: "Return JSON"
+tools: []
+generation:
+  assistantPrefix: "{\n"
+  prefixCompletion: true
+---
+
+Return compact JSON.
+`
+	if err := os.WriteFile(filepath.Join(agentDir, "json-prefix.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write agent: %v", err)
+	}
+	library := NewAgentDefinitionLibrary(root)
+	cfg, err := ResolveAgentRuntimeConfigWithLibrary(SpawnSubagentRequest{
+		Role: "json-prefix",
+		Task: "return ok",
+	}, RunnerDefaults{Model: "deepseek-v4-flash", MaxToolIters: 3}, library)
+	if err != nil {
+		t.Fatalf("ResolveAgentRuntimeConfigWithLibrary: %v", err)
+	}
+	if cfg.Generation.AssistantPrefix != "{\n" {
+		t.Fatalf("assistant prefix = %q, want %q", cfg.Generation.AssistantPrefix, "{\n")
 	}
 }
 
@@ -214,6 +259,42 @@ Project prompt.
 	}
 	if cfg.Definition.Prompt != "Plugin only prompt." || cfg.PermissionProfile != AgentPermissionReadOnly {
 		t.Fatalf("plugin definition not used: %+v", cfg)
+	}
+}
+
+func TestAgentDefinitionLibraryLoadsJSONGeneration(t *testing.T) {
+	root := t.TempDir()
+	agentDir := filepath.Join(root, ".whale", "agents")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatalf("mkdir agents: %v", err)
+	}
+	content := `{
+  "description": "Model-only prefix agent",
+  "tools": [],
+  "generation": {
+    "assistantPrefix": "Review:",
+    "prefixCompletion": true
+  }
+}`
+	if err := os.WriteFile(filepath.Join(agentDir, "prefix-agent.json"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write agent: %v", err)
+	}
+	library := NewAgentDefinitionLibrary(root)
+	cfg, err := ResolveAgentRuntimeConfigWithLibrary(SpawnSubagentRequest{
+		Role: "prefix-agent",
+		Task: "review",
+	}, RunnerDefaults{Model: "deepseek-v4-flash", MaxToolIters: 3}, library)
+	if err != nil {
+		t.Fatalf("ResolveAgentRuntimeConfigWithLibrary: %v", err)
+	}
+	if cfg.Definition.Name != "prefix-agent" {
+		t.Fatalf("name = %q", cfg.Definition.Name)
+	}
+	if !reflect.DeepEqual(cfg.Capabilities, []string{}) {
+		t.Fatalf("capabilities = %#v", cfg.Capabilities)
+	}
+	if cfg.Generation.AssistantPrefix != "Review:" || !cfg.Generation.PrefixCompletion {
+		t.Fatalf("generation = %+v", cfg.Generation)
 	}
 }
 

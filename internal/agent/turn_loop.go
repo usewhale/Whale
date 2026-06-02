@@ -17,6 +17,8 @@ type RunOptions struct {
 	GoalContinuation   bool
 	ShellAllowPrefixes []string
 	ViewMode           string
+	AssistantPrefix    string
+	PrefixCompletion   bool
 }
 
 func (a *Agent) RunStreamWithOptions(ctx context.Context, sessionID, input string, hiddenInput bool) (<-chan AgentEvent, error) {
@@ -169,7 +171,7 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 			if a.maxToolCalls > 0 {
 				remainingToolCalls = a.maxToolCalls - toolCalls
 			}
-			assistant, toolMsg, usage, modelName, abortTurn, attemptedToolCalls, sErr := a.streamAndHandle(ctx, sessionID, checkpointMessageID, history, rt, out, turnPolicy, toolSnapshot, remainingToolCalls)
+			assistant, toolMsg, usage, modelName, abortTurn, attemptedToolCalls, sErr := a.streamAndHandle(ctx, sessionID, checkpointMessageID, history, rt, out, turnPolicy, toolSnapshot, remainingToolCalls, opts)
 			if sErr != nil {
 				if errors.Is(sErr, context.Canceled) || errors.Is(sErr, context.DeadlineExceeded) {
 					a.persistInterruptedTurnMarker(sessionID)

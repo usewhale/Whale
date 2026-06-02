@@ -118,6 +118,19 @@ func agentDefinitionSchema() map[string]any {
 			"memory":          map[string]any{"type": "string", "enum": []string{"user", "project", "local"}},
 			"background":      map[string]any{"type": "boolean"},
 			"isolation":       map[string]any{"type": "string", "enum": []string{"none", "worktree"}},
+			"generation":      agentGenerationSchema(),
+		},
+	}
+}
+
+func agentGenerationSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"description":          "Optional assistant generation steering for this child agent.",
+		"additionalProperties": false,
+		"properties": map[string]any{
+			"assistantPrefix":  map[string]any{"type": "string", "description": "Assistant text prefix to continue from when prefixCompletion is enabled."},
+			"prefixCompletion": map[string]any{"type": "boolean", "description": "Use provider prefix completion when supported."},
 		},
 	}
 }

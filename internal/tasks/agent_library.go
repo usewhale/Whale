@@ -315,8 +315,57 @@ func parseMarkdownAgentDefinition(content, filename, _ string) (AgentDefinition,
 		Hooks:           hooksFrontmatterValue(frontmatter),
 		Background:      boolFrontmatterValue(values, "background"),
 		Isolation:       stringFrontmatterValue(values, "isolation"),
+		Generation:      generationFrontmatterValue(frontmatter, values),
 	}
 	return validateLoadedAgentDefinition(def)
+}
+
+func generationFrontmatterValue(frontmatter string, values map[string]any) AgentGenerationConfig {
+	cfg := AgentGenerationConfig{
+		AssistantPrefix:  exactStringFrontmatterValue(values, "generationAssistantPrefix"),
+		PrefixCompletion: boolFrontmatterValue(values, "generationPrefixCompletion"),
+	}
+	lines := strings.Split(frontmatter, "\n")
+	start := -1
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") || isIndentedYAMLLine(line) {
+			continue
+		}
+		key, raw, ok := strings.Cut(line, ":")
+		if !ok || strings.TrimSpace(key) != "generation" {
+			continue
+		}
+		if strings.TrimSpace(raw) != "" {
+			return cfg
+		}
+		start = i + 1
+		break
+	}
+	if start < 0 {
+		return cfg
+	}
+	for i := start; i < len(lines); i++ {
+		line := strings.TrimRight(lines[i], " \t")
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if yamlIndent(line) == 0 {
+			break
+		}
+		key, raw, ok := strings.Cut(trimmed, ":")
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(key) {
+		case "assistantPrefix":
+			cfg.AssistantPrefix = exactStringFromScalar(parseAgentScalar(raw))
+		case "prefixCompletion":
+			cfg.PrefixCompletion = boolFromScalar(parseAgentScalar(raw))
+		}
+	}
+	return cfg
 }
 
 func validateLoadedAgentDefinition(def AgentDefinition) (AgentDefinition, bool, error) {
@@ -625,6 +674,24 @@ func stringFrontmatterValue(values map[string]any, key string) string {
 	return ""
 }
 
+func exactStringFrontmatterValue(values map[string]any, key string) string {
+	if value, ok := values[key]; ok {
+		return exactStringFromScalar(value)
+	}
+	return ""
+}
+
+func exactStringFromScalar(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case int:
+		return strconv.Itoa(typed)
+	default:
+		return ""
+	}
+}
+
 func stringListFrontmatterValue(values map[string]any, key string) []string {
 	value, ok := values[key]
 	if !ok {
@@ -661,6 +728,17 @@ func boolFrontmatterValue(values map[string]any, key string) bool {
 	if !ok {
 		return false
 	}
+	switch typed := value.(type) {
+	case bool:
+		return typed
+	case string:
+		return strings.EqualFold(strings.TrimSpace(typed), "true")
+	default:
+		return false
+	}
+}
+
+func boolFromScalar(value any) bool {
 	switch typed := value.(type) {
 	case bool:
 		return typed

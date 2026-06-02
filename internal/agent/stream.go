@@ -31,8 +31,8 @@ type toolDispatchOutcome struct {
 	PrimarySucceeded bool
 }
 
-func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, checkpointMessageID string, history []core.Message, rt *memory.RuntimeState, events chan<- AgentEvent, toolPolicy policy.ToolPolicy, tools *core.ToolRegistry, remainingToolCalls int) (core.Message, *core.Message, llm.Usage, string, bool, int, error) {
-	assistant, lastUsage, lastModel, err := a.collectAssistantStream(ctx, sessionID, rt, events, tools)
+func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, checkpointMessageID string, history []core.Message, rt *memory.RuntimeState, events chan<- AgentEvent, toolPolicy policy.ToolPolicy, tools *core.ToolRegistry, remainingToolCalls int, opts RunOptions) (core.Message, *core.Message, llm.Usage, string, bool, int, error) {
+	assistant, lastUsage, lastModel, err := a.collectAssistantStream(ctx, sessionID, rt, events, tools, opts)
 	if err != nil {
 		return core.Message{}, nil, llm.Usage{}, "", false, 0, err
 	}

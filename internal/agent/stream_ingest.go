@@ -11,7 +11,7 @@ import (
 	"github.com/usewhale/whale/internal/session"
 )
 
-func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt *memory.RuntimeState, events chan<- AgentEvent, tools *core.ToolRegistry) (core.Message, llm.Usage, string, error) {
+func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt *memory.RuntimeState, events chan<- AgentEvent, tools *core.ToolRegistry, opts RunOptions) (core.Message, llm.Usage, string, error) {
 	assistant, err := a.store.Create(ctx, core.Message{SessionID: sessionID, Role: core.RoleAssistant})
 	if err != nil {
 		return core.Message{}, llm.Usage{}, "", fmt.Errorf("create assistant message: %w", err)
@@ -25,7 +25,17 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 		return sendAgentEvent(ctx, events, ev)
 	}
 
-	ch := a.provider.StreamResponse(ctx, a.buildTurnProviderHistory(sessionID, rt), tools.Tools())
+	history := a.buildTurnProviderHistory(sessionID, rt)
+	toolList := tools.Tools()
+	var ch <-chan llm.ProviderEvent
+	if opts.PrefixCompletion && strings.TrimSpace(opts.AssistantPrefix) != "" && len(toolList) == 0 {
+		if prefixProvider, ok := a.provider.(llm.PrefixCompletionProvider); ok {
+			ch = prefixProvider.StreamResponseWithPrefix(ctx, history, opts.AssistantPrefix, nil)
+		}
+	}
+	if ch == nil {
+		ch = a.provider.StreamResponse(ctx, history, toolList)
+	}
 	for ev := range ch {
 		switch ev.Type {
 		case llm.EventContentDelta:
