@@ -153,6 +153,9 @@ func (a *App) HandleLocalCommand(line string) (handled bool, output string, synt
 
 func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 	trimmed := strings.TrimSpace(line)
+	if res, handled, err := a.executeGoalCommand(trimmed); handled || err != nil {
+		return res, err
+	}
 	if IsOpenCommandLine(trimmed) {
 		msg, err := a.ExecuteOpenCommand(trimmed)
 		return CommandExecution{Handled: true, Text: msg}, err

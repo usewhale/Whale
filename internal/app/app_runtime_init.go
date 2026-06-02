@@ -114,6 +114,7 @@ func initAppRuntime(cfg Config, sessionInit appSessionInit, toolInit appToolInit
 		ApprovalFunc:               approvalFunc,
 	})
 	taskTools := tasks.NewTools(taskRunner)
+	goalTools := newGoalTools(cfg.DataDir, sessionInit.sessionsDir, parentSessionIDFunc)
 	workflowStore, err := workflow.NewFileRunEventStore(cfg.DataDir)
 	if err != nil {
 		return appRuntimeInit{}, fmt.Errorf("init workflow event store failed: %w", err)
@@ -126,6 +127,7 @@ func initAppRuntime(cfg Config, sessionInit appSessionInit, toolInit appToolInit
 	registeredTools := append([]core.Tool{}, toolInit.baseTools...)
 	registeredTools = append(registeredTools, toolInit.pluginTools...)
 	registeredTools = append(registeredTools, taskTools...)
+	registeredTools = append(registeredTools, goalTools...)
 	registeredTools = append(registeredTools, workflowTools...)
 	toolRegistry, err := core.NewToolRegistryChecked(registeredTools)
 	if err != nil {
@@ -139,6 +141,7 @@ func initAppRuntime(cfg Config, sessionInit appSessionInit, toolInit appToolInit
 		contextWindow:   contextWindow,
 		apiKey:          apiKey,
 		taskTools:       taskTools,
+		goalTools:       goalTools,
 		workflowTools:   workflowTools,
 		workflowManager: workflowManager,
 		workflowRunner:  workflowRunner,

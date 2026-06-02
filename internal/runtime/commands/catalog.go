@@ -30,6 +30,12 @@ func DefaultSlashCommands() []SlashCommandSpec {
 		{Name: "/btw", Description: "Ask a side question without changing the conversation", ArgumentHint: "<question>"},
 		{Name: "/focus", Description: "Toggle focus view", AutoRun: true},
 		{Name: "/diff", Description: "Show current git diff", AutoRun: true},
+		{Name: "/goal", Description: "Set or inspect the active session goal", ArgumentHint: "[--tokens 50k] <objective>|status|pause|resume|clear", AutoRun: true, Options: []SlashCommandOption{
+			{Token: "status", Description: "Show the active goal", AutoRun: true},
+			{Token: "pause", Description: "Pause the active goal", AutoRun: true},
+			{Token: "resume", Description: "Resume the active goal", AutoRun: true},
+			{Token: "clear", Description: "Clear the active goal", AutoRun: true},
+		}},
 		{Name: "/copy", Description: "Copy Whale's last response to clipboard (or /copy N for the Nth-latest)", ArgumentHint: "[N]", AutoRun: true},
 		{Name: "/open", Description: "Open a file or directory in your editor", ArgumentHint: "[path]", AutoRun: true},
 		{Name: "/review", Description: "Open review mode or review a target", ArgumentHint: "[local|branch|pr|commit|<instructions>]", AutoRun: true, Options: []SlashCommandOption{

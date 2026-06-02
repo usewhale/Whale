@@ -171,6 +171,7 @@ func (s *Service) handleSubmitSlashCommand(state *submitState) bool {
 		state.turnOptions = agent.RunOptions{
 			HiddenInput:        cmd.Turn.Hidden,
 			ReadOnly:           cmd.Turn.ReadOnly,
+			GoalContinuation:   cmd.Turn.GoalContinuation,
 			ShellAllowPrefixes: append([]string(nil), cmd.Turn.ShellAllowPrefixes...),
 		}
 		state.skipHooks = cmd.Turn.SkipUserPromptHooks
@@ -202,6 +203,7 @@ func (s *Service) handleSubmitLocalCommand(state *submitState) bool {
 		state.turnOptions = agent.RunOptions{
 			HiddenInput:        cmd.Turn.Hidden,
 			ReadOnly:           cmd.Turn.ReadOnly,
+			GoalContinuation:   cmd.Turn.GoalContinuation,
 			ShellAllowPrefixes: append([]string(nil), cmd.Turn.ShellAllowPrefixes...),
 		}
 		state.skipHooks = cmd.Turn.SkipUserPromptHooks

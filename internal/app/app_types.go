@@ -104,6 +104,7 @@ type App struct {
 	toolset               *tools.Toolset
 	baseTools             []core.Tool
 	taskTools             []core.Tool
+	goalTools             []core.Tool
 	workflowTools         []core.Tool
 	hooks                 []agent.ResolvedHook
 	hookStates            agent.HookStates
@@ -141,4 +142,6 @@ type App struct {
 	approvalMu sync.Mutex
 	approvalFn policy.ApprovalFunc
 	userInput  agent.UserInputFunc
+
+	pendingGoalTurn bool
 }

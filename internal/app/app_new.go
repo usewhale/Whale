@@ -62,6 +62,7 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 		toolset:               toolInit.toolset,
 		baseTools:             append([]core.Tool{}, toolInit.baseTools...),
 		taskTools:             append([]core.Tool{}, runtimeInit.taskTools...),
+		goalTools:             append([]core.Tool{}, runtimeInit.goalTools...),
 		workflowTools:         append([]core.Tool{}, runtimeInit.workflowTools...),
 		hooks:                 toolInit.hooks,
 		hookStates:            toolInit.hookStates,

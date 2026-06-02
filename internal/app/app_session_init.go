@@ -45,6 +45,7 @@ type appRuntimeInit struct {
 	contextWindow   int
 	apiKey          string
 	taskTools       []core.Tool
+	goalTools       []core.Tool
 	workflowTools   []core.Tool
 	workflowManager *workflow.RunManager
 	workflowRunner  *workflow.ScriptRunner
