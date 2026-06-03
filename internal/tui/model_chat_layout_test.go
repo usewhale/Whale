@@ -677,6 +677,140 @@ func TestSmallTerminalHeightKeepsBodyFooterAndComposerSeparated(t *testing.T) {
 		}
 	}
 }
+
+func TestComposerRegressionManualAcceptanceRenderStates(t *testing.T) {
+	cases := []struct {
+		name    string
+		height  int
+		setup   func(*model)
+		want    []string
+		notWant []string
+	}{
+		{
+			name:   "first screen empty state",
+			height: 24,
+			want:   []string{"Type message or command", "deepseek-v4-flash . max", "thinking: off"},
+		},
+		{
+			name:   "typing",
+			height: 24,
+			setup: func(m *model) {
+				m.startupHeaderPrintCmd()
+				m.input.SetValue("draft prompt")
+			},
+			want: []string{"draft prompt", "deepseek-v4-flash . max"},
+		},
+		{
+			name:   "multiline",
+			height: 8,
+			setup: func(m *model) {
+				m.startupHeaderPrintCmd()
+				m.input.SetValue("line one\nline two\nline three")
+			},
+			want: []string{"line one", "line two", "line three", "deepseek-v4-flash . max"},
+		},
+		{
+			name:   "busy follow-up",
+			height: 24,
+			setup: func(m *model) {
+				m.startupHeaderPrintCmd()
+				m.startBusy()
+				m.busySince = time.Now().Add(-12 * time.Second)
+				m.input.SetValue("follow up")
+				m.queuedPrompts = []queuedPrompt{{Text: "queued one"}}
+			},
+			want: []string{"Working (12s)", "Enter to queue", "queued follow-up (1)", "queued one", "follow up"},
+		},
+		{
+			name:   "slash suggestions",
+			height: 24,
+			setup: func(m *model) {
+				m.startupHeaderPrintCmd()
+				m.input.SetValue("/")
+				m.updateSlashMatches()
+			},
+			want: []string{"/permissions", "Tab/Enter pick", "› /"},
+		},
+		{
+			name:   "file suggestions",
+			height: 24,
+			setup: func(m *model) {
+				m.startupHeaderPrintCmd()
+				m.input.SetValue("@mod")
+				m.files.active = true
+				m.files.matches = []fileSuggestion{{Path: "internal/tui/model.go"}}
+			},
+			want: []string{"Files", "internal/tui/model.go", "Tab/Enter insert", "@mod"},
+		},
+		{
+			name:   "skill suggestions",
+			height: 24,
+			setup: func(m *model) {
+				m.startupHeaderPrintCmd()
+				m.input.SetValue("$co")
+				m.skills.matches = []skillSuggestion{{Name: "code-review", Description: "Review local changes"}}
+			},
+			want: []string{"Skills", "$code-review", "Tab/Enter insert", "$co"},
+		},
+		{
+			name:   "small terminal height",
+			height: 6,
+			setup: func(m *model) {
+				m.startupHeaderPrintCmd()
+				m.input.SetValue("small\nheight")
+				m.appendTranscript("info", tuirender.KindText, "body-tail")
+			},
+			want: []string{"small", "height", "deepseek-v4-flash . max"},
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newModel(nil, "deepseek-v4-flash", "max", "off")
+			m.width = 80
+			m.height = tt.height
+			m.input.SetWidth(76)
+			if tt.setup != nil {
+				tt.setup(&m)
+			}
+
+			view := xansi.Strip(m.View())
+			for _, want := range tt.want {
+				if !strings.Contains(view, want) {
+					t.Fatalf("expected render state to contain %q:\n%s", want, view)
+				}
+			}
+			for _, notWant := range append(tt.notWant, "? for shortcuts · ↵ for agents") {
+				if strings.Contains(view, notWant) {
+					t.Fatalf("render state should not contain %q:\n%s", notWant, view)
+				}
+			}
+			if got := countVisibleLines(view); got > tt.height {
+				t.Fatalf("expected render state not to exceed height %d, got %d:\n%s", tt.height, got, view)
+			}
+
+			lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+			footerIdx := len(lines) - 1
+			if !strings.Contains(lines[footerIdx], "deepseek-v4-flash . max") {
+				t.Fatalf("expected footer on last line, got %q in:\n%s", lines[footerIdx], view)
+			}
+			boundary := strings.Repeat("─", 80)
+			boundaryIdxs := []int{}
+			for i, line := range lines {
+				if line == boundary {
+					boundaryIdxs = append(boundaryIdxs, i)
+				}
+			}
+			if len(boundaryIdxs) != 2 {
+				t.Fatalf("expected two composer separators, got %v:\n%s", boundaryIdxs, view)
+			}
+			if !(boundaryIdxs[0] < boundaryIdxs[1] && boundaryIdxs[1] < footerIdx) {
+				t.Fatalf("expected composer block before footer, got boundaries=%v footer=%d:\n%s", boundaryIdxs, footerIdx, view)
+			}
+		})
+	}
+}
+
 func TestChatStartupHeaderGapDoesNotOverflowConstrainedHeight(t *testing.T) {
 	for _, height := range []int{5, 11} {
 		m := newModel(nil, "deepseek-v4-flash", "max", "off")

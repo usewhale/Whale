@@ -82,6 +82,61 @@ func TestSecondIdleCtrlCRequestsExitFlow(t *testing.T) {
 		t.Fatalf("unexpected quit state/status: %v %q", m.quitArmedUntil, m.status)
 	}
 }
+
+func TestEnterSubmitUsesComposerValueAndClearsInputState(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.input.SetValue("  $code-review inspect this diff  ")
+	m.slash.selected = 1
+	m.slash.argumentHint = "stale hint"
+	m.files.active = true
+	m.files.selected = 1
+	m.skills.selected = 1
+	m.skillBinding = &protocol.SkillBinding{Name: "code-review", SkillFilePath: "/tmp/code-review/SKILL.md"}
+	m.promptHistory = []string{"older prompt"}
+	m.historyIndex = 0
+	m.historyDraft = "draft"
+	m.lastHistoryText = "older prompt"
+	m.inHistoryNav = true
+
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+
+	if len(*intents) != 1 {
+		t.Fatalf("expected one submit intent, got %+v", *intents)
+	}
+	got := (*intents)[0]
+	if got.Kind != protocol.IntentSubmit || got.Input != "$code-review inspect this diff" {
+		t.Fatalf("expected submit payload from composer value, got %+v", got)
+	}
+	if got.SkillBinding == nil || got.SkillBinding.Name != "code-review" || got.SkillBinding.SkillFilePath != "/tmp/code-review/SKILL.md" {
+		t.Fatalf("expected current skill binding to be submitted, got %+v", got.SkillBinding)
+	}
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected composer cleared after submit, got %q", got)
+	}
+	if m.skillBinding != nil {
+		t.Fatalf("expected model skill binding cleared after submit, got %+v", m.skillBinding)
+	}
+	if len(m.slash.matches) != 0 || m.slash.selected != 0 || m.slash.argumentHint != "" {
+		t.Fatalf("expected slash state cleared, got matches=%+v selected=%d hint=%q", m.slash.matches, m.slash.selected, m.slash.argumentHint)
+	}
+	if m.files.active || len(m.files.matches) != 0 || m.files.selected != 0 {
+		t.Fatalf("expected file suggestions cleared, got active=%v matches=%+v selected=%d", m.files.active, m.files.matches, m.files.selected)
+	}
+	if len(m.skills.matches) != 0 {
+		t.Fatalf("expected skill suggestions cleared, got matches=%+v selected=%d", m.skills.matches, m.skills.selected)
+	}
+	if m.historyIndex != -1 || m.historyDraft != "" || m.lastHistoryText != "" || m.inHistoryNav {
+		t.Fatalf("expected history navigation reset, index=%d draft=%q last=%q active=%v", m.historyIndex, m.historyDraft, m.lastHistoryText, m.inHistoryNav)
+	}
+	if len(m.promptHistory) != 2 || m.promptHistory[1] != "$code-review inspect this diff" {
+		t.Fatalf("expected trimmed prompt recorded in history, got %+v", m.promptHistory)
+	}
+	if !m.busy || m.status != "running" {
+		t.Fatalf("expected submit to start busy turn, busy=%v status=%q", m.busy, m.status)
+	}
+}
+
 func TestEnterWhileBusyQueuesInputWithoutSubmitting(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.busy = true
