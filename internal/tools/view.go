@@ -49,6 +49,7 @@ func (b *Toolset) readFile(ctx context.Context, call core.ToolCall) (core.ToolRe
 	}
 	text, _ := normalizeTextFileBytes(data)
 	snapshotText := text
+	b.storeFileState(abs, snapshotText)
 	lines := strings.Split(text, "\n")
 	if len(lines) > 0 && lines[len(lines)-1] == "" {
 		lines = lines[:len(lines)-1]
@@ -85,7 +86,6 @@ func (b *Toolset) readFile(ctx context.Context, call core.ToolCall) (core.ToolRe
 		content := strings.Join(lines, "\n")
 		result := readFileResult(rel, "full", total, totalBytes, len(lines), len([]byte(content)), 0, total, false, "", 0, false, false, content, "")
 		if readFileFullResultFitsRegistryEnvelope(call.Name, result) {
-			b.storeFileState(abs, snapshotText)
 			return marshalToolResult(call, result)
 		}
 	}
