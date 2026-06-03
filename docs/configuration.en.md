@@ -35,6 +35,8 @@ base_url = "https://api.deepseek.com/v1"
 Whale is DeepSeek-native, but you can point it at any OpenAI-compatible endpoint.
 Other models may not support all features (tool calling, long context).
 
+For third-party providers such as Alibaba Cloud Bailian, OpenCode Go, and OpenCode Zen, see the [Provider Configuration Guide](providers.en.md).
+
 ### Set up a proxy
 
 ```toml
