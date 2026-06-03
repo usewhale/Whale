@@ -6,6 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	xansi "github.com/charmbracelet/x/ansi"
+	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
 
 func TestComposerCtrlJInsertsNewline(t *testing.T) {
@@ -313,6 +315,58 @@ func TestComposerEmptyPlaceholderCollapsesToSingleLine(t *testing.T) {
 	}
 	if strings.Count(view, "\n") > 1 {
 		t.Fatalf("expected empty composer to render as a single visible row, got:\n%s", view)
+	}
+}
+
+func TestComposerEmptyViewOrdersPromptCursorPlaceholder(t *testing.T) {
+	c := New()
+	c.SetWidth(40)
+
+	plain := xansi.Strip(c.View())
+	want := "› █Type message or command"
+	if !strings.Contains(plain, want) {
+		t.Fatalf("expected empty composer order %q, got %q", want, plain)
+	}
+
+	promptIndex := strings.Index(plain, "›")
+	cursorIndex := strings.Index(plain, "█")
+	placeholderIndex := strings.Index(plain, "Type message or command")
+	if promptIndex != 0 {
+		t.Fatalf("expected prompt at left edge, got index %d in %q", promptIndex, plain)
+	}
+	if !(promptIndex < cursorIndex && cursorIndex < placeholderIndex) {
+		t.Fatalf("expected prompt, cursor, placeholder order, got %q", plain)
+	}
+	if plain[promptIndex:cursorIndex] != "› " {
+		t.Fatalf("expected tight prompt/cursor spacing, got %q", plain[promptIndex:cursorIndex])
+	}
+}
+
+func TestComposerEmptyViewUsesPromptAndPlaceholderThemeStyles(t *testing.T) {
+	prompt := composerPromptStyle()
+	if got := prompt.GetForeground(); got != tuitheme.Default.Accent {
+		t.Fatalf("prompt foreground: want %s, got %s", tuitheme.Default.Accent, got)
+	}
+	if !prompt.GetBold() {
+		t.Fatal("expected prompt style to be bold")
+	}
+
+	placeholder := composerPlaceholderStyle()
+	if got := placeholder.GetForeground(); got != tuitheme.Default.Muted {
+		t.Fatalf("placeholder foreground: want %s, got %s", tuitheme.Default.Muted, got)
+	}
+}
+
+func TestComposerNonEmptyViewOmitsDefaultPlaceholder(t *testing.T) {
+	c := New()
+	c.SetValue("hello")
+
+	plain := xansi.Strip(c.View())
+	if strings.Contains(plain, "Type message or command") {
+		t.Fatalf("did not expect placeholder after input, got %q", plain)
+	}
+	if !strings.Contains(plain, "› hello") {
+		t.Fatalf("expected non-empty input to use existing prompt path, got %q", plain)
 	}
 }
 
