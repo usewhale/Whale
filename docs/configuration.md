@@ -35,6 +35,8 @@ base_url = "https://api.deepseek.com/v1"
 Whale 是 DeepSeek 原生的，但可以指向任何兼容 OpenAI 的 endpoint。
 其他模型可能不支持全部功能（工具调用、长上下文）。
 
+常见第三方 provider 的配置示例见 [Provider 配置指南](providers.md)，包括阿里云百炼、OpenCode Go/Zen 等。
+
 ### 设置代理
 
 ```toml
