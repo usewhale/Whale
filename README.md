@@ -1,7 +1,7 @@
 # Whale
 
 <p align="center">
-  <img src="docs/logo.svg" alt="Whale — DeepSeek-native coding agent for the terminal" width="640">
+  <img src="docs/logo.svg" alt="Whale — AI coding agent for DeepSeek, in any environment" width="640">
 </p>
 
 <p align="center">
@@ -16,9 +16,13 @@
 </p>
 
 <p align="center">
-  <b>A terminal-native coding agent built for DeepSeek.</b><br>
+  Blazingly fast · Zero bloat · Pure local speed.
+</p>
+
+<p align="center">
+  <b>Whale — AI coding agent for DeepSeek, in any environment.</b><br>
   Persistent sessions, long context, tools, and programmable workflows —<br>
-  all in your terminal, no IDE required.
+  start in the terminal, scale to desktop and beyond.
 </p>
 
 ---
@@ -29,7 +33,7 @@
 |---|---|
 | 🐋 **DeepSeek-native** | Built for DeepSeek's long context (1M tokens), tool calling, and cost efficiency — no generic multi-model wrapper |
 | 💬 **Persistent sessions** | Come back days later, context is still there. Search, branch, resume. |
-| 🎛️ **TUI + CLI + Headless** | Interactive TUI, one-shot CLI commands, or headless automation — pick your mode |
+| 🎛️ **Multiple interfaces** | TUI for interactive coding, CLI for one-shot tasks, headless for CI — desktop and more on the way |
 | ⚙️ **Tools & MCP** | Read/edit files, run commands, search web — and plug in 1,000+ MCP servers |
 | 🧩 **Skills + Plugins** | Install community skills (code review, git workflows, etc.) or write your own |
 | 🔁 **Dynamic Workflows** | Write JavaScript scripts that orchestrate multiple agents — fan-out research, multi-perspective review, pipelines. Claude Code compatible. |
@@ -113,9 +117,9 @@ Learn more: [Workflow Overview](docs/workflows.en.md) · [Custom Workflow Guide]
 
 ## 📸 How It Works
 
-Whale runs in three modes:
+Whale currently offers three interfaces — with more environments on the way:
 
-| Mode | When to use |
+| Interface | When to use |
 |---|---|
 | **`whale`** (TUI) | Interactive coding sessions — chat, review, iterate with full context |
 | **`whale ask "..."`** (CLI) | One-shot questions, quick code reviews, single commands |
@@ -126,7 +130,7 @@ Whale runs in three modes:
 ## 🎯 Non-goals
 
 - **Multi-model shell.** Whale is DeepSeek-first — optimized for DeepSeek's caching, tools, and pricing.
-- **IDE replacement.** Whale works in your terminal alongside your shell, git, and test commands.
+- **IDE replacement.** Whale is not an IDE — it's an agent that meets you wherever you code: terminal, desktop, or CI.
 
 ## 📦 Project Status
 
@@ -156,3 +160,19 @@ Security issues: [SECURITY.md](SECURITY.md).
    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=usewhale/DeepSeek-Code-Whale&type=date&legend=top-left" />
  </picture>
 </a>
+
+---
+
+## 🙏 Credits
+
+Whale stands on the shoulders of giants:
+
+- [Charmbracelet](https://charm.sh) — Bubble Tea, Lip Gloss, Glamour, and the entire TUI ecosystem
+- [fastschema/qjs](https://github.com/fastschema/qjs) — QuickJS Go bindings for workflow scripting
+- [spf13/cobra](https://github.com/spf13/cobra) — CLI framework
+- [alecthomas/chroma](https://github.com/alecthomas/chroma) — Syntax highlighting
+- [yuin/goldmark](https://github.com/yuin/goldmark) — Markdown parsing
+- [modelcontextprotocol/go-sdk](https://github.com/modelcontextprotocol/go-sdk) — MCP protocol support
+- [tetratelabs/wazero](https://github.com/tetratelabs/wazero) — Pure-Go WebAssembly runtime
+
+And the many open-source libraries we depend on — thank you.
