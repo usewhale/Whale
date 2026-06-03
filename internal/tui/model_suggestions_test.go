@@ -84,6 +84,83 @@ func TestSlashSuggestionsRenderDescriptions(t *testing.T) {
 		}
 	}
 }
+
+func TestSuggestionsRenderAboveComposerBoundary(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(*model)
+		panelText  string
+		inputText  string
+		insideText string
+	}{
+		{
+			name: "slash",
+			setup: func(m *model) {
+				m.input.SetValue("/")
+				m.updateSlashMatches()
+			},
+			panelText:  "/model",
+			inputText:  "› /",
+			insideText: "/model",
+		},
+		{
+			name: "file",
+			setup: func(m *model) {
+				m.input.SetValue("@mod")
+				m.files.matches = []fileSuggestion{{Path: "internal/tui/model.go"}}
+				m.files.selected = 0
+			},
+			panelText:  "internal/tui/model.go",
+			inputText:  "@mod",
+			insideText: "internal/tui/model.go",
+		},
+		{
+			name: "skill",
+			setup: func(m *model) {
+				m.input.SetValue("$co")
+				m.skills.matches = []skillSuggestion{{Name: "code-review", Description: "Review local changes"}}
+				m.skills.selected = 0
+			},
+			panelText:  "$code-review",
+			inputText:  "› $co",
+			insideText: "$code-review",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newModel(nil, "deepseek-v4-pro", "normal", "on")
+			m.width = 80
+			m.height = 24
+			m.cwd = "~/Engineer/ai/dsk/whale"
+			tt.setup(&m)
+
+			bottom := xansi.Strip(m.renderBottom(80))
+			lines := strings.Split(strings.TrimRight(bottom, "\n"), "\n")
+			suggestionIdx := firstLineContaining(lines, tt.panelText)
+			boundaryIdx := firstFullWidthBoundaryLine(lines, 80)
+			composerIdx := firstLineContaining(lines, tt.inputText)
+			footerIdx := len(lines) - 1
+
+			if suggestionIdx < 0 || boundaryIdx < 0 || composerIdx < 0 {
+				t.Fatalf("expected %s suggestions, composer boundary, and composer in bottom layout:\n%s", tt.name, bottom)
+			}
+			if !(suggestionIdx < boundaryIdx && boundaryIdx < composerIdx && composerIdx < footerIdx) {
+				t.Fatalf("expected %s suggestions above composer boundary and footer after composer, got suggestion=%d boundary=%d composer=%d footer=%d:\n%s",
+					tt.name, suggestionIdx, boundaryIdx, composerIdx, footerIdx, bottom)
+			}
+			if strings.Contains(strings.Join(lines[boundaryIdx+1:footerIdx], "\n"), tt.insideText) {
+				t.Fatalf("%s suggestions should not be wrapped inside composer boundaries:\n%s", tt.name, bottom)
+			}
+			if footer := lines[footerIdx]; !strings.Contains(footer, "deepseek-v4-pro . normal") ||
+				!strings.Contains(footer, "thinking: on") ||
+				!strings.Contains(footer, "whale") {
+				t.Fatalf("expected footer status fields on last line, got %q in:\n%s", footer, bottom)
+			}
+		})
+	}
+}
+
 func TestSlashArgumentHintShownForCommandSpace(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.input.SetValue("/model ")
