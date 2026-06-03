@@ -482,8 +482,55 @@ func TestChatStartupHeaderLeavesGapAboveComposer(t *testing.T) {
 	if promptIdx < 1 {
 		t.Fatalf("expected composer after startup header:\n%s", view)
 	}
-	if strings.TrimSpace(lines[promptIdx-1]) != "" {
-		t.Fatalf("expected blank line between startup header and composer, got %q in view:\n%s", lines[promptIdx-1], view)
+	if promptIdx < 2 {
+		t.Fatalf("expected composer boundary after startup header gap:\n%s", view)
+	}
+	if strings.TrimSpace(lines[promptIdx-2]) != "" {
+		t.Fatalf("expected blank line between startup header and composer boundary, got %q in view:\n%s", lines[promptIdx-2], view)
+	}
+}
+func TestChatComposerBoundaryRendersAboveComposer(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 24
+	m.input.SetWidth(76)
+
+	view := xansi.Strip(m.View())
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	promptIdx := -1
+	for i, line := range lines {
+		if strings.Contains(line, "Type message or command") {
+			promptIdx = i
+			break
+		}
+	}
+	if promptIdx < 1 {
+		t.Fatalf("expected composer after boundary:\n%s", view)
+	}
+	boundary := lines[promptIdx-1]
+	if want := strings.Repeat("─", 80); boundary != want {
+		t.Fatalf("expected full-width composer boundary before composer, got %q want %q in view:\n%s", boundary, want, view)
+	}
+}
+func TestComposerBoundaryUsesBottomLayoutWidth(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 120
+	m.height = 24
+	m.sidebar = true
+	m.input.SetWidth(116)
+
+	bottom := xansi.Strip(m.renderBottom(86))
+	lines := strings.Split(strings.TrimRight(bottom, "\n"), "\n")
+	if len(lines) < 3 {
+		t.Fatalf("expected boundary, composer, and footer in bottom layout:\n%s", bottom)
+	}
+	boundary := lines[0]
+	composer := lines[1]
+	if want := strings.Repeat("─", 86); boundary != want {
+		t.Fatalf("expected boundary to use main layout width, got width %d line %q", lipgloss.Width(boundary), boundary)
+	}
+	if lipgloss.Width(composer) != 116 {
+		t.Fatalf("expected composer view to retain its own width, got %d line %q", lipgloss.Width(composer), composer)
 	}
 }
 func TestChatStartupHeaderGapDoesNotOverflowConstrainedHeight(t *testing.T) {
