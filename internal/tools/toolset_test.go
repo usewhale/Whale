@@ -120,7 +120,7 @@ func TestReadFileStripsUTF8BOMFromVisibleContent(t *testing.T) {
 	}
 }
 
-func TestEditFileRequiresFullReadState(t *testing.T) {
+func TestEditFileRequiresObservedReadState(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("alpha\nbeta\n"), 0o644); err != nil {
 		t.Fatalf("write fixture: %v", err)
@@ -155,15 +155,19 @@ func TestEditFileRequiresFullReadState(t *testing.T) {
 		"search":    "beta",
 		"replace":   "whale",
 	}))
-	if err != nil {
-		t.Fatalf("edit dispatch error after range read: %v", err)
+	if err != nil || res.IsError {
+		t.Fatalf("edit after range read failed: err=%v res=%+v", err, res)
 	}
-	if got := toolErrorCode(t, res); got != "read_required" {
-		t.Fatalf("code after range read = %q, want read_required; content=%s", got, res.Content)
+	got, err := os.ReadFile(filepath.Join(dir, "a.txt"))
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	if string(got) != "alpha\nwhale\n" {
+		t.Fatalf("content = %q, want range-read edit to apply", string(got))
 	}
 }
 
-func TestEditFileUsesFullReadState(t *testing.T) {
+func TestEditFileUsesObservedReadState(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a.txt")
 	if err := os.WriteFile(path, []byte("alpha\nbeta\n"), 0o644); err != nil {
@@ -208,6 +212,78 @@ func TestEditFileRejectsStaleRuntimeState(t *testing.T) {
 	}
 
 	res, err := ts.editFile(context.Background(), tc("edit", map[string]any{
+		"file_path": "a.txt",
+		"search":    "beta",
+		"replace":   "whale",
+	}))
+	if err != nil {
+		t.Fatalf("edit dispatch error: %v", err)
+	}
+	if got := toolErrorCode(t, res); got != "stale_read" {
+		t.Fatalf("code = %q, want stale_read; content=%s", got, res.Content)
+	}
+}
+
+func TestEditFileDoesNotMarkInternalReadBeforeStaleValidation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("alpha\nbeta\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	readFileFull(t, ts, "a.txt")
+	if err := os.WriteFile(path, []byte("external\nbeta\n"), 0o644); err != nil {
+		t.Fatalf("external write: %v", err)
+	}
+	internalReadMarked := false
+	ts.afterFileRead = func(abs string) {
+		if abs == path {
+			internalReadMarked = true
+		}
+	}
+
+	res, err := ts.editFile(context.Background(), tc("edit", map[string]any{
+		"file_path": "a.txt",
+		"search":    "beta",
+		"replace":   "whale",
+	}))
+	if err != nil {
+		t.Fatalf("edit dispatch error: %v", err)
+	}
+	if got := toolErrorCode(t, res); got != "stale_read" {
+		t.Fatalf("code = %q, want stale_read; content=%s", got, res.Content)
+	}
+	if internalReadMarked {
+		t.Fatalf("stale edit marked its internal read before validation")
+	}
+}
+
+func TestEditFileRejectsStaleRangeReadState(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("alpha\nbeta\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	res, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
+		"file_path": "a.txt",
+		"offset":    0,
+		"limit":     1,
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("range read failed: err=%v res=%+v", err, res)
+	}
+	if err := os.WriteFile(path, []byte("external\nbeta\n"), 0o644); err != nil {
+		t.Fatalf("external write: %v", err)
+	}
+
+	res, err = ts.editFile(context.Background(), tc("edit", map[string]any{
 		"file_path": "a.txt",
 		"search":    "beta",
 		"replace":   "whale",
@@ -1511,6 +1587,105 @@ func TestReadFileDefaultsToBoundedResult(t *testing.T) {
 	}
 	if note, _ := data["note"].(string); !strings.Contains(note, "offset=0 limit=2000") {
 		t.Fatalf("missing continuation note: %#v", data["note"])
+	}
+}
+
+func TestEditFileAfterLargeOutlineRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "large.txt")
+	var body strings.Builder
+	for i := 0; i < 5000; i++ {
+		body.WriteString("large outline line ")
+		body.WriteString(strings.Repeat("x", 40))
+		body.WriteByte('\n')
+	}
+	body.WriteString("UNIQUE_LARGE_FILE_MARKER\n")
+	for i := 0; i < 5000; i++ {
+		body.WriteString("large outline tail ")
+		body.WriteString(strings.Repeat("y", 40))
+		body.WriteByte('\n')
+	}
+	if body.Len() <= 150*1024 {
+		t.Fatalf("fixture size = %d, want >150KB", body.Len())
+	}
+	if err := os.WriteFile(path, []byte(body.String()), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
+		"file_path": "large.txt",
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
+	}
+	data := readFileData(t, res)
+	if got := metricString(t, data, "mode"); got != "outline" {
+		t.Fatalf("mode = %q, want outline", got)
+	}
+	payload := data["payload"].(map[string]any)
+	if _, ok := payload["snapshot_id"]; ok {
+		t.Fatalf("read_file should not expose snapshot_id: %#v", payload)
+	}
+
+	res, err = ts.editFile(context.Background(), tc("edit", map[string]any{
+		"file_path": "large.txt",
+		"search":    "UNIQUE_LARGE_FILE_MARKER",
+		"replace":   "UNIQUE_LARGE_FILE_EDITED",
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("edit after outline read failed: err=%v res=%+v", err, res)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	if !strings.Contains(string(got), "UNIQUE_LARGE_FILE_EDITED") {
+		t.Fatalf("large file edit was not applied")
+	}
+}
+
+func TestEditFileRejectsStaleLargeOutlineReadState(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "large.txt")
+	body := strings.Repeat("outline\n", 22000) + "UNIQUE_LARGE_FILE_MARKER\n"
+	if len(body) <= 150*1024 {
+		t.Fatalf("fixture size = %d, want >150KB", len(body))
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
+		"file_path": "large.txt",
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
+	}
+	if got := metricString(t, readFileData(t, res), "mode"); got != "outline" {
+		t.Fatalf("mode = %q, want outline", got)
+	}
+	if err := os.WriteFile(path, []byte(strings.Replace(body, "outline\n", "changed\n", 1)), 0o644); err != nil {
+		t.Fatalf("external write: %v", err)
+	}
+
+	res, err = ts.editFile(context.Background(), tc("edit", map[string]any{
+		"file_path": "large.txt",
+		"search":    "UNIQUE_LARGE_FILE_MARKER",
+		"replace":   "UNIQUE_LARGE_FILE_EDITED",
+	}))
+	if err != nil {
+		t.Fatalf("edit dispatch error: %v", err)
+	}
+	if got := toolErrorCode(t, res); got != "stale_read" {
+		t.Fatalf("code = %q, want stale_read; content=%s", got, res.Content)
 	}
 }
 

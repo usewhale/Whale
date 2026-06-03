@@ -74,11 +74,11 @@ func (b *Toolset) storeFileStateFromBytes(abs string, data []byte) {
 
 func (b *Toolset) validateFileState(abs, normalizedContent string) (string, string) {
 	if b.fileStates == nil {
-		return "read_required", "file has not been read yet; read the full file with read_file before editing"
+		return "read_required", "file has not been observed yet; read it with read_file before editing"
 	}
 	state, ok := b.fileStates.get(abs)
 	if !ok {
-		return "read_required", "file has not been read yet; read the full file with read_file before editing"
+		return "read_required", "file has not been observed yet; read it with read_file before editing"
 	}
 	if state.Hash != fileStateHash(normalizedContent) {
 		return "stale_read", "file changed since it was last read or modified by Whale; read the file again before editing"
