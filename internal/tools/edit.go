@@ -11,11 +11,10 @@ import (
 
 func (b *Toolset) editFile(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
 	var in struct {
-		FilePath   string `json:"file_path"`
-		SnapshotID string `json:"snapshot_id"`
-		Search     string `json:"search"`
-		Replace    string `json:"replace"`
-		All        bool   `json:"all"`
+		FilePath string `json:"file_path"`
+		Search   string `json:"search"`
+		Replace  string `json:"replace"`
+		All      bool   `json:"all"`
 	}
 	if err := decodeInput(call.Input, &in); err != nil {
 		return marshalToolError(call, "invalid_args", err.Error()), nil
@@ -34,12 +33,12 @@ func (b *Toolset) editFile(ctx context.Context, call core.ToolCall) (core.ToolRe
 		}
 		return marshalToolError(call, "read_failed", err.Error()), nil
 	}
+	before, lineEndings := normalizeTextFileBytes(data)
+	if code, msg := b.validateFileState(abs, before); code != "" {
+		return marshalToolError(call, code, msg), nil
+	}
 	if b.afterFileRead != nil {
 		b.afterFileRead(abs)
-	}
-	before, lineEndings := normalizeTextFileBytes(data)
-	if code, msg := b.validateFileSnapshot(abs, in.SnapshotID, before); code != "" {
-		return marshalToolError(call, code, msg), nil
 	}
 	if in.Search == "" {
 		return marshalToolError(call, "invalid_args", "search is required"), nil
@@ -71,6 +70,7 @@ func (b *Toolset) editFile(ctx context.Context, call core.ToolCall) (core.ToolRe
 		}
 		return marshalToolError(call, "write_failed", err.Error()), nil
 	}
+	b.storeFileState(abs, after)
 	metadata := fileDiffMetadata([]fileChangePreview{{path: in.FilePath, before: before, after: after}})
 	dataMap := map[string]any{
 		"file_path":    in.FilePath,
@@ -84,11 +84,10 @@ func (b *Toolset) editFile(ctx context.Context, call core.ToolCall) (core.ToolRe
 
 func (b *Toolset) previewEditFile(_ context.Context, call core.ToolCall) (map[string]any, error) {
 	var in struct {
-		FilePath   string `json:"file_path"`
-		SnapshotID string `json:"snapshot_id"`
-		Search     string `json:"search"`
-		Replace    string `json:"replace"`
-		All        bool   `json:"all"`
+		FilePath string `json:"file_path"`
+		Search   string `json:"search"`
+		Replace  string `json:"replace"`
+		All      bool   `json:"all"`
 	}
 	if err := decodeInput(call.Input, &in); err != nil {
 		return nil, err
@@ -105,7 +104,7 @@ func (b *Toolset) previewEditFile(_ context.Context, call core.ToolCall) (map[st
 		return nil, err
 	}
 	before, _ := normalizeTextFileBytes(data)
-	if code, msg := b.validateFileSnapshot(abs, in.SnapshotID, before); code != "" {
+	if code, msg := b.validateFileState(abs, before); code != "" {
 		return nil, errors.New(code + ": " + msg)
 	}
 	if in.Search == "" {

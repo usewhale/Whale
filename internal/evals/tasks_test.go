@@ -36,13 +36,7 @@ func TestTaskSearchReadEditFlow(t *testing.T) {
 						{
 							ID:       "edit",
 							ToolName: "edit",
-							InputFunc: func(history []core.Message) (string, error) {
-								snapshotID, err := snapshotIDFromHistory(history, "read_file")
-								if err != nil {
-									return "", err
-								}
-								return fmt.Sprintf(`{"file_path":"cmd/app/main.go","snapshot_id":%q,"search":"old-value","replace":"new-value"}`, snapshotID), nil
-							},
+							Input:    `{"file_path":"cmd/app/main.go","search":"old-value","replace":"new-value"}`,
 						},
 					},
 				},

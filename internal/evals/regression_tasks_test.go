@@ -123,15 +123,9 @@ func TestTaskEditMissingSearchReturnsSearchNotFound(t *testing.T) {
 				{
 					Steps: []StepSpec{
 						{
-							ID:       "edit",
-							ToolName: "edit",
-							InputFunc: func(history []core.Message) (string, error) {
-								snapshotID, err := snapshotIDFromHistory(history, "read_file")
-								if err != nil {
-									return "", err
-								}
-								return fmt.Sprintf(`{"file_path":"notes.txt","snapshot_id":%q,"search":"missing","replace":"new"}`, snapshotID), nil
-							},
+							ID:          "edit",
+							ToolName:    "edit",
+							Input:       `{"file_path":"notes.txt","search":"missing","replace":"new"}`,
 							ExpectError: true,
 						},
 					},
@@ -422,27 +416,4 @@ func TestTaskTodoRemoveInvalidPayloadReturnsInvalidTodoRemove(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run task: %v", err)
 	}
-}
-
-func snapshotIDFromHistory(history []core.Message, toolName string) (string, error) {
-	for i := len(history) - 1; i >= 0; i-- {
-		for _, res := range history[i].ToolResults {
-			if res.Name != toolName {
-				continue
-			}
-			env, ok := core.ParseToolEnvelope(res.Content)
-			if !ok || !env.OK {
-				continue
-			}
-			payload, ok := env.Data["payload"].(map[string]any)
-			if !ok {
-				continue
-			}
-			snapshotID, ok := payload["snapshot_id"].(string)
-			if ok && strings.TrimSpace(snapshotID) != "" {
-				return snapshotID, nil
-			}
-		}
-	}
-	return "", fmt.Errorf("snapshot_id not found in history for %s", toolName)
 }

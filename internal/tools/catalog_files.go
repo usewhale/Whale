@@ -25,7 +25,8 @@ Hunk rules:
 - Hunk lines must start with exactly one of: space for context, - for removed text, + for added text.
 - Keep enough context lines for an exact match.
 - Paths are relative to the workspace. Do not use absolute paths.
-- Do not use unified diff headers such as diff --git, --- a/file, or +++ b/file.`
+- Do not use unified diff headers such as diff --git, --- a/file, or +++ b/file.
+- A successful apply_patch updates Whale's runtime file state. Do not re-read files just to confirm the patch applied; the tool fails when it cannot apply the patch.`
 
 const applyPatchParamDescription = `Full patch text in Whale's *** Begin Patch format. Do not send unified diff. Use headers like *** Update File: path, then @@ hunks with space/-/+ lines.`
 
@@ -33,7 +34,7 @@ func (b *Toolset) fileDiscoveryTools() []core.Tool {
 	return []core.Tool{
 		toolFn{
 			name:        "read_file",
-			description: "Read file content. Workspace, git worktree, and discovered local skill paths are read directly; external paths request file access approval before reading. Use this before edit/write to confirm exact text. Full results include snapshot_id required by edit. Files up to 32KB return full content by default; larger files return an outline with head lines and continuation hints. Use offset/limit to read bounded ranges.",
+			description: "Read file content. Workspace, git worktree, and discovered local skill paths are read directly; external paths request file access approval before reading. Use this before edit/write to confirm exact text. A full read records runtime file state required by edit. Files up to 32KB return full content by default; larger files return an outline with head lines and continuation hints. Use offset/limit to read bounded ranges.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
@@ -86,16 +87,15 @@ func (b *Toolset) fileMutationTools() []core.Tool {
 	return []core.Tool{
 		toolFn{
 			name:        "edit",
-			description: "Apply SEARCH/REPLACE edits to an existing file. Requires snapshot_id from a prior full read_file result for the same file. Requires exact search text; returns search_not_found when search is not found. Prefer this for small surgical changes. For large files or multi-file context edits, prefer apply_patch.",
+			description: "Apply SEARCH/REPLACE edits to an existing file. Requires a prior full read_file result for the same file; do not pass any file-state token. Requires exact search text; returns search_not_found when search is not found. Use for small surgical changes when the exact current text is known. Prefer apply_patch for most edits, multi-hunk changes, and multi-file changes.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
 				"properties": map[string]any{
-					"file_path":   map[string]any{"type": "string", "description": "Target file path relative to workspace, or an absolute path inside the workspace root"},
-					"snapshot_id": map[string]any{"type": "string", "description": "Snapshot id returned by a prior full read_file result for this exact file"},
-					"search":      map[string]any{"type": "string", "description": "Exact text to replace, copied from the read_file content"},
-					"replace":     map[string]any{"type": "string", "description": "Replacement text"},
-					"all":         map[string]any{"type": "boolean", "description": "Replace all occurrences"},
+					"file_path": map[string]any{"type": "string", "description": "Target file path relative to workspace, or an absolute path inside the workspace root"},
+					"search":    map[string]any{"type": "string", "description": "Exact text to replace, copied from the read_file content"},
+					"replace":   map[string]any{"type": "string", "description": "Replacement text"},
+					"all":       map[string]any{"type": "boolean", "description": "Replace all occurrences"},
 				},
 				"required": []string{"file_path", "search", "replace"},
 			},
@@ -105,7 +105,7 @@ func (b *Toolset) fileMutationTools() []core.Tool {
 		},
 		toolFn{
 			name:        "write",
-			description: "Write full file content under workspace root (create or overwrite). Use for new files or intentional full rewrites. New files are created as regular non-executable files; use shell_run with chmod if a script must be executable. For partial modifications, prefer edit.",
+			description: "Write full file content under workspace root (create or overwrite). Use for new files or intentional full rewrites. New files are created as regular non-executable files; use shell_run with chmod if a script must be executable. For most partial modifications, prefer apply_patch.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,

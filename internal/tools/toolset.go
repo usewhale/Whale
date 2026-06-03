@@ -26,7 +26,7 @@ type Toolset struct {
 	bingSearchURL     string
 	tasks             *shellTaskRegistry
 	fileLocks         *fileMutationLocks
-	fileSnapshots     *fileSnapshotRegistry
+	fileStates        *fileStateCache
 	// Test hooks for deterministic mutation-race coverage.
 	afterFileRead    func(string)
 	beforeFileCommit func(string)
@@ -69,7 +69,7 @@ func NewToolset(root string) (*Toolset, error) {
 		bingSearchURL: "https://www.bing.com/search?q=%s",
 		tasks:         newShellTaskRegistry(),
 		fileLocks:     newFileMutationLocks(),
-		fileSnapshots: newFileSnapshotRegistry(),
+		fileStates:    newFileStateCache(),
 	}, nil
 }
 

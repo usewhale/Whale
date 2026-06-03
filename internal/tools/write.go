@@ -43,6 +43,7 @@ func (b *Toolset) writeFile(ctx context.Context, call core.ToolCall) (core.ToolR
 		}
 		return marshalToolError(call, "write_failed", err.Error()), nil
 	}
+	b.storeFileStateFromBytes(abs, []byte(content))
 	metadata := fileDiffMetadata([]fileChangePreview{{path: in.FilePath, before: before, after: after}})
 	return marshalToolResultWithMetadata(call, map[string]any{"file_path": in.FilePath, "bytes": len(content)}, metadata)
 }

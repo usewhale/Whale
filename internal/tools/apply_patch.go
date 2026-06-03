@@ -92,6 +92,13 @@ func (b *Toolset) applyPatch(ctx context.Context, call core.ToolCall) (core.Tool
 		}
 		return marshalToolError(call, "patch_apply_failed", err.Error()), nil
 	}
+	for _, plan := range plans {
+		if plan.remove {
+			b.clearFileState(plan.abs)
+			continue
+		}
+		b.storeFileState(plan.abs, plan.after)
+	}
 
 	filesChanged := make([]string, 0, len(plans))
 	for _, plan := range plans {
