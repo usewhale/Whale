@@ -155,6 +155,43 @@ func TestBuildCacheShapeReportsRuntimeSegments(t *testing.T) {
 	if changed.RequestHash == shape.RequestHash {
 		t.Fatal("expected runtime change to alter request hash")
 	}
+	if shape.PrefixHash == "" || shape.PrefixBytes == 0 {
+		t.Fatalf("missing provider prefix shape: %+v", shape)
+	}
+	if changed.PrefixHash == shape.PrefixHash {
+		t.Fatal("expected runtime change to alter provider prefix hash")
+	}
+}
+
+func TestBuildCacheShapeReportsProviderPrefixAndToolSegments(t *testing.T) {
+	history := []core.Message{{Role: core.RoleSystem, Text: "system"}, {Role: core.RoleUser, Text: "hi"}}
+	tools := core.NewToolRegistry([]core.Tool{
+		cacheShapeTool{name: "alpha", description: "first", params: map[string]any{"type": "object"}},
+		cacheShapeTool{name: "beta", description: "second", params: map[string]any{"type": "object"}},
+	})
+
+	shape := buildCacheShape(history, tools.Tools(), "")
+	if shape.PrefixHash == "" || shape.PrefixBytes == 0 {
+		t.Fatalf("missing provider prefix hash/bytes: %+v", shape)
+	}
+	if len(shape.ToolSegments) != 2 {
+		t.Fatalf("tool segments len = %d, want 2: %+v", len(shape.ToolSegments), shape.ToolSegments)
+	}
+	if shape.ToolSegments[0].Name != "alpha" || shape.ToolSegments[0].Hash == "" || shape.ToolSegments[0].Bytes == 0 {
+		t.Fatalf("unexpected first tool segment: %+v", shape.ToolSegments[0])
+	}
+
+	changedTools := core.NewToolRegistry([]core.Tool{
+		cacheShapeTool{name: "alpha", description: "changed", params: map[string]any{"type": "object"}},
+		cacheShapeTool{name: "beta", description: "second", params: map[string]any{"type": "object"}},
+	})
+	changed := buildCacheShape(history, changedTools.Tools(), "")
+	if changed.PrefixHash == shape.PrefixHash {
+		t.Fatal("expected tool schema change to alter provider prefix hash")
+	}
+	if changed.ToolSegments[0].Hash == shape.ToolSegments[0].Hash {
+		t.Fatal("expected changed tool schema to alter tool segment hash")
+	}
 }
 
 func TestBuildCacheShapeRequestKindAffectsRequestHash(t *testing.T) {

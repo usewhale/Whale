@@ -227,6 +227,7 @@ func profileStatsSections(stats profileStats) []LocalResultSection {
 		{Label: "Estimated cost", Value: fmt.Sprintf("$%.4f", stats.CostUSD)},
 		{Label: "Max prompt", Value: formatCount(stats.MaxPromptTokens)},
 		{Label: "Prefix fingerprints", Value: fmt.Sprintf("%d", len(stats.PrefixFingerprints))},
+		{Label: "Provider prefixes", Value: fmt.Sprintf("%d distinct across %d usage sessions", len(stats.ProviderPrefixHashes), len(stats.PrefixShapeSessions))},
 		{Label: "Tools", Value: fmt.Sprintf("%d calls · %s result chars", stats.ToolCalls, formatCount(stats.ToolResultChars))},
 		{Label: "Reasoning/text", Value: fmt.Sprintf("%s reasoning chars · %s visible text chars", formatCount(stats.ReasoningChars), formatCount(stats.VisibleTextChars))},
 	}

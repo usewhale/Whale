@@ -194,6 +194,11 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 			if a.maxToolCalls > 0 {
 				remainingToolCalls = a.maxToolCalls - toolCalls
 			}
+			if actual, ok := rt.Prefix.VerifyFingerprint(); !ok {
+				if !emit(AgentEvent{Type: AgentEventTypePrefixDrift, PrefixDrift: &PrefixDriftInfo{Expected: rt.Prefix.Fingerprint(), Actual: actual}}) {
+					return
+				}
+			}
 			assistant, toolMsg, usage, modelName, cacheShape, abortTurn, attemptedToolCalls, sErr := a.streamAndHandle(ctx, sessionID, checkpointMessageID, history, rt, out, turnPolicy, toolSnapshot, remainingToolCalls, opts)
 			if sErr != nil {
 				if errors.Is(sErr, context.Canceled) || errors.Is(sErr, context.DeadlineExceeded) {

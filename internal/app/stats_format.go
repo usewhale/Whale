@@ -76,6 +76,7 @@ func formatProfileStats(stats profileStats) []string {
 		fmt.Sprintf("- subagents: %d child sessions · %s total · %s input · %s output · $%.4f · max prompt %s · %.1f%% cache", stats.SubagentSessions, formatCount(subagentTokens), formatCount(stats.SubagentPromptTokens), formatCount(stats.SubagentCompletionTokens), stats.SubagentCostUSD, formatCount(stats.SubagentMaxPromptTokens), ratioPercent(stats.SubagentCacheHit, stats.SubagentCacheHit+stats.SubagentCacheMiss)),
 		fmt.Sprintf("- all-in tokens: %s total · $%.4f", formatCount(allInTokens), stats.CostUSD+stats.SubagentCostUSD),
 		fmt.Sprintf("- prefix fingerprints: %d", len(stats.PrefixFingerprints)),
+		fmt.Sprintf("- provider prefixes: %d distinct across %d usage sessions", len(stats.ProviderPrefixHashes), len(stats.PrefixShapeSessions)),
 		fmt.Sprintf("- tools: %d calls · %s result chars", stats.ToolCalls, formatCount(stats.ToolResultChars)),
 		fmt.Sprintf("- reasoning/text: %s reasoning chars · %s visible text chars", formatCount(stats.ReasoningChars), formatCount(stats.VisibleTextChars)),
 	}

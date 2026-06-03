@@ -40,6 +40,8 @@ type UsageRecord struct {
 
 type CacheShape struct {
 	RequestKind          string              `json:"request_kind,omitempty"`
+	PrefixHash           string              `json:"prefix_hash,omitempty"`
+	PrefixBytes          int                 `json:"prefix_bytes,omitempty"`
 	SystemHash           string              `json:"system_hash,omitempty"`
 	SystemSegments       []CacheShapeSegment `json:"system_segments,omitempty"`
 	SystemBytes          int                 `json:"system_bytes,omitempty"`
@@ -47,6 +49,7 @@ type CacheShape struct {
 	RuntimeSegments      []CacheShapeSegment `json:"runtime_segments,omitempty"`
 	RuntimeBytes         int                 `json:"runtime_bytes,omitempty"`
 	ToolsHash            string              `json:"tools_hash,omitempty"`
+	ToolSegments         []CacheShapeSegment `json:"tool_segments,omitempty"`
 	ToolsBytes           int                 `json:"tools_bytes,omitempty"`
 	FewShotHash          string              `json:"fewshot_hash,omitempty"`
 	AssistantPrefixHash  string              `json:"assistant_prefix_hash,omitempty"`
@@ -156,6 +159,7 @@ func CloneCacheShape(in *CacheShape) *CacheShape {
 	out := *in
 	out.SystemSegments = append([]CacheShapeSegment(nil), in.SystemSegments...)
 	out.RuntimeSegments = append([]CacheShapeSegment(nil), in.RuntimeSegments...)
+	out.ToolSegments = append([]CacheShapeSegment(nil), in.ToolSegments...)
 	return &out
 }
 

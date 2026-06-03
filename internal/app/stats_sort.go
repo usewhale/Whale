@@ -185,6 +185,9 @@ func buildProfileInsights(sessions []profileSessionStats, limit int) []profileIn
 		if len(sp.PrefixFingerprints) > 1 {
 			add("prefix churn", sp.ID, fmt.Sprintf("%d prefix fingerprints; check system blocks, memory, and tool schemas", len(sp.PrefixFingerprints)))
 		}
+		if len(sp.ProviderPrefixHashes) > 1 {
+			add("provider prefix churn", sp.ID, profilePrefixChurnDetail(sp))
+		}
 		reasoningReplay := profileSessionReasoningReplayTokens(sp)
 		input := sp.PromptTokens + sp.SubagentPromptTokens
 		if reasoningReplay >= 1_000 || ratioPercent(reasoningReplay, input) >= 5 {
@@ -204,6 +207,44 @@ func buildProfileInsights(sessions []profileSessionStats, limit int) []profileIn
 		}
 	}
 	return out
+}
+
+func profilePrefixChurnDetail(sp profileSessionStats) string {
+	sources := make([]string, 0, 3)
+	if len(sp.SystemHashes) > 1 {
+		sources = append(sources, "system drift")
+	}
+	if len(sp.RuntimeHashes) > 1 {
+		sources = append(sources, "runtime drift")
+	}
+	if len(sp.ToolsHashes) > 1 {
+		sources = append(sources, "tool drift")
+	}
+	if len(sources) == 0 {
+		sources = append(sources, "mixed or legacy drift")
+	}
+	detail := fmt.Sprintf("%d provider prefixes; %s", len(sp.ProviderPrefixHashes), strings.Join(sources, ", "))
+	if changed := changedProfileShapeSegments(sp.ShapeSegments, 3); len(changed) > 0 {
+		detail += "; changed segments: " + strings.Join(changed, ", ")
+	}
+	return detail
+}
+
+func changedProfileShapeSegments(segments map[string]map[string]bool, limit int) []string {
+	if limit <= 0 || len(segments) == 0 {
+		return nil
+	}
+	var names []string
+	for name, hashes := range segments {
+		if len(hashes) > 1 {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	if len(names) > limit {
+		names = names[:limit]
+	}
+	return names
 }
 
 func topToolInputTools(in map[string]*toolInputToolStats, limit int) []*toolInputToolStats {

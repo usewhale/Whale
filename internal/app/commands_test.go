@@ -449,7 +449,20 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		ToolResultReplayTokens:   1000,
 		ToolResultTokensSaved:    2250,
 		ToolResultsCompacted:     1,
-		CostUSD:                  0.0123,
+		CacheShape: &telemetry.CacheShape{
+			PrefixHash:  "prefix-a",
+			SystemHash:  "system-a",
+			RuntimeHash: "runtime-a",
+			ToolsHash:   "tools-a",
+			RequestHash: "request-a",
+			RuntimeSegments: []telemetry.CacheShapeSegment{{
+				Name:      "project_memory",
+				Stability: "dynamic",
+				Hash:      "runtime-project-a",
+				Bytes:     10,
+			}},
+		},
+		CostUSD: 0.0123,
 	})
 	writeUsageRecord(t, filepath.Join(dir, "usage.jsonl"), telemetry.UsageRecord{
 		TS:                 time.Date(2026, 5, 12, 10, 3, 0, 0, time.Local).UnixMilli(),
@@ -461,7 +474,20 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		PromptCacheHit:     1000,
 		PromptCacheMiss:    1000,
 		ReasoningReplayTok: 100,
-		CostUSD:            0.0456,
+		CacheShape: &telemetry.CacheShape{
+			PrefixHash:  "prefix-b",
+			SystemHash:  "system-a",
+			RuntimeHash: "runtime-b",
+			ToolsHash:   "tools-a",
+			RequestHash: "request-b",
+			RuntimeSegments: []telemetry.CacheShapeSegment{{
+				Name:      "project_memory",
+				Stability: "dynamic",
+				Hash:      "runtime-project-b",
+				Bytes:     10,
+			}},
+		},
+		CostUSD: 0.0456,
 	})
 	writeUsageRecord(t, filepath.Join(dir, "usage.jsonl"), telemetry.UsageRecord{
 		TS:               time.Date(2026, 5, 12, 10, 4, 0, 0, time.Local).UnixMilli(),
@@ -599,6 +625,7 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		"- reasoning replay: 350 main · 0 subagent · 350 all-in",
 		"- tool replay: 1K sent · 3.2K raw · 2.2K saved · 1 compacted",
 		"- prefix fingerprints: 2",
+		"- provider prefixes: 2 distinct across 2 usage sessions",
 		"- tools: 1 calls · 13K result chars",
 		"- reasoning/text: 8 reasoning chars",
 		"Top tools",
@@ -636,6 +663,7 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		field   string
 	}{
 		{"Insights", "reasoning replay · s1"},
+		{"Profile", "Provider prefixes"},
 		{"Profile", "Reasoning replay"},
 		{"Profile", "Tool replay"},
 		{"Top tool replay sessions", "s1"},
@@ -701,6 +729,35 @@ func TestHandleLocalCommandStats(t *testing.T) {
 	handled, _, _, err = a.HandleLocalCommand("/stats extra")
 	if !handled || err == nil || !strings.Contains(err.Error(), "usage: /stats [usage|tools|repair|recent|profile|all]") {
 		t.Fatalf("expected /stats usage error, handled=%v err=%v", handled, err)
+	}
+}
+
+func TestProfilePrefixChurnDetailNamesSourcesAndSegments(t *testing.T) {
+	sp := profileSessionStats{
+		ProviderPrefixHashes: map[string]bool{"p1": true, "p2": true},
+		SystemHashes:         map[string]bool{"s": true},
+		RuntimeHashes:        map[string]bool{"r1": true, "r2": true},
+		ToolsHashes:          map[string]bool{"t1": true, "t2": true},
+		ShapeSegments: map[string]map[string]bool{
+			"runtime:project_memory": {"a": true, "b": true},
+			"tool:shell_run":         {"a": true, "b": true},
+		},
+	}
+
+	got := profilePrefixChurnDetail(sp)
+	for _, want := range []string{
+		"2 provider prefixes",
+		"runtime drift",
+		"tool drift",
+		"runtime:project_memory",
+		"tool:shell_run",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected churn detail to contain %q, got %q", want, got)
+		}
+	}
+	if strings.Contains(got, "system drift") {
+		t.Fatalf("unexpected system drift in %q", got)
 	}
 }
 

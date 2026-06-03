@@ -110,6 +110,7 @@ func buildCacheShapeForRequestWithRuntime(requestKind string, history []core.Mes
 		SystemSegments: shapeSystemSegments(systemBlocks, system),
 		SystemBytes:    stableJSONBytes(systemForShape),
 		ToolsHash:      hashJSON(toolPayload),
+		ToolSegments:   shapeToolSegments(toolPayload),
 		ToolsBytes:     stableJSONBytes(toolPayload),
 		LogMessages:    len(log),
 		TailMessages:   tailLen,
@@ -132,8 +133,21 @@ func buildCacheShapeForRequestWithRuntime(requestKind string, history []core.Mes
 		shape.LogTailHash = hashJSON(tail)
 		shape.LogTailBytes = stableJSONBytes(tail)
 	}
+	shape.PrefixHash = hashJSON(struct {
+		SystemHash  string `json:"system_hash,omitempty"`
+		RuntimeHash string `json:"runtime_hash,omitempty"`
+		ToolsHash   string `json:"tools_hash,omitempty"`
+		FewShotHash string `json:"fewshot_hash,omitempty"`
+	}{
+		SystemHash:  shape.SystemHash,
+		RuntimeHash: shape.RuntimeHash,
+		ToolsHash:   shape.ToolsHash,
+		FewShotHash: shape.FewShotHash,
+	})
+	shape.PrefixBytes = shape.SystemBytes + shape.RuntimeBytes + shape.ToolsBytes
 	shape.RequestHash = hashJSON(struct {
 		RequestKind         string `json:"request_kind,omitempty"`
+		PrefixHash          string `json:"prefix_hash,omitempty"`
 		SystemHash          string `json:"system_hash,omitempty"`
 		RuntimeHash         string `json:"runtime_hash,omitempty"`
 		ToolsHash           string `json:"tools_hash,omitempty"`
@@ -145,6 +159,7 @@ func buildCacheShapeForRequestWithRuntime(requestKind string, history []core.Mes
 		TailMessages        int    `json:"tail_messages,omitempty"`
 	}{
 		RequestKind:         shape.RequestKind,
+		PrefixHash:          shape.PrefixHash,
 		SystemHash:          shape.SystemHash,
 		RuntimeHash:         shape.RuntimeHash,
 		ToolsHash:           shape.ToolsHash,
@@ -164,6 +179,23 @@ func systemBlocksToShapeMessages(blocks []string) []cacheShapeMessage {
 		if trimmed := strings.TrimSpace(block); trimmed != "" {
 			out = append(out, cacheShapeMessage{Role: core.RoleSystem, Text: trimmed})
 		}
+	}
+	return out
+}
+
+func shapeToolSegments(tools []cacheShapeToolSpec) []telemetry.CacheShapeSegment {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]telemetry.CacheShapeSegment, 0, len(tools))
+	for i, tool := range tools {
+		out = append(out, telemetry.CacheShapeSegment{
+			Index:     i,
+			Name:      tool.Function.Name,
+			Stability: "immutable",
+			Hash:      hashJSON(tool),
+			Bytes:     stableJSONBytes(tool),
+		})
 	}
 	return out
 }

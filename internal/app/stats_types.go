@@ -117,6 +117,8 @@ type profileStats struct {
 	SubagentCostUSD                float64
 	SubagentMaxPromptTokens        int
 	PrefixFingerprints             map[string]bool
+	ProviderPrefixHashes           map[string]bool
+	PrefixShapeSessions            map[string]bool
 	ToolCalls                      int
 	ToolResultChars                int
 	ApprovalPrompts                int
@@ -193,6 +195,12 @@ type profileSessionStats struct {
 	SubagentCostUSD                float64
 	SubagentMaxPromptTokens        int
 	PrefixFingerprints             map[string]bool
+	ProviderPrefixHashes           map[string]bool
+	SystemHashes                   map[string]bool
+	RuntimeHashes                  map[string]bool
+	ToolsHashes                    map[string]bool
+	RequestHashes                  map[string]bool
+	ShapeSegments                  map[string]map[string]bool
 	ByTool                         map[string]*profileToolStats
 	approvalPromptKeys             map[string]bool
 	approvalDecisionKeys           map[string]bool

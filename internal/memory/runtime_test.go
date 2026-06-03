@@ -15,6 +15,24 @@ func TestImmutablePrefixFingerprintChangesOnRefresh(t *testing.T) {
 	}
 }
 
+func TestImmutablePrefixCopiesBlocksAndVerifiesFingerprint(t *testing.T) {
+	blocks := []string{"a"}
+	p := NewImmutablePrefix(blocks)
+	first := p.Fingerprint()
+	blocks[0] = "changed"
+	if p.Fingerprint() != first {
+		t.Fatal("prefix fingerprint changed after mutating source slice")
+	}
+	copied := p.SystemBlocks()
+	copied[0] = "changed again"
+	if p.Fingerprint() != first {
+		t.Fatal("prefix fingerprint changed after mutating returned blocks")
+	}
+	if fresh, ok := p.VerifyFingerprint(); !ok || fresh != first {
+		t.Fatalf("verify fingerprint = %q/%v, want %q/true", fresh, ok, first)
+	}
+}
+
 func TestAppendOnlyLogRewriteWithReason(t *testing.T) {
 	log := NewAppendOnlyLog()
 	log.Append(core.Message{Role: core.RoleUser, Text: "u1"})
