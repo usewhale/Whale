@@ -20,6 +20,9 @@ func TestCopyTextUsesNativeOSC52AndFallback(t *testing.T) {
 		FallbackFilename: "response.md",
 		TermWriter:       &term,
 		GOOS:             "darwin",
+		LookupEnv: func(string) (string, bool) {
+			return "", false
+		},
 		RunCommand: func(_ context.Context, name string, args []string, stdin string) error {
 			calls = append(calls, name+":"+stdin)
 			return nil
@@ -140,7 +143,10 @@ func TestCopyTextNativeCommandsByPlatform(t *testing.T) {
 				FallbackFilename: "response.md",
 				TermWriter:       ioDiscard{},
 				GOOS:             tt.goos,
-				LookPath:         tt.lookPath,
+				LookupEnv: func(string) (string, bool) {
+					return "", false
+				},
+				LookPath: tt.lookPath,
 				RunCommand: func(_ context.Context, name string, args []string, stdin string) error {
 					if stdin != "text" {
 						t.Fatalf("stdin = %q, want text", stdin)

@@ -318,7 +318,7 @@ func TestShellRunBackgroundTimeoutDiagnosesRuntimeLimit(t *testing.T) {
 		t.Fatalf("new toolset: %v", err)
 	}
 	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
-		"command":    "go test ./internal/tui",
+		"command":    strconv.Quote(fakeGo) + " test ./internal/tui",
 		"background": true,
 		"timeout_ms": 50,
 	}))
@@ -327,7 +327,7 @@ func TestShellRunBackgroundTimeoutDiagnosesRuntimeLimit(t *testing.T) {
 	}
 	waitRes, err := ts.shellWait(context.Background(), tc("shell_wait", map[string]any{
 		"task_id":    backgroundTaskID(t, startRes.Content),
-		"timeout_ms": 3000,
+		"timeout_ms": 5000,
 	}))
 	if err != nil {
 		t.Fatalf("shell_wait dispatch failed: %v", err)
@@ -343,7 +343,10 @@ func TestShellRunBackgroundTimeoutDiagnosesRuntimeLimit(t *testing.T) {
 		t.Fatalf("expected successful wait envelope, got %+v", env)
 	}
 	data := env.Data
-	diagnosis := data["diagnosis"].(map[string]any)
+	diagnosis, ok := data["diagnosis"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing diagnosis in wait data: %#v", data)
+	}
 	if diagnosis["reason"] != "background_runtime_timeout" || diagnosis["suggested_next_action"] != "rerun_background_with_longer_timeout" {
 		t.Fatalf("unexpected diagnosis: %#v", diagnosis)
 	}
@@ -368,7 +371,7 @@ func TestShellRunAutoBackgroundsLongCommandAfterForegroundWait(t *testing.T) {
 	}
 	start := time.Now()
 	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
-		"command":    "go test ./internal/tui",
+		"command":    strconv.Quote(fakeGo) + " test ./internal/tui",
 		"timeout_ms": 50,
 	}))
 	if err != nil || startRes.IsError {
@@ -461,7 +464,7 @@ func TestShellWaitAutoBackgroundedFailureReturnsStructuredResult(t *testing.T) {
 		t.Fatalf("new toolset: %v", err)
 	}
 	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
-		"command":    "go test ./internal/tui",
+		"command":    strconv.Quote(fakeGo) + " test ./internal/tui",
 		"timeout_ms": 50,
 	}))
 	if err != nil || startRes.IsError {

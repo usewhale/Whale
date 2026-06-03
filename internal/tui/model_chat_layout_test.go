@@ -533,6 +533,150 @@ func TestComposerBoundaryUsesBottomLayoutWidth(t *testing.T) {
 		t.Fatalf("expected composer view to retain its own width, got %d line %q", lipgloss.Width(composer), composer)
 	}
 }
+func TestComposerSeparatorsWrapComposerWithBottomLayoutWidth(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 120
+	m.height = 24
+	m.sidebar = true
+	m.input.SetWidth(116)
+	m.input.SetValue("first line\nsecond line")
+
+	bottom := xansi.Strip(m.renderBottom(86))
+	lines := strings.Split(strings.TrimRight(bottom, "\n"), "\n")
+	boundary := strings.Repeat("─", 86)
+	boundaryIdxs := []int{}
+	for i, line := range lines {
+		if line == boundary {
+			boundaryIdxs = append(boundaryIdxs, i)
+			if got := lipgloss.Width(line); got != 86 {
+				t.Fatalf("expected composer separator width 86, got %d line %q", got, line)
+			}
+		}
+	}
+	if len(boundaryIdxs) != 2 {
+		t.Fatalf("expected top and bottom composer separators, got indexes %v in:\n%s", boundaryIdxs, bottom)
+	}
+	firstLineIdx := firstLineContaining(lines, "first line")
+	secondLineIdx := firstLineContaining(lines, "second line")
+	footerIdx := len(lines) - 1
+	if firstLineIdx < 0 || secondLineIdx < 0 {
+		t.Fatalf("expected multiline composer content in bottom:\n%s", bottom)
+	}
+	if !(boundaryIdxs[0] < firstLineIdx && firstLineIdx < secondLineIdx && secondLineIdx < boundaryIdxs[1] && boundaryIdxs[1] < footerIdx) {
+		t.Fatalf("expected separators to wrap composer before footer, got top=%d first=%d second=%d bottom=%d footer=%d:\n%s",
+			boundaryIdxs[0], firstLineIdx, secondLineIdx, boundaryIdxs[1], footerIdx, bottom)
+	}
+	if got := lipgloss.Width(lines[firstLineIdx]); got != 116 {
+		t.Fatalf("expected composer input to retain existing width 116, got %d line %q", got, lines[firstLineIdx])
+	}
+}
+func TestComposerSeparatorsContributeToBottomHeight(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 24
+	m.input.SetWidth(76)
+	m.input.SetValue("alpha\nbeta")
+
+	bottom := m.renderBottom(80)
+	plain := xansi.Strip(bottom)
+	lines := strings.Split(strings.TrimRight(plain, "\n"), "\n")
+	boundary := strings.Repeat("─", 80)
+	boundaryCount := 0
+	for _, line := range lines {
+		if line == boundary {
+			boundaryCount++
+		}
+	}
+	if boundaryCount != 2 {
+		t.Fatalf("expected two real separator lines in bottom, got %d:\n%s", boundaryCount, plain)
+	}
+	if got, want := countVisibleLines(bottom), len(lines); got != want {
+		t.Fatalf("expected embedded newlines to determine bottom height, got %d want %d:\n%s", got, want, plain)
+	}
+}
+func TestMultilineComposerDoesNotOverlapFooterAtFixedWidth(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 9
+	m.input.SetWidth(76)
+	m.input.SetValue("one\ntwo\nthree")
+
+	view := xansi.Strip(m.View())
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	footerIdx := len(lines) - 1
+	boundary := strings.Repeat("─", 80)
+	boundaryIdxs := []int{}
+	for i, line := range lines {
+		if line == boundary {
+			boundaryIdxs = append(boundaryIdxs, i)
+		}
+	}
+	if len(boundaryIdxs) != 2 {
+		t.Fatalf("expected top and bottom composer separators in view, got %v:\n%s", boundaryIdxs, view)
+	}
+	for _, want := range []string{"one", "two", "three"} {
+		idx := firstLineContaining(lines, want)
+		if idx < 0 {
+			t.Fatalf("expected composer line %q in view:\n%s", want, view)
+		}
+		if !(boundaryIdxs[0] < idx && idx < boundaryIdxs[1]) {
+			t.Fatalf("expected composer line %q between separators, got line %d separators %v:\n%s", want, idx, boundaryIdxs, view)
+		}
+	}
+	if !(boundaryIdxs[1] < footerIdx) {
+		t.Fatalf("expected footer after bottom separator, got bottom separator %d footer %d:\n%s", boundaryIdxs[1], footerIdx, view)
+	}
+	if strings.Contains(lines[footerIdx], "one") || strings.Contains(lines[footerIdx], "two") || strings.Contains(lines[footerIdx], "three") {
+		t.Fatalf("composer content overlapped footer line %q in:\n%s", lines[footerIdx], view)
+	}
+	if got := countVisibleLines(view); got > m.height {
+		t.Fatalf("expected view not to exceed fixed height %d, got %d:\n%s", m.height, got, view)
+	}
+}
+func TestSmallTerminalHeightKeepsBodyFooterAndComposerSeparated(t *testing.T) {
+	for _, height := range []int{5, 6, 7} {
+		m := newModel(nil, "deepseek-v4-flash", "max", "off")
+		m.width = 80
+		m.height = height
+		m.startupHeaderPrintCmd()
+		m.input.SetWidth(76)
+		m.input.SetValue("alpha\nbeta")
+		m.appendTranscript("info", tuirender.KindText, "body-tail")
+
+		view := xansi.Strip(m.View())
+		lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+		if got := len(lines); got > height {
+			t.Fatalf("height %d: expected rendered lines not to exceed terminal height, got %d:\n%s", height, got, view)
+		}
+		footerIdx := len(lines) - 1
+		if !strings.Contains(lines[footerIdx], "deepseek-v4-flash . max") {
+			t.Fatalf("height %d: expected footer on last line, got %q in:\n%s", height, lines[footerIdx], view)
+		}
+		bodyIdx := firstLineContaining(lines, "body-tail")
+		alphaIdx := firstLineContaining(lines, "alpha")
+		betaIdx := firstLineContaining(lines, "beta")
+		boundary := strings.Repeat("─", 80)
+		boundaryIdxs := []int{}
+		for i, line := range lines {
+			if line == boundary {
+				boundaryIdxs = append(boundaryIdxs, i)
+			}
+		}
+		if len(boundaryIdxs) != 2 {
+			t.Fatalf("height %d: expected top and bottom separators, got %v:\n%s", height, boundaryIdxs, view)
+		}
+		if alphaIdx < 0 || betaIdx < 0 {
+			t.Fatalf("height %d: expected multiline composer content in view:\n%s", height, view)
+		}
+		if !(boundaryIdxs[0] < alphaIdx && alphaIdx < betaIdx && betaIdx < boundaryIdxs[1] && boundaryIdxs[1] < footerIdx) {
+			t.Fatalf("height %d: expected composer and footer separated, got boundaries=%v alpha=%d beta=%d footer=%d:\n%s",
+				height, boundaryIdxs, alphaIdx, betaIdx, footerIdx, view)
+		}
+		if bodyIdx >= 0 && !(bodyIdx < boundaryIdxs[0]) {
+			t.Fatalf("height %d: expected body before composer, got body=%d boundaries=%v:\n%s", height, bodyIdx, boundaryIdxs, view)
+		}
+	}
+}
 func TestChatStartupHeaderGapDoesNotOverflowConstrainedHeight(t *testing.T) {
 	for _, height := range []int{5, 11} {
 		m := newModel(nil, "deepseek-v4-flash", "max", "off")
