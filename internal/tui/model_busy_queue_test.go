@@ -1021,6 +1021,7 @@ func TestChatViewportBusyFollowTailKeepsSingleLargeLiveMessageScrollable(t *test
 			m := newModel(nil, "", "", "")
 			m.width = 80
 			m.height = height
+			m.startupHeaderPrintCmd()
 			m.transcript = nil
 			m.beginTurnTranscript()
 			m.startBusy()

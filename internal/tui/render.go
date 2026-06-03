@@ -101,10 +101,20 @@ func (m model) renderBottom(mainWidth int) string {
 	footer := lipgloss.NewStyle().Width(mainWidth).MaxWidth(mainWidth).Render(lipgloss.JoinHorizontal(lipgloss.Left, footerText))
 	bottomParts := m.bottomPartsBeforeInput(mainWidth)
 	if m.shouldRenderComposer() {
+		bottomParts = append(bottomParts, m.renderComposerBoundary(mainWidth))
 		bottomParts = append(bottomParts, m.input.View())
 	}
 	bottomParts = append(bottomParts, footer)
 	return strings.Join(bottomParts, "\n")
+}
+
+func (m model) renderComposerBoundary(mainWidth int) string {
+	width := max(0, mainWidth)
+	return lipgloss.NewStyle().
+		Foreground(tuitheme.Default.Border).
+		Width(width).
+		MaxWidth(width).
+		Render(strings.Repeat("─", width))
 }
 
 func (m model) shouldRenderComposer() bool {

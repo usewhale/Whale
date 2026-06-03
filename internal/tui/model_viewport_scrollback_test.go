@@ -276,6 +276,7 @@ func TestChatViewportIdleFollowTailUsesTailRenderWindow(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 80
 	m.height = 10
+	m.startupHeaderPrintCmd()
 	m.transcript = nil
 	for i := 0; i < 200; i++ {
 		m.appendTranscript("info", tuirender.KindText, fmt.Sprintf("entry-%03d", i))
@@ -298,6 +299,7 @@ func TestChatViewportTailRenderBoundedWithAlternatingToolAndAssistant(t *testing
 	m := newModel(nil, "", "", "")
 	m.width = 80
 	m.height = 10
+	m.startupHeaderPrintCmd()
 	m.transcript = nil
 	for i := 0; i < 200; i++ {
 		m.appendTranscript("tool", tuirender.KindToolCall, fmt.Sprintf("tool-call-%03d", i))
@@ -315,6 +317,7 @@ func TestChatViewportHomeFromIdleTailRenderRestoresFullHistory(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 80
 	m.height = 10
+	m.startupHeaderPrintCmd()
 	m.transcript = nil
 	for i := 0; i < 200; i++ {
 		m.appendTranscript("info", tuirender.KindText, fmt.Sprintf("entry-%03d", i))
