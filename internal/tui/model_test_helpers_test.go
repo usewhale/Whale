@@ -145,3 +145,22 @@ func assertFooterLastLineNotContains(t *testing.T, view, unwanted string) {
 		t.Fatalf("expected footer not to contain %q, got %q in view:\n%s", unwanted, got, view)
 	}
 }
+
+func firstLineContaining(lines []string, needle string) int {
+	for i, line := range lines {
+		if strings.Contains(line, needle) {
+			return i
+		}
+	}
+	return -1
+}
+
+func firstFullWidthBoundaryLine(lines []string, width int) int {
+	boundary := strings.Repeat("─", width)
+	for i, line := range lines {
+		if line == boundary {
+			return i
+		}
+	}
+	return -1
+}

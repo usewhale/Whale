@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/usewhale/whale/internal/runtime/protocol"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 	"strings"
@@ -1217,6 +1218,47 @@ func TestChatBusyViewShowsWorkingAboveComposer(t *testing.T) {
 		t.Fatalf("working status line should appear above composer:\n%s", view)
 	}
 }
+
+func TestBusyQueueAndFooterStayOutsideComposerBlock(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "high", "on")
+	m.width = 100
+	m.height = 24
+	m.cwd = "~/Engineer/ai/dsk/whale"
+	m.gitBranch = "feat/composer-redesign"
+	m.startBusy()
+	m.busySince = time.Now().Add(-12 * time.Second)
+	m.input.SetValue("editable follow-up")
+	m.queuedPrompts = []queuedPrompt{{Text: "first queued prompt"}, {Text: "second queued prompt"}}
+
+	bottom := ansi.Strip(m.renderBottom(100))
+	lines := strings.Split(strings.TrimRight(bottom, "\n"), "\n")
+	busyIdx := firstLineContaining(lines, "Working (12s)")
+	queueIdx := firstLineContaining(lines, "queued follow-up (2)")
+	boundaryIdx := firstFullWidthBoundaryLine(lines, 100)
+	composerIdx := firstLineContaining(lines, "editable follow-up")
+	footerIdx := len(lines) - 1
+
+	if busyIdx < 0 || queueIdx < 0 || boundaryIdx < 0 || composerIdx < 0 {
+		t.Fatalf("expected busy status, queue panel, composer boundary, and editable draft in bottom layout:\n%s", bottom)
+	}
+	if !(busyIdx < boundaryIdx && queueIdx < boundaryIdx && boundaryIdx < composerIdx && composerIdx < footerIdx) {
+		t.Fatalf("expected busy status and queued prompts above composer boundary and footer after composer, got busy=%d queue=%d boundary=%d composer=%d footer=%d:\n%s",
+			busyIdx, queueIdx, boundaryIdx, composerIdx, footerIdx, bottom)
+	}
+	insideComposer := strings.Join(lines[boundaryIdx+1:footerIdx], "\n")
+	for _, unexpected := range []string{"Working (12s)", "queued follow-up (2)", "first queued prompt", "second queued prompt"} {
+		if strings.Contains(insideComposer, unexpected) {
+			t.Fatalf("%q should not be wrapped inside composer boundaries:\n%s", unexpected, bottom)
+		}
+	}
+	footer := lines[footerIdx]
+	for _, want := range []string{"deepseek-v4-flash . high", "thinking: on", "whale", "feat/composer-redesign"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("expected footer last line to contain %q, got %q in:\n%s", want, footer, bottom)
+		}
+	}
+}
+
 func TestChatBusyViewShowsDraftSpecificBusyHint(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 100
