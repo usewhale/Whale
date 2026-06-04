@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -847,8 +848,12 @@ func TestChatStartupHeaderPrintCommandIsOneShot(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected startup header to be printed to native scrollback")
 	}
-	if !strings.Contains(fmt.Sprintf("%#v", cmd()), "███████") {
+	printed := teaPrintLineMessageBody(cmd())
+	if !strings.Contains(printed, "███████") {
 		t.Fatal("expected startup header print command to emit the banner")
+	}
+	if !strings.HasSuffix(printed, strings.Repeat("\n", startupHeaderTrailingBlankLines)) {
+		t.Fatalf("expected startup header print command to leave trailing gap, got %#v", printed)
 	}
 	if !m.startupHeaderPrinted {
 		t.Fatal("expected startup header to be marked printed")
@@ -857,6 +862,59 @@ func TestChatStartupHeaderPrintCommandIsOneShot(t *testing.T) {
 		t.Fatal("expected startup header print command to be one-shot")
 	}
 }
+
+func TestChatStartupHeaderReplayLeavesGapWhenEmpty(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 24
+
+	cmd := m.replayNativeScrollbackCmd()
+	if cmd == nil {
+		t.Fatal("expected startup header replay to print empty welcome state")
+	}
+	printed := teaPrintLineMessageBody(cmd())
+	if !strings.Contains(printed, "███████") {
+		t.Fatalf("expected replay to emit startup header, got %#v", printed)
+	}
+	if !strings.HasSuffix(printed, strings.Repeat("\n", startupHeaderTrailingBlankLines)) {
+		t.Fatalf("expected empty replay to leave trailing gap, got %#v", printed)
+	}
+}
+
+func TestChatStartupHeaderReplayKeepsTranscriptSeparator(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 24
+	m.appendTranscript("info", tuirender.KindText, "first content")
+
+	cmd := m.replayNativeScrollbackCmd()
+	if cmd == nil {
+		t.Fatal("expected startup header replay with transcript to print")
+	}
+	printed := teaPrintLineMessageBody(cmd())
+	if !strings.Contains(printed, "███████") || !strings.Contains(printed, "first content") {
+		t.Fatalf("expected replay to emit startup header and transcript, got %#v", printed)
+	}
+	if !strings.Contains(printed, "╯\n\n┃") {
+		t.Fatalf("expected header and transcript to keep existing separator, got %#v", printed)
+	}
+	if strings.Contains(printed, "╯"+strings.Repeat("\n", startupHeaderTrailingBlankLines+1)) {
+		t.Fatalf("expected transcript replay not to add empty-welcome trailing gap before transcript, got %#v", printed)
+	}
+}
+
+func teaPrintLineMessageBody(msg tea.Msg) string {
+	v := reflect.ValueOf(msg)
+	if !v.IsValid() {
+		return ""
+	}
+	field := v.FieldByName("messageBody")
+	if !field.IsValid() || field.Kind() != reflect.String {
+		return fmt.Sprintf("%#v", msg)
+	}
+	return field.String()
+}
+
 func TestChatStartupHeaderStaysVisibleWithSmallTranscript(t *testing.T) {
 	m := newModel(nil, "deepseek-v4-flash", "max", "off")
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})

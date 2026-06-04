@@ -8,6 +8,8 @@ import (
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
+const startupHeaderTrailingBlankLines = 2
+
 func (m *model) startupHeaderPrintCmd() tea.Cmd {
 	if m.startupHeaderOnce == nil {
 		m.startupHeaderOnce = new(bool)
@@ -22,7 +24,7 @@ func (m *model) startupHeaderPrintCmd() tea.Cmd {
 	m.startupHeaderPrinted = true
 	*m.startupHeaderOnce = true
 	m.viewportLayoutReady = false
-	return tea.Println(header)
+	return tea.Println(startupHeaderWithTrailingGap(header))
 }
 
 func (m model) startupHeaderText() string {
@@ -58,7 +60,7 @@ func (m *model) replayNativeScrollbackCmd() tea.Cmd {
 			if text != "" {
 				text = header + "\n\n" + text
 			} else {
-				text = header
+				text = startupHeaderWithTrailingGap(header)
 			}
 			m.startupHeaderPrinted = true
 			if m.startupHeaderOnce == nil {
@@ -124,6 +126,10 @@ func (m *model) emitNativeScrollbackCmd() tea.Cmd {
 		return nil
 	}
 	return tea.Println(text)
+}
+
+func startupHeaderWithTrailingGap(header string) string {
+	return strings.TrimRight(header, "\n") + strings.Repeat("\n", startupHeaderTrailingBlankLines)
 }
 
 func focusMessagesAreOnlyDeferredToolSummary(messages []tuirender.UIMessage) bool {
