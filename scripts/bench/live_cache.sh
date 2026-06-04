@@ -5,4 +5,4 @@ if [[ " $* " != *" --dry "* ]]; then
   : "${DEEPSEEK_API_KEY:?DEEPSEEK_API_KEY is required}"
 fi
 mkdir -p .gocache
-GOCACHE="${GOCACHE:-$PWD/.gocache}" go run ./internal/bench/livecache "$@"
+GOCACHE="${GOCACHE:-$PWD/.gocache}" go run ./bench/livecache "$@"

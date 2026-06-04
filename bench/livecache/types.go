@@ -3,13 +3,14 @@ package main
 import "time"
 
 type benchMeta struct {
-	Date           string `json:"date"`
-	Model          string `json:"model"`
-	Effort         string `json:"effort"`
-	TaskCount      int    `json:"task_count"`
-	RepeatsPerTask int    `json:"repeats_per_task"`
-	WhaleVersion   string `json:"whale_version"`
-	LiveDeepSeek   bool   `json:"live_deepseek"`
+	Date           string   `json:"date"`
+	Model          string   `json:"model"`
+	Effort         string   `json:"effort"`
+	Modes          []string `json:"modes"`
+	TaskCount      int      `json:"task_count"`
+	RepeatsPerTask int      `json:"repeats_per_task"`
+	WhaleVersion   string   `json:"whale_version"`
+	LiveDeepSeek   bool     `json:"live_deepseek"`
 }
 
 type benchReport struct {
@@ -18,30 +19,33 @@ type benchReport struct {
 }
 
 type runResult struct {
-	TaskID           string  `json:"task_id"`
-	Repeat           int     `json:"repeat"`
-	Pass             bool    `json:"pass"`
-	Turns            int     `json:"turns"`
-	ToolCalls        int     `json:"tool_calls"`
-	PromptTokens     int     `json:"prompt_tokens"`
-	CompletionTokens int     `json:"completion_tokens"`
-	CacheHitTokens   int     `json:"prompt_cache_hit_tokens"`
-	CacheMissTokens  int     `json:"prompt_cache_miss_tokens"`
-	CacheHitRatio    float64 `json:"cache_hit_ratio"`
-	CostUSD          float64 `json:"cost_usd"`
-	FinalOutput      string  `json:"final_output,omitempty"`
-	Error            string  `json:"error,omitempty"`
-	DurationMS       int64   `json:"duration_ms"`
-	Workspace        string  `json:"workspace,omitempty"`
-	TranscriptPath   string  `json:"transcript_path,omitempty"`
+	Mode               string  `json:"mode"`
+	TaskID             string  `json:"task_id"`
+	Repeat             int     `json:"repeat"`
+	Pass               bool    `json:"pass"`
+	Turns              int     `json:"turns"`
+	ToolCalls          int     `json:"tool_calls"`
+	PromptTokens       int     `json:"prompt_tokens"`
+	CompletionTokens   int     `json:"completion_tokens"`
+	CacheHitTokens     int     `json:"prompt_cache_hit_tokens"`
+	CacheMissTokens    int     `json:"prompt_cache_miss_tokens"`
+	CacheHitRatio      float64 `json:"cache_hit_ratio"`
+	CostUSD            float64 `json:"cost_usd"`
+	PrefixFingerprints int     `json:"prefix_fingerprints"`
+	FinalOutput        string  `json:"final_output,omitempty"`
+	Error              string  `json:"error,omitempty"`
+	DurationMS         int64   `json:"duration_ms"`
+	Workspace          string  `json:"workspace,omitempty"`
+	TranscriptPath     string  `json:"transcript_path,omitempty"`
 }
 
 type usageTotals struct {
-	PromptTokens     int
-	CompletionTokens int
-	CacheHitTokens   int
-	CacheMissTokens  int
-	CostUSD          float64
+	PromptTokens       int
+	CompletionTokens   int
+	CacheHitTokens     int
+	CacheMissTokens    int
+	CostUSD            float64
+	PrefixFingerprints map[string]bool
 }
 
 func (u usageTotals) CacheHitRatio() float64 {

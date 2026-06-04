@@ -7,7 +7,7 @@ GOCACHE_DIR ?= $(CURDIR)/.gocache
 VERSION ?= dev
 LDFLAGS := -X github.com/usewhale/whale/internal/build.Version=$(VERSION)
 
-.PHONY: help build fmt-check vet test test-tui test-evals test-windows run clean
+.PHONY: help build fmt-check vet test test-tui test-evals test-windows bench-cost bench-cost-live run clean
 
 export BIN
 export GOCACHE_DIR
@@ -37,6 +37,12 @@ test-tui:
 
 test-windows:
 	@go run ./cmd/dev test-windows
+
+bench-cost:
+	@scripts/bench/cost.sh
+
+bench-cost-live:
+	@scripts/bench/cost.sh --live
 
 run:
 	@go run ./cmd/dev run

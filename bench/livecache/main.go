@@ -25,6 +25,7 @@ import (
 
 type cliArgs struct {
 	taskFilter  string
+	mode        string
 	repeats     int
 	model       string
 	effort      string
@@ -38,6 +39,7 @@ type cliArgs struct {
 func parseArgs() cliArgs {
 	var args cliArgs
 	flag.StringVar(&args.taskFilter, "task", "", "Run only one task id")
+	flag.StringVar(&args.mode, "mode", "both", "Run mode: whale, baseline, or both")
 	flag.IntVar(&args.repeats, "repeats", 3, "Repeats per task")
 	flag.StringVar(&args.model, "model", defaults.DefaultModel, "DeepSeek model")
 	flag.StringVar(&args.effort, "effort", defaults.DefaultReasoningEffort, "DeepSeek reasoning effort")
@@ -77,24 +79,15 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	modes, err := parseModes(args.mode)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(args.outDir, 0o755); err != nil {
 		return err
 	}
 	if args.dry {
-		for _, task := range selected {
-			root := filepath.Join(args.outDir, "dry", task.ID)
-			if err := os.RemoveAll(root); err != nil {
-				return err
-			}
-			if err := os.MkdirAll(root, 0o755); err != nil {
-				return err
-			}
-			if err := task.Setup(root); err != nil {
-				return fmt.Errorf("%s setup: %w", task.ID, err)
-			}
-			fmt.Printf("[%s] dry setup ok\n", task.ID)
-		}
-		return nil
+		return runDry(args, selected, modes)
 	}
 	if os.Getenv("DEEPSEEK_API_KEY") == "" {
 		return errors.New("DEEPSEEK_API_KEY is required for live cache benchmark")
@@ -103,30 +96,24 @@ func run() error {
 	ctx, cancel := context.WithTimeout(context.Background(), args.timeout)
 	defer cancel()
 
-	results := make([]runResult, 0, len(selected)*args.repeats)
+	results := make([]runResult, 0, len(selected)*args.repeats*len(modes))
 	for _, task := range selected {
 		for rep := 1; rep <= args.repeats; rep++ {
-			result := runTask(ctx, args, task, rep)
-			results = append(results, result)
-			status := "fail"
-			if result.Pass {
-				status = "pass"
+			for _, mode := range modes {
+				result := runTask(ctx, args, task, mode, rep)
+				results = append(results, result)
+				status := "fail"
+				if result.Pass {
+					status = "pass"
+				}
+				fmt.Printf("[%s/%s/r%d] %s turns=%d tools=%d cache=%s cost=$%.6f prefixes=%d\n",
+					task.ID, mode, rep, status, result.Turns, result.ToolCalls, pctFloat(result.CacheHitRatio), result.CostUSD, result.PrefixFingerprints)
 			}
-			fmt.Printf("[%s/r%d] %s turns=%d tools=%d cache=%s cost=$%.6f\n",
-				task.ID, rep, status, result.Turns, result.ToolCalls, pctFloat(result.CacheHitRatio), result.CostUSD)
 		}
 	}
 
 	report := benchReport{
-		Meta: benchMeta{
-			Date:           time.Now().UTC().Format(time.RFC3339),
-			Model:          args.model,
-			Effort:         args.effort,
-			TaskCount:      len(selected),
-			RepeatsPerTask: args.repeats,
-			WhaleVersion:   build.CurrentVersion(),
-			LiveDeepSeek:   true,
-		},
+		Meta:    buildMeta(args, selected, modes, true),
 		Results: results,
 	}
 	if err := writeOutputs(args.outDir, report); err != nil {
@@ -136,9 +123,64 @@ func run() error {
 	return nil
 }
 
-func runTask(parent context.Context, args cliArgs, task taskSpec, repeat int) (result runResult) {
+func runDry(args cliArgs, selected []taskSpec, modes []string) error {
+	results := make([]runResult, 0, len(selected)*args.repeats*len(modes))
+	for _, task := range selected {
+		for rep := 1; rep <= args.repeats; rep++ {
+			for _, mode := range modes {
+				runID := fmt.Sprintf("%s.%s.r%d", task.ID, mode, rep)
+				root := filepath.Join(args.outDir, "dry", runID)
+				result := runResult{
+					Mode:      mode,
+					TaskID:    task.ID,
+					Repeat:    rep,
+					Workspace: root,
+				}
+				if err := os.RemoveAll(root); err != nil {
+					result.Error = err.Error()
+				} else if err := os.MkdirAll(root, 0o755); err != nil {
+					result.Error = err.Error()
+				} else if err := task.Setup(root); err != nil {
+					result.Error = err.Error()
+				} else {
+					result.Pass = true
+				}
+				results = append(results, result)
+				status := "fail"
+				if result.Pass {
+					status = "pass"
+				}
+				fmt.Printf("[%s/%s/r%d] dry setup %s\n", task.ID, mode, rep, status)
+			}
+		}
+	}
+	report := benchReport{
+		Meta:    buildMeta(args, selected, modes, false),
+		Results: results,
+	}
+	if err := writeOutputs(args.outDir, report); err != nil {
+		return err
+	}
+	fmt.Printf("wrote %s\n", args.outDir)
+	return nil
+}
+
+func buildMeta(args cliArgs, selected []taskSpec, modes []string, live bool) benchMeta {
+	return benchMeta{
+		Date:           time.Now().UTC().Format(time.RFC3339),
+		Model:          args.model,
+		Effort:         args.effort,
+		Modes:          append([]string(nil), modes...),
+		TaskCount:      len(selected),
+		RepeatsPerTask: args.repeats,
+		WhaleVersion:   build.CurrentVersion(),
+		LiveDeepSeek:   live,
+	}
+}
+
+func runTask(parent context.Context, args cliArgs, task taskSpec, mode string, repeat int) (result runResult) {
 	started := time.Now()
-	runID := fmt.Sprintf("%s.r%d", task.ID, repeat)
+	runID := fmt.Sprintf("%s.%s.r%d", task.ID, mode, repeat)
 	workspace := filepath.Join(args.outDir, "workspaces", runID)
 	dataDir := filepath.Join(args.outDir, "data", runID)
 	transcriptPath := ""
@@ -146,6 +188,7 @@ func runTask(parent context.Context, args cliArgs, task taskSpec, repeat int) (r
 		transcriptPath = filepath.Join(args.outDir, "transcripts", runID+".jsonl")
 	}
 	result = runResult{
+		Mode:           mode,
 		TaskID:         task.ID,
 		Repeat:         repeat,
 		Workspace:      workspace,
@@ -173,6 +216,7 @@ func runTask(parent context.Context, args cliArgs, task taskSpec, repeat int) (r
 		Event: "meta",
 		Metadata: map[string]any{
 			"task":      task.ID,
+			"mode":      mode,
 			"repeat":    repeat,
 			"model":     args.model,
 			"workspace": workspace,
@@ -211,16 +255,17 @@ func runTask(parent context.Context, args cliArgs, task taskSpec, repeat int) (r
 		return result
 	}
 	usagePath := filepath.Join(dataDir, "usage.jsonl")
-	ag := agent.NewAgentWithRegistry(
-		provider,
-		msgStore,
-		registry,
+	options := []agent.AgentOption{
 		agent.WithToolPolicy(policy.RulePolicy{Default: policy.PermissionAllow}),
 		agent.WithUsageLogPath(usagePath),
 		agent.WithSessionsDir(filepath.Join(dataDir, "sessions")),
 		agent.WithAutoCompact(false, 0, defaults.DeepSeekV4ContextWindow),
 		agent.WithProjectMemory(false, 0, nil, workspace),
-	)
+	}
+	if mode == "baseline" {
+		options = append(options, agent.WithDynamicSystemBlocks(volatileBenchmarkBlock()))
+	}
+	ag := agent.NewAgentWithRegistry(provider, msgStore, registry, options...)
 
 	sessionID := runID
 	var finalOutput string
@@ -282,6 +327,7 @@ func runTask(parent context.Context, args cliArgs, task taskSpec, repeat int) (r
 	result.CacheMissTokens = totals.CacheMissTokens
 	result.CacheHitRatio = totals.CacheHitRatio()
 	result.CostUSD = totals.CostUSD
+	result.PrefixFingerprints = len(totals.PrefixFingerprints)
 
 	if result.Error == "" {
 		if err := task.Check(workspace, records, finalOutput); err != nil {
@@ -291,6 +337,14 @@ func runTask(parent context.Context, args cliArgs, task taskSpec, repeat int) (r
 		}
 	}
 	return result
+}
+
+func volatileBenchmarkBlock() func() string {
+	var n int
+	return func() string {
+		n++
+		return fmt.Sprintf("Benchmark volatile prefix marker: baseline-turn-%d at %s", n, time.Now().UTC().Format(time.RFC3339Nano))
+	}
 }
 
 func recordAgentEvent(turn int, ev agent.AgentEvent) (transcriptRecord, bool) {
@@ -367,7 +421,7 @@ func readUsageTotals(path string) (usageTotals, error) {
 		return usageTotals{}, err
 	}
 	defer f.Close()
-	var totals usageTotals
+	totals := usageTotals{PrefixFingerprints: map[string]bool{}}
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
 		var rec telemetry.UsageRecord
@@ -379,6 +433,9 @@ func readUsageTotals(path string) (usageTotals, error) {
 		totals.CacheHitTokens += rec.PromptCacheHit
 		totals.CacheMissTokens += rec.PromptCacheMiss
 		totals.CostUSD += rec.CostUSD
+		if fp := strings.TrimSpace(rec.PrefixFingerprint); fp != "" {
+			totals.PrefixFingerprints[fp] = true
+		}
 	}
 	return totals, sc.Err()
 }
@@ -441,4 +498,17 @@ func selectTasks(filter string) ([]taskSpec, error) {
 		}
 	}
 	return nil, fmt.Errorf("unknown task: %s", filter)
+}
+
+func parseModes(mode string) ([]string, error) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "both":
+		return []string{"baseline", "whale"}, nil
+	case "baseline":
+		return []string{"baseline"}, nil
+	case "whale":
+		return []string{"whale"}, nil
+	default:
+		return nil, fmt.Errorf("unknown mode: %s", mode)
+	}
 }
