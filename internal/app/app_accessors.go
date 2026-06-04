@@ -29,7 +29,7 @@ func (a *App) SetMode(mode session.Mode) (string, error) {
 	}
 	a.currentMode = mode
 	a.a = nil
-	if previous != "" {
+	if previous != "" && previous != mode {
 		a.RecordModeChanged(string(previous), string(mode))
 	}
 	return fmt.Sprintf("%s mode enabled", modeTitle(mode)), nil

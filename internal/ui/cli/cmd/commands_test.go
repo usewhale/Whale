@@ -795,7 +795,10 @@ func TestRunExecAttachSendsOpenAICompatibleFilePart(t *testing.T) {
 	var msg map[string]any
 	for _, item := range messages {
 		candidate, _ := item.(map[string]any)
-		if candidate["role"] == "user" {
+		if candidate["role"] != "user" {
+			continue
+		}
+		if parts, ok := candidate["content"].([]any); ok && len(parts) == 2 {
 			msg = candidate
 			break
 		}

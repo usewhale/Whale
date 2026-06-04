@@ -247,11 +247,8 @@ func classifySystemBlock(block string, index int) (string, string) {
 		return "tool_policy", "immutable"
 	case strings.HasPrefix(block, "Workflow authoring."):
 		return "workflow_authoring", "immutable"
-	case strings.Contains(lower, "agent mode is active") ||
-		strings.Contains(lower, "ask mode is active") ||
-		strings.Contains(lower, "plan mode is active") ||
-		strings.HasPrefix(block, "Current session mode:"):
-		return "mode_instructions", "dynamic"
+	case strings.HasPrefix(block, "Mode contract."):
+		return "mode_contract", "immutable"
 	case strings.HasPrefix(block, "Focus view is active"):
 		return "output_style", "dynamic"
 	case strings.HasPrefix(block, "Mode switching commands"):

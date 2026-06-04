@@ -151,6 +151,10 @@ func (a *App) RunTurnWithContentOptions(ctx context.Context, parts []core.Messag
 	}
 	a.pendingGoalTurn = opts.GoalContinuation
 	opts = a.applyRunOptionsDefaults(opts)
+	if err := a.ensureCurrentModeMarker(); err != nil {
+		a.pendingGoalTurn = false
+		return nil, err
+	}
 	ag, err := a.ensureAgent()
 	if err != nil {
 		a.pendingGoalTurn = false
@@ -173,6 +177,9 @@ func (a *App) RunTurnWithInjectedContentOptions(ctx context.Context, visiblePart
 		_, _ = session.PatchSessionMeta(a.sessionsDir, a.sessionID, session.SessionMetaPatch{Title: visibleInput})
 	}
 	opts = a.applyRunOptionsDefaults(opts)
+	if err := a.ensureCurrentModeMarker(); err != nil {
+		return nil, err
+	}
 	ag, err := a.ensureAgent()
 	if err != nil {
 		return nil, err

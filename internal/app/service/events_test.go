@@ -468,7 +468,16 @@ func TestSubmitIntentWithAttachmentsPersistsMessageParts(t *testing.T) {
 	if len(msgs) == 0 {
 		t.Fatal("expected messages")
 	}
-	user := msgs[0]
+	var user core.Message
+	for _, msg := range msgs {
+		if msg.Role == core.RoleUser && !msg.Hidden {
+			user = msg
+			break
+		}
+	}
+	if user.ID == "" {
+		t.Fatalf("missing visible user message: %+v", msgs)
+	}
 	if len(user.Parts) != 2 || user.Parts[1].Attachment == nil {
 		t.Fatalf("user parts = %+v", user.Parts)
 	}
@@ -1611,8 +1620,6 @@ func TestModeSwitchPersistsHiddenModeChangedMarker(t *testing.T) {
 		{name: "plan to agent", from: session.ModePlan, to: session.ModeAgent},
 		{name: "agent to ask", from: session.ModeAgent, to: session.ModeAsk},
 		{name: "agent to plan", from: session.ModeAgent, to: session.ModePlan},
-		{name: "ask reaffirmed", from: session.ModeAsk, to: session.ModeAsk},
-		{name: "plan reaffirmed", from: session.ModePlan, to: session.ModePlan},
 	}
 
 	for _, tt := range tests {
@@ -1652,7 +1659,47 @@ func TestModeSwitchPersistsHiddenModeChangedMarker(t *testing.T) {
 				!strings.Contains(got.Text, "stale") {
 				t.Fatalf("unexpected marker text: %q", got.Text)
 			}
+			switch tt.to {
+			case session.ModeAsk:
+				if !strings.Contains(got.Text, "Ask mode instruction") || !strings.Contains(got.Text, "do not modify files") {
+					t.Fatalf("ask marker missing mode instruction: %q", got.Text)
+				}
+			case session.ModePlan:
+				if !strings.Contains(got.Text, "Plan mode instruction") || !strings.Contains(got.Text, "<proposed_plan>") {
+					t.Fatalf("plan marker missing mode instruction: %q", got.Text)
+				}
+			case session.ModeAgent:
+				if !strings.Contains(got.Text, "Agent mode instruction") || !strings.Contains(got.Text, "execute the user's current goal") {
+					t.Fatalf("agent marker missing mode instruction: %q", got.Text)
+				}
+			}
 		})
+	}
+}
+
+func TestModeSwitchDoesNotPersistMarkerWhenModeUnchanged(t *testing.T) {
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true, ModeOverride: "plan"})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+
+	before, err := svc.app.ListMessages()
+	if err != nil {
+		t.Fatalf("ListMessages before: %v", err)
+	}
+	if _, err := svc.app.SetMode(session.ModePlan); err != nil {
+		t.Fatalf("SetMode: %v", err)
+	}
+	after, err := svc.app.ListMessages()
+	if err != nil {
+		t.Fatalf("ListMessages after: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("unchanged mode should not persist marker, before=%d after=%d msgs=%+v", len(before), len(after), after)
 	}
 }
 
