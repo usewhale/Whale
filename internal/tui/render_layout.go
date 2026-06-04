@@ -7,31 +7,28 @@ import (
 )
 
 func (m model) chatViewNeedsBottomGap(body, bottom string) bool {
-	if m.page != pageChat {
+	if m.page != pageChat || m.mode != modeChat || !m.shouldRenderComposer() {
 		return false
 	}
-	if m.height > 0 && countVisibleLines(body)+countVisibleLines(bottom)+1 > m.height {
+	if body == "" || bottom == "" {
 		return false
 	}
-	liveLen := 0
-	if m.assembler != nil {
-		liveLen = len(m.assembler.Snapshot())
-	}
-	return m.startupHeaderMessage() != nil &&
-		len(m.transcript) == 0 &&
-		liveLen == 0 &&
-		len(m.ephemeralMessages) == 0
+	return m.height <= 0 || countVisibleLines(body)+countVisibleLines(bottom)+1 <= m.height
 }
 
-func (m model) chatBodyHeightForView(mainWidth, maxBodyHeight int) int {
+func (m model) chatBodyHeightForView(mainWidth, maxBodyHeight int, messages []tuirender.UIMessage, leadingGap int) int {
 	if maxBodyHeight <= 0 {
 		return 0
 	}
-	lines := tuirender.ChatLines(m.chatViewportMessages(), max(20, mainWidth-2))
-	if len(lines) == 0 {
+	lineCount := chatListRenderedLineCountWithLeadingGap(
+		messages,
+		max(20, mainWidth-2),
+		leadingGap,
+	)
+	if lineCount == 0 {
 		return 0
 	}
-	return min(len(lines), maxBodyHeight)
+	return min(lineCount, maxBodyHeight)
 }
 
 func (m model) viewportBodyHeight(mainWidth int) int {

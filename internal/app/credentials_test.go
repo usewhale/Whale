@@ -81,6 +81,7 @@ func TestLoadDeepSeekAPIKeyFallsBackToCredentials(t *testing.T) {
 	if err := SaveCredentials(dir, Credentials{DeepSeekAPIKey: want}); err != nil {
 		t.Fatalf("SaveCredentials: %v", err)
 	}
+	t.Setenv("DEEPSEEK_API_KEY", "")
 
 	got, err := LoadDeepSeekAPIKey(dir)
 	if err != nil {

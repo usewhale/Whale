@@ -8,6 +8,8 @@ import (
 	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
+const startupHeaderTrailingBlankLines = 2
+
 func (m *model) startupHeaderPrintCmd() tea.Cmd {
 	if m.startupHeaderOnce == nil {
 		m.startupHeaderOnce = new(bool)
@@ -22,7 +24,7 @@ func (m *model) startupHeaderPrintCmd() tea.Cmd {
 	m.startupHeaderPrinted = true
 	*m.startupHeaderOnce = true
 	m.viewportLayoutReady = false
-	return tea.Println(header)
+	return tea.Println(startupHeaderWithTrailingGap(header))
 }
 
 func (m model) startupHeaderText() string {
@@ -51,14 +53,14 @@ func (m *model) replayNativeScrollbackCmd() tea.Cmd {
 	start := min(max(m.nativeScrollbackPrinted, 0), len(m.transcript))
 	text := ""
 	if start < len(m.transcript) {
-		text = m.scrollbackText(m.transcript[start:])
+		text = m.scrollbackTextWithPrevious(m.nativeScrollbackPreviousMessage(start), m.transcript[start:])
 	}
 	if start == 0 && (m.startupHeaderOnce == nil || !*m.startupHeaderOnce) {
 		if header := strings.TrimSpace(m.startupHeaderText()); header != "" {
 			if text != "" {
 				text = header + "\n\n" + text
 			} else {
-				text = header
+				text = startupHeaderWithTrailingGap(header)
 			}
 			m.startupHeaderPrinted = true
 			if m.startupHeaderOnce == nil {
@@ -108,7 +110,7 @@ func (m *model) emitNativeScrollbackCmd() tea.Cmd {
 			return nil
 		}
 	}
-	text := m.scrollbackText(m.transcript[start:])
+	text := m.scrollbackTextWithPrevious(m.nativeScrollbackPreviousMessage(start), m.transcript[start:])
 	if start == 0 && (m.startupHeaderOnce == nil || !*m.startupHeaderOnce) {
 		if header := strings.TrimSpace(m.startupHeaderText()); header != "" {
 			text = header + "\n\n" + text
@@ -124,6 +126,21 @@ func (m *model) emitNativeScrollbackCmd() tea.Cmd {
 		return nil
 	}
 	return tea.Println(text)
+}
+
+func startupHeaderWithTrailingGap(header string) string {
+	return strings.TrimRight(header, "\n") + strings.Repeat("\n", startupHeaderTrailingBlankLines)
+}
+
+func (m model) nativeScrollbackPreviousMessage(start int) *tuirender.UIMessage {
+	if start <= 0 || start > len(m.transcript) {
+		return nil
+	}
+	previous := m.focusMessages(m.transcript[:start])
+	if len(previous) == 0 {
+		return nil
+	}
+	return &previous[len(previous)-1]
 }
 
 func focusMessagesAreOnlyDeferredToolSummary(messages []tuirender.UIMessage) bool {

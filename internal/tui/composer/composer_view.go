@@ -16,9 +16,7 @@ func (c Composer) View() string {
 	}
 	var view string
 	if c.rawValue() == "" {
-		copy := c.textarea
-		copy.SetHeight(1)
-		view = copy.View()
+		view = c.emptyView()
 	} else {
 		value := c.rawValue()
 		lines := splitComposerLines(value)
@@ -29,6 +27,12 @@ func (c Composer) View() string {
 		}
 	}
 	return c.normalizeView(view)
+}
+
+func (c Composer) emptyView() string {
+	return composerPromptStyle().Render("›") + " " +
+		renderComposerLineText("", true, 0, -1, -1, 0) +
+		composerPlaceholderStyle().Render(c.textarea.Placeholder)
 }
 
 func (c Composer) foldedView(lines []string, selStart, selEnd int) string {
@@ -127,9 +131,17 @@ func (c Composer) promptLine(line string, first bool, cursor bool, selStart, sel
 func (c Composer) promptLineAt(line string, first bool, cursor bool, col int, selStart, selEnd int, lineRuneStart int) string {
 	prefix := "  "
 	if first {
-		prefix = lipgloss.NewStyle().Foreground(tuitheme.Default.Accent).Bold(true).Render("›") + " "
+		prefix = composerPromptStyle().Render("›") + " "
 	}
 	return prefix + renderComposerLineText(line, cursor, col, selStart, selEnd, lineRuneStart)
+}
+
+func composerPromptStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(tuitheme.Default.Accent).Bold(true)
+}
+
+func composerPlaceholderStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(tuitheme.Default.Muted)
 }
 
 func renderComposerLineText(line string, cursor bool, col int, selStart, selEnd int, lineRuneStart int) string {

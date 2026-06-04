@@ -14,6 +14,7 @@ type chatList struct {
 	width       int
 	height      int
 	items       []chatItem
+	leadingGap  int
 	offsetIdx   int
 	offsetLine  int
 	generation  uint64
@@ -59,6 +60,8 @@ func (l *chatList) SetSize(width, height int) {
 	l.clampOffset()
 }
 
+// SetMessages resets leadingGap to 0. Callers that need a leading gap must
+// call SetLeadingGap after SetMessages.
 func (l *chatList) SetMessages(messages []tuirender.UIMessage, renderWidth int) {
 	items := make([]chatItem, 0, len(messages))
 	nextCache := make(map[chatItemRenderKey][]string, len(messages))
@@ -87,6 +90,7 @@ func (l *chatList) SetMessages(messages []tuirender.UIMessage, renderWidth int) 
 		}
 	}
 	l.items = items
+	l.leadingGap = 0
 	l.renderCache = nextCache
 	l.generation++
 	if len(l.items) == 0 {
@@ -94,6 +98,11 @@ func (l *chatList) SetMessages(messages []tuirender.UIMessage, renderWidth int) 
 		l.offsetLine = 0
 		return
 	}
+	l.clampOffset()
+}
+
+func (l *chatList) SetLeadingGap(gap int) {
+	l.leadingGap = max(0, gap)
 	l.clampOffset()
 }
 
@@ -128,6 +137,47 @@ func isPlainBlankLine(line string) bool {
 	return line == xansi.Strip(line)
 }
 
+func chatListGapAfter(prev, next tuirender.UIMessage) int {
+	if prev.Role == "assistant" && prev.Kind == tuirender.KindText && next.Role == "you" {
+		return 2
+	}
+	return chatListGap
+}
+
+func chatListGapAfterItems(items []chatItem, idx int) int {
+	if idx < 0 || idx >= len(items)-1 {
+		return 0
+	}
+	return chatListGapAfter(items[idx].msg, items[idx+1].msg)
+}
+
+func (l chatList) itemHeight(idx int) int {
+	if idx < 0 || idx >= len(l.items) {
+		return 0
+	}
+	return l.leadingGapBeforeItem(idx) + len(l.items[idx].lines) + chatListGapAfterItems(l.items, idx)
+}
+
+func (l chatList) leadingGapBeforeItem(idx int) int {
+	if idx == 0 {
+		return l.leadingGap
+	}
+	return 0
+}
+
+func chatListRenderedLineCount(messages []tuirender.UIMessage, renderWidth int) int {
+	var l chatList
+	l.SetMessages(messages, renderWidth)
+	return l.TotalLineCount()
+}
+
+func chatListRenderedLineCountWithLeadingGap(messages []tuirender.UIMessage, renderWidth, leadingGap int) int {
+	var l chatList
+	l.SetMessages(messages, renderWidth)
+	l.SetLeadingGap(leadingGap)
+	return l.TotalLineCount()
+}
+
 func (l *chatList) View() string {
 	if len(l.items) == 0 || l.height <= 0 {
 		return ""
@@ -137,16 +187,23 @@ func (l *chatList) View() string {
 	offset := l.offsetLine
 	for len(lines) < l.height && idx < len(l.items) {
 		itemLines := l.items[idx].lines
-		if offset < len(itemLines) {
-			lines = append(lines, itemLines[offset:]...)
-			if idx < len(l.items)-1 {
-				for range chatListGap {
-					lines = append(lines, "")
-				}
+		leadingGap := l.leadingGapBeforeItem(idx)
+		if offset < leadingGap {
+			for i := offset; i < leadingGap; i++ {
+				lines = append(lines, "")
+			}
+			lines = append(lines, itemLines...)
+			for range chatListGapAfterItems(l.items, idx) {
+				lines = append(lines, "")
+			}
+		} else if itemOffset := offset - leadingGap; itemOffset < len(itemLines) {
+			lines = append(lines, itemLines[itemOffset:]...)
+			for range chatListGapAfterItems(l.items, idx) {
+				lines = append(lines, "")
 			}
 		} else {
-			gapOffset := offset - len(itemLines)
-			for i := gapOffset; i < chatListGap; i++ {
+			gapOffset := offset - leadingGap - len(itemLines)
+			for i := gapOffset; i < chatListGapAfterItems(l.items, idx); i++ {
 				lines = append(lines, "")
 			}
 		}
@@ -164,12 +221,13 @@ func (l *chatList) FullContent() string {
 		return ""
 	}
 	out := make([]string, 0, l.TotalLineCount())
+	for range l.leadingGap {
+		out = append(out, "")
+	}
 	for i, item := range l.items {
 		out = append(out, item.lines...)
-		if i < len(l.items)-1 {
-			for range chatListGap {
-				out = append(out, "")
-			}
+		for range chatListGapAfterItems(l.items, i) {
+			out = append(out, "")
 		}
 	}
 	return strings.Join(out, "\n")
@@ -178,10 +236,9 @@ func (l *chatList) FullContent() string {
 func (l *chatList) TotalLineCount() int {
 	total := 0
 	for i, item := range l.items {
+		total += l.leadingGapBeforeItem(i)
 		total += len(item.lines)
-		if i < len(l.items)-1 {
-			total += chatListGap
-		}
+		total += chatListGapAfterItems(l.items, i)
 	}
 	return total
 }
@@ -189,10 +246,7 @@ func (l *chatList) TotalLineCount() int {
 func (l *chatList) HiddenLineCount() int {
 	total := 0
 	for i := 0; i < l.offsetIdx && i < len(l.items); i++ {
-		total += len(l.items[i].lines)
-		if i < len(l.items)-1 {
-			total += chatListGap
-		}
+		total += l.itemHeight(i)
 	}
 	return total + l.offsetLine
 }
@@ -210,10 +264,7 @@ func (l *chatList) ScrollToBottom() {
 	}
 	total := 0
 	for i := len(l.items) - 1; i >= 0; i-- {
-		itemHeight := len(l.items[i].lines)
-		if i < len(l.items)-1 {
-			itemHeight += chatListGap
-		}
+		itemHeight := l.itemHeight(i)
 		total += itemHeight
 		if total > l.height {
 			l.offsetIdx = i
@@ -241,10 +292,7 @@ func (l *chatList) ScrollBy(lines int) {
 		}
 		l.offsetLine += lines
 		for l.offsetIdx < len(l.items) {
-			currentHeight := len(l.items[l.offsetIdx].lines)
-			if l.offsetIdx < len(l.items)-1 {
-				currentHeight += chatListGap
-			}
+			currentHeight := l.itemHeight(l.offsetIdx)
 			if l.offsetLine < currentHeight {
 				break
 			}
@@ -261,10 +309,7 @@ func (l *chatList) ScrollBy(lines int) {
 			l.ScrollToTop()
 			return
 		}
-		prevHeight := len(l.items[l.offsetIdx].lines)
-		if l.offsetIdx < len(l.items)-1 {
-			prevHeight += chatListGap
-		}
+		prevHeight := l.itemHeight(l.offsetIdx)
 		l.offsetLine += prevHeight
 	}
 }
@@ -312,10 +357,7 @@ func (l *chatList) setHiddenLineCount(hidden int) {
 	}
 	idx := 0
 	for idx < len(l.items) {
-		itemHeight := len(l.items[idx].lines)
-		if idx < len(l.items)-1 {
-			itemHeight += chatListGap
-		}
+		itemHeight := l.itemHeight(idx)
 		if hidden < itemHeight {
 			l.offsetIdx = idx
 			l.offsetLine = hidden

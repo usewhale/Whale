@@ -111,12 +111,17 @@ func (m *model) refreshViewportContentForSize(mainWidth, bodyHeight int, forceBo
 		m.chat.SetSize(max(10, mainWidth), max(1, bodyHeight))
 		renderWidth := max(20, mainWidth-2)
 		messages := m.chatViewportMessages()
+		unprunedMessages := messages
+		leadingGap := m.chatViewportLeadingGap(nil, messages)
 		if m.viewportFrozen {
 			messages = m.frozenChatMessages
+			leadingGap = 0
 		} else if m.shouldRenderChatTailOnly(forceBottom) {
 			messages = m.chatTailMessagesForView(messages, renderWidth, bodyHeight)
+			leadingGap = m.chatViewportLeadingGap(unprunedMessages, messages)
 		}
 		m.chat.SetMessages(messages, renderWidth)
+		m.chat.SetLeadingGap(leadingGap)
 		if forceBottom || m.followTail {
 			m.chat.ScrollToBottom()
 		}
@@ -149,6 +154,47 @@ func (m *model) refreshViewportContentForSize(mainWidth, bodyHeight int, forceBo
 
 func (m *model) shouldRenderChatTailOnly(forceBottom bool) bool {
 	return m.page == pageChat && m.followTail && !m.viewportFrozen && !forceBottom
+}
+
+func (m model) chatViewportLeadingGap(source, messages []tuirender.UIMessage) int {
+	if m.page != pageChat || m.viewportFrozen || !m.followTail || len(messages) == 0 {
+		return 0
+	}
+	prev := m.chatViewportPreviousMessage(source, messages[0])
+	if prev == nil {
+		return 0
+	}
+	return chatListGapAfter(*prev, messages[0])
+}
+
+func (m model) chatViewportPreviousMessage(source []tuirender.UIMessage, first tuirender.UIMessage) *tuirender.UIMessage {
+	if len(source) > 0 {
+		for i, msg := range source {
+			if !sameChatViewportMessage(msg, first) {
+				continue
+			}
+			if i == 0 {
+				break
+			}
+			return &source[i-1]
+		}
+	}
+	start := min(max(m.nativeScrollbackPrinted, 0), len(m.transcript))
+	if start == 0 || start >= len(m.transcript) {
+		return nil
+	}
+	return m.nativeScrollbackPreviousMessage(start)
+}
+
+func sameChatViewportMessage(a, b tuirender.UIMessage) bool {
+	if a.ID != "" || b.ID != "" {
+		return a.ID == b.ID
+	}
+	return a.Role == b.Role &&
+		a.Kind == b.Kind &&
+		a.Text == b.Text &&
+		a.ToolName == b.ToolName &&
+		a.ToolIdentity == b.ToolIdentity
 }
 
 func (m *model) freezeChatViewport() {
@@ -189,8 +235,18 @@ func (m model) renderChatLines(width int) []string {
 }
 
 func (m model) scrollbackText(messages []tuirender.UIMessage) string {
-	lines := tuirender.ChatLines(m.focusMessages(messages), m.chatRenderWidth())
-	return strings.TrimRight(strings.Join(lines, "\n"), "\n")
+	return m.scrollbackTextWithPrevious(nil, messages)
+}
+
+func (m model) scrollbackTextWithPrevious(prev *tuirender.UIMessage, messages []tuirender.UIMessage) string {
+	var l chatList
+	focused := m.focusMessages(messages)
+	l.SetMessages(focused, m.chatRenderWidth())
+	text := strings.TrimRight(l.FullContent(), "\n")
+	if prev == nil || len(focused) == 0 || text == "" {
+		return text
+	}
+	return strings.Repeat("\n", chatListGapAfter(*prev, focused[0])) + text
 }
 
 func (m model) chatMessages() []tuirender.UIMessage {
@@ -290,7 +346,7 @@ func (m *model) chatTailMessagesForView(messages []tuirender.UIMessage, renderWi
 		counts[i] = m.chat.measureLines(msg, renderWidth)
 	}
 	// windowLines mirrors SetMessages' line accounting for messages[start:]
-	// exactly: per-message base lines, chatListGap between items, plus two
+	// exactly: per-message base lines, chat list gaps between items, plus two
 	// extra lines (WorkSeparator + blank) at every boundary where the same
 	// pendingWorkSeparator state machine fires. Walk start forward until the
 	// window fits lineLimit, keeping at least the last message.
@@ -303,7 +359,7 @@ func (m *model) chatTailMessagesForView(messages []tuirender.UIMessage, renderWi
 				n += 2
 			}
 			if i > start {
-				n += chatListGap
+				n += chatListGapAfter(messages[i-1], messages[i])
 			}
 			total += n
 			switch {

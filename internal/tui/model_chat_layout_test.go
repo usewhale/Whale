@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -482,10 +483,379 @@ func TestChatStartupHeaderLeavesGapAboveComposer(t *testing.T) {
 	if promptIdx < 1 {
 		t.Fatalf("expected composer after startup header:\n%s", view)
 	}
-	if strings.TrimSpace(lines[promptIdx-1]) != "" {
-		t.Fatalf("expected blank line between startup header and composer, got %q in view:\n%s", lines[promptIdx-1], view)
+	if promptIdx < 2 {
+		t.Fatalf("expected composer boundary after startup header gap:\n%s", view)
+	}
+	if strings.TrimSpace(lines[promptIdx-2]) != "" {
+		t.Fatalf("expected blank line between startup header and composer boundary, got %q in view:\n%s", lines[promptIdx-2], view)
 	}
 }
+
+func TestChatTranscriptLeavesGapAboveComposer(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 24
+	m.startupHeaderPrintCmd()
+	m.appendTranscript("assistant", tuirender.KindText, "done response")
+
+	view := xansi.Strip(m.View())
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	responseIdx := firstLineContaining(lines, "done response")
+	boundaryIdx := firstFullWidthBoundaryLine(lines, 80)
+	if responseIdx < 0 || boundaryIdx < 0 {
+		t.Fatalf("expected assistant response and composer boundary in view:\n%s", view)
+	}
+	if boundaryIdx-responseIdx != 2 {
+		t.Fatalf("expected one blank line between assistant response and composer boundary, got response=%d boundary=%d in:\n%s", responseIdx, boundaryIdx, view)
+	}
+	if strings.TrimSpace(lines[responseIdx+1]) != "" {
+		t.Fatalf("expected blank line above composer boundary, got %q in:\n%s", lines[responseIdx+1], view)
+	}
+}
+
+func TestChatTranscriptBottomGapDoesNotOverflowConstrainedHeight(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = countVisibleLines(m.renderBottom(80)) + 1
+	m.startupHeaderPrintCmd()
+	m.appendTranscript("assistant", tuirender.KindText, "tight response")
+
+	view := xansi.Strip(m.View())
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	if got := len(lines); got > m.height {
+		t.Fatalf("expected constrained view not to exceed height %d, got %d:\n%s", m.height, got, view)
+	}
+	responseIdx := firstLineContaining(lines, "tight response")
+	boundaryIdx := firstFullWidthBoundaryLine(lines, 80)
+	if responseIdx < 0 || boundaryIdx < 0 {
+		t.Fatalf("expected assistant response and composer boundary in constrained view:\n%s", view)
+	}
+	if boundaryIdx-responseIdx != 1 {
+		t.Fatalf("expected constrained view to omit extra bottom gap, got response=%d boundary=%d in:\n%s", responseIdx, boundaryIdx, view)
+	}
+}
+func TestChatComposerBoundaryRendersAboveComposer(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 24
+	m.input.SetWidth(76)
+
+	view := xansi.Strip(m.View())
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	promptIdx := -1
+	for i, line := range lines {
+		if strings.Contains(line, "Type message or command") {
+			promptIdx = i
+			break
+		}
+	}
+	if promptIdx < 1 {
+		t.Fatalf("expected composer after boundary:\n%s", view)
+	}
+	boundary := lines[promptIdx-1]
+	if want := strings.Repeat("─", 80); boundary != want {
+		t.Fatalf("expected full-width composer boundary before composer, got %q want %q in view:\n%s", boundary, want, view)
+	}
+}
+func TestComposerBoundaryUsesBottomLayoutWidth(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 120
+	m.height = 24
+	m.sidebar = true
+	m.input.SetWidth(116)
+
+	bottom := xansi.Strip(m.renderBottom(86))
+	lines := strings.Split(strings.TrimRight(bottom, "\n"), "\n")
+	if len(lines) < 3 {
+		t.Fatalf("expected boundary, composer, and footer in bottom layout:\n%s", bottom)
+	}
+	boundary := lines[0]
+	composer := lines[1]
+	if want := strings.Repeat("─", 86); boundary != want {
+		t.Fatalf("expected boundary to use main layout width, got width %d line %q", lipgloss.Width(boundary), boundary)
+	}
+	if lipgloss.Width(composer) != 116 {
+		t.Fatalf("expected composer view to retain its own width, got %d line %q", lipgloss.Width(composer), composer)
+	}
+}
+func TestComposerSeparatorsWrapComposerWithBottomLayoutWidth(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 120
+	m.height = 24
+	m.sidebar = true
+	m.input.SetWidth(116)
+	m.input.SetValue("first line\nsecond line")
+
+	bottom := xansi.Strip(m.renderBottom(86))
+	lines := strings.Split(strings.TrimRight(bottom, "\n"), "\n")
+	boundary := strings.Repeat("─", 86)
+	boundaryIdxs := []int{}
+	for i, line := range lines {
+		if line == boundary {
+			boundaryIdxs = append(boundaryIdxs, i)
+			if got := lipgloss.Width(line); got != 86 {
+				t.Fatalf("expected composer separator width 86, got %d line %q", got, line)
+			}
+		}
+	}
+	if len(boundaryIdxs) != 2 {
+		t.Fatalf("expected top and bottom composer separators, got indexes %v in:\n%s", boundaryIdxs, bottom)
+	}
+	firstLineIdx := firstLineContaining(lines, "first line")
+	secondLineIdx := firstLineContaining(lines, "second line")
+	footerIdx := len(lines) - 1
+	if firstLineIdx < 0 || secondLineIdx < 0 {
+		t.Fatalf("expected multiline composer content in bottom:\n%s", bottom)
+	}
+	if !(boundaryIdxs[0] < firstLineIdx && firstLineIdx < secondLineIdx && secondLineIdx < boundaryIdxs[1] && boundaryIdxs[1] < footerIdx) {
+		t.Fatalf("expected separators to wrap composer before footer, got top=%d first=%d second=%d bottom=%d footer=%d:\n%s",
+			boundaryIdxs[0], firstLineIdx, secondLineIdx, boundaryIdxs[1], footerIdx, bottom)
+	}
+	if got := lipgloss.Width(lines[firstLineIdx]); got != 116 {
+		t.Fatalf("expected composer input to retain existing width 116, got %d line %q", got, lines[firstLineIdx])
+	}
+}
+func TestComposerSeparatorsContributeToBottomHeight(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 24
+	m.input.SetWidth(76)
+	m.input.SetValue("alpha\nbeta")
+
+	bottom := m.renderBottom(80)
+	plain := xansi.Strip(bottom)
+	lines := strings.Split(strings.TrimRight(plain, "\n"), "\n")
+	boundary := strings.Repeat("─", 80)
+	boundaryCount := 0
+	for _, line := range lines {
+		if line == boundary {
+			boundaryCount++
+		}
+	}
+	if boundaryCount != 2 {
+		t.Fatalf("expected two real separator lines in bottom, got %d:\n%s", boundaryCount, plain)
+	}
+	if got, want := countVisibleLines(bottom), len(lines); got != want {
+		t.Fatalf("expected embedded newlines to determine bottom height, got %d want %d:\n%s", got, want, plain)
+	}
+}
+func TestMultilineComposerDoesNotOverlapFooterAtFixedWidth(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 9
+	m.input.SetWidth(76)
+	m.input.SetValue("one\ntwo\nthree")
+
+	view := xansi.Strip(m.View())
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	footerIdx := len(lines) - 1
+	boundary := strings.Repeat("─", 80)
+	boundaryIdxs := []int{}
+	for i, line := range lines {
+		if line == boundary {
+			boundaryIdxs = append(boundaryIdxs, i)
+		}
+	}
+	if len(boundaryIdxs) != 2 {
+		t.Fatalf("expected top and bottom composer separators in view, got %v:\n%s", boundaryIdxs, view)
+	}
+	for _, want := range []string{"one", "two", "three"} {
+		idx := firstLineContaining(lines, want)
+		if idx < 0 {
+			t.Fatalf("expected composer line %q in view:\n%s", want, view)
+		}
+		if !(boundaryIdxs[0] < idx && idx < boundaryIdxs[1]) {
+			t.Fatalf("expected composer line %q between separators, got line %d separators %v:\n%s", want, idx, boundaryIdxs, view)
+		}
+	}
+	if !(boundaryIdxs[1] < footerIdx) {
+		t.Fatalf("expected footer after bottom separator, got bottom separator %d footer %d:\n%s", boundaryIdxs[1], footerIdx, view)
+	}
+	if strings.Contains(lines[footerIdx], "one") || strings.Contains(lines[footerIdx], "two") || strings.Contains(lines[footerIdx], "three") {
+		t.Fatalf("composer content overlapped footer line %q in:\n%s", lines[footerIdx], view)
+	}
+	if got := countVisibleLines(view); got > m.height {
+		t.Fatalf("expected view not to exceed fixed height %d, got %d:\n%s", m.height, got, view)
+	}
+}
+func TestSmallTerminalHeightKeepsBodyFooterAndComposerSeparated(t *testing.T) {
+	for _, height := range []int{5, 6, 7} {
+		m := newModel(nil, "deepseek-v4-flash", "max", "off")
+		m.width = 80
+		m.height = height
+		m.startupHeaderPrintCmd()
+		m.input.SetWidth(76)
+		m.input.SetValue("alpha\nbeta")
+		m.appendTranscript("info", tuirender.KindText, "body-tail")
+
+		view := xansi.Strip(m.View())
+		lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+		if got := len(lines); got > height {
+			t.Fatalf("height %d: expected rendered lines not to exceed terminal height, got %d:\n%s", height, got, view)
+		}
+		footerIdx := len(lines) - 1
+		if !strings.Contains(lines[footerIdx], "deepseek-v4-flash . max") {
+			t.Fatalf("height %d: expected footer on last line, got %q in:\n%s", height, lines[footerIdx], view)
+		}
+		bodyIdx := firstLineContaining(lines, "body-tail")
+		alphaIdx := firstLineContaining(lines, "alpha")
+		betaIdx := firstLineContaining(lines, "beta")
+		boundary := strings.Repeat("─", 80)
+		boundaryIdxs := []int{}
+		for i, line := range lines {
+			if line == boundary {
+				boundaryIdxs = append(boundaryIdxs, i)
+			}
+		}
+		if len(boundaryIdxs) != 2 {
+			t.Fatalf("height %d: expected top and bottom separators, got %v:\n%s", height, boundaryIdxs, view)
+		}
+		if alphaIdx < 0 || betaIdx < 0 {
+			t.Fatalf("height %d: expected multiline composer content in view:\n%s", height, view)
+		}
+		if !(boundaryIdxs[0] < alphaIdx && alphaIdx < betaIdx && betaIdx < boundaryIdxs[1] && boundaryIdxs[1] < footerIdx) {
+			t.Fatalf("height %d: expected composer and footer separated, got boundaries=%v alpha=%d beta=%d footer=%d:\n%s",
+				height, boundaryIdxs, alphaIdx, betaIdx, footerIdx, view)
+		}
+		if bodyIdx >= 0 && !(bodyIdx < boundaryIdxs[0]) {
+			t.Fatalf("height %d: expected body before composer, got body=%d boundaries=%v:\n%s", height, bodyIdx, boundaryIdxs, view)
+		}
+	}
+}
+
+func TestComposerRegressionManualAcceptanceRenderStates(t *testing.T) {
+	cases := []struct {
+		name    string
+		height  int
+		setup   func(*model)
+		want    []string
+		notWant []string
+	}{
+		{
+			name:   "first screen empty state",
+			height: 24,
+			want:   []string{"Type message or command", "deepseek-v4-flash . max", "thinking: off"},
+		},
+		{
+			name:   "typing",
+			height: 24,
+			setup: func(m *model) {
+				m.startupHeaderPrintCmd()
+				m.input.SetValue("draft prompt")
+			},
+			want: []string{"draft prompt", "deepseek-v4-flash . max"},
+		},
+		{
+			name:   "multiline",
+			height: 8,
+			setup: func(m *model) {
+				m.startupHeaderPrintCmd()
+				m.input.SetValue("line one\nline two\nline three")
+			},
+			want: []string{"line one", "line two", "line three", "deepseek-v4-flash . max"},
+		},
+		{
+			name:   "busy follow-up",
+			height: 24,
+			setup: func(m *model) {
+				m.startupHeaderPrintCmd()
+				m.startBusy()
+				m.busySince = time.Now().Add(-12 * time.Second)
+				m.input.SetValue("follow up")
+				m.queuedPrompts = []queuedPrompt{{Text: "queued one"}}
+			},
+			want: []string{"Working (12s)", "Enter to queue", "queued follow-up (1)", "queued one", "follow up"},
+		},
+		{
+			name:   "slash suggestions",
+			height: 24,
+			setup: func(m *model) {
+				m.startupHeaderPrintCmd()
+				m.input.SetValue("/")
+				m.updateSlashMatches()
+			},
+			want: []string{"/permissions", "Tab/Enter pick", "› /"},
+		},
+		{
+			name:   "file suggestions",
+			height: 24,
+			setup: func(m *model) {
+				m.startupHeaderPrintCmd()
+				m.input.SetValue("@mod")
+				m.files.active = true
+				m.files.matches = []fileSuggestion{{Path: "internal/tui/model.go"}}
+			},
+			want: []string{"Files", "internal/tui/model.go", "Tab/Enter insert", "@mod"},
+		},
+		{
+			name:   "skill suggestions",
+			height: 24,
+			setup: func(m *model) {
+				m.startupHeaderPrintCmd()
+				m.input.SetValue("$co")
+				m.skills.matches = []skillSuggestion{{Name: "code-review", Description: "Review local changes"}}
+			},
+			want: []string{"Skills", "$code-review", "Tab/Enter insert", "$co"},
+		},
+		{
+			name:   "small terminal height",
+			height: 6,
+			setup: func(m *model) {
+				m.startupHeaderPrintCmd()
+				m.input.SetValue("small\nheight")
+				m.appendTranscript("info", tuirender.KindText, "body-tail")
+			},
+			want: []string{"small", "height", "deepseek-v4-flash . max"},
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newModel(nil, "deepseek-v4-flash", "max", "off")
+			m.width = 80
+			m.height = tt.height
+			m.input.SetWidth(76)
+			if tt.setup != nil {
+				tt.setup(&m)
+			}
+
+			view := xansi.Strip(m.View())
+			for _, want := range tt.want {
+				if !strings.Contains(view, want) {
+					t.Fatalf("expected render state to contain %q:\n%s", want, view)
+				}
+			}
+			for _, notWant := range append(tt.notWant, "? for shortcuts · ↵ for agents") {
+				if strings.Contains(view, notWant) {
+					t.Fatalf("render state should not contain %q:\n%s", notWant, view)
+				}
+			}
+			if got := countVisibleLines(view); got > tt.height {
+				t.Fatalf("expected render state not to exceed height %d, got %d:\n%s", tt.height, got, view)
+			}
+
+			lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+			footerIdx := len(lines) - 1
+			if !strings.Contains(lines[footerIdx], "deepseek-v4-flash . max") {
+				t.Fatalf("expected footer on last line, got %q in:\n%s", lines[footerIdx], view)
+			}
+			boundary := strings.Repeat("─", 80)
+			boundaryIdxs := []int{}
+			for i, line := range lines {
+				if line == boundary {
+					boundaryIdxs = append(boundaryIdxs, i)
+				}
+			}
+			if len(boundaryIdxs) != 2 {
+				t.Fatalf("expected two composer separators, got %v:\n%s", boundaryIdxs, view)
+			}
+			if !(boundaryIdxs[0] < boundaryIdxs[1] && boundaryIdxs[1] < footerIdx) {
+				t.Fatalf("expected composer block before footer, got boundaries=%v footer=%d:\n%s", boundaryIdxs, footerIdx, view)
+			}
+		})
+	}
+}
+
 func TestChatStartupHeaderGapDoesNotOverflowConstrainedHeight(t *testing.T) {
 	for _, height := range []int{5, 11} {
 		m := newModel(nil, "deepseek-v4-flash", "max", "off")
@@ -522,8 +892,12 @@ func TestChatStartupHeaderPrintCommandIsOneShot(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected startup header to be printed to native scrollback")
 	}
-	if !strings.Contains(fmt.Sprintf("%#v", cmd()), "███████") {
+	printed := teaPrintLineMessageBody(cmd())
+	if !strings.Contains(printed, "███████") {
 		t.Fatal("expected startup header print command to emit the banner")
+	}
+	if !strings.HasSuffix(printed, strings.Repeat("\n", startupHeaderTrailingBlankLines)) {
+		t.Fatalf("expected startup header print command to leave trailing gap, got %#v", printed)
 	}
 	if !m.startupHeaderPrinted {
 		t.Fatal("expected startup header to be marked printed")
@@ -532,6 +906,59 @@ func TestChatStartupHeaderPrintCommandIsOneShot(t *testing.T) {
 		t.Fatal("expected startup header print command to be one-shot")
 	}
 }
+
+func TestChatStartupHeaderReplayLeavesGapWhenEmpty(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 24
+
+	cmd := m.replayNativeScrollbackCmd()
+	if cmd == nil {
+		t.Fatal("expected startup header replay to print empty welcome state")
+	}
+	printed := teaPrintLineMessageBody(cmd())
+	if !strings.Contains(printed, "███████") {
+		t.Fatalf("expected replay to emit startup header, got %#v", printed)
+	}
+	if !strings.HasSuffix(printed, strings.Repeat("\n", startupHeaderTrailingBlankLines)) {
+		t.Fatalf("expected empty replay to leave trailing gap, got %#v", printed)
+	}
+}
+
+func TestChatStartupHeaderReplayKeepsTranscriptSeparator(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 24
+	m.appendTranscript("info", tuirender.KindText, "first content")
+
+	cmd := m.replayNativeScrollbackCmd()
+	if cmd == nil {
+		t.Fatal("expected startup header replay with transcript to print")
+	}
+	printed := teaPrintLineMessageBody(cmd())
+	if !strings.Contains(printed, "███████") || !strings.Contains(printed, "first content") {
+		t.Fatalf("expected replay to emit startup header and transcript, got %#v", printed)
+	}
+	if !strings.Contains(printed, "╯\n\n┃") {
+		t.Fatalf("expected header and transcript to keep existing separator, got %#v", printed)
+	}
+	if strings.Contains(printed, "╯"+strings.Repeat("\n", startupHeaderTrailingBlankLines+1)) {
+		t.Fatalf("expected transcript replay not to add empty-welcome trailing gap before transcript, got %#v", printed)
+	}
+}
+
+func teaPrintLineMessageBody(msg tea.Msg) string {
+	v := reflect.ValueOf(msg)
+	if !v.IsValid() {
+		return ""
+	}
+	field := v.FieldByName("messageBody")
+	if !field.IsValid() || field.Kind() != reflect.String {
+		return fmt.Sprintf("%#v", msg)
+	}
+	return field.String()
+}
+
 func TestChatStartupHeaderStaysVisibleWithSmallTranscript(t *testing.T) {
 	m := newModel(nil, "deepseek-v4-flash", "max", "off")
 	next, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -610,6 +1037,87 @@ func TestChatViewPinsBottomAfterContentExceedsScreen(t *testing.T) {
 		t.Fatalf("expected overflowing chat view to scroll older content out of the visible frame:\n%s", view)
 	}
 }
+
+func TestChatBodyHeightIncludesConversationGaps(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 40
+	m.startupHeaderPrinted = true
+	*m.startupHeaderOnce = true
+	m.transcript = []tuirender.UIMessage{
+		{Role: "you", Kind: tuirender.KindText, Text: "hi"},
+		{Role: "assistant", Kind: tuirender.KindText, Text: "Hello! How can I help you today?"},
+		{Role: "you", Kind: tuirender.KindText, Text: "hah"},
+		{Role: "assistant", Kind: tuirender.KindText, Text: "Hello again! What can I do for you?"},
+	}
+	m.nativeScrollbackPrinted = 0
+
+	messages := m.chatViewportMessages()
+	renderWidth := max(20, m.width-2)
+	want := chatListRenderedLineCount(messages, renderWidth)
+
+	if got := m.chatBodyHeightForView(m.width, 100, messages, 0); got != want {
+		t.Fatalf("expected chat body height to include conversation gaps, got %d want %d", got, want)
+	}
+	view := xansi.Strip(m.View())
+	if blanks := countBlankLinesBetweenText(t, view, "hi", "Hello! How can I help you today?"); blanks < chatListGap {
+		t.Fatalf("expected visible user-to-assistant gap to survive body height calculation, got %d blank lines:\n%s", blanks, view)
+	}
+	if blanks := countBlankLinesBetweenText(t, view, "Hello! How can I help you today?", "hah"); blanks < chatListGap {
+		t.Fatalf("expected visible assistant-to-user gap to survive body height calculation, got %d blank lines:\n%s", blanks, view)
+	}
+}
+
+func TestChatBodyHeightUsesProvidedLeadingGap(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 40
+	m.startupHeaderPrinted = true
+	*m.startupHeaderOnce = true
+	m.transcript = []tuirender.UIMessage{
+		{Role: "you", Kind: tuirender.KindText, Text: "hi"},
+	}
+	m.nativeScrollbackPrinted = len(m.transcript)
+
+	messages := m.chatViewportMessages()
+	renderWidth := max(20, m.width-2)
+	leadingGap := 3
+	want := chatListRenderedLineCountWithLeadingGap(messages, renderWidth, leadingGap)
+
+	if got := m.chatBodyHeightForView(m.width, 100, messages, leadingGap); got != want {
+		t.Fatalf("expected chat body height to use provided leading gap, got %d want %d", got, want)
+	}
+	if derived := m.chatViewportLeadingGap(nil, messages); derived == leadingGap {
+		t.Fatalf("test setup expected provided leading gap %d to differ from derived gap", leadingGap)
+	}
+}
+
+func countBlankLinesBetweenText(t *testing.T, text, before, after string) int {
+	t.Helper()
+	lines := strings.Split(text, "\n")
+	beforeIdx, afterIdx := -1, -1
+	for i, line := range lines {
+		if beforeIdx < 0 && strings.Contains(line, before) {
+			beforeIdx = i
+			continue
+		}
+		if beforeIdx >= 0 && strings.Contains(line, after) {
+			afterIdx = i
+			break
+		}
+	}
+	if beforeIdx < 0 || afterIdx < 0 {
+		t.Fatalf("could not find %q before %q in:\n%s", before, after, text)
+	}
+	blanks := 0
+	for _, line := range lines[beforeIdx+1 : afterIdx] {
+		if strings.TrimSpace(line) == "" {
+			blanks++
+		}
+	}
+	return blanks
+}
+
 func TestComposerEditsDoNotRerenderChatWhenHeightIsStable(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 80

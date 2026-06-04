@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	tuirender "github.com/usewhale/whale/internal/tui/render"
 	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
 
@@ -52,7 +53,9 @@ func (m model) View() string {
 	}
 	bodyHeight = max(0, bodyHeight)
 	if m.page == pageChat && m.mode == modeChat {
-		bodyHeight = m.chatBodyHeightForView(mainWidth, bodyHeight)
+		messages := m.chatViewportMessages()
+		leadingGap := m.chatViewportLeadingGap(nil, messages)
+		bodyHeight = m.chatBodyHeightForView(mainWidth, bodyHeight, messages, leadingGap)
 	}
 	body := m.renderBody(mainWidth, bodyHeight)
 	if m.page != pageChat {
@@ -60,7 +63,7 @@ func (m model) View() string {
 	}
 	var out string
 	if body == "" {
-		out = bottom
+		out = m.renderChatBottomOnlyView(bottom)
 	} else {
 		separator := "\n"
 		if m.chatViewNeedsBottomGap(body, bottom) {
@@ -71,6 +74,39 @@ func (m model) View() string {
 	recordFrame(start, out, m.page, m.width, m.height)
 	m.rememberView(out)
 	return out
+}
+
+func (m model) renderChatBottomOnlyView(bottom string) string {
+	if !m.shouldRenderChatBottomOnlyGap() {
+		return bottom
+	}
+	if !m.chatViewNeedsBottomGap(" ", bottom) {
+		return bottom
+	}
+	mainWidth, _ := m.layoutDims()
+	return lipgloss.NewStyle().
+		Width(mainWidth).
+		MaxWidth(mainWidth).
+		Render("") + "\n" + bottom
+}
+
+func (m model) shouldRenderChatBottomOnlyGap() bool {
+	if m.page != pageChat || m.mode != modeChat || !m.shouldRenderComposer() {
+		return false
+	}
+	if m.busy || m.stopping {
+		return false
+	}
+	printed := min(max(m.nativeScrollbackPrinted, 0), len(m.transcript))
+	if printed == 0 || printed < len(m.transcript) {
+		return false
+	}
+	visible := m.focusMessages(m.transcript[:printed])
+	if len(visible) == 0 {
+		return false
+	}
+	last := visible[len(visible)-1]
+	return last.Role == "assistant" && last.Kind == tuirender.KindText
 }
 
 func (m model) renderBottom(mainWidth int) string {
@@ -101,10 +137,27 @@ func (m model) renderBottom(mainWidth int) string {
 	footer := lipgloss.NewStyle().Width(mainWidth).MaxWidth(mainWidth).Render(lipgloss.JoinHorizontal(lipgloss.Left, footerText))
 	bottomParts := m.bottomPartsBeforeInput(mainWidth)
 	if m.shouldRenderComposer() {
-		bottomParts = append(bottomParts, m.input.View())
+		bottomParts = append(bottomParts, m.renderComposerBlock(mainWidth))
 	}
 	bottomParts = append(bottomParts, footer)
 	return strings.Join(bottomParts, "\n")
+}
+
+func (m model) renderComposerBlock(mainWidth int) string {
+	return strings.Join([]string{
+		m.renderComposerBoundary(mainWidth),
+		m.input.View(),
+		m.renderComposerBoundary(mainWidth),
+	}, "\n")
+}
+
+func (m model) renderComposerBoundary(mainWidth int) string {
+	width := max(0, mainWidth)
+	return lipgloss.NewStyle().
+		Foreground(tuitheme.Default.Border).
+		Width(width).
+		MaxWidth(width).
+		Render(strings.Repeat("─", width))
 }
 
 func (m model) shouldRenderComposer() bool {
