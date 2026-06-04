@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	tuirender "github.com/usewhale/whale/internal/tui/render"
 	tuitheme "github.com/usewhale/whale/internal/tui/theme"
 )
 
@@ -60,7 +61,7 @@ func (m model) View() string {
 	}
 	var out string
 	if body == "" {
-		out = bottom
+		out = m.renderChatBottomOnlyView(bottom)
 	} else {
 		separator := "\n"
 		if m.chatViewNeedsBottomGap(body, bottom) {
@@ -71,6 +72,39 @@ func (m model) View() string {
 	recordFrame(start, out, m.page, m.width, m.height)
 	m.rememberView(out)
 	return out
+}
+
+func (m model) renderChatBottomOnlyView(bottom string) string {
+	if !m.shouldRenderChatBottomOnlyGap() {
+		return bottom
+	}
+	if !m.chatViewNeedsBottomGap(" ", bottom) {
+		return bottom
+	}
+	mainWidth, _ := m.layoutDims()
+	return lipgloss.NewStyle().
+		Width(mainWidth).
+		MaxWidth(mainWidth).
+		Render("") + "\n" + bottom
+}
+
+func (m model) shouldRenderChatBottomOnlyGap() bool {
+	if m.page != pageChat || m.mode != modeChat || !m.shouldRenderComposer() {
+		return false
+	}
+	if m.busy || m.stopping {
+		return false
+	}
+	printed := min(max(m.nativeScrollbackPrinted, 0), len(m.transcript))
+	if printed == 0 || printed < len(m.transcript) {
+		return false
+	}
+	visible := m.focusMessages(m.transcript[:printed])
+	if len(visible) == 0 {
+		return false
+	}
+	last := visible[len(visible)-1]
+	return last.Role == "assistant" && last.Kind == tuirender.KindText
 }
 
 func (m model) renderBottom(mainWidth int) string {

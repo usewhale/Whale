@@ -465,6 +465,20 @@ func TestChatLines_UserPromptHardWrapsLongLines(t *testing.T) {
 	assertVisibleWidthAtMost(t, lines, 54)
 }
 
+func TestChatLines_UserPromptRemainsFullWidthOnWideTerminals(t *testing.T) {
+	entries := []UIMessage{
+		{Role: "you", Kind: KindText, Text: "what is your model id"},
+	}
+	lines := ChatLines(entries, 160)
+	if len(lines) < 3 {
+		t.Fatalf("expected user prompt padding rows, got: %q", strings.Join(lines, "\n"))
+	}
+	if got := xansi.StringWidth(lines[0]); got != 160 {
+		t.Fatalf("expected user prompt background row to stay full width, got %d", got)
+	}
+	assertVisibleWidthAtMost(t, lines, 160)
+}
+
 func TestChatLines_NoticeRendersAsPlainHint(t *testing.T) {
 	entries := []UIMessage{
 		{Role: "notice", Kind: KindNotice, Text: "✔ You approved whale to run uptime this time"},
@@ -752,6 +766,22 @@ func TestChatLines_AssistantMarkdownHardWrapsLongLines(t *testing.T) {
 	assertVisibleWidthAtMost(t, lines, 54)
 }
 
+func TestChatLines_AssistantMarkdownUsesReadableWidthOnWideTerminals(t *testing.T) {
+	entries := []UIMessage{
+		{
+			Role: "assistant",
+			Kind: KindText,
+			Text: strings.Repeat("assistant-output-segment ", 12),
+		},
+	}
+	lines := ChatLines(entries, 180)
+	plain := joinedPlain(lines)
+	if !strings.Contains(plain, "assistant-output-segment") {
+		t.Fatalf("expected assistant output, got:\n%s", plain)
+	}
+	assertVisibleWidthAtMost(t, lines, 112)
+}
+
 func TestChatLines_ToolEventHardWrapsLongLines(t *testing.T) {
 	entries := []UIMessage{
 		{
@@ -769,6 +799,28 @@ func TestChatLines_ToolEventHardWrapsLongLines(t *testing.T) {
 		t.Fatalf("tool result should render as event rows, got: %q", joinedPlain(lines))
 	}
 	assertVisibleWidthAtMost(t, lines, 54)
+}
+
+func TestChatLines_ToolEventKeepsFullAvailableWidthOnWideTerminals(t *testing.T) {
+	entries := []UIMessage{
+		{
+			Role: "result",
+			Kind: KindToolResult,
+			Text: "git: " + strings.Repeat("wide-tool-output ", 12),
+		},
+	}
+	lines := ChatLines(entries, 180)
+	hasWideLine := false
+	for _, line := range lines {
+		if xansi.StringWidth(line) > 112 {
+			hasWideLine = true
+			break
+		}
+	}
+	if !hasWideLine {
+		t.Fatalf("expected tool output to use more than assistant readable width, got:\n%s", joinedPlain(lines))
+	}
+	assertVisibleWidthAtMost(t, lines, 180)
 }
 
 func TestChatLines_ShellToolRendersAsEventRows(t *testing.T) {

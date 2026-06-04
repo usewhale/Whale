@@ -490,6 +490,50 @@ func TestChatStartupHeaderLeavesGapAboveComposer(t *testing.T) {
 		t.Fatalf("expected blank line between startup header and composer boundary, got %q in view:\n%s", lines[promptIdx-2], view)
 	}
 }
+
+func TestChatTranscriptLeavesGapAboveComposer(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 24
+	m.startupHeaderPrintCmd()
+	m.appendTranscript("assistant", tuirender.KindText, "done response")
+
+	view := xansi.Strip(m.View())
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	responseIdx := firstLineContaining(lines, "done response")
+	boundaryIdx := firstFullWidthBoundaryLine(lines, 80)
+	if responseIdx < 0 || boundaryIdx < 0 {
+		t.Fatalf("expected assistant response and composer boundary in view:\n%s", view)
+	}
+	if boundaryIdx-responseIdx != 2 {
+		t.Fatalf("expected one blank line between assistant response and composer boundary, got response=%d boundary=%d in:\n%s", responseIdx, boundaryIdx, view)
+	}
+	if strings.TrimSpace(lines[responseIdx+1]) != "" {
+		t.Fatalf("expected blank line above composer boundary, got %q in:\n%s", lines[responseIdx+1], view)
+	}
+}
+
+func TestChatTranscriptBottomGapDoesNotOverflowConstrainedHeight(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = countVisibleLines(m.renderBottom(80)) + 1
+	m.startupHeaderPrintCmd()
+	m.appendTranscript("assistant", tuirender.KindText, "tight response")
+
+	view := xansi.Strip(m.View())
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	if got := len(lines); got > m.height {
+		t.Fatalf("expected constrained view not to exceed height %d, got %d:\n%s", m.height, got, view)
+	}
+	responseIdx := firstLineContaining(lines, "tight response")
+	boundaryIdx := firstFullWidthBoundaryLine(lines, 80)
+	if responseIdx < 0 || boundaryIdx < 0 {
+		t.Fatalf("expected assistant response and composer boundary in constrained view:\n%s", view)
+	}
+	if boundaryIdx-responseIdx != 1 {
+		t.Fatalf("expected constrained view to omit extra bottom gap, got response=%d boundary=%d in:\n%s", responseIdx, boundaryIdx, view)
+	}
+}
 func TestChatComposerBoundaryRendersAboveComposer(t *testing.T) {
 	m := newModel(nil, "deepseek-v4-flash", "max", "off")
 	m.width = 80
@@ -993,6 +1037,62 @@ func TestChatViewPinsBottomAfterContentExceedsScreen(t *testing.T) {
 		t.Fatalf("expected overflowing chat view to scroll older content out of the visible frame:\n%s", view)
 	}
 }
+
+func TestChatBodyHeightIncludesConversationGaps(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 40
+	m.startupHeaderPrinted = true
+	*m.startupHeaderOnce = true
+	m.transcript = []tuirender.UIMessage{
+		{Role: "you", Kind: tuirender.KindText, Text: "hi"},
+		{Role: "assistant", Kind: tuirender.KindText, Text: "Hello! How can I help you today?"},
+		{Role: "you", Kind: tuirender.KindText, Text: "hah"},
+		{Role: "assistant", Kind: tuirender.KindText, Text: "Hello again! What can I do for you?"},
+	}
+	m.nativeScrollbackPrinted = 0
+
+	renderWidth := max(20, m.width-2)
+	want := chatListRenderedLineCount(m.chatViewportMessages(), renderWidth)
+
+	if got := m.chatBodyHeightForView(m.width, 100); got != want {
+		t.Fatalf("expected chat body height to include conversation gaps, got %d want %d", got, want)
+	}
+	view := xansi.Strip(m.View())
+	if blanks := countBlankLinesBetweenText(t, view, "hi", "Hello! How can I help you today?"); blanks < chatListGap {
+		t.Fatalf("expected visible user-to-assistant gap to survive body height calculation, got %d blank lines:\n%s", blanks, view)
+	}
+	if blanks := countBlankLinesBetweenText(t, view, "Hello! How can I help you today?", "hah"); blanks < chatListGap {
+		t.Fatalf("expected visible assistant-to-user gap to survive body height calculation, got %d blank lines:\n%s", blanks, view)
+	}
+}
+
+func countBlankLinesBetweenText(t *testing.T, text, before, after string) int {
+	t.Helper()
+	lines := strings.Split(text, "\n")
+	beforeIdx, afterIdx := -1, -1
+	for i, line := range lines {
+		if beforeIdx < 0 && strings.Contains(line, before) {
+			beforeIdx = i
+			continue
+		}
+		if beforeIdx >= 0 && strings.Contains(line, after) {
+			afterIdx = i
+			break
+		}
+	}
+	if beforeIdx < 0 || afterIdx < 0 {
+		t.Fatalf("could not find %q before %q in:\n%s", before, after, text)
+	}
+	blanks := 0
+	for _, line := range lines[beforeIdx+1 : afterIdx] {
+		if strings.TrimSpace(line) == "" {
+			blanks++
+		}
+	}
+	return blanks
+}
+
 func TestComposerEditsDoNotRerenderChatWhenHeightIsStable(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 80

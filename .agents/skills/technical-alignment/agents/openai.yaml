@@ -1,0 +1,7 @@
+interface:
+  display_name: "Technical Alignment"
+  short_description: "基于完整需求、代码事实和 Claude 共识生成技术对齐稿"
+  default_prompt: "Use $technical-alignment to generate a confirmed 03-technical-alignment.md from a complete business requirement document."
+
+policy:
+  allow_implicit_invocation: true

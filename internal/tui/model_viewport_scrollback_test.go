@@ -3,12 +3,14 @@ package tui
 import (
 	"bytes"
 	"fmt"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/usewhale/whale/internal/runtime/protocol"
-	tuirender "github.com/usewhale/whale/internal/tui/render"
 	"regexp"
 	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
+	xansi "github.com/charmbracelet/x/ansi"
+	"github.com/usewhale/whale/internal/runtime/protocol"
+	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
 func TestClearScreenCmdPreservesUnixScrollbackClear(t *testing.T) {
@@ -33,6 +35,332 @@ func TestScrollbackTextRendersUserMessage(t *testing.T) {
 		t.Fatalf("expected user text in scrollback output, got %q", got)
 	}
 }
+func TestScrollbackTextUsesChatListConversationGaps(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 80
+	m.height = 24
+	got := xansi.Strip(m.scrollbackText([]tuirender.UIMessage{
+		{Role: "you", Kind: tuirender.KindText, Text: "hi"},
+		{Role: "assistant", Kind: tuirender.KindText, Text: "Hello! How can I help you today?"},
+		{Role: "you", Kind: tuirender.KindText, Text: "who are you"},
+		{Role: "assistant", Kind: tuirender.KindText, Text: "I'm Whale."},
+	}))
+
+	if blanks := countBlankLinesBetweenText(t, got, "hi", "Hello! How can I help you today?"); blanks < chatListGap {
+		t.Fatalf("expected native scrollback user-to-assistant gap, got %d blank lines:\n%s", blanks, got)
+	}
+	var l chatList
+	l.SetMessages(m.focusMessages([]tuirender.UIMessage{
+		{Role: "you", Kind: tuirender.KindText, Text: "hi"},
+		{Role: "assistant", Kind: tuirender.KindText, Text: "Hello! How can I help you today?"},
+		{Role: "you", Kind: tuirender.KindText, Text: "who are you"},
+		{Role: "assistant", Kind: tuirender.KindText, Text: "I'm Whale."},
+	}), m.chatRenderWidth())
+	if got := countPlainBlankLinesAfterItem(l.items, 1, l.FullContent()); got != 2 {
+		t.Fatalf("expected native scrollback assistant-to-user inserted gap 2, got %d blank lines:\n%s", got, xansi.Strip(l.FullContent()))
+	}
+}
+
+func TestNativeScrollbackFlushPreservesConversationGapAcrossFlushes(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 80
+	m.height = 24
+	*m.startupHeaderOnce = true
+	m.transcript = []tuirender.UIMessage{
+		{Role: "you", Kind: tuirender.KindText, Text: "hi"},
+		{Role: "assistant", Kind: tuirender.KindText, Text: "hello"},
+	}
+
+	first := m.emitNativeScrollbackCmd()
+	if first == nil {
+		t.Fatal("expected first native scrollback flush")
+	}
+	firstPrinted := xansi.Strip(teaPrintLineMessageBody(first()))
+	if blanks := countBlankLinesBetweenText(t, firstPrinted, "hi", "hello"); blanks < chatListGap {
+		t.Fatalf("expected first flush user-to-assistant gap, got %d blank lines:\n%s", blanks, firstPrinted)
+	}
+
+	m.transcript = append(m.transcript, tuirender.UIMessage{Role: "you", Kind: tuirender.KindText, Text: "next"})
+	second := m.emitNativeScrollbackCmd()
+	if second == nil {
+		t.Fatal("expected second native scrollback flush")
+	}
+	secondPrinted := xansi.Strip(teaPrintLineMessageBody(second()))
+	if got := leadingNewlines(secondPrinted); got != 2 {
+		t.Fatalf("expected second flush to start with assistant-to-user gap 2, got %d blank lines:\n%q", got, secondPrinted)
+	}
+	if strings.Contains(secondPrinted, "hello") {
+		t.Fatalf("second flush must not reprint previous assistant message:\n%s", secondPrinted)
+	}
+
+	m.transcript = append(m.transcript, tuirender.UIMessage{Role: "assistant", Kind: tuirender.KindText, Text: "answer"})
+	third := m.emitNativeScrollbackCmd()
+	if third == nil {
+		t.Fatal("expected third native scrollback flush")
+	}
+	thirdPrinted := xansi.Strip(teaPrintLineMessageBody(third()))
+	if got := leadingNewlines(thirdPrinted); got != chatListGapAfter(m.transcript[2], m.transcript[3]) {
+		t.Fatalf("expected third flush to start with user-to-assistant gap, got %d blank lines:\n%q", got, thirdPrinted)
+	}
+}
+
+func TestNativeScrollbackFlushDoesNotPersistComposerGap(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "high", "off")
+	m.width = 80
+	m.height = 24
+	*m.startupHeaderOnce = true
+	m.transcript = []tuirender.UIMessage{
+		{Role: "you", Kind: tuirender.KindText, Text: "hello"},
+		{Role: "assistant", Kind: tuirender.KindText, Text: "Hello! How can I help you today?"},
+	}
+
+	cmd := m.emitNativeScrollbackCmd()
+	if cmd == nil {
+		t.Fatal("expected native scrollback flush")
+	}
+	printed := teaPrintLineMessageBody(cmd())
+	if strings.HasSuffix(printed, "\n") {
+		t.Fatalf("expected native scrollback flush not to persist composer gap, got %#v", printed)
+	}
+}
+
+func TestChatBottomOnlyFrameLeavesTransientGapAboveComposer(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "high", "off")
+	m.width = 80
+	m.height = 24
+	*m.startupHeaderOnce = true
+	m.transcript = []tuirender.UIMessage{
+		{Role: "you", Kind: tuirender.KindText, Text: "hello"},
+		{Role: "assistant", Kind: tuirender.KindText, Text: "Hello! How can I help you today?"},
+	}
+	cmd := m.emitNativeScrollbackCmd()
+	if cmd == nil {
+		t.Fatal("expected native scrollback flush")
+	}
+
+	view := xansi.Strip(m.View())
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	boundaryIdx := firstFullWidthBoundaryLine(lines, 80)
+	if boundaryIdx != 1 {
+		t.Fatalf("expected transient blank row above composer boundary, got boundary=%d in:\n%s", boundaryIdx, view)
+	}
+	if strings.TrimSpace(lines[0]) != "" {
+		t.Fatalf("expected first live frame row to be blank, got %q in:\n%s", lines[0], view)
+	}
+}
+
+func TestChatBottomOnlyFrameDoesNotAddGapWhileBusyAfterUserPrompt(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "high", "off")
+	m.width = 80
+	m.height = 24
+	*m.startupHeaderOnce = true
+	m.transcript = []tuirender.UIMessage{{Role: "you", Kind: tuirender.KindText, Text: "cool"}}
+	cmd := m.emitNativeScrollbackCmd()
+	if cmd == nil {
+		t.Fatal("expected native scrollback flush")
+	}
+	m.startBusy()
+
+	view := xansi.Strip(m.View())
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	workingIdx := firstLineContaining(lines, "Working (")
+	boundaryIdx := firstFullWidthBoundaryLine(lines, 80)
+	if workingIdx != 0 {
+		t.Fatalf("expected busy bottom-only frame to start with working status, got working=%d in:\n%s", workingIdx, view)
+	}
+	if boundaryIdx != 1 {
+		t.Fatalf("expected composer boundary immediately after working status, got boundary=%d in:\n%s", boundaryIdx, view)
+	}
+}
+
+func TestChatLiveViewportKeepsAssistantToUserGapAfterNativeScrollbackTrim(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "high", "off")
+	m.width = 80
+	m.height = 24
+	*m.startupHeaderOnce = true
+	m.transcript = []tuirender.UIMessage{
+		{Role: "you", Kind: tuirender.KindText, Text: "hello"},
+		{Role: "assistant", Kind: tuirender.KindText, Text: "Hello again! What's on your mind?"},
+	}
+	m.nativeScrollbackPrinted = len(m.transcript)
+	m.transcript = append(m.transcript, tuirender.UIMessage{Role: "you", Kind: tuirender.KindText, Text: "kaka"})
+	m.startBusy()
+
+	view := xansi.Strip(m.View())
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	promptIdx := firstLineContaining(lines, "kaka")
+	if promptIdx < 0 {
+		t.Fatalf("expected live user prompt in busy view:\n%s", view)
+	}
+	if promptIdx < 3 {
+		t.Fatalf("expected assistant-to-user leading gap before trimmed live prompt, got prompt index %d in:\n%s", promptIdx, view)
+	}
+	for i := 0; i < promptIdx; i++ {
+		if strings.TrimSpace(lines[i]) != "" {
+			t.Fatalf("expected leading line %d before prompt to be blank, got %q in:\n%s", i, lines[i], view)
+		}
+	}
+}
+
+func TestChatBottomOnlyFrameDoesNotAddGapAfterUserTail(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "high", "off")
+	m.width = 80
+	m.height = 24
+	*m.startupHeaderOnce = true
+	m.transcript = []tuirender.UIMessage{{Role: "you", Kind: tuirender.KindText, Text: "cool"}}
+	cmd := m.emitNativeScrollbackCmd()
+	if cmd == nil {
+		t.Fatal("expected native scrollback flush")
+	}
+
+	view := xansi.Strip(m.View())
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	if boundaryIdx := firstFullWidthBoundaryLine(lines, 80); boundaryIdx != 0 {
+		t.Fatalf("expected user-tail bottom-only frame to omit transient gap, got boundary=%d in:\n%s", boundaryIdx, view)
+	}
+}
+
+func TestChatBottomOnlyFrameGapDoesNotOverflowConstrainedHeight(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "high", "off")
+	m.width = 80
+	m.height = countVisibleLines(m.renderBottom(80))
+	*m.startupHeaderOnce = true
+	m.transcript = []tuirender.UIMessage{{Role: "assistant", Kind: tuirender.KindText, Text: "tight response"}}
+
+	cmd := m.emitNativeScrollbackCmd()
+	if cmd == nil {
+		t.Fatal("expected native scrollback flush")
+	}
+	view := xansi.Strip(m.View())
+	if got := countVisibleLines(view); got > m.height {
+		t.Fatalf("expected constrained bottom-only view not to exceed height %d, got %d:\n%s", m.height, got, view)
+	}
+	lines := strings.Split(strings.TrimRight(view, "\n"), "\n")
+	if boundaryIdx := firstFullWidthBoundaryLine(lines, 80); boundaryIdx != 0 {
+		t.Fatalf("expected constrained bottom-only view to omit transient gap, got boundary=%d in:\n%s", boundaryIdx, view)
+	}
+}
+
+func TestNativeScrollbackReplayPreservesConversationGapAcrossStartBoundary(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 80
+	m.height = 24
+	*m.startupHeaderOnce = true
+	m.transcript = []tuirender.UIMessage{
+		{Role: "you", Kind: tuirender.KindText, Text: "first"},
+		{Role: "assistant", Kind: tuirender.KindText, Text: "reply"},
+		{Role: "you", Kind: tuirender.KindText, Text: "second"},
+	}
+	m.nativeScrollbackPrinted = 2
+
+	cmd := m.replayNativeScrollbackCmd()
+	if cmd == nil {
+		t.Fatal("expected native scrollback replay")
+	}
+	printed := xansi.Strip(teaPrintLineMessageBody(cmd()))
+	if got := leadingNewlines(printed); got != chatListGapAfter(m.transcript[1], m.transcript[2]) {
+		t.Fatalf("expected replay to start with assistant-to-user gap, got %d blank lines:\n%q", got, printed)
+	}
+	if strings.Contains(printed, "reply") {
+		t.Fatalf("replay from start boundary must not reprint previous assistant message:\n%s", printed)
+	}
+}
+
+func TestNativeScrollbackUsesPreviousRenderedMessageAcrossHiddenFocusBoundary(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "high", "on")
+	m.viewMode = protocol.ViewModeFocus
+	m.width = 80
+	m.height = 24
+	*m.startupHeaderOnce = true
+	m.transcript = []tuirender.UIMessage{
+		{Role: "assistant", Kind: tuirender.KindText, Text: "previous answer"},
+		{Role: "think", Kind: tuirender.KindThinking, Text: "hidden thought"},
+		{Role: "you", Kind: tuirender.KindText, Text: "next prompt"},
+	}
+	m.nativeScrollbackPrinted = 2
+
+	cmd := m.emitNativeScrollbackCmd()
+	if cmd == nil {
+		t.Fatal("expected native scrollback flush")
+	}
+	printed := xansi.Strip(teaPrintLineMessageBody(cmd()))
+	if got := leadingNewlines(printed); got != chatListGapAfter(m.transcript[0], m.transcript[2]) {
+		t.Fatalf("expected hidden focus boundary to use previous rendered assistant gap, got %d blank lines:\n%q", got, printed)
+	}
+	if strings.Contains(printed, "hidden thought") || strings.Contains(printed, "previous answer") {
+		t.Fatalf("flush must not print hidden or previous context messages:\n%s", printed)
+	}
+}
+
+func TestNativeScrollbackStartZeroDoesNotAddLeadingGap(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 80
+	m.height = 24
+	*m.startupHeaderOnce = true
+	m.transcript = []tuirender.UIMessage{{Role: "you", Kind: tuirender.KindText, Text: "first"}}
+
+	cmd := m.emitNativeScrollbackCmd()
+	if cmd == nil {
+		t.Fatal("expected native scrollback flush")
+	}
+	printed := xansi.Strip(teaPrintLineMessageBody(cmd()))
+	if strings.HasPrefix(printed, "\n") {
+		t.Fatalf("expected start==0 flush not to add leading gap, got %q", printed)
+	}
+}
+
+func TestNativeScrollbackCrossFlushToolBoundariesKeepDefaultGap(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		prev tuirender.UIMessage
+		next tuirender.UIMessage
+	}{
+		{
+			name: "assistant to tool",
+			prev: tuirender.UIMessage{Role: "assistant", Kind: tuirender.KindText, Text: "I'll run it."},
+			next: tuirender.UIMessage{Role: "shell_result_ok", Kind: tuirender.KindToolResult, Text: "Ran make test\nok"},
+		},
+		{
+			name: "tool to assistant",
+			prev: tuirender.UIMessage{Role: "shell_result_ok", Kind: tuirender.KindToolResult, Text: "Ran make test\nok"},
+			next: tuirender.UIMessage{Role: "assistant", Kind: tuirender.KindText, Text: "Done."},
+		},
+		{
+			name: "you to tool",
+			prev: tuirender.UIMessage{Role: "you", Kind: tuirender.KindText, Text: "run tests"},
+			next: tuirender.UIMessage{Role: "shell_result_ok", Kind: tuirender.KindToolResult, Text: "Ran make test\nok"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newModel(nil, "", "", "")
+			m.width = 80
+			m.height = 24
+			*m.startupHeaderOnce = true
+			m.transcript = []tuirender.UIMessage{tc.prev}
+			m.nativeScrollbackPrinted = 1
+			m.transcript = append(m.transcript, tc.next)
+
+			cmd := m.emitNativeScrollbackCmd()
+			if cmd == nil {
+				t.Fatal("expected native scrollback flush")
+			}
+			printed := xansi.Strip(teaPrintLineMessageBody(cmd()))
+			if got := leadingNewlines(printed); got != chatListGap {
+				t.Fatalf("expected default cross-flush gap %d, got %d blank lines:\n%q", chatListGap, got, printed)
+			}
+		})
+	}
+}
+
+func leadingNewlines(text string) int {
+	for i, r := range text {
+		if r != '\n' {
+			return i
+		}
+	}
+	return len(text)
+}
+
 func TestChatIdleViewDoesNotRenderEmptyViewportFrame(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 80

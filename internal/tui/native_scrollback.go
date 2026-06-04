@@ -53,7 +53,7 @@ func (m *model) replayNativeScrollbackCmd() tea.Cmd {
 	start := min(max(m.nativeScrollbackPrinted, 0), len(m.transcript))
 	text := ""
 	if start < len(m.transcript) {
-		text = m.scrollbackText(m.transcript[start:])
+		text = m.scrollbackTextWithPrevious(m.nativeScrollbackPreviousMessage(start), m.transcript[start:])
 	}
 	if start == 0 && (m.startupHeaderOnce == nil || !*m.startupHeaderOnce) {
 		if header := strings.TrimSpace(m.startupHeaderText()); header != "" {
@@ -110,7 +110,7 @@ func (m *model) emitNativeScrollbackCmd() tea.Cmd {
 			return nil
 		}
 	}
-	text := m.scrollbackText(m.transcript[start:])
+	text := m.scrollbackTextWithPrevious(m.nativeScrollbackPreviousMessage(start), m.transcript[start:])
 	if start == 0 && (m.startupHeaderOnce == nil || !*m.startupHeaderOnce) {
 		if header := strings.TrimSpace(m.startupHeaderText()); header != "" {
 			text = header + "\n\n" + text
@@ -130,6 +130,17 @@ func (m *model) emitNativeScrollbackCmd() tea.Cmd {
 
 func startupHeaderWithTrailingGap(header string) string {
 	return strings.TrimRight(header, "\n") + strings.Repeat("\n", startupHeaderTrailingBlankLines)
+}
+
+func (m model) nativeScrollbackPreviousMessage(start int) *tuirender.UIMessage {
+	if start <= 0 || start > len(m.transcript) {
+		return nil
+	}
+	previous := m.focusMessages(m.transcript[:start])
+	if len(previous) == 0 {
+		return nil
+	}
+	return &previous[len(previous)-1]
 }
 
 func focusMessagesAreOnlyDeferredToolSummary(messages []tuirender.UIMessage) bool {
