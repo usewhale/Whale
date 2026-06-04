@@ -76,7 +76,7 @@ func TestBuildCacheShapeIgnoresMessageIdentityFields(t *testing.T) {
 
 func TestBuildCacheShapeReportsSystemSegments(t *testing.T) {
 	systemBlocks := []string{
-		"Agent mode is active.",
+		"Mode contract.\n\n- Agent mode is the execution mode.",
 		"Current Whale runtime:\n- Current Whale workspace root: /tmp/task-a\n- OS: darwin",
 		"Tool use policy.\n\n- Tools are provided through the provider tool schema.",
 		"Workflow authoring.",
@@ -100,6 +100,10 @@ func TestBuildCacheShapeReportsSystemSegments(t *testing.T) {
 	if runtimeSegment.Hash == "" || runtimeSegment.Bytes == 0 {
 		t.Fatalf("runtime segment missing hash/bytes: %+v", runtimeSegment)
 	}
+	modeContractSegment := shape.SystemSegments[0]
+	if modeContractSegment.Name != "mode_contract" || modeContractSegment.Stability != "immutable" {
+		t.Fatalf("mode contract segment classification = %+v", modeContractSegment)
+	}
 	toolPolicySegment := shape.SystemSegments[2]
 	if toolPolicySegment.Name != "tool_policy" || toolPolicySegment.Stability != "immutable" {
 		t.Fatalf("tool policy segment classification = %+v", toolPolicySegment)
@@ -115,7 +119,6 @@ func TestBuildCacheShapeReportsRuntimeSegments(t *testing.T) {
 		"Tool use policy.\n\n- Tools are provided through the provider tool schema.",
 	}
 	runtimeBlocks := []string{
-		"Current session mode: agent.",
 		"Current Whale runtime:\n- Current Whale workspace root: /tmp/task-a\n- OS: darwin",
 	}
 	history := []core.Message{
@@ -131,15 +134,12 @@ func TestBuildCacheShapeReportsRuntimeSegments(t *testing.T) {
 	if len(shape.RuntimeSegments) != len(runtimeBlocks) {
 		t.Fatalf("runtime segments len = %d, want %d: %+v", len(shape.RuntimeSegments), len(runtimeBlocks), shape.RuntimeSegments)
 	}
-	if shape.RuntimeSegments[0].Name != "mode_instructions" || shape.RuntimeSegments[0].Stability != "dynamic" {
-		t.Fatalf("mode runtime segment classification = %+v", shape.RuntimeSegments[0])
-	}
-	if shape.RuntimeSegments[1].Name != "runtime_context" || shape.RuntimeSegments[1].Stability != "dynamic" {
-		t.Fatalf("runtime context segment classification = %+v", shape.RuntimeSegments[1])
+	if shape.RuntimeSegments[0].Name != "runtime_context" || shape.RuntimeSegments[0].Stability != "dynamic" {
+		t.Fatalf("runtime context segment classification = %+v", shape.RuntimeSegments[0])
 	}
 
 	changedRuntime := append([]string(nil), runtimeBlocks...)
-	changedRuntime[1] = strings.Replace(changedRuntime[1], "/tmp/task-a", "/tmp/task-b", 1)
+	changedRuntime[0] = strings.Replace(changedRuntime[0], "/tmp/task-a", "/tmp/task-b", 1)
 	changedHistory := []core.Message{
 		{Role: core.RoleSystem, Text: strings.Join(systemBlocks, "\n\n")},
 		{Role: core.RoleSystem, Text: strings.Join(changedRuntime, "\n\n")},
@@ -160,6 +160,49 @@ func TestBuildCacheShapeReportsRuntimeSegments(t *testing.T) {
 	}
 	if changed.PrefixHash == shape.PrefixHash {
 		t.Fatal("expected runtime change to alter provider prefix hash")
+	}
+}
+
+func TestBuildCacheShapeTreatsModeChangeAsLogTail(t *testing.T) {
+	systemBlocks := []string{
+		"Mode contract.\n\n- Agent mode is the execution mode.",
+	}
+	runtimeBlocks := []string{
+		"Current Whale runtime:\n- Current Whale workspace root: /tmp/task-a\n- OS: darwin",
+	}
+	agentHistory := []core.Message{
+		{Role: core.RoleSystem, Text: strings.Join(systemBlocks, "\n\n")},
+		{Role: core.RoleSystem, Text: strings.Join(runtimeBlocks, "\n\n")},
+		{Role: core.RoleUser, Hidden: true, Text: "<mode_changed>\nThe active session mode is now agent, changed from plan.\n</mode_changed>"},
+		{Role: core.RoleUser, Text: "hi"},
+	}
+	planHistory := []core.Message{
+		{Role: core.RoleSystem, Text: strings.Join(systemBlocks, "\n\n")},
+		{Role: core.RoleSystem, Text: strings.Join(runtimeBlocks, "\n\n")},
+		{Role: core.RoleUser, Hidden: true, Text: "<mode_changed>\nThe active session mode is now plan, changed from agent. When the plan is decision-complete, output exactly one <proposed_plan> block.\n</mode_changed>"},
+		{Role: core.RoleUser, Text: "hi"},
+	}
+
+	agentShape := buildCacheShapeForRequestWithRuntime(cacheShapeRequestAgent, agentHistory, nil, "", systemBlocks, runtimeBlocks)
+	planShape := buildCacheShapeForRequestWithRuntime(cacheShapeRequestAgent, planHistory, nil, "", systemBlocks, runtimeBlocks)
+
+	if agentShape.SystemHash != planShape.SystemHash {
+		t.Fatal("mode change log marker should not alter immutable system hash")
+	}
+	if agentShape.RuntimeHash != planShape.RuntimeHash {
+		t.Fatal("mode change log marker should not alter runtime hash")
+	}
+	if agentShape.PrefixHash == "" || planShape.PrefixHash == "" {
+		t.Fatal("prefix hash should be populated")
+	}
+	if agentShape.PrefixHash != planShape.PrefixHash {
+		t.Fatal("mode change log marker should not alter provider prefix hash")
+	}
+	if agentShape.LogTailHash == planShape.LogTailHash {
+		t.Fatal("expected mode change log marker to alter log tail hash")
+	}
+	if agentShape.RequestHash == planShape.RequestHash {
+		t.Fatal("expected mode change log marker to alter request hash")
 	}
 }
 

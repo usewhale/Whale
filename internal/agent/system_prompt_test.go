@@ -84,7 +84,7 @@ func TestRuntimeSystemBlocksIncludeDynamicSystemBlocks(t *testing.T) {
 		}),
 	)
 	immutable := strings.Join(a.buildImmutableSystemBlocks(), "\n\n")
-	if strings.Contains(immutable, "Available workflows.") || strings.Contains(immutable, "dead-code-scan [project]") || strings.Contains(immutable, "Current session mode: agent") {
+	if strings.Contains(immutable, "Available workflows.") || strings.Contains(immutable, "dead-code-scan [project]") || strings.Contains(immutable, "Current session mode:") {
 		t.Fatalf("dynamic system blocks leaked into immutable system blocks:\n%s", immutable)
 	}
 
@@ -93,11 +93,13 @@ func TestRuntimeSystemBlocksIncludeDynamicSystemBlocks(t *testing.T) {
 	for _, want := range []string{
 		"Available workflows.",
 		"dead-code-scan [project]",
-		"Current session mode: agent",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("runtime system blocks missing %q:\n%s", want, joined)
 		}
+	}
+	if strings.Contains(joined, "Current session mode:") {
+		t.Fatalf("current mode marker leaked into runtime system blocks:\n%s", joined)
 	}
 }
 
@@ -220,28 +222,33 @@ func TestRuntimeEnvironmentBlockIncludesWorktreeContext(t *testing.T) {
 func TestRuntimeSystemBlocksDeclareCurrentModeAuthoritatively(t *testing.T) {
 	a := NewAgentWithRegistry(nil, nil, core.NewToolRegistry(nil), WithSessionMode(session.ModeAsk))
 	immutable := strings.Join(a.buildImmutableSystemBlocks(), "\n\n")
-	if strings.Contains(immutable, "Current session mode: ask") || strings.Contains(immutable, "Ask mode is active.") {
+	if strings.Contains(immutable, "Current session mode: ask") {
 		t.Fatalf("mode authority leaked into immutable system blocks:\n%s", immutable)
 	}
 	for _, want := range []string{
 		"Mode switching commands are /agent, /ask, and /plan",
 		"Do not tell users to run /mode agent",
+		"Mode contract.",
+		"Agent mode is the execution mode.",
+		"Ask mode is read-only answer mode.",
+		"Plan mode is read-only collaboration mode",
+		"ask_mode_blocked or plan_mode_blocked",
 	} {
 		if !strings.Contains(immutable, want) {
-			t.Fatalf("immutable mode switching guidance missing %q:\n%s", want, immutable)
+			t.Fatalf("immutable mode guidance missing %q:\n%s", want, immutable)
 		}
 	}
 
 	joined := strings.Join(a.buildRuntimeSystemBlocks(), "\n\n")
-
-	for _, want := range []string{
-		"Current session mode: ask",
-		"claim the current mode is any other value as stale",
+	for _, notWant := range []string{
+		"Current session mode:",
+		"Treat older mode markers as stale.",
 		"Ask mode is active.",
-		"do not retry the same tool call or the same shell operation with another shell command",
+		"Agent mode is active.",
+		"You are in PLAN mode.",
 	} {
-		if !strings.Contains(joined, want) {
-			t.Fatalf("runtime system blocks missing %q:\n%s", want, joined)
+		if strings.Contains(joined, notWant) {
+			t.Fatalf("runtime system blocks should not include long mode text %q:\n%s", notWant, joined)
 		}
 	}
 }
@@ -249,25 +256,136 @@ func TestRuntimeSystemBlocksDeclareCurrentModeAuthoritatively(t *testing.T) {
 func TestPlanModeInstructionsTreatExecutionRequestsAsPlanning(t *testing.T) {
 	a := NewAgentWithRegistry(nil, nil, core.NewToolRegistry(nil), WithSessionMode(session.ModePlan))
 	immutable := strings.Join(a.buildImmutableSystemBlocks(), "\n\n")
-	if strings.Contains(immutable, "PLAN mode") || strings.Contains(immutable, "Do not run side-effectful commands") {
-		t.Fatalf("plan mode instructions leaked into immutable system blocks:\n%s", immutable)
-	}
-
-	joined := strings.Join(a.buildRuntimeSystemBlocks(), "\n\n")
 
 	for _, want := range []string{
 		"User intent, imperative wording",
 		"create a branch",
-		"treat it as a request to plan the execution",
+		"Treat execution requests in Plan mode as requests to plan the execution",
 		"do not retry the same tool call or the same shell operation with another shell command",
 		"Do not run side-effectful commands",
 		"Do not output slash commands such as /agent",
 		"Only the user or UI can switch modes",
 		"<proposed_plan>",
 	} {
-		if !strings.Contains(joined, want) {
-			t.Fatalf("runtime plan mode instructions missing %q:\n%s", want, joined)
+		if !strings.Contains(immutable, want) {
+			t.Fatalf("immutable plan mode contract missing %q:\n%s", want, immutable)
 		}
+	}
+
+	joined := strings.Join(a.buildRuntimeSystemBlocks(), "\n\n")
+	if strings.Contains(joined, "User intent, imperative wording") || strings.Contains(joined, "Do not run side-effectful commands") {
+		t.Fatalf("runtime should not include long plan mode instructions:\n%s", joined)
+	}
+	if strings.Contains(joined, "Current session mode:") {
+		t.Fatalf("runtime should not include current mode marker:\n%s", joined)
+	}
+}
+
+func TestRuntimeSystemPromptStableAcrossSessionModes(t *testing.T) {
+	agentMode := NewAgentWithRegistry(nil, nil, core.NewToolRegistry(nil), WithSessionMode(session.ModeAgent), WithProjectMemory(false, 0, nil, "/repo"))
+	askMode := NewAgentWithRegistry(nil, nil, core.NewToolRegistry(nil), WithSessionMode(session.ModeAsk), WithProjectMemory(false, 0, nil, "/repo"))
+	planMode := NewAgentWithRegistry(nil, nil, core.NewToolRegistry(nil), WithSessionMode(session.ModePlan), WithProjectMemory(false, 0, nil, "/repo"))
+
+	agentPrompt := strings.Join(agentMode.buildRuntimeSystemBlocks(), "\n\n")
+	askPrompt := strings.Join(askMode.buildRuntimeSystemBlocks(), "\n\n")
+	planPrompt := strings.Join(planMode.buildRuntimeSystemBlocks(), "\n\n")
+	if agentPrompt != askPrompt || agentPrompt != planPrompt {
+		t.Fatalf("runtime provider prompt should not change across modes")
+	}
+	if strings.Contains(agentPrompt, "Current session mode:") {
+		t.Fatalf("runtime provider prompt leaked current mode marker:\n%s", agentPrompt)
+	}
+}
+
+func TestProviderHistoryReplaysPersistedModeChangeMarker(t *testing.T) {
+	provider := &modeTailCaptureProvider{}
+	store := NewInMemoryStore()
+	a := NewAgentWithRegistry(provider, store, core.NewToolRegistry(nil), WithSessionMode(session.ModePlan), WithProjectMemory(false, 0, nil, "/repo"))
+
+	_, err := store.Create(context.Background(), core.Message{
+		SessionID: "s-mode-tail",
+		Role:      core.RoleUser,
+		Text:      "<mode_changed>\nThe active session mode is now plan, changed from agent. When the plan is decision-complete, output exactly one <proposed_plan> block.\n</mode_changed>",
+		Hidden:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for range mustRunStreamWithOptions(t, a, "s-mode-tail", "draft a plan", RunOptions{}) {
+	}
+
+	if len(provider.history) == 0 {
+		t.Fatal("provider did not receive history")
+	}
+	var marker core.Message
+	markerIndex := -1
+	for i, msg := range provider.history {
+		if strings.Contains(msg.Text, "<mode_changed>") {
+			marker = msg
+			markerIndex = i
+			break
+		}
+	}
+	if markerIndex < 0 {
+		t.Fatalf("provider history missing persisted mode-change marker: %+v", provider.history)
+	}
+	if marker.Role != core.RoleUser || !marker.Hidden {
+		t.Fatalf("provider mode marker should be hidden history message, got role=%s hidden=%v text=%q", marker.Role, marker.Hidden, marker.Text)
+	}
+	last := provider.history[len(provider.history)-1]
+	if last.Text != "draft a plan" {
+		t.Fatalf("mode-change marker should not replace the last user prompt, last=%+v", last)
+	}
+	for _, want := range []string{
+		"<mode_changed>",
+		"active session mode is now plan",
+		"<proposed_plan>",
+	} {
+		if !strings.Contains(marker.Text, want) {
+			t.Fatalf("mode marker missing %q:\n%s", want, marker.Text)
+		}
+	}
+	for _, msg := range provider.history {
+		if strings.Contains(msg.Text, "<whale_runtime_mode>") {
+			t.Fatalf("provider history should not include per-turn runtime mode marker: %+v", msg)
+		}
+	}
+	for _, msg := range provider.history {
+		if msg.Role == core.RoleSystem && strings.Contains(msg.Text, "Current session mode:") {
+			t.Fatalf("current mode leaked into system prompt:\n%s", msg.Text)
+		}
+	}
+	persisted, err := store.List(context.Background(), "s-mode-tail")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, msg := range persisted {
+		if strings.Contains(msg.Text, "<whale_runtime_mode>") {
+			t.Fatalf("per-turn mode marker should not be persisted: %+v", msg)
+		}
+	}
+}
+
+type modeTailCaptureProvider struct {
+	history []Message
+}
+
+func (p *modeTailCaptureProvider) StreamResponse(_ context.Context, history []Message, _ []Tool) <-chan ProviderEvent {
+	p.history = append([]Message(nil), history...)
+	return eventStream(endTurnEvent("ok"))
+}
+
+func TestImmutableSystemPromptStableAcrossSessionModes(t *testing.T) {
+	agentMode := NewAgentWithRegistry(nil, nil, core.NewToolRegistry(nil), WithSessionMode(session.ModeAgent))
+	askMode := NewAgentWithRegistry(nil, nil, core.NewToolRegistry(nil), WithSessionMode(session.ModeAsk))
+	planMode := NewAgentWithRegistry(nil, nil, core.NewToolRegistry(nil), WithSessionMode(session.ModePlan))
+
+	agentPrompt := strings.Join(agentMode.buildImmutableSystemBlocks(), "\n\n")
+	askPrompt := strings.Join(askMode.buildImmutableSystemBlocks(), "\n\n")
+	planPrompt := strings.Join(planMode.buildImmutableSystemBlocks(), "\n\n")
+	if agentPrompt != askPrompt || agentPrompt != planPrompt {
+		t.Fatalf("immutable system prompt should be stable across modes")
 	}
 }
 

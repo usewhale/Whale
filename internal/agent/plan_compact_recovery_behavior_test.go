@@ -153,7 +153,7 @@ func TestPlanModeInjectsSystemPrompt(t *testing.T) {
 			joinedSystem.WriteString("\n\n")
 		}
 	}
-	if !strings.Contains(joinedSystem.String(), "PLAN mode") {
+	if !strings.Contains(joinedSystem.String(), "Plan mode is read-only collaboration mode") {
 		t.Fatalf("unexpected system prompt: %s", joinedSystem.String())
 	}
 }
