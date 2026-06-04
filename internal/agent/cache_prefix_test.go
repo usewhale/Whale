@@ -54,7 +54,7 @@ func TestBuildTurnProviderHistoryDoesNotAppendLegacyPlanRuntimeControl(t *testin
 	}
 }
 
-func TestRunStreamEmitsPrefixDriftWhenImmutablePrefixChanges(t *testing.T) {
+func TestRunStreamDoesNotEmitPrefixDriftWhenRuntimeMemoryChanges(t *testing.T) {
 	dir := t.TempDir()
 	memFile := filepath.Join(dir, "AGENTS.md")
 	if err := os.WriteFile(memFile, []byte("v1"), 0o600); err != nil {
@@ -71,14 +71,14 @@ func TestRunStreamEmitsPrefixDriftWhenImmutablePrefixChanges(t *testing.T) {
 	seen := false
 	for ev := range events {
 		if ev.Type == AgentEventTypePrefixDrift && ev.PrefixDrift != nil && ev.PrefixDrift.Expected != "" && ev.PrefixDrift.Actual != "" && ev.PrefixDrift.Expected != ev.PrefixDrift.Actual {
-			seen = true
+			t.Fatalf("unexpected prefix drift for runtime memory change: %+v", ev.PrefixDrift)
 		}
 		if ev.Type == AgentEventTypeError {
 			t.Fatalf("unexpected error: %v", ev.Err)
 		}
 	}
-	if !seen {
-		t.Fatal("expected prefix drift event")
+	if seen {
+		t.Fatal("unexpected prefix drift event")
 	}
 }
 
@@ -96,6 +96,38 @@ func (p *cacheMetricsProvider) StreamResponse(_ context.Context, _ []Message, _ 
 				PromptTokens:          120,
 				PromptCacheHitTokens:  80,
 				PromptCacheMissTokens: 20,
+			},
+		},
+	}
+	close(out)
+	return out
+}
+
+type prefixCacheShapeProvider struct {
+	prefixRequests int
+}
+
+func (p *prefixCacheShapeProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	return p.complete()
+}
+
+func (p *prefixCacheShapeProvider) StreamResponseWithPrefix(_ context.Context, _ []Message, _ string, _ []string) <-chan ProviderEvent {
+	return p.complete()
+}
+
+func (p *prefixCacheShapeProvider) complete() <-chan ProviderEvent {
+	out := make(chan ProviderEvent, 1)
+	out <- ProviderEvent{
+		Type: EventComplete,
+		Response: &ProviderResponse{
+			FinishReason: FinishReasonEndTurn,
+			Content:      "ok",
+			Model:        "deepseek-chat",
+			Usage: Usage{
+				PromptTokens:             100,
+				PromptCacheHitTokens:     50,
+				PromptCacheMissTokens:    50,
+				PrefixCompletionRequests: p.prefixRequests,
 			},
 		},
 	}
@@ -122,6 +154,9 @@ func TestRunStreamEmitsPrefixCacheMetrics(t *testing.T) {
 			if ev.CacheMetrics.PromptTokens != 120 || ev.CacheMetrics.CachedTokens != 80 || ev.CacheMetrics.CacheHitRatio != 0.8 {
 				t.Fatalf("unexpected metrics: %+v", ev.CacheMetrics)
 			}
+			if ev.CacheMetrics.CacheShape == nil || ev.CacheMetrics.CacheShape.SystemHash == "" || ev.CacheMetrics.CacheShape.LogTailHash == "" || ev.CacheMetrics.CacheShape.RequestHash == "" {
+				t.Fatalf("missing cache shape: %+v", ev.CacheMetrics.CacheShape)
+			}
 			seen = true
 		}
 		if ev.Type == AgentEventTypeError {
@@ -131,4 +166,70 @@ func TestRunStreamEmitsPrefixCacheMetrics(t *testing.T) {
 	if !seen {
 		t.Fatal("expected prefix cache metrics event")
 	}
+}
+
+func TestRunStreamCacheShapeOmitsFallbackAssistantPrefix(t *testing.T) {
+	store := NewInMemoryStore()
+	a := NewAgentWithRegistry(
+		&prefixCacheShapeProvider{prefixRequests: 0},
+		store,
+		core.NewToolRegistry(nil),
+		WithUsageLogPath(filepath.Join(t.TempDir(), "usage.jsonl")),
+	)
+
+	events, err := a.RunStreamWithTurnOptions(context.Background(), "s-prefix-fallback", "hi", RunOptions{
+		PrefixCompletion: true,
+		AssistantPrefix:  "{",
+	})
+	if err != nil {
+		t.Fatalf("run stream failed: %v", err)
+	}
+	for ev := range events {
+		if ev.Type == AgentEventTypePrefixCacheMetrics && ev.CacheMetrics != nil {
+			if ev.CacheMetrics.CacheShape == nil {
+				t.Fatal("missing cache shape")
+			}
+			if ev.CacheMetrics.CacheShape.AssistantPrefixHash != "" {
+				t.Fatalf("assistant prefix hash = %q, want empty", ev.CacheMetrics.CacheShape.AssistantPrefixHash)
+			}
+			return
+		}
+		if ev.Type == AgentEventTypeError {
+			t.Fatalf("unexpected error: %v", ev.Err)
+		}
+	}
+	t.Fatal("expected prefix cache metrics event")
+}
+
+func TestRunStreamCacheShapeIncludesUsedAssistantPrefix(t *testing.T) {
+	store := NewInMemoryStore()
+	a := NewAgentWithRegistry(
+		&prefixCacheShapeProvider{prefixRequests: 1},
+		store,
+		core.NewToolRegistry(nil),
+		WithUsageLogPath(filepath.Join(t.TempDir(), "usage.jsonl")),
+	)
+
+	events, err := a.RunStreamWithTurnOptions(context.Background(), "s-prefix-used", "hi", RunOptions{
+		PrefixCompletion: true,
+		AssistantPrefix:  "{",
+	})
+	if err != nil {
+		t.Fatalf("run stream failed: %v", err)
+	}
+	for ev := range events {
+		if ev.Type == AgentEventTypePrefixCacheMetrics && ev.CacheMetrics != nil {
+			if ev.CacheMetrics.CacheShape == nil {
+				t.Fatal("missing cache shape")
+			}
+			if ev.CacheMetrics.CacheShape.AssistantPrefixHash == "" {
+				t.Fatal("expected assistant prefix hash")
+			}
+			return
+		}
+		if ev.Type == AgentEventTypeError {
+			t.Fatalf("unexpected error: %v", ev.Err)
+		}
+	}
+	t.Fatal("expected prefix cache metrics event")
 }

@@ -276,12 +276,12 @@ func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 		fields := strings.Fields(trimmed)
 		if len(fields) == 2 {
 			switch fields[1] {
-			case "usage", "tools", "repair", "recent", "profile", "all":
+			case "usage", "cache", "tools", "repair", "recent", "profile", "all":
 				stats := a.buildStatsLocalResult(fields[1])
 				return CommandExecution{Handled: true, Text: stats.PlainText, LocalResult: stats}, nil
 			}
 		}
-		return CommandExecution{Handled: true}, errors.New("usage: /stats [usage|tools|repair|recent|profile|all]")
+		return CommandExecution{Handled: true}, errors.New("usage: /stats [usage|cache|tools|repair|recent|profile|all]")
 	}
 	if strings.HasPrefix(line, "/compact") {
 		fields := strings.Fields(line)

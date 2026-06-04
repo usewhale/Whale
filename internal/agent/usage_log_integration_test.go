@@ -48,7 +48,7 @@ func TestRecordTurnCostWritesSubagentUsageMetadata(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("save meta: %v", err)
 	}
-	a.recordTurnCost("child", llm.Usage{PromptTokens: 100, PromptCacheHitTokens: 50, PromptCacheMissTokens: 50}, "deepseek-v4-flash", "fp")
+	a.recordTurnCost("child", llm.Usage{PromptTokens: 100, PromptCacheHitTokens: 50, PromptCacheMissTokens: 50}, "deepseek-v4-flash", "fp", nil)
 
 	b, err := os.ReadFile(usagePath)
 	if err != nil {
@@ -94,7 +94,7 @@ func TestRecordTurnCostSerializesConcurrentSessionMetaUpdates(t *testing.T) {
 	for i := 0; i < n; i++ {
 		go func() {
 			defer wg.Done()
-			a.recordTurnCost("s-cost", usage, "deepseek-v4-flash", "fp")
+			a.recordTurnCost("s-cost", usage, "deepseek-v4-flash", "fp", nil)
 		}()
 	}
 	wg.Wait()

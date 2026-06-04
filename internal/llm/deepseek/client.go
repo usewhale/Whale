@@ -21,12 +21,9 @@ import (
 )
 
 const (
-	defaultBaseURL               = "https://api.deepseek.com"
-	defaultStreamMaxAttempts     = 6
-	defaultStreamIdleTimeout     = 90 * time.Second
-	maxToolResultReplayTokens    = 2000
-	maxToolResultReplayChars     = 12 * 1024
-	compactedToolResultKeepRunes = 3000
+	defaultBaseURL           = "https://api.deepseek.com"
+	defaultStreamMaxAttempts = 6
+	defaultStreamIdleTimeout = 90 * time.Second
 )
 
 var errIncompleteStream = errors.New("stream disconnected before completion")
@@ -888,15 +885,9 @@ func looksLikeCompleteJSON(s string) bool {
 func toDeepSeekTools(tools []core.Tool) []map[string]any {
 	out := make([]map[string]any, 0, len(tools))
 	for _, t := range tools {
-		spec := core.DescribeTool(t)
-		out = append(out, map[string]any{
-			"type": "function",
-			"function": map[string]any{
-				"name":        spec.Name,
-				"description": spec.Description,
-				"parameters":  core.FlattenSchemaForModel(spec.Parameters),
-			},
-		})
+		if payload := core.ProviderToolPayload(t); payload != nil {
+			out = append(out, payload)
+		}
 	}
 	return out
 }
@@ -955,7 +946,7 @@ func toDeepSeekMessages(history []core.Message) []map[string]any {
 				out = append(out, map[string]any{
 					"role":         "tool",
 					"tool_call_id": tr.ToolCallID,
-					"content":      compactToolResultForReplay(tr.Content),
+					"content":      compact.ToolResultReplayContent(tr.Content),
 				})
 				delete(pendingToolCalls, tr.ToolCallID)
 			}
@@ -1136,34 +1127,4 @@ func syntheticMissingToolResult(id string) map[string]any {
 		"tool_call_id": id,
 		"content":      `{"success":false,"error":"missing tool result recovered before provider send","code":"missing_tool_result_recovered"}`,
 	}
-}
-
-func compactToolResultForReplay(content string) string {
-	estimatedTokens := compact.EstimateTokens(content)
-	if estimatedTokens <= maxToolResultReplayTokens && len(content) <= maxToolResultReplayChars {
-		return content
-	}
-	runes := []rune(content)
-	if len(runes) <= compactedToolResultKeepRunes {
-		return content
-	}
-	headRunes := compactedToolResultKeepRunes / 2
-	tailRunes := compactedToolResultKeepRunes - headRunes
-	head := string(runes[:headRunes])
-	tail := string(runes[len(runes)-tailRunes:])
-	return fmt.Sprintf(
-		"[tool result compacted for model replay]\n"+
-			"original_estimated_tokens=%d original_chars=%d retained_head_runes=%d retained_tail_runes=%d\n"+
-			"Full raw tool result remains in Whale session history; this provider replay is abbreviated.\n\n"+
-			"--- head ---\n%s\n\n"+
-			"--- omitted ---\n[... omitted %d runes from tool result replay ...]\n\n"+
-			"--- tail ---\n%s",
-		estimatedTokens,
-		len(content),
-		headRunes,
-		tailRunes,
-		head,
-		len(runes)-headRunes-tailRunes,
-		tail,
-	)
 }

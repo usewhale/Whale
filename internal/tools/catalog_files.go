@@ -34,7 +34,7 @@ func (b *Toolset) fileDiscoveryTools() []core.Tool {
 	return []core.Tool{
 		toolFn{
 			name:        "read_file",
-			description: "Read file content. Workspace, git worktree, and discovered local skill paths are read directly; external paths request file access approval before reading. Use this before edit/write to confirm exact text. A full read records runtime file state required by edit. Files up to 32KB return full content by default; larger files return an outline with head lines and continuation hints. Use offset/limit to read bounded ranges.",
+			description: "Read file content. Workspace, git worktree, and discovered local skill paths are read directly; external paths request file access approval before reading. Use this before edit/write to confirm exact text. Any successful read records runtime file state required by edit, including outline and bounded range reads. Files up to 32KB return full content by default; larger files return an outline with head lines and continuation hints. Use offset/limit to read bounded ranges.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
@@ -87,7 +87,7 @@ func (b *Toolset) fileMutationTools() []core.Tool {
 	return []core.Tool{
 		toolFn{
 			name:        "edit",
-			description: "Apply SEARCH/REPLACE edits to an existing file. Requires a prior full read_file result for the same file; do not pass any file-state token. Requires exact search text; returns search_not_found when search is not found. Use for small surgical changes when the exact current text is known. Prefer apply_patch for most edits, multi-hunk changes, and multi-file changes.",
+			description: "Apply SEARCH/REPLACE edits to an existing file. Requires prior runtime file state from read_file, write, apply_patch, or a successful edit for the same file; do not pass any file-state token. Requires exact search text; returns search_not_found when search is not found. Use for small surgical changes when the exact current text is known. Prefer apply_patch for most edits, multi-hunk changes, and multi-file changes.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,

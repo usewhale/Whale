@@ -11,9 +11,9 @@ import (
 )
 
 // buildTurnIterCost simulates what a single tool-loop iteration costs in
-// terms of system-prompt rebuilding: buildImmutableSystemBlocks (which calls
-// ReadProjectMemory + skills.Discover) followed by rt.Prefix.Refresh (which
-// sha256s the joined system blocks). One outer iter = one tool-loop iter.
+// terms of runtime system-prompt rebuilding: buildRuntimeSystemBlocks (which
+// calls ReadProjectMemory + skills.Discover) followed by replacing the runtime
+// suffix. One outer iter = one tool-loop iter.
 func benchTurnIter(b *testing.B, projectMemoryBytes int) {
 	dir := b.TempDir()
 	if projectMemoryBytes > 0 {
@@ -29,7 +29,7 @@ func benchTurnIter(b *testing.B, projectMemoryBytes int) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		rt.Prefix.Refresh(a.buildImmutableSystemBlocks())
+		rt.SetRuntimeBlocks(a.buildRuntimeSystemBlocks())
 	}
 }
 

@@ -303,7 +303,7 @@ func classifyWorkflowsFields(fields []string) SubmitClass {
 
 func validStatsView(view string) bool {
 	switch view {
-	case "usage", "tools", "repair", "recent", "profile", "all":
+	case "usage", "cache", "tools", "repair", "recent", "profile", "all":
 		return true
 	default:
 		return false

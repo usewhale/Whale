@@ -127,6 +127,9 @@ type App struct {
 	thinkingEnabled       bool
 	contextWindow         int
 	mcpManager            *whalemcp.Manager
+	mcpSig                string
+	mcpToolPayloads       map[string]string
+	mcpSigFrozen          bool
 	pluginManager         *plugins.Manager
 	pluginTools           []core.Tool
 	pluginAgents          []plugins.AgentDefinition

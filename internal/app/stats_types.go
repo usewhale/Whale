@@ -29,6 +29,7 @@ type usageStats struct {
 	Buckets                  []usageBucketStats
 	ByModel                  map[string]*usageModelStats
 	Recent                   []telemetry.UsageRecord
+	CacheDiagnostics         cacheDiagnostics
 }
 
 type usageBucketStats struct {
@@ -117,6 +118,8 @@ type profileStats struct {
 	SubagentCostUSD                float64
 	SubagentMaxPromptTokens        int
 	PrefixFingerprints             map[string]bool
+	ProviderPrefixHashes           map[string]bool
+	PrefixShapeSessions            map[string]bool
 	ToolCalls                      int
 	ToolResultChars                int
 	ApprovalPrompts                int
@@ -193,6 +196,12 @@ type profileSessionStats struct {
 	SubagentCostUSD                float64
 	SubagentMaxPromptTokens        int
 	PrefixFingerprints             map[string]bool
+	ProviderPrefixHashes           map[string]bool
+	SystemHashes                   map[string]bool
+	RuntimeHashes                  map[string]bool
+	ToolsHashes                    map[string]bool
+	RequestHashes                  map[string]bool
+	ShapeSegments                  map[string]map[string]bool
 	ByTool                         map[string]*profileToolStats
 	approvalPromptKeys             map[string]bool
 	approvalDecisionKeys           map[string]bool
@@ -205,16 +214,43 @@ type profileToolStats struct {
 }
 
 type sessionUsageSummary struct {
-	Turns            int
-	PromptTokens     int
-	CompletionTokens int
-	CacheHit         int
-	CacheMiss        int
-	CostUSD          float64
-	CacheSavingsUSD  float64
-	LastPromptTokens int
-	LastTS           int64
-	SubagentTurns    int
-	SubagentTokens   int
-	SubagentCostUSD  float64
+	Turns                 int
+	PromptTokens          int
+	CompletionTokens      int
+	CacheHit              int
+	CacheMiss             int
+	CostUSD               float64
+	CacheSavingsUSD       float64
+	LastPromptTokens      int
+	LastTS                int64
+	SubagentTurns         int
+	SubagentTokens        int
+	SubagentCostUSD       float64
+	SubagentRequestHashes map[string]bool
+	SubagentSystemHashes  map[string]bool
+	SubagentToolsHashes   map[string]bool
+}
+
+type cacheDiagnostics struct {
+	Breaks []cacheBreak
+	Counts map[string]int
+}
+
+type cacheBreak struct {
+	TS              int64
+	Session         string
+	Key             string
+	Model           string
+	RequestKind     string
+	PreviousHit     int
+	CurrentHit      int
+	CurrentMiss     int
+	PromptTokens    int
+	Cause           string
+	Details         string
+	ChangedTools    []string
+	AddedTools      []string
+	RemovedTools    []string
+	PreviousRequest string
+	CurrentRequest  string
 }

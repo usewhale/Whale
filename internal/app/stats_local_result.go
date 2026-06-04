@@ -25,6 +25,8 @@ func (a *App) buildStatsLocalResultAt(view string, now time.Time) *LocalResult {
 	switch view {
 	case "usage":
 		result.Sections = append(result.Sections, usageStatsSections(usage)...)
+	case "cache":
+		result.Sections = append(result.Sections, cacheDiagnosticsSections(usage.CacheDiagnostics)...)
 	case "tools", "repair":
 		result.Sections = append(result.Sections, toolInputStatsSections(toolInput)...)
 	case "recent":
@@ -35,6 +37,7 @@ func (a *App) buildStatsLocalResultAt(view string, now time.Time) *LocalResult {
 		result.Sections = append(result.Sections, profileStatsSections(profile)...)
 	case "all":
 		result.Sections = append(result.Sections, usageStatsSections(usage)...)
+		result.Sections = append(result.Sections, cacheDiagnosticsSections(usage.CacheDiagnostics)...)
 		result.Sections = append(result.Sections, toolInputStatsSections(toolInput)...)
 		result.Sections = append(result.Sections, recentStatsSections(usage, toolInput)...)
 	default:
@@ -48,7 +51,7 @@ func (a *App) buildStatsLocalResultAt(view string, now time.Time) *LocalResult {
 
 func normalizeStatsView(view string) string {
 	switch strings.TrimSpace(view) {
-	case "usage", "tools", "repair", "recent", "profile", "all":
+	case "usage", "cache", "tools", "repair", "recent", "profile", "all":
 		return strings.TrimSpace(view)
 	default:
 		return "overview"
@@ -124,6 +127,9 @@ func usageStatsSections(stats usageStats) []LocalResultSection {
 	if stats.PrefixCompletionRequests > 0 {
 		sections[0].Fields = append(sections[0].Fields, LocalResultField{Label: "Prefix completion", Value: fmt.Sprintf("%d requests", stats.PrefixCompletionRequests)})
 	}
+	if summary := cacheDiagnosticsSummary(stats.CacheDiagnostics); summary != "" {
+		sections[0].Fields = append(sections[0].Fields, LocalResultField{Label: "Cache diagnostics", Value: summary, Tone: "warn"})
+	}
 	if len(stats.Buckets) > 0 {
 		fields := make([]LocalResultField, 0, len(stats.Buckets))
 		for _, b := range stats.Buckets {
@@ -147,6 +153,34 @@ func usageStatsSections(stats usageStats) []LocalResultSection {
 		sections = append(sections, LocalResultSection{Title: "By model", Fields: fields})
 	}
 	return sections
+}
+
+func cacheDiagnosticsSections(diag cacheDiagnostics) []LocalResultSection {
+	sections := []LocalResultSection{{Title: "Cache diagnostics", Fields: []LocalResultField{
+		{Label: "Breaks", Value: fmt.Sprintf("%d", totalCacheBreaks(diag)), Tone: cacheDiagnosticsTone(diag)},
+	}}}
+	if len(diag.Counts) > 0 {
+		sections = append(sections, LocalResultSection{Title: "Break causes", Fields: countFields(topCounts(diag.Counts, statsRecentLimit), "warn")})
+	}
+	if len(diag.Breaks) > 0 {
+		fields := make([]LocalResultField, 0, len(diag.Breaks))
+		for _, br := range reverseCacheBreaks(diag.Breaks) {
+			fields = append(fields, LocalResultField{
+				Label: formatTS(br.TS),
+				Value: formatCacheBreakDetail(br),
+				Tone:  "warn",
+			})
+		}
+		sections = append(sections, LocalResultSection{Title: "Recent breaks", Fields: fields})
+	}
+	return sections
+}
+
+func cacheDiagnosticsTone(diag cacheDiagnostics) string {
+	if totalCacheBreaks(diag) > 0 {
+		return "warn"
+	}
+	return ""
 }
 
 func toolInputStatsSections(stats toolInputStats) []LocalResultSection {
@@ -227,6 +261,7 @@ func profileStatsSections(stats profileStats) []LocalResultSection {
 		{Label: "Estimated cost", Value: fmt.Sprintf("$%.4f", stats.CostUSD)},
 		{Label: "Max prompt", Value: formatCount(stats.MaxPromptTokens)},
 		{Label: "Prefix fingerprints", Value: fmt.Sprintf("%d", len(stats.PrefixFingerprints))},
+		{Label: "Provider prefixes", Value: fmt.Sprintf("%d distinct across %d usage sessions", len(stats.ProviderPrefixHashes), len(stats.PrefixShapeSessions))},
 		{Label: "Tools", Value: fmt.Sprintf("%d calls · %s result chars", stats.ToolCalls, formatCount(stats.ToolResultChars))},
 		{Label: "Reasoning/text", Value: fmt.Sprintf("%s reasoning chars · %s visible text chars", formatCount(stats.ReasoningChars), formatCount(stats.VisibleTextChars))},
 	}

@@ -18,9 +18,11 @@ func readProfileStats(sessionsDir, usagePath string, limit int) profileStats {
 		limit = statsProfileSessionLimit
 	}
 	stats := profileStats{
-		Limit:              limit,
-		PrefixFingerprints: map[string]bool{},
-		ByTool:             map[string]*profileToolStats{},
+		Limit:                limit,
+		PrefixFingerprints:   map[string]bool{},
+		ProviderPrefixHashes: map[string]bool{},
+		PrefixShapeSessions:  map[string]bool{},
+		ByTool:               map[string]*profileToolStats{},
 	}
 	files := latestProfileSessionFiles(sessionsDir, limit)
 	sessionIndex := map[string]int{}
@@ -62,6 +64,12 @@ func readProfileStats(sessionsDir, usagePath string, limit int) profileStats {
 	for _, sp := range stats.Sessions {
 		for fp := range sp.PrefixFingerprints {
 			stats.PrefixFingerprints[fp] = true
+		}
+		for fp := range sp.ProviderPrefixHashes {
+			stats.ProviderPrefixHashes[fp] = true
+		}
+		if len(sp.ProviderPrefixHashes) > 0 {
+			stats.PrefixShapeSessions[sp.ID] = true
 		}
 		if sp.MaxPromptTokens > stats.MaxPromptTokens {
 			stats.MaxPromptTokens = sp.MaxPromptTokens
@@ -190,10 +198,16 @@ func profileChildSessionIndex(sessionsDir string, parentIndex map[string]int) ma
 
 func readProfileSessionFile(path, id string, modTime time.Time) profileSessionStats {
 	stats := profileSessionStats{
-		ID:                 id,
-		ModTime:            modTime,
-		PrefixFingerprints: map[string]bool{},
-		ByTool:             map[string]*profileToolStats{},
+		ID:                   id,
+		ModTime:              modTime,
+		PrefixFingerprints:   map[string]bool{},
+		ProviderPrefixHashes: map[string]bool{},
+		SystemHashes:         map[string]bool{},
+		RuntimeHashes:        map[string]bool{},
+		ToolsHashes:          map[string]bool{},
+		RequestHashes:        map[string]bool{},
+		ShapeSegments:        map[string]map[string]bool{},
+		ByTool:               map[string]*profileToolStats{},
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -294,6 +308,7 @@ func readProfileUsage(path string, sessionIndex map[string]int, childSessionInde
 			if fp := strings.TrimSpace(rec.PrefixFingerprint); fp != "" {
 				sp.PrefixFingerprints[fp] = true
 			}
+			addProfileCacheShape(sp, rec.CacheShape)
 			continue
 		}
 		if idx, ok := childSessionIndex[rec.Session]; ok {
@@ -420,6 +435,70 @@ func addProfileSubagentUsage(sp *profileSessionStats, stats *profileStats, rec t
 	sp.SubagentCostUSD += cost
 	if rec.PromptTokens > sp.SubagentMaxPromptTokens {
 		sp.SubagentMaxPromptTokens = rec.PromptTokens
+	}
+	addProfileCacheShape(sp, rec.CacheShape)
+}
+
+func addProfileCacheShape(sp *profileSessionStats, shape *telemetry.CacheShape) {
+	if sp == nil || shape == nil {
+		return
+	}
+	ensureProfileShapeMaps(sp)
+	if h := strings.TrimSpace(shape.PrefixHash); h != "" {
+		sp.ProviderPrefixHashes[h] = true
+	}
+	if h := strings.TrimSpace(shape.SystemHash); h != "" {
+		sp.SystemHashes[h] = true
+	}
+	if h := strings.TrimSpace(shape.RuntimeHash); h != "" {
+		sp.RuntimeHashes[h] = true
+	}
+	if h := strings.TrimSpace(shape.ToolsHash); h != "" {
+		sp.ToolsHashes[h] = true
+	}
+	if h := strings.TrimSpace(shape.RequestHash); h != "" {
+		sp.RequestHashes[h] = true
+	}
+	addProfileShapeSegments(sp.ShapeSegments, "system", shape.SystemSegments)
+	addProfileShapeSegments(sp.ShapeSegments, "runtime", shape.RuntimeSegments)
+	addProfileShapeSegments(sp.ShapeSegments, "tool", shape.ToolSegments)
+}
+
+func ensureProfileShapeMaps(sp *profileSessionStats) {
+	if sp.ProviderPrefixHashes == nil {
+		sp.ProviderPrefixHashes = map[string]bool{}
+	}
+	if sp.SystemHashes == nil {
+		sp.SystemHashes = map[string]bool{}
+	}
+	if sp.RuntimeHashes == nil {
+		sp.RuntimeHashes = map[string]bool{}
+	}
+	if sp.ToolsHashes == nil {
+		sp.ToolsHashes = map[string]bool{}
+	}
+	if sp.RequestHashes == nil {
+		sp.RequestHashes = map[string]bool{}
+	}
+	if sp.ShapeSegments == nil {
+		sp.ShapeSegments = map[string]map[string]bool{}
+	}
+}
+
+func addProfileShapeSegments(dst map[string]map[string]bool, family string, segments []telemetry.CacheShapeSegment) {
+	for _, segment := range segments {
+		name := strings.TrimSpace(segment.Name)
+		hash := strings.TrimSpace(segment.Hash)
+		if name == "" || hash == "" {
+			continue
+		}
+		key := family + ":" + name
+		hashes := dst[key]
+		if hashes == nil {
+			hashes = map[string]bool{}
+			dst[key] = hashes
+		}
+		hashes[hash] = true
 	}
 }
 

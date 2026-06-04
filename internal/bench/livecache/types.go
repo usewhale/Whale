@@ -70,6 +70,7 @@ type transcriptRecord struct {
 	Success       *bool          `json:"success,omitempty"`
 	Model         string         `json:"model,omitempty"`
 	PrefixHash    string         `json:"prefix_hash,omitempty"`
+	CacheShape    map[string]any `json:"cache_shape,omitempty"`
 	PromptTokens  int            `json:"prompt_tokens,omitempty"`
 	CachedTokens  int            `json:"cached_tokens,omitempty"`
 	CacheHitRatio float64        `json:"cache_hit_ratio,omitempty"`

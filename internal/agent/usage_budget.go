@@ -34,7 +34,7 @@ func (a *Agent) emitBudgetWarningIfNeeded(ctx context.Context, sessionID string,
 	return true
 }
 
-func (a *Agent) recordTurnCost(sessionID string, usage llm.Usage, modelName, prefixFingerprint string) float64 {
+func (a *Agent) recordTurnCost(sessionID string, usage llm.Usage, modelName, prefixFingerprint string, cacheShape *telemetry.CacheShape) float64 {
 	cost := telemetry.EstimateTurnUSD(modelName, usage)
 	if cost <= 0 {
 		return 0
@@ -45,7 +45,7 @@ func (a *Agent) recordTurnCost(sessionID string, usage llm.Usage, modelName, pre
 			meta.TotalCostUSD += cost
 		})
 	}
-	_ = telemetry.AppendUsage(a.usageLogPath, sessionID, modelName, prefixFingerprint, usage, cost, time.Now(), a.usageMetadata(sessionID))
+	_ = telemetry.AppendUsage(a.usageLogPath, sessionID, modelName, prefixFingerprint, usage, cost, time.Now(), cacheShape, a.usageMetadata(sessionID))
 	return cost
 }
 
@@ -77,7 +77,7 @@ func previewUsageTask(task string, maxRunes int) string {
 	return string(runes[:maxRunes-3]) + "..."
 }
 
-func buildPrefixCacheMetrics(model string, usage llm.Usage, fingerprint string) *PrefixCacheMetricsInfo {
+func buildPrefixCacheMetrics(model string, usage llm.Usage, fingerprint string, cacheShape *telemetry.CacheShape) *PrefixCacheMetricsInfo {
 	prompt := usage.PromptTokens
 	cached := usage.PromptCacheHitTokens
 	missed := usage.PromptCacheMissTokens
@@ -91,6 +91,7 @@ func buildPrefixCacheMetrics(model string, usage llm.Usage, fingerprint string) 
 	return &PrefixCacheMetricsInfo{
 		Model:             model,
 		PrefixFingerprint: fingerprint,
+		CacheShape:        telemetry.CloneCacheShape(cacheShape),
 		PromptTokens:      prompt,
 		CachedTokens:      cached,
 		CacheHitRatio:     ratio,

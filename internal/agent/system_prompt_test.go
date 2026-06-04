@@ -57,28 +57,38 @@ func TestRuntimeEnvironmentBlockWindowsUsesCurrentShellRunName(t *testing.T) {
 	}
 }
 
-func TestImmutableSystemBlocksIncludeRuntimeEnvironment(t *testing.T) {
+func TestRuntimeSystemBlocksIncludeRuntimeEnvironment(t *testing.T) {
 	a := NewAgentWithRegistry(nil, nil, core.NewToolRegistry(nil), WithProjectMemory(false, 0, nil, "/repo"))
-	joined := strings.Join(a.buildImmutableSystemBlocks(), "\n\n")
+	immutable := strings.Join(a.buildImmutableSystemBlocks(), "\n\n")
+	if strings.Contains(immutable, "Current Whale runtime:") || strings.Contains(immutable, "Current Whale workspace root: /repo") {
+		t.Fatalf("runtime environment leaked into immutable system blocks:\n%s", immutable)
+	}
+
+	joined := strings.Join(a.buildRuntimeSystemBlocks(), "\n\n")
 
 	if !strings.Contains(joined, "Current Whale runtime:") {
-		t.Fatalf("system blocks missing runtime environment:\n%s", joined)
+		t.Fatalf("runtime system blocks missing runtime environment:\n%s", joined)
 	}
 	if !strings.Contains(joined, "Current Whale workspace root: /repo") {
-		t.Fatalf("system blocks missing workspace root:\n%s", joined)
+		t.Fatalf("runtime system blocks missing workspace root:\n%s", joined)
 	}
 	if !strings.Contains(joined, "shell_run cwd parameter") {
-		t.Fatalf("system blocks missing shell_run cwd guidance:\n%s", joined)
+		t.Fatalf("runtime system blocks missing shell_run cwd guidance:\n%s", joined)
 	}
 }
 
-func TestImmutableSystemBlocksIncludeDynamicSystemBlocks(t *testing.T) {
+func TestRuntimeSystemBlocksIncludeDynamicSystemBlocks(t *testing.T) {
 	a := NewAgentWithRegistry(nil, nil, core.NewToolRegistry(nil),
 		WithDynamicSystemBlocks(func() string {
 			return "Available workflows.\n\n- dead-code-scan [project]: Scan for dead code."
 		}),
 	)
-	joined := strings.Join(a.buildImmutableSystemBlocks(), "\n\n")
+	immutable := strings.Join(a.buildImmutableSystemBlocks(), "\n\n")
+	if strings.Contains(immutable, "Available workflows.") || strings.Contains(immutable, "dead-code-scan [project]") || strings.Contains(immutable, "Current session mode: agent") {
+		t.Fatalf("dynamic system blocks leaked into immutable system blocks:\n%s", immutable)
+	}
+
+	joined := strings.Join(a.buildRuntimeSystemBlocks(), "\n\n")
 
 	for _, want := range []string{
 		"Available workflows.",
@@ -86,7 +96,7 @@ func TestImmutableSystemBlocksIncludeDynamicSystemBlocks(t *testing.T) {
 		"Current session mode: agent",
 	} {
 		if !strings.Contains(joined, want) {
-			t.Fatalf("system blocks missing %q:\n%s", want, joined)
+			t.Fatalf("runtime system blocks missing %q:\n%s", want, joined)
 		}
 	}
 }
@@ -101,7 +111,7 @@ func TestImmutableSystemBlocksIncludeWorkflowAuthoringGuidance(t *testing.T) {
 		"Do not inspect existing workflow directories, load skills, or pre-read repository files",
 		"Claude Code-compatible raw JavaScript workflow",
 		"array of objects such as { title:",
-		"capability-defined workers",
+		"tool-scoped workers",
 		"Call phase(\"Name\") only as a statement",
 		"Await async workflow primitives before reading their results",
 		"Call agent(prompt, { label, phase, schema",
@@ -207,27 +217,43 @@ func TestRuntimeEnvironmentBlockIncludesWorktreeContext(t *testing.T) {
 	}
 }
 
-func TestImmutableSystemBlocksDeclareCurrentModeAuthoritatively(t *testing.T) {
+func TestRuntimeSystemBlocksDeclareCurrentModeAuthoritatively(t *testing.T) {
 	a := NewAgentWithRegistry(nil, nil, core.NewToolRegistry(nil), WithSessionMode(session.ModeAsk))
-	joined := strings.Join(a.buildImmutableSystemBlocks(), "\n\n")
+	immutable := strings.Join(a.buildImmutableSystemBlocks(), "\n\n")
+	if strings.Contains(immutable, "Current session mode: ask") || strings.Contains(immutable, "Ask mode is active.") {
+		t.Fatalf("mode authority leaked into immutable system blocks:\n%s", immutable)
+	}
+	for _, want := range []string{
+		"Mode switching commands are /agent, /ask, and /plan",
+		"Do not tell users to run /mode agent",
+	} {
+		if !strings.Contains(immutable, want) {
+			t.Fatalf("immutable mode switching guidance missing %q:\n%s", want, immutable)
+		}
+	}
+
+	joined := strings.Join(a.buildRuntimeSystemBlocks(), "\n\n")
 
 	for _, want := range []string{
 		"Current session mode: ask",
 		"claim the current mode is any other value as stale",
 		"Ask mode is active.",
 		"do not retry the same tool call or the same shell operation with another shell command",
-		"Mode switching commands are /agent, /ask, and /plan",
-		"Do not tell users to run /mode agent",
 	} {
 		if !strings.Contains(joined, want) {
-			t.Fatalf("system blocks missing %q:\n%s", want, joined)
+			t.Fatalf("runtime system blocks missing %q:\n%s", want, joined)
 		}
 	}
 }
 
 func TestPlanModeInstructionsTreatExecutionRequestsAsPlanning(t *testing.T) {
 	a := NewAgentWithRegistry(nil, nil, core.NewToolRegistry(nil), WithSessionMode(session.ModePlan))
-	joined := strings.Join(a.buildImmutableSystemBlocks(), "\n\n")
+	immutable := strings.Join(a.buildImmutableSystemBlocks(), "\n\n")
+	if strings.Contains(immutable, "PLAN mode") || strings.Contains(immutable, "Do not run side-effectful commands") {
+		t.Fatalf("plan mode instructions leaked into immutable system blocks:\n%s", immutable)
+	}
+
+	joined := strings.Join(a.buildRuntimeSystemBlocks(), "\n\n")
 
 	for _, want := range []string{
 		"User intent, imperative wording",
@@ -240,20 +266,25 @@ func TestPlanModeInstructionsTreatExecutionRequestsAsPlanning(t *testing.T) {
 		"<proposed_plan>",
 	} {
 		if !strings.Contains(joined, want) {
-			t.Fatalf("plan mode instructions missing %q:\n%s", want, joined)
+			t.Fatalf("runtime plan mode instructions missing %q:\n%s", want, joined)
 		}
 	}
 }
 
-func TestImmutableSystemBlocksIncludeFocusOutputStyleOnlyInFocusView(t *testing.T) {
+func TestRuntimeSystemBlocksIncludeFocusOutputStyleOnlyInFocusView(t *testing.T) {
 	a := NewAgentWithRegistry(nil, nil, core.NewToolRegistry(nil))
 
-	defaultPrompt := strings.Join(a.buildImmutableSystemBlocks(RunOptions{ViewMode: "default"}), "\n\n")
-	if strings.Contains(defaultPrompt, "Focus view is active") {
-		t.Fatalf("default view should not include focus output style:\n%s", defaultPrompt)
+	immutable := strings.Join(a.buildImmutableSystemBlocks(RunOptions{ViewMode: "focus"}), "\n\n")
+	if strings.Contains(immutable, "Focus view is active") {
+		t.Fatalf("focus output style leaked into immutable system blocks:\n%s", immutable)
 	}
 
-	focusPrompt := strings.Join(a.buildImmutableSystemBlocks(RunOptions{ViewMode: "focus"}), "\n\n")
+	defaultPrompt := strings.Join(a.buildRuntimeSystemBlocks(RunOptions{ViewMode: "default"}), "\n\n")
+	if strings.Contains(defaultPrompt, "Focus view is active") {
+		t.Fatalf("default runtime should not include focus output style:\n%s", defaultPrompt)
+	}
+
+	focusPrompt := strings.Join(a.buildRuntimeSystemBlocks(RunOptions{ViewMode: "focus"}), "\n\n")
 	for _, want := range []string{
 		"Focus view is active in the terminal.",
 		"Emit text only when it changes what the user needs to know",
@@ -262,32 +293,53 @@ func TestImmutableSystemBlocksIncludeFocusOutputStyleOnlyInFocusView(t *testing.
 		"file inspection, searching, reading, or continuing with the next obvious step",
 	} {
 		if !strings.Contains(focusPrompt, want) {
-			t.Fatalf("focus output style missing %q:\n%s", want, focusPrompt)
+			t.Fatalf("runtime focus output style missing %q:\n%s", want, focusPrompt)
 		}
 	}
 }
 
-func TestRenderToolSpecsMarksDynamicReadOnlyTools(t *testing.T) {
-	block := renderToolSpecsBlock([]core.ToolSpec{
-		{
-			Name:          "shell_run",
-			Description:   "Run a shell command",
-			ReadOnlyCheck: func(map[string]any) bool { return true },
-		},
-		{
-			Name:     "write",
-			ReadOnly: false,
-		},
-	})
+func TestImmutableSystemPromptUsesStableToolPolicyWithoutToolCatalog(t *testing.T) {
+	tools := core.NewToolRegistry([]core.Tool{&recordingWorkflowTool{}})
+	a := NewAgentWithRegistry(nil, nil, tools)
+	joined := strings.Join(a.buildImmutableSystemBlocks(), "\n\n")
 
 	for _, want := range []string{
-		"shell_run [conditional read-only]",
-		"some calls are allowed in read-only modes",
-		"mutating inputs are blocked",
-		"write [write]",
+		"Tool use policy.",
+		"provider tool schema",
+		"Choose tools by exact name and schema",
+		"do not invent tools",
+		"Prefer read-only inspection tools",
+		"read_file, list_dir, grep, search_files",
+		"Mutating tools such as apply_patch, edit, write",
+		"may be blocked by mode, policy, or user approval",
+		"shell_run can be read-only only for safe inspection commands accepted by policy",
+		"do not retry the same action through another tool",
 	} {
-		if !strings.Contains(block, want) {
-			t.Fatalf("tool specs block missing %q:\n%s", want, block)
+		if !strings.Contains(joined, want) {
+			t.Fatalf("tool policy missing %q:\n%s", want, joined)
 		}
+	}
+	for _, notWant := range []string{
+		"Available tools",
+		"No tools are available.",
+		"workflow [",
+		"Launch a workflow by name.",
+		" args:",
+		" approval:",
+	} {
+		if strings.Contains(joined, notWant) {
+			t.Fatalf("system prompt leaked tool catalog text %q:\n%s", notWant, joined)
+		}
+	}
+}
+
+func TestImmutableSystemPromptToolPolicyDoesNotDependOnToolRegistry(t *testing.T) {
+	withoutTools := NewAgentWithRegistry(nil, nil, core.NewToolRegistry(nil))
+	withTools := NewAgentWithRegistry(nil, nil, core.NewToolRegistry([]core.Tool{&recordingWorkflowTool{}}))
+
+	a := strings.Join(withoutTools.buildImmutableSystemBlocks(), "\n\n")
+	b := strings.Join(withTools.buildImmutableSystemBlocks(), "\n\n")
+	if a != b {
+		t.Fatalf("immutable system prompt changed with tool registry\nwithout tools:\n%s\n\nwith tools:\n%s", a, b)
 	}
 }

@@ -23,6 +23,9 @@ func (a *App) buildStatsViewAt(view string, now time.Time) string {
 	case "usage":
 		lines = []string{"Stats", "", "Usage"}
 		lines = append(lines, formatUsageStats(usage)...)
+	case "cache":
+		lines = []string{"Stats", "", "Cache diagnostics"}
+		lines = append(lines, formatCacheDiagnostics(usage.CacheDiagnostics)...)
 	case "tools", "repair":
 		lines = []string{"Stats", "", "Tool input"}
 		lines = append(lines, formatToolInputStats(toolInput)...)
@@ -36,6 +39,8 @@ func (a *App) buildStatsViewAt(view string, now time.Time) string {
 	case "all":
 		lines = []string{"Stats", "", "Usage"}
 		lines = append(lines, formatUsageStats(usage)...)
+		lines = append(lines, "", "Cache diagnostics")
+		lines = append(lines, formatCacheDiagnostics(usage.CacheDiagnostics)...)
 		lines = append(lines, "", "Tool input")
 		lines = append(lines, formatToolInputStats(toolInput)...)
 		lines = append(lines, formatRecentStats(usage, toolInput)...)

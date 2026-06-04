@@ -1865,8 +1865,8 @@ await agent('research', {
 	if len(requests) != 1 {
 		t.Fatalf("requests = %+v", requests)
 	}
-	if got := strings.Join(requests[0].Capabilities, ","); got != "web.search,web.fetch" {
-		t.Fatalf("capabilities = %q", got)
+	if got := strings.Join(requests[0].Tools, ","); got != "web.search,web.fetch" {
+		t.Fatalf("tools = %q", got)
 	}
 	if requests[0].MaxToolIters != 7 {
 		t.Fatalf("max tool iters = %d, want 7", requests[0].MaxToolIters)
@@ -1970,8 +1970,8 @@ await agent('review local changes', {
 	if len(hooks) != 1 || hooks[0].Event != "SubagentStart" || hooks[0].Command != "echo top-level" {
 		t.Fatalf("hooks = %+v", hooks)
 	}
-	if strings.Join(req.Capabilities, ",") != "workspace.read,web.fetch" {
-		t.Fatalf("capabilities = %#v", req.Capabilities)
+	if strings.Join(req.Tools, ",") != "workspace.read,web.fetch" {
+		t.Fatalf("tools = %#v", req.Tools)
 	}
 	events, err := store.List(context.Background(), out.RunID)
 	if err != nil {
@@ -2075,7 +2075,7 @@ await parallel([
 	}
 	seen := map[string]string{}
 	for _, req := range requests {
-		seen[req.Task] = strings.Join(req.Capabilities, ",")
+		seen[req.Task] = strings.Join(req.Tools, ",")
 	}
 	if seen["search"] != "web.search" {
 		t.Fatalf("search capabilities = %q", seen["search"])
@@ -2083,8 +2083,8 @@ await parallel([
 	if _, ok := seen["synth"]; !ok {
 		t.Fatalf("missing synth request: %+v", requests)
 	}
-	if seen["synth"] != "" || requestsWithNilCapabilities(requests, "synth") {
-		t.Fatalf("synth should carry explicit empty capabilities, requests=%+v", requests)
+	if seen["synth"] != "" || requestsWithNilTools(requests, "synth") {
+		t.Fatalf("synth should carry explicit empty tools, requests=%+v", requests)
 	}
 }
 
@@ -2104,10 +2104,10 @@ await parallel([agent('x')])
 	}
 }
 
-func requestsWithNilCapabilities(requests []tasks.SpawnSubagentRequest, task string) bool {
+func requestsWithNilTools(requests []tasks.SpawnSubagentRequest, task string) bool {
 	for _, req := range requests {
 		if req.Task == task {
-			return req.Capabilities == nil
+			return req.Tools == nil
 		}
 	}
 	return false

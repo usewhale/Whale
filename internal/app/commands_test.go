@@ -449,7 +449,20 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		ToolResultReplayTokens:   1000,
 		ToolResultTokensSaved:    2250,
 		ToolResultsCompacted:     1,
-		CostUSD:                  0.0123,
+		CacheShape: &telemetry.CacheShape{
+			PrefixHash:  "prefix-a",
+			SystemHash:  "system-a",
+			RuntimeHash: "runtime-a",
+			ToolsHash:   "tools-a",
+			RequestHash: "request-a",
+			RuntimeSegments: []telemetry.CacheShapeSegment{{
+				Name:      "project_memory",
+				Stability: "dynamic",
+				Hash:      "runtime-project-a",
+				Bytes:     10,
+			}},
+		},
+		CostUSD: 0.0123,
 	})
 	writeUsageRecord(t, filepath.Join(dir, "usage.jsonl"), telemetry.UsageRecord{
 		TS:                 time.Date(2026, 5, 12, 10, 3, 0, 0, time.Local).UnixMilli(),
@@ -461,7 +474,20 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		PromptCacheHit:     1000,
 		PromptCacheMiss:    1000,
 		ReasoningReplayTok: 100,
-		CostUSD:            0.0456,
+		CacheShape: &telemetry.CacheShape{
+			PrefixHash:  "prefix-b",
+			SystemHash:  "system-a",
+			RuntimeHash: "runtime-b",
+			ToolsHash:   "tools-a",
+			RequestHash: "request-b",
+			RuntimeSegments: []telemetry.CacheShapeSegment{{
+				Name:      "project_memory",
+				Stability: "dynamic",
+				Hash:      "runtime-project-b",
+				Bytes:     10,
+			}},
+		},
+		CostUSD: 0.0456,
 	})
 	writeUsageRecord(t, filepath.Join(dir, "usage.jsonl"), telemetry.UsageRecord{
 		TS:               time.Date(2026, 5, 12, 10, 4, 0, 0, time.Local).UnixMilli(),
@@ -540,7 +566,7 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		"- repair rate: 50.0%",
 		"- top repair: markdown_autolink_path · 1",
 		"- top invalid tool: write · 1",
-		"More: /stats usage, /stats tools, /stats repair, /stats recent, /stats profile, /stats all",
+		"More: /stats usage, /stats cache, /stats tools, /stats repair, /stats recent, /stats profile, /stats all",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected stats to contain %q, got:\n%s", want, out)
@@ -599,6 +625,7 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		"- reasoning replay: 350 main · 0 subagent · 350 all-in",
 		"- tool replay: 1K sent · 3.2K raw · 2.2K saved · 1 compacted",
 		"- prefix fingerprints: 2",
+		"- provider prefixes: 2 distinct across 2 usage sessions",
 		"- tools: 1 calls · 13K result chars",
 		"- reasoning/text: 8 reasoning chars",
 		"Top tools",
@@ -636,6 +663,7 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		field   string
 	}{
 		{"Insights", "reasoning replay · s1"},
+		{"Profile", "Provider prefixes"},
 		{"Profile", "Reasoning replay"},
 		{"Profile", "Tool replay"},
 		{"Top tool replay sessions", "s1"},
@@ -663,6 +691,14 @@ func TestHandleLocalCommandStats(t *testing.T) {
 	}
 	if strings.Contains(out, "Recent tool-input events") {
 		t.Fatalf("expected tool stats to omit recent events:\n%s", out)
+	}
+
+	handled, out, _, err = a.HandleLocalCommand("/stats cache")
+	if err != nil || !handled {
+		t.Fatalf("stats cache command handled=%v err=%v", handled, err)
+	}
+	if !strings.Contains(out, "Cache diagnostics") {
+		t.Fatalf("expected cache stats to contain diagnostics, got:\n%s", out)
 	}
 
 	handled, out, _, err = a.HandleLocalCommand("/stats recent")
@@ -699,8 +735,37 @@ func TestHandleLocalCommandStats(t *testing.T) {
 	}
 
 	handled, _, _, err = a.HandleLocalCommand("/stats extra")
-	if !handled || err == nil || !strings.Contains(err.Error(), "usage: /stats [usage|tools|repair|recent|profile|all]") {
+	if !handled || err == nil || !strings.Contains(err.Error(), "usage: /stats [usage|cache|tools|repair|recent|profile|all]") {
 		t.Fatalf("expected /stats usage error, handled=%v err=%v", handled, err)
+	}
+}
+
+func TestProfilePrefixChurnDetailNamesSourcesAndSegments(t *testing.T) {
+	sp := profileSessionStats{
+		ProviderPrefixHashes: map[string]bool{"p1": true, "p2": true},
+		SystemHashes:         map[string]bool{"s": true},
+		RuntimeHashes:        map[string]bool{"r1": true, "r2": true},
+		ToolsHashes:          map[string]bool{"t1": true, "t2": true},
+		ShapeSegments: map[string]map[string]bool{
+			"runtime:project_memory": {"a": true, "b": true},
+			"tool:shell_run":         {"a": true, "b": true},
+		},
+	}
+
+	got := profilePrefixChurnDetail(sp)
+	for _, want := range []string{
+		"2 provider prefixes",
+		"runtime drift",
+		"tool drift",
+		"runtime:project_memory",
+		"tool:shell_run",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected churn detail to contain %q, got %q", want, got)
+		}
+	}
+	if strings.Contains(got, "system drift") {
+		t.Fatalf("unexpected system drift in %q", got)
 	}
 }
 
@@ -1123,7 +1188,7 @@ func TestHandleLocalCommandHelp(t *testing.T) {
 		"/compact",
 		"/review [local|branch|pr|commit|<instructions>]",
 		"/status",
-		"/stats [usage|tools|repair|recent|profile|all]",
+		"/stats [usage|cache|tools|repair|recent|profile|all]",
 		"/plugins",
 		"/feedback",
 		"For more help:",
@@ -2065,20 +2130,20 @@ func TestExecuteLocalDeepResearchStartsBuiltinWorkflow(t *testing.T) {
 	if len(requests) != 9 {
 		t.Fatalf("requests = %+v", requests)
 	}
-	if got := strings.Join(requests[0].Capabilities, ","); got != "" {
-		t.Fatalf("scope capabilities = %#v", requests[0].Capabilities)
+	if got := strings.Join(requests[0].Tools, ","); got != "" {
+		t.Fatalf("scope tools = %#v", requests[0].Tools)
 	}
-	if got := strings.Join(requests[1].Capabilities, ","); got != "web.search" {
-		t.Fatalf("search capabilities = %#v", requests[1].Capabilities)
+	if got := strings.Join(requests[1].Tools, ","); got != "web.search" {
+		t.Fatalf("search tools = %#v", requests[1].Tools)
 	}
-	if got := strings.Join(requests[4].Capabilities, ","); got != "web.fetch" {
-		t.Fatalf("fetch capabilities = %#v", requests[4].Capabilities)
+	if got := strings.Join(requests[4].Tools, ","); got != "web.fetch" {
+		t.Fatalf("fetch tools = %#v", requests[4].Tools)
 	}
-	if got := strings.Join(requests[5].Capabilities, ","); got != "web.search" {
-		t.Fatalf("verify capabilities = %#v", requests[5].Capabilities)
+	if got := strings.Join(requests[5].Tools, ","); got != "web.search" {
+		t.Fatalf("verify tools = %#v", requests[5].Tools)
 	}
-	if got := strings.Join(requests[len(requests)-1].Capabilities, ","); got != "" {
-		t.Fatalf("synthesize capabilities = %#v", requests[len(requests)-1].Capabilities)
+	if got := strings.Join(requests[len(requests)-1].Tools, ","); got != "" {
+		t.Fatalf("synthesize tools = %#v", requests[len(requests)-1].Tools)
 	}
 	if requests[1].WorkflowName != workflow.BuiltinDeepResearchName || requests[1].WorkflowRunID == "" || requests[1].WorkflowPhase != "Search" {
 		t.Fatalf("missing workflow context on request: %+v", requests[1])
@@ -2432,9 +2497,9 @@ type deepResearchTestSpawner struct {
 }
 
 func (s *deepResearchTestSpawner) AllowedSubagentTools(req tasks.SpawnSubagentRequest) ([]string, error) {
-	out := make([]string, 0, len(req.Capabilities))
-	for _, cap := range req.Capabilities {
-		out = append(out, "allowed:"+cap)
+	out := make([]string, 0, len(req.Tools))
+	for _, tool := range req.Tools {
+		out = append(out, "allowed:"+tool)
 	}
 	return out, nil
 }

@@ -10,7 +10,7 @@ import (
 	"github.com/usewhale/whale/internal/skills"
 )
 
-func agentDefinitionSystemBlock(def AgentDefinition, capabilities []string) string {
+func agentDefinitionSystemBlock(def AgentDefinition, requestedTools, resolvedTools []string, toolMode string) string {
 	name := strings.TrimSpace(def.Name)
 	if name == "" {
 		name = "explore"
@@ -36,16 +36,24 @@ func agentDefinitionSystemBlock(def AgentDefinition, capabilities []string) stri
 		b.WriteString(prompt)
 		b.WriteString("\n\n")
 	}
-	effectiveCapabilities := capabilities
-	if effectiveCapabilities == nil {
-		effectiveCapabilities = []string{CapabilityWorkspaceRead}
-	}
-	if len(effectiveCapabilities) > 0 {
-		b.WriteString("- tools: ")
-		b.WriteString(strings.Join(effectiveCapabilities, ", "))
+	if len(requestedTools) > 0 {
+		b.WriteString("- requestedTools: ")
+		b.WriteString(strings.Join(requestedTools, ", "))
 		b.WriteString("\n")
 	} else {
-		b.WriteString("- tools: model-only\n")
+		b.WriteString("- requestedTools: []\n")
+	}
+	if len(resolvedTools) > 0 {
+		b.WriteString("- resolvedTools: ")
+		b.WriteString(strings.Join(resolvedTools, ", "))
+		b.WriteString("\n")
+	} else {
+		b.WriteString("- resolvedTools: none\n")
+	}
+	if mode := strings.TrimSpace(toolMode); mode != "" {
+		b.WriteString("- toolMode: ")
+		b.WriteString(mode)
+		b.WriteString("\n")
 	}
 	if effort := strings.TrimSpace(def.Effort); effort != "" {
 		b.WriteString("- effort: ")
@@ -65,6 +73,10 @@ func agentDefinitionSystemBlock(def AgentDefinition, capabilities []string) stri
 	b.WriteString("\nInstructions:\n")
 	b.WriteString("- Complete only the assigned task and return a concise final summary.\n")
 	b.WriteString("- Use only the tools that are actually available in this child agent session.\n")
+	if strings.TrimSpace(toolMode) == "model_only" {
+		b.WriteString("- No tools are available. Answer directly from the prompt and your model knowledge only.\n")
+		b.WriteString("- Do not write pseudo tool calls, shell commands, XML/DSML tool-call markup, or text that implies a tool was executed.\n")
+	}
 	b.WriteString("- Do not request user input or spawn more agents.\n")
 	b.WriteString("- Do not modify files unless this agent definition explicitly includes an editing capability and the runtime exposes editing tools.\n")
 	b.WriteString("- If required evidence cannot be gathered with the available tools, say exactly what is missing and which capability or command the parent should provide.\n")

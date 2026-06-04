@@ -100,7 +100,7 @@ func (s *TaskScheduler) SpawnAgent(ctx context.Context, actor ActorContext, spec
 		Model:             spec.Model,
 		MaxToolIters:      spec.MaxToolIters,
 		MaxToolCalls:      spec.MaxToolCalls,
-		Capabilities:      cloneStringSlice(spec.Capabilities),
+		Tools:             cloneStringSlice(spec.Capabilities),
 		OutputSchema:      cloneMap(spec.OutputSchema),
 		ParentToolCallID:  string(actor.TaskID),
 		WorkflowRunID:     string(actor.RunID),

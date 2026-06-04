@@ -41,7 +41,7 @@ func TestWorkflowToolDescriptionPrefersNamedCatalogWorkflows(t *testing.T) {
 		"do not inspect existing workflow directories or load skills first",
 		"set saveAs",
 		"Claude Code compatibility",
-		"capability-defined workers",
+		"tool-scoped workers",
 		"Use phase('Name') only as a statement",
 		"Await async workflow primitives before reading their results",
 		"Use agent(prompt, { label, phase, schema",

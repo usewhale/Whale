@@ -56,7 +56,7 @@ type AgentRuntimeConfig struct {
 	MaxToolIters      int
 	MaxToolCalls      int
 	MaxTurns          int
-	Capabilities      []string
+	ToolSelectors     []string
 	DisallowedTools   []string
 	MCPServers        []string
 	Hooks             []agent.ResolvedHook
@@ -107,20 +107,20 @@ func ResolveAgentRuntimeConfigWithLibrary(req SpawnSubagentRequest, defaults Run
 		maxToolCalls = defaults.MaxToolCalls
 	}
 	maxTurns := def.MaxTurns
-	caps := req.Capabilities
-	if caps == nil {
-		caps = def.Tools
+	tools := req.Tools
+	if tools == nil {
+		tools = def.Tools
 	}
 	mcpServers := normalizeAgentMCPServers(def.MCPServers)
 	hooks, err := ResolveAgentHooks(def)
 	if err != nil {
 		return AgentRuntimeConfig{}, err
 	}
-	if len(mcpServers) > 0 && caps == nil {
-		caps = []string{CapabilityWorkspaceRead}
+	if len(mcpServers) > 0 && tools == nil {
+		tools = []string{CapabilityWorkspaceRead}
 	}
-	if len(mcpServers) > 0 && !containsString(caps, CapabilityMCPRead) {
-		caps = append(cloneStrings(caps), CapabilityMCPRead)
+	if len(mcpServers) > 0 && !containsString(tools, CapabilityMCPRead) {
+		tools = append(cloneStrings(tools), CapabilityMCPRead)
 	}
 	permission, err := normalizeAgentPermissionMode(def.PermissionMode)
 	if err != nil {
@@ -141,7 +141,7 @@ func ResolveAgentRuntimeConfigWithLibrary(req SpawnSubagentRequest, defaults Run
 		MaxToolIters:      maxToolIters,
 		MaxToolCalls:      maxToolCalls,
 		MaxTurns:          maxTurns,
-		Capabilities:      cloneStrings(caps),
+		ToolSelectors:     cloneStrings(tools),
 		DisallowedTools:   cloneStrings(def.DisallowedTools),
 		MCPServers:        cloneStrings(mcpServers),
 		Hooks:             hooks,
@@ -273,6 +273,7 @@ func builtinAgentDefinition(name string) (AgentDefinition, bool) {
 			Name:           "review",
 			Description:    "Read-only review child agent",
 			WhenToUse:      "Use for bounded review of correctness risks, regressions, and missing verification.",
+			Tools:          []string{CapabilityWorkspaceRead, CapabilityShellRead},
 			PermissionMode: AgentPermissionReadOnly,
 		}, true
 	case "explore":
@@ -280,6 +281,7 @@ func builtinAgentDefinition(name string) (AgentDefinition, bool) {
 			Name:           "explore",
 			Description:    "Read-only exploration child agent",
 			WhenToUse:      "Use for bounded codebase or source exploration.",
+			Tools:          []string{CapabilityWorkspaceRead, CapabilityShellRead},
 			PermissionMode: AgentPermissionReadOnly,
 		}, true
 	default:

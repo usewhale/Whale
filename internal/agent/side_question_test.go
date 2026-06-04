@@ -167,6 +167,13 @@ func TestRunSideQuestionRecordsUsageCost(t *testing.T) {
 	if _, err := os.Stat(usagePath); err != nil {
 		t.Fatalf("usage log missing: %v", err)
 	}
+	b, err := os.ReadFile(usagePath)
+	if err != nil {
+		t.Fatalf("read usage log: %v", err)
+	}
+	if !strings.Contains(string(b), `"request_kind":"side_question"`) {
+		t.Fatalf("missing side question cache shape: %s", string(b))
+	}
 }
 
 func TestRunSideQuestionBlocksWhenBudgetExceeded(t *testing.T) {

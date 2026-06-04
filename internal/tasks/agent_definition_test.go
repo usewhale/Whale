@@ -68,8 +68,8 @@ func TestResolveAgentRuntimeConfigMergesDefinitionAndOverrides(t *testing.T) {
 	if len(cfg.Hooks) != 1 || cfg.Hooks[0].Event != "PreToolUse" || cfg.Hooks[0].Command != "echo pre" || cfg.Hooks[0].Match != "read_file" {
 		t.Fatalf("hooks = %+v", cfg.Hooks)
 	}
-	if !reflect.DeepEqual(cfg.Capabilities, []string{CapabilityWorkspaceRead, CapabilityWebFetch, CapabilityMCPRead}) {
-		t.Fatalf("capabilities = %#v", cfg.Capabilities)
+	if !reflect.DeepEqual(cfg.ToolSelectors, []string{CapabilityWorkspaceRead, CapabilityWebFetch, CapabilityMCPRead}) {
+		t.Fatalf("tool selectors = %#v", cfg.ToolSelectors)
 	}
 	if !reflect.DeepEqual(cfg.DisallowedTools, []string{CapabilityWebFetch}) {
 		t.Fatalf("disallowed tools = %#v", cfg.DisallowedTools)
@@ -83,16 +83,24 @@ func TestResolveAgentRuntimeConfigMergesDefinitionAndOverrides(t *testing.T) {
 }
 
 func TestAgentDefinitionSystemBlockShowsDefaultWorkspaceReadTools(t *testing.T) {
-	got := agentDefinitionSystemBlock(AgentDefinition{Name: "explore"}, nil)
-	if !strings.Contains(got, "- tools: workspace.read") {
+	got := agentDefinitionSystemBlock(AgentDefinition{Name: "explore"}, []string{CapabilityWorkspaceRead}, []string{"read_file"}, "read_only")
+	if !strings.Contains(got, "- requestedTools: workspace.read") || !strings.Contains(got, "- resolvedTools: read_file") {
 		t.Fatalf("default tools not rendered:\n%s", got)
 	}
-	if strings.Contains(got, "- tools: model-only") {
-		t.Fatalf("nil capabilities should not render model-only:\n%s", got)
+	if strings.Contains(got, "- toolMode: model_only") {
+		t.Fatalf("read-only tools should not render model-only:\n%s", got)
 	}
-	explicitEmpty := agentDefinitionSystemBlock(AgentDefinition{Name: "synthesis"}, []string{})
-	if !strings.Contains(explicitEmpty, "- tools: model-only") {
-		t.Fatalf("explicit empty capabilities should render model-only:\n%s", explicitEmpty)
+	explicitEmpty := agentDefinitionSystemBlock(AgentDefinition{Name: "synthesis"}, []string{}, []string{}, "model_only")
+	for _, want := range []string{
+		"- requestedTools: []",
+		"- resolvedTools: none",
+		"- toolMode: model_only",
+		"No tools are available",
+		"Do not write pseudo tool calls",
+	} {
+		if !strings.Contains(explicitEmpty, want) {
+			t.Fatalf("model-only block missing %q:\n%s", want, explicitEmpty)
+		}
 	}
 }
 
@@ -105,8 +113,8 @@ func TestBuiltinResearchAgentIncludesWebTools(t *testing.T) {
 		t.Fatalf("ResolveAgentRuntimeConfig: %v", err)
 	}
 	want := []string{CapabilityWorkspaceRead, CapabilityWebSearch, CapabilityWebFetch}
-	if !reflect.DeepEqual(cfg.Capabilities, want) {
-		t.Fatalf("research capabilities = %#v, want %#v", cfg.Capabilities, want)
+	if !reflect.DeepEqual(cfg.ToolSelectors, want) {
+		t.Fatalf("research tools = %#v, want %#v", cfg.ToolSelectors, want)
 	}
 }
 
@@ -164,8 +172,8 @@ Focus on correctness risks and missing tests.
 	if cfg.MaxTurns != 5 || cfg.InitialPrompt != "Read the diff first." || cfg.Memory != "project" || cfg.Isolation != AgentIsolationWorktree {
 		t.Fatalf("context fields = %+v", cfg)
 	}
-	if !reflect.DeepEqual(cfg.Capabilities, []string{CapabilityWorkspaceRead, CapabilityShellRun, CapabilityMCPRead}) {
-		t.Fatalf("capabilities = %#v", cfg.Capabilities)
+	if !reflect.DeepEqual(cfg.ToolSelectors, []string{CapabilityWorkspaceRead, CapabilityShellRun, CapabilityMCPRead}) {
+		t.Fatalf("tool selectors = %#v", cfg.ToolSelectors)
 	}
 	if !reflect.DeepEqual(cfg.DisallowedTools, []string{CapabilityWebFetch}) || !reflect.DeepEqual(cfg.Skills, []string{"review-skill"}) || !reflect.DeepEqual(cfg.MCPServers, []string{"github"}) {
 		t.Fatalf("lists = tools:%#v skills:%#v mcp:%#v", cfg.DisallowedTools, cfg.Skills, cfg.MCPServers)
@@ -247,7 +255,7 @@ Project prompt.
 	if err != nil {
 		t.Fatalf("Resolve project override: %v", err)
 	}
-	if cfg.Definition.Prompt != "Project prompt." || !reflect.DeepEqual(cfg.Capabilities, []string{CapabilityWorkspaceRead}) {
+	if cfg.Definition.Prompt != "Project prompt." || !reflect.DeepEqual(cfg.ToolSelectors, []string{CapabilityWorkspaceRead}) {
 		t.Fatalf("project definition should override plugin fallback: %+v", cfg)
 	}
 	cfg, err = ResolveAgentRuntimeConfigWithLibrary(SpawnSubagentRequest{
@@ -290,8 +298,8 @@ func TestAgentDefinitionLibraryLoadsJSONGeneration(t *testing.T) {
 	if cfg.Definition.Name != "prefix-agent" {
 		t.Fatalf("name = %q", cfg.Definition.Name)
 	}
-	if !reflect.DeepEqual(cfg.Capabilities, []string{}) {
-		t.Fatalf("capabilities = %#v", cfg.Capabilities)
+	if !reflect.DeepEqual(cfg.ToolSelectors, []string{}) {
+		t.Fatalf("tool selectors = %#v", cfg.ToolSelectors)
 	}
 	if cfg.Generation.AssistantPrefix != "Review:" || !cfg.Generation.PrefixCompletion {
 		t.Fatalf("generation = %+v", cfg.Generation)

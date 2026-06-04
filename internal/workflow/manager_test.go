@@ -80,12 +80,12 @@ type fakeAgentSpawner struct {
 }
 
 func (s *fakeAgentSpawner) AllowedSubagentTools(req tasks.SpawnSubagentRequest) ([]string, error) {
-	if len(req.Capabilities) == 0 {
+	if len(req.Tools) == 0 {
 		return nil, nil
 	}
-	out := make([]string, 0, len(req.Capabilities))
-	for _, cap := range req.Capabilities {
-		out = append(out, "allowed:"+cap)
+	out := make([]string, 0, len(req.Tools))
+	for _, tool := range req.Tools {
+		out = append(out, "allowed:"+tool)
 	}
 	return out, nil
 }

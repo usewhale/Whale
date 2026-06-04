@@ -176,6 +176,9 @@ func addToolSelectors(parent *core.ToolRegistry, selectors []string, caps, tools
 		if selector == "" {
 			continue
 		}
+		if selector == "*" {
+			return fmt.Errorf("agent %s selector %q is only supported by fork/trusted child agents", field, selector)
+		}
 		if knownSubagentCapabilities[selector] {
 			caps[selector] = true
 			continue
@@ -190,6 +193,20 @@ func addToolSelectors(parent *core.ToolRegistry, selectors []string, caps, tools
 		tools[selector] = true
 	}
 	return nil
+}
+
+func agentToolMode(selectors, resolvedTools []string, permissionMode string) string {
+	if len(resolvedTools) == 0 {
+		return "model_only"
+	}
+	switch strings.TrimSpace(permissionMode) {
+	case AgentPermissionTrusted:
+		return "trusted"
+	case AgentPermissionReadOnly, "":
+		return "read_only"
+	default:
+		return "custom"
+	}
 }
 
 func toolSelectionAllowed(spec core.ToolSpec, selection toolSelection) bool {

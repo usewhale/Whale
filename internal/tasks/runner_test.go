@@ -87,6 +87,20 @@ func TestParallelReasonAllowsOptionsOnlyProviderFactory(t *testing.T) {
 	}
 }
 
+func TestSpawnSubagentDescriptionWarnsAboutFreshChildCost(t *testing.T) {
+	desc := spawnSubagentTool{}.Description()
+	for _, want := range []string{
+		"Prefer direct tools",
+		"10+ read/search steps",
+		"prefix-cache miss",
+		"full child loop",
+	} {
+		if !strings.Contains(desc, want) {
+			t.Fatalf("description missing %q: %s", want, desc)
+		}
+	}
+}
+
 func TestSpawnSubagentInlineHookSchemaAllowsNonCommandHooks(t *testing.T) {
 	spec := core.DescribeTool(spawnSubagentTool{})
 	props := spec.Parameters["properties"].(map[string]any)
@@ -109,6 +123,91 @@ func TestSpawnSubagentInlineHookSchemaAllowsNonCommandHooks(t *testing.T) {
 	}
 }
 
+func TestSpawnSubagentToolReturnsSessionBudgetHint(t *testing.T) {
+	factory := func(_ string, _ int) (llm.Provider, error) {
+		return providerFunc(func(_ context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
+			out := make(chan llm.ProviderEvent, 1)
+			go func() {
+				defer close(out)
+				out <- llm.ProviderEvent{
+					Type: llm.EventComplete,
+					Response: &llm.ProviderResponse{
+						Content: "done",
+						Usage:   llm.Usage{PromptTokens: 20_000, CompletionTokens: 1_000, TotalTokens: 21_000},
+					},
+				}
+			}()
+			return out
+		}), nil
+	}
+	dir := t.TempDir()
+	msgStore, err := store.NewJSONLStore(dir)
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	parent := core.NewToolRegistry([]core.Tool{testTool{name: "read_file", readOnly: true, capabilities: []string{CapabilityWorkspaceRead}}})
+	r := NewRunner(RunnerConfig{
+		ProviderFactory: factory,
+		ParentTools:     parent,
+		MessageStore:    msgStore,
+		SessionsDir:     dir,
+		ParentSessionID: "parent-session",
+	})
+	tool := spawnSubagentTool{runner: r}
+
+	first := runSpawnSubagentToolForBudget(t, tool, "tc-budget-1")
+	firstBudget := first["subagent_budget"].(map[string]any)
+	if firstBudget["spawn_count"].(float64) != 1 || firstBudget["hint"] != nil {
+		t.Fatalf("first budget = %+v, want count without hint", firstBudget)
+	}
+
+	second := runSpawnSubagentToolForBudget(t, tool, "tc-budget-2")
+	secondBudget := second["subagent_budget"].(map[string]any)
+	if secondBudget["spawn_count"].(float64) != 2 {
+		t.Fatalf("second budget = %+v, want count 2", secondBudget)
+	}
+	hint, _ := secondBudget["hint"].(string)
+	if !strings.Contains(hint, "prefix-cache miss") {
+		t.Fatalf("second hint missing cache warning: %+v", secondBudget)
+	}
+
+	third := runSpawnSubagentToolForBudget(t, tool, "tc-budget-3")
+	thirdBudget := third["subagent_budget"].(map[string]any)
+	hint, _ = thirdBudget["hint"].(string)
+	if !strings.Contains(hint, "budget is high") || thirdBudget["total_tokens"].(float64) != 63_000 {
+		t.Fatalf("third budget = %+v, want strong high-budget hint at 63k tokens", thirdBudget)
+	}
+	if first["tool_mode"] != "model_only" {
+		t.Fatalf("tool_mode = %v, want model_only", first["tool_mode"])
+	}
+	if got := jsonArrayLen(first["requested_tools"]); got != 0 {
+		t.Fatalf("requested_tools length = %d, want 0: %+v", got, first["requested_tools"])
+	}
+	if got := jsonArrayLen(first["resolved_tools"]); got != 0 {
+		t.Fatalf("resolved_tools length = %d, want 0: %+v", got, first["resolved_tools"])
+	}
+}
+
+func runSpawnSubagentToolForBudget(t *testing.T, tool spawnSubagentTool, callID string) map[string]any {
+	t.Helper()
+	res, err := tool.Run(context.Background(), core.ToolCall{
+		ID:    callID,
+		Name:  "spawn_subagent",
+		Input: `{"task":"inspect","role":"review","tools":[]}`,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("unexpected tool error: %s", res.Content)
+	}
+	env, ok := core.ParseToolEnvelope(res.Content)
+	if !ok {
+		t.Fatalf("parse envelope failed: %s", res.Content)
+	}
+	return env.Data
+}
+
 func TestSpawnSubagentToolReadOnlyCheckGatesMutatingLaunches(t *testing.T) {
 	spec := core.DescribeTool(spawnSubagentTool{})
 	tests := []struct {
@@ -123,12 +222,12 @@ func TestSpawnSubagentToolReadOnlyCheckGatesMutatingLaunches(t *testing.T) {
 		},
 		{
 			name:     "workspace write capability needs approval",
-			input:    `{"task":"edit files","capabilities":["workspace.write"]}`,
+			input:    `{"task":"edit files","tools":["workspace.write"]}`,
 			readOnly: false,
 		},
 		{
 			name:     "shell run capability needs approval",
-			input:    `{"task":"run tests","capabilities":["shell.run"]}`,
+			input:    `{"task":"run tests","tools":["shell.run"]}`,
 			readOnly: false,
 		},
 		{
@@ -189,6 +288,59 @@ func TestSpawnSubagentToolReadOnlyCheckGatesMutatingLaunches(t *testing.T) {
 				t.Fatalf("IsReadOnlyToolCall() = %v, want %v", got, tc.readOnly)
 			}
 		})
+	}
+}
+
+func TestSpawnSubagentToolRejectsDeprecatedCapabilitiesInput(t *testing.T) {
+	tool := spawnSubagentTool{runner: NewRunner(RunnerConfig{})}
+	res, err := tool.Run(context.Background(), core.ToolCall{
+		ID:    "tc-deprecated",
+		Name:  "spawn_subagent",
+		Input: `{"task":"inspect","capabilities":["workspace.read"]}`,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected deprecated capabilities error: %+v", res)
+	}
+	env, ok := core.ParseToolEnvelope(res.Content)
+	if !ok {
+		t.Fatalf("parse envelope failed: %s", res.Content)
+	}
+	if env.Code != "invalid_input" || !strings.Contains(env.Message, "use tools instead") {
+		t.Fatalf("unexpected envelope: %+v", env)
+	}
+}
+
+func TestSpawnSubagentToolRejectsWildcardToolsSelector(t *testing.T) {
+	factoryCalled := false
+	factory := func(_ string, _ int) (llm.Provider, error) {
+		factoryCalled = true
+		return providerFunc(func(_ context.Context, _ []core.Message, _ []core.Tool) <-chan llm.ProviderEvent {
+			out := make(chan llm.ProviderEvent)
+			close(out)
+			return out
+		}), nil
+	}
+	parent := core.NewToolRegistry([]core.Tool{testTool{name: "read_file", readOnly: true, capabilities: []string{CapabilityWorkspaceRead}}})
+	tool := spawnSubagentTool{runner: NewRunner(RunnerConfig{ProviderFactory: factory, ParentTools: parent})}
+	res, err := tool.Run(context.Background(), core.ToolCall{
+		ID:    "tc-wildcard",
+		Name:  "spawn_subagent",
+		Input: `{"task":"inspect","tools":["*"]}`,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected wildcard selector error: %+v", res)
+	}
+	if factoryCalled {
+		t.Fatal("provider should not run after wildcard selector rejection")
+	}
+	if !strings.Contains(res.Content, "only supported by fork/trusted child agents") {
+		t.Fatalf("unexpected wildcard error: %s", res.Content)
 	}
 }
 
@@ -571,6 +723,21 @@ func TestChildAskPolicyRequiresApprovalForMutableTools(t *testing.T) {
 	)
 	if !editDecision.Allow || !editDecision.RequiresApproval {
 		t.Fatalf("ask write should require approval, got %+v", editDecision)
+	}
+	exactPolicy := childToolPolicy(nil, AgentPermissionAsk, "/repo", []string{"shell_run", "write_file"})
+	exactShellDecision := exactPolicy.Decide(
+		core.ToolSpec{Name: "shell_run"},
+		core.ToolCall{Name: "shell_run", Input: `{"command":"go test ./..."}`},
+	)
+	if !exactShellDecision.Allow || !exactShellDecision.RequiresApproval {
+		t.Fatalf("ask exact shell selector should require approval, got %+v", exactShellDecision)
+	}
+	exactWriteDecision := exactPolicy.Decide(
+		core.ToolSpec{Name: "write_file"},
+		core.ToolCall{Name: "write_file", Input: `{"file_path":"out.txt","content":"x"}`},
+	)
+	if !exactWriteDecision.Allow || !exactWriteDecision.RequiresApproval {
+		t.Fatalf("ask exact write selector should require approval, got %+v", exactWriteDecision)
 	}
 	denied := p.Decide(
 		core.ToolSpec{Name: "shell_run"},
@@ -1205,7 +1372,7 @@ func TestSpawnSubagentAllowsReadOnlyMCPToolsWithoutApprovalPath(t *testing.T) {
 		ran:      &ran,
 	}})
 	r := NewRunner(RunnerConfig{ProviderFactory: factory, ParentTools: parent})
-	res, err := r.SpawnSubagent(context.Background(), SpawnSubagentRequest{Task: "look it up", Role: "explore", Capabilities: []string{CapabilityMCPRead}})
+	res, err := r.SpawnSubagent(context.Background(), SpawnSubagentRequest{Task: "look it up", Role: "explore", Tools: []string{CapabilityMCPRead}})
 	if err != nil {
 		t.Fatalf("SpawnSubagent: %v", err)
 	}
@@ -1424,7 +1591,7 @@ func TestSpawnSubagentInheritsAutoCompact(t *testing.T) {
 			go func() {
 				defer close(out)
 				content := "child done"
-				if len(tools) == 0 && len(history) > 0 && strings.Contains(history[len(history)-1].Text, "Summarize the conversation") {
+				if len(history) > 0 && strings.Contains(history[len(history)-1].Text, "Summarize the conversation") {
 					content = "compact summary"
 				}
 				out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
@@ -1496,7 +1663,7 @@ func TestSpawnSubagentDerivesAutoCompactWindowFromChildModel(t *testing.T) {
 			go func() {
 				defer close(out)
 				content := "child done"
-				if len(tools) == 0 && len(history) > 0 && strings.Contains(history[len(history)-1].Text, "Summarize the conversation") {
+				if len(history) > 0 && strings.Contains(history[len(history)-1].Text, "Summarize the conversation") {
 					content = "compact summary"
 				}
 				out <- llm.ProviderEvent{Type: llm.EventComplete, Response: &llm.ProviderResponse{
@@ -1761,8 +1928,8 @@ func TestSpawnSubagentUsesAgentGenerationPrefixCompletion(t *testing.T) {
 		WorkspaceRoot: workspaceRoot,
 	})
 	res, err := r.SpawnSubagent(context.Background(), SpawnSubagentRequest{
-		Task:         "return ok",
-		Capabilities: []string{},
+		Task:  "return ok",
+		Tools: []string{},
 		Agent: AgentDefinition{
 			Name:        "prefill-agent",
 			Description: "uses prefix completion",
@@ -1846,8 +2013,8 @@ func TestSpawnSubagentGenerationFallsBackWithoutPrefixProvider(t *testing.T) {
 		WorkspaceRoot: workspaceRoot,
 	})
 	res, err := r.SpawnSubagent(context.Background(), SpawnSubagentRequest{
-		Task:         "return ok",
-		Capabilities: []string{},
+		Task:  "return ok",
+		Tools: []string{},
 		Agent: AgentDefinition{
 			Name:        "fallback-agent",
 			Description: "falls back",
@@ -1937,6 +2104,40 @@ func TestSpawnSubagentToolSchemaExposesInlineAgentPrompt(t *testing.T) {
 	}
 	if _, ok := agentProps["prompt"]; !ok {
 		t.Fatalf("inline agent schema omits prompt: %+v", agentProps)
+	}
+}
+
+func TestSpawnSubagentToolSchemaUsesToolsNotCapabilities(t *testing.T) {
+	tool := spawnSubagentTool{}
+	params := tool.Parameters()
+	props, ok := params["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool properties missing: %+v", params)
+	}
+	if _, ok := props["capabilities"]; ok {
+		t.Fatalf("spawn_subagent schema should not expose capabilities: %+v", props)
+	}
+	toolsSchema, ok := props["tools"].(map[string]any)
+	if !ok {
+		t.Fatalf("spawn_subagent schema omits tools: %+v", props)
+	}
+	items, ok := toolsSchema["items"].(map[string]any)
+	if !ok {
+		t.Fatalf("tools items schema missing: %+v", toolsSchema)
+	}
+	if _, ok := items["enum"]; ok {
+		t.Fatalf("tools items should allow exact tool names, got enum: %+v", items)
+	}
+}
+
+func jsonArrayLen(value any) int {
+	switch v := value.(type) {
+	case []any:
+		return len(v)
+	case []string:
+		return len(v)
+	default:
+		return -1
 	}
 }
 

@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"sort"
 	"strings"
 
 	"github.com/usewhale/whale/internal/agent/planning"
@@ -21,16 +20,27 @@ func (a *Agent) buildImmutableSystemBlocks(opts ...RunOptions) []string {
 	return a.buildImmutableSystemBlocksWithTools(a.tools, opts...)
 }
 
-func (a *Agent) buildImmutableSystemBlocksWithTools(tools *core.ToolRegistry, opts ...RunOptions) []string {
+func (a *Agent) buildImmutableSystemBlocksWithTools(_ *core.ToolRegistry, opts ...RunOptions) []string {
 	systemBlocks := make([]string, 0, len(a.extraSystemBlocks)+2)
-	var turnOpts RunOptions
-	if len(opts) > 0 {
-		turnOpts = opts[0]
-	}
 	for _, block := range a.extraSystemBlocks {
 		if trimmed := strings.TrimSpace(block); trimmed != "" {
 			systemBlocks = append(systemBlocks, trimmed)
 		}
+	}
+	systemBlocks = append(systemBlocks, "Mode switching commands are /agent, /ask, and /plan. Shift+Tab cycles modes in the TUI. Do not tell users to run /mode agent, /mode ask, or /mode plan; those commands do not exist.")
+	systemBlocks = append(systemBlocks, renderDelegationPolicyBlock())
+	systemBlocks = append(systemBlocks, "For questions about the current date or time, use an available read-only shell/time command to verify the answer instead of guessing from model memory.")
+	systemBlocks = append(systemBlocks, renderToolPolicyBlock())
+	systemBlocks = append(systemBlocks, renderWorkflowAuthoringBlock())
+	systemBlocks = append(systemBlocks, "For branch decisions or key assumptions requiring user choice, call request_user_input instead of presenting long A/B/C prose menus.")
+	return systemBlocks
+}
+
+func (a *Agent) buildRuntimeSystemBlocks(opts ...RunOptions) []string {
+	systemBlocks := make([]string, 0, len(a.dynamicSystemBlocks)+6)
+	var turnOpts RunOptions
+	if len(opts) > 0 {
+		turnOpts = opts[0]
 	}
 	for _, render := range a.dynamicSystemBlocks {
 		if render == nil {
@@ -63,15 +73,10 @@ Ask mode is active.
 - For implementation work with more than one step, use update_plan to initialize and maintain a concise execution checklist. Keep at most one item in_progress and mark steps completed promptly.
 		`))
 	}
-	systemBlocks = append(systemBlocks, "Mode switching commands are /agent, /ask, and /plan. Shift+Tab cycles modes in the TUI. Do not tell users to run /mode agent, /mode ask, or /mode plan; those commands do not exist.")
 	if block := renderOutputStyleBlock(turnOpts.ViewMode); block != "" {
 		systemBlocks = append(systemBlocks, block)
 	}
-	systemBlocks = append(systemBlocks, renderDelegationPolicyBlock())
 	systemBlocks = append(systemBlocks, renderRuntimeBlock(a.workspaceRoot, runtimeWorktreeContext{WorktreeRoot: a.worktreeRoot, OriginalWorkspace: a.originalWorkspace}, shell.DescribeRuntime()))
-	systemBlocks = append(systemBlocks, "For questions about the current date or time, use an available read-only shell/time command to verify the answer instead of guessing from model memory.")
-	systemBlocks = append(systemBlocks, renderToolSpecsBlock(tools.Specs()))
-	systemBlocks = append(systemBlocks, renderWorkflowAuthoringBlock())
 	if strings.TrimSpace(a.workspaceRoot) != "" {
 		discovered := skills.Filter(skills.Discover(skills.DefaultRoots(a.workspaceRoot)), a.disabledSkills)
 		discovered = append(discovered, skills.Filter(a.extraSkills, a.disabledSkills)...)
@@ -100,7 +105,7 @@ Workflow authoring.
 - The generated script must be a Claude Code-compatible raw JavaScript workflow: first statement export const meta as a pure literal with name, description, optional whenToUse, and optional phases.
 - If meta.phases is present, it must be an array of objects such as { title: "Review", detail: "one reviewer per dimension" }, not strings and not { name, description } objects.
 - Use only portable workflow globals in generated scripts: args, budget, phase(), log(), agent(), workflow(), parallel(), and pipeline(). Do not use Whale-only APIs or host APIs such as require, import, fs, fetch, process, Date.now, Math.random, or new Date.
-- Workflow agent leaves are capability-defined workers. Use agent definitions and opts.tools/opts.disallowedTools to state required capabilities. Supported capabilities include workspace.read, workspace.write, shell.read, shell.run, web.search, web.fetch, and mcp.read; shell.run or workspace.write require an explicit non-read-only permissionMode. If a needed capability is not exposed by the runtime, make the workflow report the missing evidence instead of assuming shell, edit, or host access.
+- Workflow agent leaves are tool-scoped workers. Use agent definitions and opts.tools/opts.disallowedTools to state required tool selectors. Supported selectors include workspace.read, workspace.write, shell.read, shell.run, web.search, web.fetch, mcp.read, and exact tool names; shell.run or workspace.write require an explicit non-read-only permissionMode. If a needed selector is not exposed by the runtime, make the workflow report the missing evidence instead of assuming shell, edit, or host access.
 - Call phase("Name") only as a statement. Do not write phase("Name", async () => ...); phase() is not a callback wrapper and returns nothing.
 - Await async workflow primitives before reading their results: const result = await agent(...), await parallel(...), await pipeline(...), or await workflow(...). Inside parallel(), thunks may return agent(...).
 - Call agent(prompt, { label, phase, schema, max_tool_calls?, agent?, tools?, disallowedTools?, effort?, permissionMode?, maxTurns? }). The first argument is the complete prompt string. Do not use opts.system, opts.prompt, opts.structured, or a first-argument label.
@@ -181,7 +186,7 @@ Delegation policy.
 - Do not use parallel_reason or spawn_subagent just because they are available.
 - Use a single agent for direct questions, known-file reads, small localized edits, tightly coupled work, or tasks where the next step depends on the current result.
 - Use parallel_reason for 2-8 independent, cheap, model-only subqueries that need comparison, classification, critique, or brainstorming and do not need tools, files, shell, or web access.
-- Use spawn_subagent for one bounded capability-defined exploration, research, or review task. Child agents receive only the tools listed in their agent definition/capabilities.
+- Use spawn_subagent for one bounded tool-scoped exploration, research, or review task. Child agents receive only the tools listed in their agent definition or the call's tools allowlist. Omit tools for role defaults; pass tools: [] for model-only synthesis.
 - Do not ask the user to name these tools. Infer the right path from natural language such as "parallelize this" or "send a reviewer/explorer".
 - If the user explicitly asks for a subagent, delegated reviewer, or explorer, spawn the appropriate subagent directly. Do not load a skill first unless the user explicitly names one.
 - The parent agent owns the final answer. Summarize and reconcile child results before responding to the user.
@@ -189,54 +194,14 @@ Delegation policy.
 `)
 }
 
-func renderToolSpecsBlock(specs []core.ToolSpec) string {
-	if len(specs) == 0 {
-		return "No tools are available."
-	}
-	var b strings.Builder
-	b.WriteString("Available tools (source of truth from registry):\n")
-	for _, s := range specs {
-		mode := "write"
-		switch {
-		case s.ReadOnly:
-			mode = "read-only"
-		case s.ReadOnlyCheck != nil:
-			mode = "conditional read-only"
-		}
-		b.WriteString("- ")
-		b.WriteString(s.Name)
-		b.WriteString(" [")
-		b.WriteString(mode)
-		b.WriteString("]")
-		if strings.TrimSpace(s.Description) != "" {
-			b.WriteString(": ")
-			b.WriteString(strings.TrimSpace(s.Description))
-		}
-		if s.Parameters != nil {
-			if propsAny, ok := s.Parameters["properties"]; ok {
-				if props, ok := propsAny.(map[string]any); ok && len(props) > 0 {
-					keys := make([]string, 0, len(props))
-					for k := range props {
-						keys = append(keys, k)
-					}
-					sort.Strings(keys)
-					max := len(keys)
-					if max > 5 {
-						max = 5
-					}
-					b.WriteString(" args:")
-					b.WriteString(strings.Join(keys[:max], ","))
-				}
-			}
-		}
-		if strings.TrimSpace(s.ApprovalHint) != "" {
-			b.WriteString(" approval:")
-			b.WriteString(strings.TrimSpace(s.ApprovalHint))
-		}
-		if s.ReadOnlyCheck != nil {
-			b.WriteString(" note:some calls are allowed in read-only modes when their input is classified as safe read-only; mutating inputs are blocked.")
-		}
-		b.WriteString("\n")
-	}
-	return strings.TrimSpace(b.String())
+func renderToolPolicyBlock() string {
+	return strings.TrimSpace(`
+Tool use policy.
+
+- Tools are provided through the provider tool schema. Choose tools by exact name and schema; do not invent tools that are not present in the schema.
+- Prefer read-only inspection tools for exploration: read_file, list_dir, grep, search_files, web_search, web_fetch, and clearly read-only MCP tools when available.
+- Mutating tools such as apply_patch, edit, write, shell_run with non-read-only commands, workflow launches, and writable subagents may be blocked by mode, policy, or user approval. In read-only modes, use read-only alternatives and do not request writes.
+- shell_run can be read-only only for safe inspection commands accepted by policy; build, test, install, start, and file-changing shell commands may require approval or be denied.
+- If a tool call is blocked, denied, rejected, or returns a permission/mode error, do not retry the same action through another tool unless the user explicitly asks.
+`)
 }

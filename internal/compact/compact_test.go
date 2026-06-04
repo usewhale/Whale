@@ -38,3 +38,17 @@ func TestEstimateMessagesTokensIncludesToolPayloads(t *testing.T) {
 		t.Fatal("expected non-zero estimate")
 	}
 }
+
+func TestToolResultReplayContentCompactsLargeOutput(t *testing.T) {
+	raw := strings.Repeat("a", 4000) + strings.Repeat("middle", 2000) + strings.Repeat("z", 4000)
+	got := ToolResultReplayContent(raw)
+	if got == raw {
+		t.Fatal("expected large tool result to be compacted")
+	}
+	if !strings.Contains(got, "[tool result compacted for model replay]") {
+		t.Fatalf("missing compaction marker: %q", got[:min(len(got), 80)])
+	}
+	if !strings.Contains(got, strings.Repeat("a", 100)) || !strings.Contains(got, strings.Repeat("z", 100)) {
+		t.Fatal("expected compacted replay to retain head and tail")
+	}
+}

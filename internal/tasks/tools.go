@@ -72,7 +72,7 @@ type spawnSubagentTool struct {
 
 func (t spawnSubagentTool) Name() string { return "spawn_subagent" }
 func (t spawnSubagentTool) Description() string {
-	return "Run one bounded child agent for exploration, research, or review. Child agents are resolved through an agent definition with least-privilege tools. Omit capabilities/tools for workspace.read, pass shell.read for safe read-only shell commands, shell.run or workspace.write only with an explicit non-read-only permissionMode, or [] for model-only synthesis. Set agent.background=true to launch and return a child session id immediately; use subagent_status or cancel_subagent for lifecycle follow-up."
+	return "Run one bounded child agent for independent exploration, research, or review. Prefer direct tools for small follow-ups; use a child agent mainly for parallel fan-out or when a task needs roughly 10+ read/search steps whose trail does not need to stay in the parent context. Each fresh child has its own provider request/prefix and may pay a prefix-cache miss plus a full child loop. Child agents are resolved through an agent definition with least-privilege tools. Omit tools to use the selected agent defaults, pass [] for model-only synthesis, pass workspace.read or exact tool names for a custom allowlist, and use shell.run or workspace.write only with an explicit non-read-only permissionMode. Set agent.background=true to launch and return a child session id immediately; use subagent_status or cancel_subagent for lifecycle follow-up."
 }
 func (t spawnSubagentTool) Parameters() map[string]any {
 	return map[string]any{
@@ -85,10 +85,10 @@ func (t spawnSubagentTool) Parameters() map[string]any {
 			"model":          map[string]any{"type": "string", "description": "Optional model override. Defaults to the configured cheap model."},
 			"max_tool_iters": map[string]any{"type": "integer", "minimum": 1, "maximum": 64},
 			"max_tool_calls": map[string]any{"type": "integer", "minimum": 1, "maximum": 128},
-			"capabilities": map[string]any{
+			"tools": map[string]any{
 				"type":        "array",
-				"description": "Optional least-privilege tool capabilities. Omit for workspace.read. Pass [] for model-only.",
-				"items":       map[string]any{"type": "string", "enum": agentCapabilityEnum()},
+				"description": "Optional least-privilege tool selectors. Omit to use the selected agent defaults. Pass [] for model-only. Selectors may be known aliases such as workspace.read or exact tool names exposed to the parent agent.",
+				"items":       map[string]any{"type": "string"},
 			},
 		},
 		"required": []string{"task"},
@@ -98,7 +98,7 @@ func (t spawnSubagentTool) Parameters() map[string]any {
 func agentDefinitionSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
-		"description":          "Optional long-term child agent definition. Top-level role/model/capabilities still override or seed this definition.",
+		"description":          "Optional long-term child agent definition. Top-level role/model/tools still override or seed this definition.",
 		"additionalProperties": false,
 		"properties": map[string]any{
 			"name":            map[string]any{"type": "string"},
@@ -212,6 +212,9 @@ func spawnSubagentLaunchReadOnly(args map[string]any, runner *Runner) bool {
 	if args == nil {
 		return false
 	}
+	if _, ok := args["capabilities"]; ok {
+		return false
+	}
 	raw, err := json.Marshal(args)
 	if err != nil {
 		return false
@@ -231,7 +234,7 @@ func spawnSubagentLaunchReadOnly(args map[string]any, runner *Runner) bool {
 	if err != nil {
 		return false
 	}
-	if spawnSubagentSelectorsMutating(cfg.Capabilities) {
+	if spawnSubagentSelectorsMutating(cfg.ToolSelectors) {
 		return false
 	}
 	if cfg.PermissionProfile != AgentPermissionReadOnly {
@@ -259,6 +262,9 @@ func spawnSubagentSelectorsMutating(values []string) bool {
 func (t spawnSubagentTool) RunWithProgress(ctx context.Context, call core.ToolCall, progress func(core.ToolProgress)) (core.ToolResult, error) {
 	if t.runner == nil {
 		return marshalError(call, "not_configured", "task runner is not configured")
+	}
+	if spawnSubagentInputHasDeprecatedCapabilities(call.Input) {
+		return marshalError(call, "invalid_input", "spawn_subagent no longer accepts capabilities; use tools instead")
 	}
 	req, err := decodeInput[SpawnSubagentRequest](call)
 	if err != nil {
@@ -290,30 +296,52 @@ func (t spawnSubagentTool) RunWithProgress(ctx context.Context, call core.ToolCa
 		}
 		return marshalError(call, "spawn_subagent_failed", err.Error())
 	}
+	data := map[string]any{
+		"session_id":         res.SessionID,
+		"child_session_id":   res.SessionID,
+		"role":               res.Role,
+		"model":              res.Model,
+		"permission_profile": res.PermissionProfile,
+		"status":             res.Status,
+		"summary":            res.Summary,
+		"truncated":          res.Truncated,
+		"tool_calls":         res.ToolCalls,
+		"requested_tools":    res.RequestedTools,
+		"resolved_tools":     res.ResolvedTools,
+		"tool_mode":          res.ToolMode,
+		"duration_ms":        res.DurationMS,
+		"completed_at":       res.CompletedAt,
+	}
+	if res.SubagentBudget.SpawnCount > 0 {
+		budget := map[string]any{
+			"spawn_count":  res.SubagentBudget.SpawnCount,
+			"total_tokens": res.SubagentBudget.TotalTokens,
+		}
+		if strings.TrimSpace(res.SubagentBudget.Hint) != "" {
+			budget["hint"] = res.SubagentBudget.Hint
+		}
+		data["subagent_budget"] = budget
+	}
 	content, err := core.MarshalToolEnvelope(core.ToolEnvelope{
-		OK:      true,
-		Success: true,
-		Code:    "ok",
-		Data: map[string]any{
-			"session_id":         res.SessionID,
-			"child_session_id":   res.SessionID,
-			"role":               res.Role,
-			"model":              res.Model,
-			"permission_profile": res.PermissionProfile,
-			"status":             res.Status,
-			"summary":            res.Summary,
-			"truncated":          res.Truncated,
-			"tool_calls":         res.ToolCalls,
-			"capabilities":       res.Capabilities,
-			"duration_ms":        res.DurationMS,
-			"completed_at":       res.CompletedAt,
-		},
+		OK:       true,
+		Success:  true,
+		Code:     "ok",
+		Data:     data,
 		Metadata: map[string]any{"duration_ms": res.DurationMS},
 	})
 	if err != nil {
 		return core.ToolResult{}, err
 	}
 	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content}, nil
+}
+
+func spawnSubagentInputHasDeprecatedCapabilities(input string) bool {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(input), &raw); err != nil {
+		return false
+	}
+	_, ok := raw["capabilities"]
+	return ok
 }
 
 type subagentStatusTool struct {

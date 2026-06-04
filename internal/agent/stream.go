@@ -12,6 +12,7 @@ import (
 	"github.com/usewhale/whale/internal/memory"
 	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/session"
+	"github.com/usewhale/whale/internal/telemetry"
 )
 
 type preparedToolDispatch struct {
@@ -31,15 +32,15 @@ type toolDispatchOutcome struct {
 	PrimarySucceeded bool
 }
 
-func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, checkpointMessageID string, history []core.Message, rt *memory.RuntimeState, events chan<- AgentEvent, toolPolicy policy.ToolPolicy, tools *core.ToolRegistry, remainingToolCalls int, opts RunOptions) (core.Message, *core.Message, llm.Usage, string, bool, int, error) {
-	assistant, lastUsage, lastModel, err := a.collectAssistantStream(ctx, sessionID, rt, events, tools, opts)
+func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, checkpointMessageID string, history []core.Message, rt *memory.RuntimeState, events chan<- AgentEvent, toolPolicy policy.ToolPolicy, tools *core.ToolRegistry, remainingToolCalls int, opts RunOptions) (core.Message, *core.Message, llm.Usage, string, *telemetry.CacheShape, bool, int, error) {
+	assistant, lastUsage, lastModel, cacheShape, err := a.collectAssistantStream(ctx, sessionID, rt, events, tools, opts)
 	if err != nil {
-		return core.Message{}, nil, llm.Usage{}, "", false, 0, err
+		return core.Message{}, nil, llm.Usage{}, "", nil, false, 0, err
 	}
 
 	dispatchCalls, blocked, err := a.prepareToolDispatches(ctx, sessionID, lastModel, assistant, events, tools)
 	if err != nil {
-		return core.Message{}, nil, llm.Usage{}, "", false, 0, err
+		return core.Message{}, nil, llm.Usage{}, "", nil, false, 0, err
 	}
 	attemptedToolCalls := len(dispatchCalls)
 	if remainingToolCalls > 0 && len(dispatchCalls) > remainingToolCalls {
@@ -51,7 +52,7 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, checkpoin
 	}
 	if len(dispatchCalls) == 0 {
 		if len(blocked) == 0 {
-			return assistant, nil, lastUsage, lastModel, false, attemptedToolCalls, nil
+			return assistant, nil, lastUsage, lastModel, cacheShape, false, attemptedToolCalls, nil
 		}
 		toolMsg, abortTurn, err := a.dispatchToolCalls(ctx, streamDispatchContext{
 			SessionID:           sessionID,
@@ -63,9 +64,9 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, checkpoin
 			CheckpointMessageID: checkpointMessageID,
 		}, nil, blocked)
 		if err != nil {
-			return core.Message{}, nil, llm.Usage{}, "", false, attemptedToolCalls, err
+			return core.Message{}, nil, llm.Usage{}, "", nil, false, attemptedToolCalls, err
 		}
-		return assistant, toolMsg, lastUsage, lastModel, abortTurn, attemptedToolCalls, nil
+		return assistant, toolMsg, lastUsage, lastModel, cacheShape, abortTurn, attemptedToolCalls, nil
 	}
 	toolMsg, abortTurn, err := a.dispatchToolCalls(ctx, streamDispatchContext{
 		SessionID:           sessionID,
@@ -77,9 +78,9 @@ func (a *Agent) streamAndHandle(ctx context.Context, sessionID string, checkpoin
 		CheckpointMessageID: checkpointMessageID,
 	}, dispatchCalls, blocked)
 	if err != nil {
-		return core.Message{}, nil, llm.Usage{}, "", false, attemptedToolCalls, err
+		return core.Message{}, nil, llm.Usage{}, "", nil, false, attemptedToolCalls, err
 	}
-	return assistant, toolMsg, lastUsage, lastModel, abortTurn, attemptedToolCalls, nil
+	return assistant, toolMsg, lastUsage, lastModel, cacheShape, abortTurn, attemptedToolCalls, nil
 }
 
 func toolCallCapBlockedResult(call core.ToolCall) core.ToolResult {

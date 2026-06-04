@@ -27,7 +27,7 @@ type SpawnSubagentRequest struct {
 	Model             string          `json:"model,omitempty"`
 	MaxToolIters      int             `json:"max_tool_iters,omitempty"`
 	MaxToolCalls      int             `json:"max_tool_calls,omitempty"`
-	Capabilities      []string        `json:"capabilities,omitempty"`
+	Tools             []string        `json:"tools,omitempty"`
 	OutputSchema      map[string]any  `json:"output_schema,omitempty"`
 	ParentToolCallID  string          `json:"-"`
 	WorkflowRunID     string          `json:"-"`
@@ -38,20 +38,29 @@ type SpawnSubagentRequest struct {
 }
 
 type SpawnSubagentResponse struct {
-	SessionID         string    `json:"session_id"`
-	Role              string    `json:"role"`
-	Model             string    `json:"model"`
-	PermissionProfile string    `json:"permission_profile"`
-	Status            string    `json:"status"`
-	Summary           string    `json:"summary"`
-	StructuredResult  any       `json:"structured_result,omitempty"`
-	Error             string    `json:"error,omitempty"`
-	Truncated         bool      `json:"truncated"`
-	ToolCalls         []string  `json:"tool_calls,omitempty"`
-	Capabilities      []string  `json:"capabilities,omitempty"`
-	Usage             llm.Usage `json:"usage,omitempty"`
-	DurationMS        int64     `json:"duration_ms"`
-	CompletedAt       string    `json:"completed_at"`
+	SessionID         string         `json:"session_id"`
+	Role              string         `json:"role"`
+	Model             string         `json:"model"`
+	PermissionProfile string         `json:"permission_profile"`
+	Status            string         `json:"status"`
+	Summary           string         `json:"summary"`
+	StructuredResult  any            `json:"structured_result,omitempty"`
+	Error             string         `json:"error,omitempty"`
+	Truncated         bool           `json:"truncated"`
+	ToolCalls         []string       `json:"tool_calls,omitempty"`
+	RequestedTools    []string       `json:"requested_tools,omitempty"`
+	ResolvedTools     []string       `json:"resolved_tools,omitempty"`
+	ToolMode          string         `json:"tool_mode,omitempty"`
+	Usage             llm.Usage      `json:"usage,omitempty"`
+	SubagentBudget    SubagentBudget `json:"subagent_budget,omitempty"`
+	DurationMS        int64          `json:"duration_ms"`
+	CompletedAt       string         `json:"completed_at"`
+}
+
+type SubagentBudget struct {
+	SpawnCount  int    `json:"spawn_count"`
+	TotalTokens int    `json:"total_tokens"`
+	Hint        string `json:"hint,omitempty"`
 }
 
 type SpawnSubagentError struct {
@@ -93,7 +102,7 @@ func (r *Runner) AllowedSubagentTools(req SpawnSubagentRequest) ([]string, error
 	if err != nil {
 		return nil, err
 	}
-	return AllowedAgentToolNamesForMCPServers(r.parentTools, cfg.Capabilities, cfg.PermissionProfile, cfg.MCPServers, cfg.DisallowedTools)
+	return AllowedAgentToolNamesForMCPServers(r.parentTools, cfg.ToolSelectors, cfg.PermissionProfile, cfg.MCPServers, cfg.DisallowedTools)
 }
 
 func (r *Runner) SubagentStatus(sessionID string) (session.SessionMeta, error) {
@@ -137,11 +146,11 @@ func childSessionMode(permissionMode string) session.Mode {
 	}
 }
 
-func childToolPolicy(parent policy.ToolPolicy, permissionMode, workspaceRoot string, capabilities []string) policy.ToolPolicy {
+func childToolPolicy(parent policy.ToolPolicy, permissionMode, workspaceRoot string, toolSelectors []string) policy.ToolPolicy {
 	base := childBasePolicy(parent, workspaceRoot)
 	switch strings.TrimSpace(permissionMode) {
 	case AgentPermissionAsk:
-		return childToolApprovalPolicy{Base: base, Capabilities: capabilities}
+		return childToolApprovalPolicy{Base: base, ToolSelectors: toolSelectors}
 	default:
 		return base
 	}
@@ -211,10 +220,12 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 			return SpawnSubagentResponse{}, err
 		}
 	}
-	childTools, err := BuildAgentRegistryForMCPServers(parentTools, cfg.Capabilities, cfg.PermissionProfile, cfg.MCPServers, cfg.DisallowedTools)
+	childTools, err := BuildAgentRegistryForMCPServers(parentTools, cfg.ToolSelectors, cfg.PermissionProfile, cfg.MCPServers, cfg.DisallowedTools)
 	if err != nil {
 		return SpawnSubagentResponse{}, err
 	}
+	resolvedToolNames := toolNames(childTools.Tools())
+	toolMode := agentToolMode(cfg.ToolSelectors, resolvedToolNames, cfg.PermissionProfile)
 	var structuredCapture *structuredOutputCapture
 	if len(req.OutputSchema) > 0 {
 		structuredCapture = &structuredOutputCapture{}
@@ -251,7 +262,7 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 		OriginalHeadCommit: workspace.OriginalHeadCommit,
 		StartedAt:          start.UTC(),
 	})
-	extraBlocks := []string{agentDefinitionSystemBlock(cfg.Definition, cfg.Capabilities)}
+	extraBlocks := []string{agentDefinitionSystemBlock(cfg.Definition, cfg.ToolSelectors, resolvedToolNames, toolMode)}
 	if workflowBlock := workflowContextSystemBlock(req); workflowBlock != "" {
 		extraBlocks = append(extraBlocks, workflowBlock)
 	}
@@ -279,7 +290,7 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 	newChild := func(registry *core.ToolRegistry, maxIters int) *agent.Agent {
 		return agent.NewAgentWithRegistry(provider, childStore, registry,
 			agent.WithSessionMode(childSessionMode(cfg.PermissionProfile)),
-			agent.WithToolPolicy(childToolPolicy(r.parentPolicy, cfg.PermissionProfile, workspace.WorkspaceRoot, cfg.Capabilities)),
+			agent.WithToolPolicy(childToolPolicy(r.parentPolicy, cfg.PermissionProfile, workspace.WorkspaceRoot, cfg.ToolSelectors)),
 			// The child registry is capability-restricted, but policy decisions
 			// still flow through the parent approval path so workspace/user
 			// permission rules remain effective inside subagents.
@@ -495,7 +506,9 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 			StructuredResult:  structuredResult,
 			Truncated:         truncated,
 			ToolCalls:         toolCalls,
-			Capabilities:      cloneStrings(cfg.Capabilities),
+			RequestedTools:    cloneStrings(cfg.ToolSelectors),
+			ResolvedTools:     cloneStrings(resolvedToolNames),
+			ToolMode:          toolMode,
 			Usage:             usage,
 			DurationMS:        time.Since(start).Milliseconds(),
 			CompletedAt:       completedAt.Format(time.RFC3339),
@@ -512,18 +525,54 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 			defer r.unregisterBackgroundSubagent(sessionID)
 			_, _ = runChild(bgCtx, nil)
 		}()
-		return SpawnSubagentResponse{
+		res := SpawnSubagentResponse{
 			SessionID:         sessionID,
 			Role:              role,
 			Model:             model,
 			PermissionProfile: cfg.PermissionProfile,
 			Status:            "running",
 			Summary:           "background subagent launched",
-			Capabilities:      cloneStrings(cfg.Capabilities),
+			RequestedTools:    cloneStrings(cfg.ToolSelectors),
+			ResolvedTools:     cloneStrings(resolvedToolNames),
+			ToolMode:          toolMode,
 			DurationMS:        time.Since(start).Milliseconds(),
-		}, nil
+		}
+		res.SubagentBudget = r.recordSubagentBudget(llm.Usage{})
+		return res, nil
 	}
-	return runChild(ctx, progress)
+	res, err := runChild(ctx, progress)
+	if err != nil {
+		return res, err
+	}
+	res.SubagentBudget = r.recordSubagentBudget(res.Usage)
+	return res, nil
+}
+
+func (r *Runner) recordSubagentBudget(usage llm.Usage) SubagentBudget {
+	if r == nil {
+		return SubagentBudget{}
+	}
+	tokens := usage.TotalTokens
+	if tokens <= 0 {
+		tokens = usage.PromptTokens + usage.CompletionTokens
+	}
+	r.subagentBudgetMu.Lock()
+	defer r.subagentBudgetMu.Unlock()
+	r.subagentBudget.SpawnCount++
+	r.subagentBudget.TotalTokens += tokens
+	out := r.subagentBudget
+	out.Hint = subagentBudgetHint(out.SpawnCount, out.TotalTokens)
+	return out
+}
+
+func subagentBudgetHint(spawnCount, totalTokens int) string {
+	if spawnCount > 4 || totalTokens >= 50_000 {
+		return "Subagent budget is high for this session. Prefer using current-context tools or combining remaining child tasks; each fresh subagent may pay a prefix-cache miss and a full child loop."
+	}
+	if spawnCount > 1 {
+		return "Subagent budget is warming up. Prefer direct tools for small follow-ups; each fresh subagent may pay a prefix-cache miss and a full child loop."
+	}
+	return ""
 }
 
 func workflowContextSystemBlock(req SpawnSubagentRequest) string {

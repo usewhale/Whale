@@ -137,7 +137,7 @@ func (r *Runner) recordHookModelUsage(payload agent.HookPayload, model, hookKind
 	if strings.TrimSpace(r.usageLogPath) == "" {
 		return
 	}
-	_ = telemetry.AppendUsage(r.usageLogPath, payload.SessionID, model, "", usage, cost, time.Now(), telemetry.UsageMetadata{
+	_ = telemetry.AppendUsage(r.usageLogPath, payload.SessionID, model, "", usage, cost, time.Now(), nil, telemetry.UsageMetadata{
 		Kind:                "subagent",
 		ParentSessionID:     r.currentParentSessionID(),
 		SubagentRole:        strings.TrimSpace(payload.SubagentRole),

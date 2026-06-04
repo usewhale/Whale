@@ -225,6 +225,7 @@ type PrefixDriftInfo struct {
 type PrefixCacheMetricsInfo struct {
 	Model             string
 	PrefixFingerprint string
+	CacheShape        *telemetry.CacheShape
 	PromptTokens      int
 	CachedTokens      int
 	CacheHitRatio     float64

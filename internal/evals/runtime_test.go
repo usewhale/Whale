@@ -1200,7 +1200,7 @@ func (p *autoCompactProvider) StreamResponse(_ context.Context, history []core.M
 	p.histories = append(p.histories, append([]core.Message(nil), history...))
 	out := make(chan llm.ProviderEvent, 1)
 	content := "ok"
-	if len(tools) == 0 && len(history) > 0 && strings.Contains(history[len(history)-1].Text, "Summarize the conversation") {
+	if len(history) > 0 && strings.Contains(history[len(history)-1].Text, "Summarize the conversation") {
 		content = "compact summary"
 	}
 	out <- llm.ProviderEvent{
@@ -1300,11 +1300,14 @@ func TestRuntimeAutoCompactEmitsEventAndRewritesHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list messages failed: %v", err)
 	}
-	if len(msgs) != 2 {
-		t.Fatalf("expected compact summary plus current turn result, got %+v", msgs)
+	if len(msgs) != 3 {
+		t.Fatalf("expected compact summary plus retained current turn and result, got %+v", msgs)
 	}
 	if msgs[0].Role != core.RoleUser || msgs[0].Text != "compact summary" {
 		t.Fatalf("expected summary rewrite, got %+v", msgs[0])
+	}
+	if msgs[1].Role != core.RoleUser || msgs[1].Text != "next" {
+		t.Fatalf("expected retained current user turn, got %+v", msgs[1])
 	}
 	if len(provider.histories) < 2 {
 		t.Fatalf("expected summary and normal provider calls, got %d", len(provider.histories))
@@ -1383,14 +1386,17 @@ func TestRuntimeAutoCompactRewritesLongHistoryWithToolMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list messages failed: %v", err)
 	}
-	if len(msgs) != 2 {
-		t.Fatalf("expected compact summary plus current turn result, got %+v", msgs)
+	if len(msgs) != 3 {
+		t.Fatalf("expected compact summary plus retained current turn and result, got %+v", msgs)
 	}
 	if msgs[0].Role != core.RoleUser || msgs[0].Text != "compact summary" {
 		t.Fatalf("expected summary rewrite, got %+v", msgs[0])
 	}
-	if msgs[1].Role != core.RoleAssistant || msgs[1].Text == "" {
-		t.Fatalf("expected current assistant response after compact, got %+v", msgs[1])
+	if msgs[1].Role != core.RoleUser || msgs[1].Text != "next" {
+		t.Fatalf("expected retained current user turn, got %+v", msgs[1])
+	}
+	if msgs[2].Role != core.RoleAssistant || msgs[2].Text == "" {
+		t.Fatalf("expected current assistant response after compact, got %+v", msgs[2])
 	}
 }
 

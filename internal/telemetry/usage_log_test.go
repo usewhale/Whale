@@ -28,7 +28,25 @@ func TestAppendUsage_WritesJSONL(t *testing.T) {
 		ToolResultReplayTokens: 75,
 		ToolResultTokensSaved:  225,
 		ToolResultsCompacted:   1,
-	}, 0.1234, time.UnixMilli(1000))
+	}, 0.1234, time.UnixMilli(1000), &CacheShape{
+		RequestKind: "agent",
+		SystemHash:  "sys",
+		SystemSegments: []CacheShapeSegment{{
+			Index:     0,
+			Name:      "runtime_context",
+			Stability: "dynamic",
+			Hash:      "seg",
+			Bytes:     42,
+		}},
+		SystemBytes:  42,
+		ToolsHash:    "tools",
+		ToolsBytes:   12,
+		LogTailHash:  "tail",
+		LogTailBytes: 20,
+		RequestHash:  "req",
+		LogMessages:  2,
+		TailMessages: 2,
+	})
 	if err != nil {
 		t.Fatalf("append usage failed: %v", err)
 	}
@@ -49,6 +67,15 @@ func TestAppendUsage_WritesJSONL(t *testing.T) {
 	if !strings.Contains(s, `"prefix_fingerprint":"abc123"`) {
 		t.Fatalf("missing prefix fingerprint in log: %s", s)
 	}
+	if !strings.Contains(s, `"cache_shape"`) || !strings.Contains(s, `"system_hash":"sys"`) {
+		t.Fatalf("missing cache shape in log: %s", s)
+	}
+	if !strings.Contains(s, `"request_kind":"agent"`) {
+		t.Fatalf("missing cache shape request kind in log: %s", s)
+	}
+	if !strings.Contains(s, `"system_segments"`) || !strings.Contains(s, `"name":"runtime_context"`) {
+		t.Fatalf("missing cache shape system segments in log: %s", s)
+	}
 	if !strings.Contains(s, `"cache_hit_ratio"`) {
 		t.Fatalf("missing cache hit ratio in log: %s", s)
 	}
@@ -63,7 +90,7 @@ func TestAppendUsage_WritesJSONL(t *testing.T) {
 func TestAppendUsage_WritesSubagentMetadata(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "usage.jsonl")
-	err := AppendUsage(path, "child", "deepseek-v4-flash", "", llm.Usage{PromptTokens: 100}, 0.0001, time.UnixMilli(1000), UsageMetadata{
+	err := AppendUsage(path, "child", "deepseek-v4-flash", "", llm.Usage{PromptTokens: 100}, 0.0001, time.UnixMilli(1000), nil, UsageMetadata{
 		Kind:                "subagent",
 		ParentSessionID:     "parent",
 		SubagentRole:        "reviewer",
@@ -125,7 +152,7 @@ func TestAppendUsage_CompactionSerializesConcurrentAppends(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs <- AppendUsage(path, "recent-"+string(rune('a'+i)), "deepseek-v4-flash", "", llm.Usage{PromptTokens: 10}, 0.0001, now.Add(time.Duration(i)*time.Millisecond))
+			errs <- AppendUsage(path, "recent-"+string(rune('a'+i)), "deepseek-v4-flash", "", llm.Usage{PromptTokens: 10}, 0.0001, now.Add(time.Duration(i)*time.Millisecond), nil)
 		}()
 	}
 	wg.Wait()

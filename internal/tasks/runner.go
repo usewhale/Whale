@@ -95,6 +95,8 @@ type Runner struct {
 	summaryMaxChars            int
 	usageLogPath               string
 	approvalFunc               policy.ApprovalFunc
+	subagentBudgetMu           sync.Mutex
+	subagentBudget             SubagentBudget
 	backgroundMu               sync.Mutex
 	backgroundCancels          map[string]context.CancelFunc
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/usewhale/whale/internal/compact"
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/llm"
 	llmretry "github.com/usewhale/whale/internal/llm/retry"
@@ -1123,7 +1124,7 @@ func TestSanitizeDeepSeekMessagesLeavesCompactedToolResultPaired(t *testing.T) {
 				{"id": "call_1", "type": "function", "function": map[string]any{"name": "read_file", "arguments": "{}"}},
 			},
 		},
-		{"role": "tool", "tool_call_id": "call_1", "content": compactToolResultForReplay(large)},
+		{"role": "tool", "tool_call_id": "call_1", "content": compact.ToolResultReplayContent(large)},
 	}
 
 	out, diag := sanitizeDeepSeekMessagesForRequest(msgs, true)

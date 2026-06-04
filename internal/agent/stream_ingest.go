@@ -9,12 +9,13 @@ import (
 	"github.com/usewhale/whale/internal/llm"
 	"github.com/usewhale/whale/internal/memory"
 	"github.com/usewhale/whale/internal/session"
+	"github.com/usewhale/whale/internal/telemetry"
 )
 
-func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt *memory.RuntimeState, events chan<- AgentEvent, tools *core.ToolRegistry, opts RunOptions) (core.Message, llm.Usage, string, error) {
+func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt *memory.RuntimeState, events chan<- AgentEvent, tools *core.ToolRegistry, opts RunOptions) (core.Message, llm.Usage, string, *telemetry.CacheShape, error) {
 	assistant, err := a.store.Create(ctx, core.Message{SessionID: sessionID, Role: core.RoleAssistant})
 	if err != nil {
-		return core.Message{}, llm.Usage{}, "", fmt.Errorf("create assistant message: %w", err)
+		return core.Message{}, llm.Usage{}, "", nil, fmt.Errorf("create assistant message: %w", err)
 	}
 	lastUsage := llm.Usage{}
 	lastModel := ""
@@ -28,8 +29,10 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 	history := a.buildTurnProviderHistory(sessionID, rt)
 	toolList := tools.Tools()
 	var ch <-chan llm.ProviderEvent
+	requestedAssistantPrefix := ""
 	if opts.PrefixCompletion && strings.TrimSpace(opts.AssistantPrefix) != "" && len(toolList) == 0 {
 		if prefixProvider, ok := a.provider.(llm.PrefixCompletionProvider); ok {
+			requestedAssistantPrefix = opts.AssistantPrefix
 			ch = prefixProvider.StreamResponseWithPrefix(ctx, history, opts.AssistantPrefix, nil)
 		}
 	}
@@ -42,7 +45,7 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 			assistant.Text += ev.Content
 			assistantDeltaSeen = true
 			if !a.emitAssistantContentDelta(ctx, ev.Content, &ps, events) {
-				return core.Message{}, llm.Usage{}, "", ctx.Err()
+				return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
 			}
 			// Intentionally do not persist on every delta: rewriting the full
 			// session JSONL per token produced O(n·m) disk I/O and caused TUI
@@ -53,7 +56,7 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 			assistant.Reasoning += ev.ReasoningDelta
 			rt.Scratch.Reasoning += ev.ReasoningDelta
 			if !emit(AgentEvent{Type: AgentEventTypeReasoningDelta, ReasoningDelta: ev.ReasoningDelta}) {
-				return core.Message{}, llm.Usage{}, "", ctx.Err()
+				return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
 			}
 		case llm.EventToolArgsDelta:
 			if ev.ToolArgsDelta != nil {
@@ -67,7 +70,7 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 						ReadyCount:    ev.ToolArgsDelta.ReadyCount,
 					},
 				}) {
-					return core.Message{}, llm.Usage{}, "", ctx.Err()
+					return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
 				}
 			}
 		case llm.EventToolUseStart:
@@ -89,11 +92,11 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 					assistantDeltaSeen = false
 					streamPersisted = false
 					if err := a.store.Update(ctx, assistant); err != nil {
-						return core.Message{}, llm.Usage{}, "", err
+						return core.Message{}, llm.Usage{}, "", nil, err
 					}
 				}
 				if !emit(AgentEvent{Type: AgentEventTypeProviderRetryScheduled, ProviderRetry: &info}) {
-					return core.Message{}, llm.Usage{}, "", ctx.Err()
+					return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
 				}
 			}
 		case llm.EventComplete:
@@ -112,11 +115,11 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 					for i := range ev.Response.ToolCalls {
 						tc := ev.Response.ToolCalls[i]
 						if !emit(AgentEvent{Type: AgentEventTypeToolCall, ToolCall: &tc}) {
-							return core.Message{}, llm.Usage{}, "", ctx.Err()
+							return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
 						}
 						if taskEvent, ok := taskStartedEvent(tc); ok {
 							if !emit(taskEvent) {
-								return core.Message{}, llm.Usage{}, "", ctx.Err()
+								return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
 							}
 						}
 					}
@@ -125,16 +128,16 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 					assistant.Text = ev.Response.Content
 					if !assistantDeltaSeen {
 						if !a.emitAssistantContentDelta(ctx, ev.Response.Content, &ps, events) {
-							return core.Message{}, llm.Usage{}, "", ctx.Err()
+							return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
 						}
 					} else if a.mode == session.ModePlan && !ps.completed {
 						if !a.emitFinalProposedPlan(ctx, ev.Response.Content, &ps, events) {
-							return core.Message{}, llm.Usage{}, "", ctx.Err()
+							return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
 						}
 					}
 				}
 				if err := a.store.Update(ctx, assistant); err != nil {
-					return core.Message{}, llm.Usage{}, "", err
+					return core.Message{}, llm.Usage{}, "", nil, err
 				}
 				streamPersisted = true
 			}
@@ -143,7 +146,7 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 				assistant.FinishReason = core.FinishReasonError
 				assistant.ToolCalls = nil
 				a.bestEffortUpdateAssistant(assistant)
-				return core.Message{}, llm.Usage{}, "", ev.Err
+				return core.Message{}, llm.Usage{}, "", nil, ev.Err
 			}
 		}
 	}
@@ -157,9 +160,14 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 	if a.mode == session.ModePlan && !ps.completed {
 		for _, seg := range ps.parser.Finish() {
 			if !a.emitProposedPlanSegment(ctx, seg, &ps, events) {
-				return core.Message{}, llm.Usage{}, "", ctx.Err()
+				return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
 			}
 		}
 	}
-	return assistant, lastUsage, lastModel, nil
+	assistantPrefix := ""
+	if lastUsage.PrefixCompletionRequests > 0 {
+		assistantPrefix = requestedAssistantPrefix
+	}
+	cacheShape := buildCacheShapeForRequestWithRuntime(cacheShapeRequestAgent, history, toolList, assistantPrefix, rt.Prefix.SystemBlocks(), rt.RuntimeBlocks())
+	return assistant, lastUsage, lastModel, cacheShape, nil
 }

@@ -21,12 +21,29 @@ func NewImmutablePrefix(systemBlocks []string) *ImmutablePrefix {
 
 func (p *ImmutablePrefix) Refresh(systemBlocks []string) {
 	p.systemBlocks = append([]string(nil), systemBlocks...)
-	sum := sha256.Sum256([]byte(strings.Join(p.systemBlocks, "\n\n")))
-	p.fingerprint = hex.EncodeToString(sum[:])
+	p.fingerprint = fingerprintSystemBlocks(p.systemBlocks)
 }
 
 func (p *ImmutablePrefix) Fingerprint() string {
+	if p == nil {
+		return ""
+	}
 	return p.fingerprint
+}
+
+func (p *ImmutablePrefix) VerifyFingerprint() (string, bool) {
+	if p == nil {
+		return "", true
+	}
+	fresh := fingerprintSystemBlocks(p.systemBlocks)
+	return fresh, fresh == p.fingerprint
+}
+
+func (p *ImmutablePrefix) SystemBlocks() []string {
+	if p == nil {
+		return nil
+	}
+	return append([]string(nil), p.systemBlocks...)
 }
 
 func (p *ImmutablePrefix) ToMessages() []core.Message {
@@ -37,4 +54,9 @@ func (p *ImmutablePrefix) ToMessages() []core.Message {
 		Role: core.RoleSystem,
 		Text: strings.Join(p.systemBlocks, "\n\n"),
 	}}
+}
+
+func fingerprintSystemBlocks(systemBlocks []string) string {
+	sum := sha256.Sum256([]byte(strings.Join(systemBlocks, "\n\n")))
+	return hex.EncodeToString(sum[:])
 }

@@ -9,8 +9,8 @@ import (
 )
 
 type childToolApprovalPolicy struct {
-	Base         policy.ToolPolicy
-	Capabilities []string
+	Base          policy.ToolPolicy
+	ToolSelectors []string
 }
 
 func (p childToolApprovalPolicy) Decide(spec core.ToolSpec, call core.ToolCall) policy.PolicyDecision {
@@ -33,7 +33,10 @@ func (p childToolApprovalPolicy) requiresApproval(spec core.ToolSpec, call core.
 	if core.IsReadOnlyToolCall(spec, call) {
 		return false
 	}
-	caps := childCapabilitySet(p.Capabilities)
+	caps := childCapabilitySet(p.ToolSelectors)
+	if caps[strings.TrimSpace(spec.Name)] {
+		return true
+	}
 	if caps[CapabilityWorkspaceWrite] && slices.Contains(spec.Capabilities, CapabilityWorkspaceWrite) {
 		return true
 	}
