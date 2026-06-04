@@ -306,9 +306,14 @@ func TestImmutableSystemPromptUsesStableToolPolicyWithoutToolCatalog(t *testing.
 	for _, want := range []string{
 		"Tool use policy.",
 		"provider tool schema",
-		"Choose tools by name and schema",
+		"Choose tools by exact name and schema",
 		"do not invent tools",
-		"Respect runtime permission errors",
+		"Prefer read-only inspection tools",
+		"read_file, list_dir, grep, search_files",
+		"Mutating tools such as apply_patch, edit, write",
+		"may be blocked by mode, policy, or user approval",
+		"shell_run can be read-only only for safe inspection commands accepted by policy",
+		"do not retry the same action through another tool",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("tool policy missing %q:\n%s", want, joined)
@@ -325,5 +330,16 @@ func TestImmutableSystemPromptUsesStableToolPolicyWithoutToolCatalog(t *testing.
 		if strings.Contains(joined, notWant) {
 			t.Fatalf("system prompt leaked tool catalog text %q:\n%s", notWant, joined)
 		}
+	}
+}
+
+func TestImmutableSystemPromptToolPolicyDoesNotDependOnToolRegistry(t *testing.T) {
+	withoutTools := NewAgentWithRegistry(nil, nil, core.NewToolRegistry(nil))
+	withTools := NewAgentWithRegistry(nil, nil, core.NewToolRegistry([]core.Tool{&recordingWorkflowTool{}}))
+
+	a := strings.Join(withoutTools.buildImmutableSystemBlocks(), "\n\n")
+	b := strings.Join(withTools.buildImmutableSystemBlocks(), "\n\n")
+	if a != b {
+		t.Fatalf("immutable system prompt changed with tool registry\nwithout tools:\n%s\n\nwith tools:\n%s", a, b)
 	}
 }

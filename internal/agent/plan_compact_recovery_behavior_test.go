@@ -56,6 +56,22 @@ func (p *compactUsageProvider) StreamResponse(_ context.Context, _ []Message, _ 
 	return out
 }
 
+type compactToolOnlyWhenToolsProvider struct {
+	toolsSeen int
+}
+
+func (p *compactToolOnlyWhenToolsProvider) StreamResponse(_ context.Context, _ []Message, tools []Tool) <-chan ProviderEvent {
+	p.toolsSeen = len(tools)
+	out := make(chan ProviderEvent, 1)
+	if len(tools) > 0 {
+		out <- toolUseEvent(toolCall("call-1", tools[0].Name(), `{}`))
+	} else {
+		out <- ProviderEvent{Type: EventComplete, Response: &ProviderResponse{FinishReason: FinishReasonEndTurn, Content: "compact summary"}}
+	}
+	close(out)
+	return out
+}
+
 type stepAdvanceProvider struct {
 	calls int
 }
@@ -277,12 +293,12 @@ func TestCompactSessionRecordsCacheShapeRequestKind(t *testing.T) {
 	if !strings.Contains(string(b), `"prefix_fingerprint"`) || !strings.Contains(string(b), `"system_segments"`) {
 		t.Fatalf("missing compact prefix shape: %s", string(b))
 	}
-	if !strings.Contains(string(b), `"tools_hash"`) || !strings.Contains(string(b), `"tools_bytes"`) {
-		t.Fatalf("missing compact tools shape: %s", string(b))
+	if !strings.Contains(string(b), `"tools_bytes":4`) || strings.Contains(string(b), `"read_file"`) {
+		t.Fatalf("compact summary should record only an empty provider tool shape: %s", string(b))
 	}
 }
 
-func TestCompactSessionSendsToolsWithPrefixShape(t *testing.T) {
+func TestCompactSessionUsesPrefixWithoutTools(t *testing.T) {
 	store := NewInMemoryStore()
 	_, _ = store.Create(context.Background(), Message{SessionID: "s-compact-tools", Role: RoleUser, Text: "keep this"})
 	prov := &autoCompactProvider{}
@@ -297,8 +313,22 @@ func TestCompactSessionSendsToolsWithPrefixShape(t *testing.T) {
 	if prov.histories[0][0].Role != RoleSystem {
 		t.Fatalf("expected compact summary call to include system prefix, got %+v", prov.histories[0])
 	}
-	if len(prov.tools) != 1 || len(prov.tools[0]) != 1 || prov.tools[0][0].Name() != "read_file" {
-		t.Fatalf("expected compact summary call to include provider tools, got %+v", prov.tools)
+	if len(prov.tools) != 1 || len(prov.tools[0]) != 0 {
+		t.Fatalf("expected compact summary call to omit provider tools, got %+v", prov.tools)
+	}
+}
+
+func TestCompactSessionDoesNotAdvertiseToolsThatItCannotDispatch(t *testing.T) {
+	store := NewInMemoryStore()
+	_, _ = store.Create(context.Background(), Message{SessionID: "s-compact-no-tools", Role: RoleUser, Text: "keep this"})
+	prov := &compactToolOnlyWhenToolsProvider{}
+	a := NewAgentWithRegistry(prov, store, NewToolRegistry([]Tool{readOnlyViewTool{}}))
+
+	if _, err := a.CompactSession(context.Background(), "s-compact-no-tools"); err != nil {
+		t.Fatalf("compact failed: %v", err)
+	}
+	if prov.toolsSeen != 0 {
+		t.Fatalf("compact summary request advertised %d tools", prov.toolsSeen)
 	}
 }
 

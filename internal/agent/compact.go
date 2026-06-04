@@ -19,7 +19,6 @@ type summaryRequestContext struct {
 	systemBlocks      []string
 	runtimeBlocks     []string
 	prefixFingerprint string
-	tools             *core.ToolRegistry
 }
 
 func (a *Agent) CompactSession(ctx context.Context, sessionID string) (CompactInfo, error) {
@@ -114,7 +113,7 @@ Do not call tools. Output only the summary.`)
 		prompt += "\n\nAdditional context from PreCompact hooks:\n" + strings.TrimSpace(hookContext)
 	}
 	tmpHistory := buildSummaryProviderHistory(sessionID, reqCtx, history, prompt)
-	toolList := summaryRequestTools(reqCtx)
+	var toolList []core.Tool
 	ch := a.provider.StreamResponse(ctx, tmpHistory, toolList)
 	var summary strings.Builder
 	lastUsage := llm.Usage{}
@@ -146,16 +145,12 @@ Do not call tools. Output only the summary.`)
 	return out, nil
 }
 
-func (a *Agent) buildSummaryRequestContext(ctx context.Context, opts RunOptions) (summaryRequestContext, error) {
-	toolSnapshot, err := a.refreshToolSnapshot(ctx)
-	if err != nil {
-		return summaryRequestContext{}, err
-	}
-	prefix := memory.NewImmutablePrefix(a.buildImmutableSystemBlocksWithTools(toolSnapshot, opts))
-	return summaryRequestContextFromPrefix(prefix, a.buildRuntimeSystemBlocks(opts), toolSnapshot), nil
+func (a *Agent) buildSummaryRequestContext(_ context.Context, opts RunOptions) (summaryRequestContext, error) {
+	prefix := memory.NewImmutablePrefix(a.buildImmutableSystemBlocks(opts))
+	return summaryRequestContextFromPrefix(prefix, a.buildRuntimeSystemBlocks(opts)), nil
 }
 
-func summaryRequestContextFromPrefix(prefix *memory.ImmutablePrefix, runtimeBlocks []string, tools *core.ToolRegistry) summaryRequestContext {
+func summaryRequestContextFromPrefix(prefix *memory.ImmutablePrefix, runtimeBlocks []string) summaryRequestContext {
 	if prefix == nil {
 		prefix = memory.NewImmutablePrefix(nil)
 	}
@@ -163,7 +158,6 @@ func summaryRequestContextFromPrefix(prefix *memory.ImmutablePrefix, runtimeBloc
 		systemBlocks:      prefix.SystemBlocks(),
 		runtimeBlocks:     append([]string(nil), runtimeBlocks...),
 		prefixFingerprint: prefix.Fingerprint(),
-		tools:             tools,
 	}
 }
 
@@ -176,13 +170,6 @@ func buildSummaryProviderHistory(sessionID string, reqCtx summaryRequestContext,
 	out = append(out, append([]core.Message(nil), history...)...)
 	out = append(out, core.Message{SessionID: sessionID, Role: core.RoleUser, Text: prompt})
 	return out
-}
-
-func summaryRequestTools(reqCtx summaryRequestContext) []core.Tool {
-	if reqCtx.tools == nil {
-		return nil
-	}
-	return reqCtx.tools.Tools()
 }
 
 func (a *Agent) splitCompactHistory(history []core.Message) ([]core.Message, []core.Message) {
