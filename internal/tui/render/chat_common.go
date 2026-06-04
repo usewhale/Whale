@@ -98,6 +98,17 @@ func assistantReadableContentWidth(width int) int {
 	return contentWidth
 }
 
+func userReadableContentWidth(width int) int {
+	contentWidth := width - 4
+	if contentWidth < 16 {
+		return 16
+	}
+	if contentWidth > 110 {
+		return 110
+	}
+	return contentWidth
+}
+
 func hardWrapRendered(text string, width int) string {
 	if width < 1 || text == "" {
 		return text
@@ -116,10 +127,7 @@ func truncatePlain(text string, width int) string {
 }
 
 func renderUserPrompt(block string, width int) []string {
-	contentWidth := width - 4
-	if contentWidth < 16 {
-		contentWidth = 16
-	}
+	contentWidth := userReadableContentWidth(width)
 	rendered := strings.TrimRight(hardWrapRendered(renderEntryText("you", block, contentWidth), contentWidth), "\n")
 	lines := strings.Split(rendered, "\n")
 	glyph := tuitheme.UserPromptGlyphStyle().Render("›")

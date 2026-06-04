@@ -2,6 +2,7 @@ package tui
 
 import (
 	"github.com/charmbracelet/lipgloss"
+	tuirender "github.com/usewhale/whale/internal/tui/render"
 	"strings"
 )
 
@@ -15,15 +16,14 @@ func (m model) chatViewNeedsBottomGap(body, bottom string) bool {
 	return m.height <= 0 || countVisibleLines(body)+countVisibleLines(bottom)+1 <= m.height
 }
 
-func (m model) chatBodyHeightForView(mainWidth, maxBodyHeight int) int {
+func (m model) chatBodyHeightForView(mainWidth, maxBodyHeight int, messages []tuirender.UIMessage, leadingGap int) int {
 	if maxBodyHeight <= 0 {
 		return 0
 	}
-	messages := m.chatViewportMessages()
 	lineCount := chatListRenderedLineCountWithLeadingGap(
 		messages,
 		max(20, mainWidth-2),
-		m.chatViewportLeadingGap(nil, messages),
+		leadingGap,
 	)
 	if lineCount == 0 {
 		return 0

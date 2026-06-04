@@ -479,6 +479,32 @@ func TestChatLines_UserPromptRemainsFullWidthOnWideTerminals(t *testing.T) {
 	assertVisibleWidthAtMost(t, lines, 160)
 }
 
+func TestChatLines_UserPromptWrapsAtReadableWidthOnWideTerminals(t *testing.T) {
+	entries := []UIMessage{
+		{Role: "you", Kind: KindText, Text: strings.Repeat("x", 111)},
+	}
+	lines := ChatLines(entries, 160)
+	plain := strings.Split(joinedPlain(lines), "\n")
+	var content []string
+	for _, line := range plain {
+		trimmed := strings.TrimRight(line, " ")
+		if strings.TrimSpace(trimmed) == "" {
+			continue
+		}
+		content = append(content, trimmed)
+	}
+	if len(content) != 2 {
+		t.Fatalf("expected wide user prompt to wrap into two content lines, got %d:\n%s", len(content), joinedPlain(lines))
+	}
+	if got := xansi.StringWidth(strings.TrimPrefix(content[0], "› ")); got != 110 {
+		t.Fatalf("expected first wrapped user prompt line width 110, got %d in %q", got, content[0])
+	}
+	if got := xansi.StringWidth(strings.TrimPrefix(content[1], "  ")); got != 1 {
+		t.Fatalf("expected second wrapped user prompt line width 1, got %d in %q", got, content[1])
+	}
+	assertVisibleWidthAtMost(t, lines, 160)
+}
+
 func TestChatLines_NoticeRendersAsPlainHint(t *testing.T) {
 	entries := []UIMessage{
 		{Role: "notice", Kind: KindNotice, Text: "✔ You approved whale to run uptime this time"},

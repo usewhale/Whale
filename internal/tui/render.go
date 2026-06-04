@@ -53,7 +53,9 @@ func (m model) View() string {
 	}
 	bodyHeight = max(0, bodyHeight)
 	if m.page == pageChat && m.mode == modeChat {
-		bodyHeight = m.chatBodyHeightForView(mainWidth, bodyHeight)
+		messages := m.chatViewportMessages()
+		leadingGap := m.chatViewportLeadingGap(nil, messages)
+		bodyHeight = m.chatBodyHeightForView(mainWidth, bodyHeight, messages, leadingGap)
 	}
 	body := m.renderBody(mainWidth, bodyHeight)
 	if m.page != pageChat {
