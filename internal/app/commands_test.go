@@ -693,6 +693,14 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		t.Fatalf("expected tool stats to omit recent events:\n%s", out)
 	}
 
+	handled, out, _, err = a.HandleLocalCommand("/stats cache")
+	if err != nil || !handled {
+		t.Fatalf("stats cache command handled=%v err=%v", handled, err)
+	}
+	if !strings.Contains(out, "Cache diagnostics") {
+		t.Fatalf("expected cache stats to contain diagnostics, got:\n%s", out)
+	}
+
 	handled, out, _, err = a.HandleLocalCommand("/stats recent")
 	if err != nil || !handled {
 		t.Fatalf("stats recent command handled=%v err=%v", handled, err)
@@ -727,7 +735,7 @@ func TestHandleLocalCommandStats(t *testing.T) {
 	}
 
 	handled, _, _, err = a.HandleLocalCommand("/stats extra")
-	if !handled || err == nil || !strings.Contains(err.Error(), "usage: /stats [usage|tools|repair|recent|profile|all]") {
+	if !handled || err == nil || !strings.Contains(err.Error(), "usage: /stats [usage|cache|tools|repair|recent|profile|all]") {
 		t.Fatalf("expected /stats usage error, handled=%v err=%v", handled, err)
 	}
 }
@@ -1180,7 +1188,7 @@ func TestHandleLocalCommandHelp(t *testing.T) {
 		"/compact",
 		"/review [local|branch|pr|commit|<instructions>]",
 		"/status",
-		"/stats [usage|tools|repair|recent|profile|all]",
+		"/stats [usage|cache|tools|repair|recent|profile|all]",
 		"/plugins",
 		"/feedback",
 		"For more help:",

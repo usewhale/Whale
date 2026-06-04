@@ -2,6 +2,7 @@ package app
 
 import (
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -187,5 +188,27 @@ func TestCacheBreakDetectorClassifiesUnchangedShapeAsServerSideOrTTL(t *testing.
 	}
 	if got := diag.Breaks[0].Cause; got != "likely server-side or TTL" {
 		t.Fatalf("cause = %q, want likely server-side or TTL", got)
+	}
+}
+
+func TestAppendRecentCacheBreakKeepsNewestBreaks(t *testing.T) {
+	var recent []cacheBreak
+	for i := int64(1); i <= statsRecentLimit+2; i++ {
+		recent = appendRecentCacheBreak(recent, cacheBreak{
+			TS:      i,
+			Session: "s" + strconv.FormatInt(i, 10),
+		})
+	}
+
+	if len(recent) != statsRecentLimit {
+		t.Fatalf("recent breaks len = %d, want %d", len(recent), statsRecentLimit)
+	}
+	if recent[0].Session != "s7" {
+		t.Fatalf("newest break should be first, got %+v", recent)
+	}
+	for _, br := range recent {
+		if br.Session == "s1" || br.Session == "s2" {
+			t.Fatalf("old cache break was retained instead of newest tail: %+v", recent)
+		}
 	}
 }

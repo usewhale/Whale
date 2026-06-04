@@ -57,8 +57,9 @@ func DefaultSlashCommands() []SlashCommandSpec {
 		{Name: "/clear", Description: "Clear the visible conversation", AutoRun: true},
 		{Name: "/status", Description: "Show session and configuration status", AutoRun: true},
 		{Name: "/doctor", Description: "Show session storage and diagnostic information", AutoRun: true},
-		{Name: "/stats", Description: "Show usage and tool statistics", ArgumentHint: "[usage|tools|repair|recent|profile|all]", Options: []SlashCommandOption{
+		{Name: "/stats", Description: "Show usage and tool statistics", ArgumentHint: "[usage|cache|tools|repair|recent|profile|all]", Options: []SlashCommandOption{
 			{Token: "usage", Description: "Show token and cost usage", AutoRun: true},
+			{Token: "cache", Description: "Show cache diagnostics", AutoRun: true},
 			{Token: "tools", Description: "Show tool-call counts", AutoRun: true},
 			{Token: "repair", Description: "Show repair statistics", AutoRun: true},
 			{Token: "recent", Description: "Show recent activity", AutoRun: true},

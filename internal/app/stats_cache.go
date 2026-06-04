@@ -256,6 +256,7 @@ func shortHash(hash string) string {
 
 func appendRecentCacheBreak(recent []cacheBreak, br cacheBreak) []cacheBreak {
 	recent = append(recent, br)
+	sort.Slice(recent, func(i, j int) bool { return recent[i].TS > recent[j].TS })
 	return limitSlice(recent, statsRecentLimit)
 }
 

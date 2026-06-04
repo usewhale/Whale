@@ -150,7 +150,7 @@ func TestSlashStatsOptionSuggestionsUseFullCommandLabels(t *testing.T) {
 		t.Fatalf("expected styled stats suggestions, got:\n%s", rendered)
 	}
 	plain := xansi.Strip(rendered)
-	for _, want := range []string{"/stats usage", "/stats tools", "Show token and cost usage", "Show tool-call counts"} {
+	for _, want := range []string{"/stats usage", "/stats cache", "/stats tools", "Show token and cost usage", "Show cache diagnostics", "Show tool-call counts"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("expected stats suggestions to contain %q, got:\n%s", want, plain)
 		}
@@ -722,6 +722,7 @@ func TestLocalImmediateSlashCommandsDoNotStartWorkingState(t *testing.T) {
 		"/status",
 		"/stats",
 		"/stats usage",
+		"/stats cache",
 		"/stats tools",
 		"/stats repair",
 		"/stats recent",
