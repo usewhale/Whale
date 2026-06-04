@@ -16,6 +16,9 @@ const (
 	SkillFileName        = "SKILL.md"
 	MaxNameLength        = 64
 	MaxDescriptionLength = 1024
+
+	availableSkillsIndexMaxChars = 2000
+	availableSkillLineMaxChars   = 180
 )
 
 var namePattern = regexp.MustCompile(`^[a-zA-Z0-9]+(-[a-zA-Z0-9]+)*$`)
@@ -328,26 +331,72 @@ func RenderAvailableSkills(all []*Skill) string {
 	}
 	var b strings.Builder
 	b.WriteString("Available skills:\n")
+	omitted := 0
 	for _, skill := range all {
-		b.WriteString("- ")
-		b.WriteString(skill.Name)
-		if strings.TrimSpace(skill.Description) != "" {
-			b.WriteString(": ")
-			b.WriteString(strings.TrimSpace(skill.Description))
+		line := renderAvailableSkillLine(skill, true)
+		if line == "" {
+			continue
 		}
-		if strings.TrimSpace(skill.When) != "" {
-			b.WriteString(" Use when: ")
-			b.WriteString(strings.TrimSpace(skill.When))
+		if b.Len()+len(line)+1 > availableSkillsIndexMaxChars {
+			line = renderAvailableSkillLine(skill, false)
 		}
-		if strings.TrimSpace(skill.SkillFilePath) != "" {
-			b.WriteString(" (file: ")
-			b.WriteString(skill.SkillFilePath)
-			b.WriteString(")")
+		if b.Len()+len(line)+1 > availableSkillsIndexMaxChars {
+			omitted++
+			continue
 		}
+		b.WriteString(line)
 		b.WriteString("\n")
 	}
-	b.WriteString("\nUsers can invoke a skill with a leading $skill-name mention. Use load_skill when the user explicitly mentions a skill, or when no direct tool/delegation path is clearly requested and the task strongly matches a skill. If the user explicitly asks for subagent, delegation, or parallel work, follow the delegation policy first and do not load a skill unless the user also names one. The index above is metadata only; load the skill before relying on its instructions. If loaded skill instructions reference relative files such as references/, scripts/, templates/, or assets/, resolve them relative to the skill directory and read only the specific files needed.")
+	if omitted > 0 {
+		b.WriteString(fmt.Sprintf("- ... %d more skills omitted from this compact index\n", omitted))
+	}
+	b.WriteString("\nUse load_skill only when the user names a skill with $skill-name or the task strongly matches a listed skill. The index is metadata only; load a skill before relying on its instructions. Prefer direct tools or delegation when clearly requested. Loaded skill results include the skill path for resolving references/, scripts/, templates/, and assets/.")
 	return strings.TrimSpace(b.String())
+}
+
+func renderAvailableSkillLine(skill *Skill, includeDescription bool) string {
+	if skill == nil {
+		return ""
+	}
+	name := strings.TrimSpace(skill.Name)
+	if name == "" {
+		return ""
+	}
+	line := "- " + name
+	if !includeDescription {
+		return line
+	}
+	description := compactInlineText(skill.Description)
+	when := compactInlineText(skill.When)
+	detail := description
+	if when != "" {
+		if detail != "" {
+			detail += " When: "
+		} else {
+			detail = "When: "
+		}
+		detail += when
+	}
+	if detail == "" {
+		return line
+	}
+	line += ": " + detail
+	return clipString(line, availableSkillLineMaxChars)
+}
+
+func compactInlineText(s string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(s)), " ")
+}
+
+func clipString(s string, max int) string {
+	runes := []rune(s)
+	if max <= 0 || len(runes) <= max {
+		return s
+	}
+	if max <= 3 {
+		return string(runes[:max])
+	}
+	return strings.TrimSpace(string(runes[:max-3])) + "..."
 }
 
 // ApproxTokenCount returns a rough estimate using a common ~4 chars/token heuristic.

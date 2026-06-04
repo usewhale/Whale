@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -216,19 +217,43 @@ func TestRenderAvailableSkillsDoesNotIncludeInstructions(t *testing.T) {
 	rendered := RenderAvailableSkills([]*Skill{{
 		Name:          "test-skill",
 		Description:   "Use this for tests.",
+		When:          "The user asks for a targeted test skill.",
 		Instructions:  "secret instructions",
 		SkillFilePath: "/skills/test-skill/SKILL.md",
 	}})
 	if !strings.Contains(rendered, "test-skill") || !strings.Contains(rendered, "load_skill") {
 		t.Fatalf("unexpected rendered skills: %q", rendered)
 	}
-	for _, want := range []string{"follow the delegation policy first", "do not load a skill unless the user also names one", "resolve them relative to the skill directory"} {
+	for _, want := range []string{"metadata only", "Prefer direct tools or delegation", "Loaded skill results include the skill path"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered skill index missing %q: %q", want, rendered)
 		}
 	}
 	if strings.Contains(rendered, "secret instructions") {
 		t.Fatalf("rendered index should not include full instructions: %q", rendered)
+	}
+	if strings.Contains(rendered, "/skills/test-skill/SKILL.md") {
+		t.Fatalf("rendered index should not include full skill paths: %q", rendered)
+	}
+}
+
+func TestRenderAvailableSkillsStaysWithinCompactBudget(t *testing.T) {
+	t.Parallel()
+
+	var all []*Skill
+	for i := 0; i < 80; i++ {
+		all = append(all, &Skill{
+			Name:        fmt.Sprintf("skill-%02d", i),
+			Description: strings.Repeat("verbose description ", 20),
+			When:        strings.Repeat("matching condition ", 20),
+		})
+	}
+	rendered := RenderAvailableSkills(all)
+	if len(rendered) > availableSkillsIndexMaxChars+512 {
+		t.Fatalf("rendered skill index too large: %d chars\n%s", len(rendered), rendered)
+	}
+	if !strings.Contains(rendered, "more skills omitted") {
+		t.Fatalf("expected omitted count in compact index:\n%s", rendered)
 	}
 }
 

@@ -101,25 +101,23 @@ func TestSpawnSubagentDescriptionWarnsAboutFreshChildCost(t *testing.T) {
 	}
 }
 
-func TestSpawnSubagentInlineHookSchemaAllowsNonCommandHooks(t *testing.T) {
+func TestSpawnSubagentSchemaOmitsInlineAgentDefinition(t *testing.T) {
 	spec := core.DescribeTool(spawnSubagentTool{})
 	props := spec.Parameters["properties"].(map[string]any)
-	agentSchema := props["agent"].(map[string]any)
-	agentProps := agentSchema["properties"].(map[string]any)
-	hooksSchema := agentProps["hooks"].(map[string]any)
-	hookEvents := hooksSchema["properties"].(map[string]any)
-	preToolUse := hookEvents["PreToolUse"].(map[string]any)
-	itemProps := preToolUse["items"].(map[string]any)["properties"].(map[string]any)
-	typeEnum := itemProps["type"].(map[string]any)["enum"].([]string)
-	for _, want := range []string{"command", "shell", "prompt", "http", "agent"} {
-		if !slices.Contains(typeEnum, want) {
-			t.Fatalf("hook type enum missing %q: %+v", want, typeEnum)
+	if _, ok := props["agent"]; ok {
+		t.Fatalf("spawn_subagent schema should not expose inline agent definitions: %+v", props["agent"])
+	}
+	b, err := json.Marshal(spec.Parameters)
+	if err != nil {
+		t.Fatalf("marshal schema: %v", err)
+	}
+	for _, forbidden := range []string{"\"hooks\"", "\"generation\"", "\"mcpServers\"", "\"permissionMode\"", "\"assistantPrefix\""} {
+		if strings.Contains(string(b), forbidden) {
+			t.Fatalf("spawn_subagent schema leaked %s: %s", forbidden, string(b))
 		}
 	}
-	for _, want := range []string{"prompt", "url", "model", "headers", "allowedEnvVars", "hooks", "matcher"} {
-		if _, ok := itemProps[want]; !ok {
-			t.Fatalf("hook schema missing %q in %+v", want, itemProps)
-		}
+	if len(b) > 3000 {
+		t.Fatalf("spawn_subagent schema is too large after slimming: %d bytes", len(b))
 	}
 }
 
@@ -236,9 +234,9 @@ func TestSpawnSubagentToolReadOnlyCheckGatesMutatingLaunches(t *testing.T) {
 			readOnly: false,
 		},
 		{
-			name:     "inline read-only mode stays read-only",
+			name:     "inline read-only mode is not model-facing",
 			input:    `{"task":"inspect files","agent":{"permissionMode":"read_only"}}`,
-			readOnly: true,
+			readOnly: false,
 		},
 		{
 			name:     "inline command hook needs approval",
@@ -288,6 +286,28 @@ func TestSpawnSubagentToolReadOnlyCheckGatesMutatingLaunches(t *testing.T) {
 				t.Fatalf("IsReadOnlyToolCall() = %v, want %v", got, tc.readOnly)
 			}
 		})
+	}
+}
+
+func TestSpawnSubagentToolRejectsInlineAgentDefinitionInput(t *testing.T) {
+	tool := spawnSubagentTool{runner: NewRunner(RunnerConfig{})}
+	res, err := tool.Run(context.Background(), core.ToolCall{
+		ID:    "tc-inline-agent",
+		Name:  "spawn_subagent",
+		Input: `{"task":"inspect","agent":{"prompt":"act as reviewer"}}`,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected inline agent definition error: %+v", res)
+	}
+	env, ok := core.ParseToolEnvelope(res.Content)
+	if !ok {
+		t.Fatalf("parse envelope failed: %s", res.Content)
+	}
+	if env.Code != "invalid_input" || !strings.Contains(env.Message, "inline agent definitions") {
+		t.Fatalf("unexpected envelope: %+v", env)
 	}
 }
 
@@ -2087,23 +2107,23 @@ func TestSpawnSubagentToolFailureIncludesChildSessionID(t *testing.T) {
 	}
 }
 
-func TestSpawnSubagentToolSchemaExposesInlineAgentPrompt(t *testing.T) {
+func TestSpawnSubagentToolSchemaUsesNamedRoleNotInlinePrompt(t *testing.T) {
 	tool := spawnSubagentTool{}
 	params := tool.Parameters()
 	props, ok := params["properties"].(map[string]any)
 	if !ok {
 		t.Fatalf("tool properties missing: %+v", params)
 	}
-	agentSchema, ok := props["agent"].(map[string]any)
-	if !ok {
-		t.Fatalf("agent schema missing: %+v", props)
+	if _, ok := props["agent"]; ok {
+		t.Fatalf("spawn_subagent schema should not expose inline agent definitions: %+v", props)
 	}
-	agentProps, ok := agentSchema["properties"].(map[string]any)
+	roleSchema, ok := props["role"].(map[string]any)
 	if !ok {
-		t.Fatalf("agent properties missing: %+v", agentSchema)
+		t.Fatalf("spawn_subagent schema omits role: %+v", props)
 	}
-	if _, ok := agentProps["prompt"]; !ok {
-		t.Fatalf("inline agent schema omits prompt: %+v", agentProps)
+	desc, _ := roleSchema["description"].(string)
+	if !strings.Contains(desc, ".whale/agents") {
+		t.Fatalf("role description should point to named agent definitions: %q", desc)
 	}
 }
 

@@ -72,16 +72,15 @@ type spawnSubagentTool struct {
 
 func (t spawnSubagentTool) Name() string { return "spawn_subagent" }
 func (t spawnSubagentTool) Description() string {
-	return "Run one bounded child agent for independent exploration, research, or review. Prefer direct tools for small follow-ups; use a child agent mainly for parallel fan-out or when a task needs roughly 10+ read/search steps whose trail does not need to stay in the parent context. Each fresh child has its own provider request/prefix and may pay a prefix-cache miss plus a full child loop. Child agents are resolved through an agent definition with least-privilege tools. Omit tools to use the selected agent defaults, pass [] for model-only synthesis, pass workspace.read or exact tool names for a custom allowlist, and use shell.run or workspace.write only with an explicit non-read-only permissionMode. Set agent.background=true to launch and return a child session id immediately; use subagent_status or cancel_subagent for lifecycle follow-up."
+	return "Run one bounded child agent for independent exploration, research, or review. Prefer direct tools for small follow-ups; use a child agent mainly for parallel fan-out or when a task needs roughly 10+ read/search steps whose trail does not need to stay in the parent context. Each fresh child has its own provider request/prefix and may pay a prefix-cache miss plus a full child loop. Select a built-in role or named agent definition; advanced agent definitions are configured outside this tool schema. Omit tools to use the selected agent defaults, pass [] for model-only synthesis, or pass workspace.read or exact tool names for a custom allowlist. Use subagent_status or cancel_subagent for background lifecycle follow-up."
 }
 func (t spawnSubagentTool) Parameters() map[string]any {
 	return map[string]any{
 		"type":                 "object",
 		"additionalProperties": false,
 		"properties": map[string]any{
-			"task":           map[string]any{"type": "string", "description": "Self-contained task for the child agent. The available tools are determined by the requested role or agent definition."},
+			"task":           map[string]any{"type": "string", "description": "Self-contained task for the child agent. The available tools are determined by the requested role, named agent definition, or explicit tools allowlist."},
 			"role":           map[string]any{"type": "string", "description": "Built-in role (explore, research, review) or an agent definition name from .whale/agents."},
-			"agent":          agentDefinitionSchema(),
 			"model":          map[string]any{"type": "string", "description": "Optional model override. Defaults to the configured cheap model."},
 			"max_tool_iters": map[string]any{"type": "integer", "minimum": 1, "maximum": 64},
 			"max_tool_calls": map[string]any{"type": "integer", "minimum": 1, "maximum": 128},
@@ -95,111 +94,6 @@ func (t spawnSubagentTool) Parameters() map[string]any {
 	}
 }
 
-func agentDefinitionSchema() map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"description":          "Optional long-term child agent definition. Top-level role/model/tools still override or seed this definition.",
-		"additionalProperties": false,
-		"properties": map[string]any{
-			"name":            map[string]any{"type": "string"},
-			"description":     map[string]any{"type": "string"},
-			"whenToUse":       map[string]any{"type": "string"},
-			"prompt":          map[string]any{"type": "string", "description": "Agent-level system prompt instructions for this child agent."},
-			"tools":           map[string]any{"type": "array", "description": "Tool selectors: known capabilities such as workspace.read or exact tool names exposed to the parent agent.", "items": map[string]any{"type": "string"}},
-			"disallowedTools": map[string]any{"type": "array", "description": "Tool selectors to remove from this child agent: known capabilities or exact tool names.", "items": map[string]any{"type": "string"}},
-			"skills":          map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"mcpServers":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"hooks":           agentHooksSchema(),
-			"model":           map[string]any{"type": "string"},
-			"effort":          map[string]any{"type": "string"},
-			"permissionMode":  map[string]any{"type": "string", "enum": []string{AgentPermissionReadOnly, AgentPermissionAsk, AgentPermissionAuto, AgentPermissionTrusted}},
-			"maxTurns":        map[string]any{"type": "integer", "minimum": 1, "maximum": 256},
-			"initialPrompt":   map[string]any{"type": "string"},
-			"memory":          map[string]any{"type": "string", "enum": []string{"user", "project", "local"}},
-			"background":      map[string]any{"type": "boolean"},
-			"isolation":       map[string]any{"type": "string", "enum": []string{"none", "worktree"}},
-			"generation":      agentGenerationSchema(),
-		},
-	}
-}
-
-func agentGenerationSchema() map[string]any {
-	return map[string]any{
-		"type":                 "object",
-		"description":          "Optional assistant generation steering for this child agent.",
-		"additionalProperties": false,
-		"properties": map[string]any{
-			"assistantPrefix":  map[string]any{"type": "string", "description": "Assistant text prefix to continue from when prefixCompletion is enabled."},
-			"prefixCompletion": map[string]any{"type": "boolean", "description": "Use provider prefix completion when supported."},
-		},
-	}
-}
-
-func agentHooksSchema() map[string]any {
-	hookConfig := map[string]any{
-		"type":                 "object",
-		"additionalProperties": true,
-		"properties": map[string]any{
-			"type":           map[string]any{"type": "string", "enum": []string{"command", "shell", "prompt", "http", "agent"}},
-			"command":        map[string]any{"type": "string"},
-			"prompt":         map[string]any{"type": "string"},
-			"url":            map[string]any{"type": "string"},
-			"model":          map[string]any{"type": "string"},
-			"match":          map[string]any{"type": "string"},
-			"if":             map[string]any{"type": "string"},
-			"shell":          map[string]any{"type": "string"},
-			"cwd":            map[string]any{"type": "string"},
-			"description":    map[string]any{"type": "string"},
-			"timeout":        map[string]any{"type": "number"},
-			"once":           map[string]any{"type": "boolean"},
-			"async":          map[string]any{"type": "boolean"},
-			"asyncRewake":    map[string]any{"type": "boolean"},
-			"statusMessage":  map[string]any{"type": "string"},
-			"headers":        map[string]any{"type": "object", "additionalProperties": true},
-			"allowedEnvVars": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-		},
-	}
-	matcherHook := map[string]any{
-		"type":                 "object",
-		"additionalProperties": true,
-		"properties": map[string]any{
-			"matcher": map[string]any{"type": "string"},
-			"hooks":   map[string]any{"type": "array", "items": hookConfig},
-		},
-		"required": []string{"hooks"},
-	}
-	return map[string]any{
-		"type":                 "object",
-		"description":          "Optional hooks for child agents. Supports Whale-native event arrays or Claude Code-style matcher entries for PreToolUse, PostToolUse, SubagentStart, and Stop/SubagentStop.",
-		"additionalProperties": false,
-		"properties": map[string]any{
-			"PreToolUse":    map[string]any{"type": "array", "items": hookOrMatcherSchema(hookConfig, matcherHook)},
-			"PostToolUse":   map[string]any{"type": "array", "items": hookOrMatcherSchema(hookConfig, matcherHook)},
-			"SubagentStart": map[string]any{"type": "array", "items": hookOrMatcherSchema(hookConfig, matcherHook)},
-			"SubagentStop":  map[string]any{"type": "array", "items": hookOrMatcherSchema(hookConfig, matcherHook)},
-			"Stop":          map[string]any{"type": "array", "items": hookOrMatcherSchema(hookConfig, matcherHook)},
-		},
-	}
-}
-
-func hookOrMatcherSchema(hookConfig, matcherHook map[string]any) map[string]any {
-	props := map[string]any{}
-	for key, value := range hookConfig["properties"].(map[string]any) {
-		props[key] = value
-	}
-	for key, value := range matcherHook["properties"].(map[string]any) {
-		props[key] = value
-	}
-	return map[string]any{
-		"type":                 "object",
-		"additionalProperties": true,
-		"properties":           props,
-	}
-}
-
-func agentCapabilityEnum() []string {
-	return []string{CapabilityWorkspaceRead, CapabilityWorkspaceWrite, CapabilityShellRead, CapabilityShellRun, CapabilityWebSearch, CapabilityWebFetch, CapabilityMCPRead}
-}
 func (t spawnSubagentTool) ReadOnly() bool { return true }
 func (t spawnSubagentTool) ReadOnlyCheck(args map[string]any) bool {
 	return spawnSubagentLaunchReadOnly(args, t.runner)
@@ -213,6 +107,9 @@ func spawnSubagentLaunchReadOnly(args map[string]any, runner *Runner) bool {
 		return false
 	}
 	if _, ok := args["capabilities"]; ok {
+		return false
+	}
+	if _, ok := args["agent"]; ok {
 		return false
 	}
 	raw, err := json.Marshal(args)
@@ -265,6 +162,9 @@ func (t spawnSubagentTool) RunWithProgress(ctx context.Context, call core.ToolCa
 	}
 	if spawnSubagentInputHasDeprecatedCapabilities(call.Input) {
 		return marshalError(call, "invalid_input", "spawn_subagent no longer accepts capabilities; use tools instead")
+	}
+	if spawnSubagentInputHasInlineAgent(call.Input) {
+		return marshalError(call, "invalid_input", "spawn_subagent no longer accepts inline agent definitions; use a named role or .whale/agents definition instead")
 	}
 	req, err := decodeInput[SpawnSubagentRequest](call)
 	if err != nil {
@@ -341,6 +241,15 @@ func spawnSubagentInputHasDeprecatedCapabilities(input string) bool {
 		return false
 	}
 	_, ok := raw["capabilities"]
+	return ok
+}
+
+func spawnSubagentInputHasInlineAgent(input string) bool {
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(input), &raw); err != nil {
+		return false
+	}
+	_, ok := raw["agent"]
 	return ok
 }
 
