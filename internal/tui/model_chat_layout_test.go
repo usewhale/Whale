@@ -1052,10 +1052,11 @@ func TestChatBodyHeightIncludesConversationGaps(t *testing.T) {
 	}
 	m.nativeScrollbackPrinted = 0
 
+	messages := m.chatViewportMessages()
 	renderWidth := max(20, m.width-2)
-	want := chatListRenderedLineCount(m.chatViewportMessages(), renderWidth)
+	want := chatListRenderedLineCount(messages, renderWidth)
 
-	if got := m.chatBodyHeightForView(m.width, 100); got != want {
+	if got := m.chatBodyHeightForView(m.width, 100, messages, 0); got != want {
 		t.Fatalf("expected chat body height to include conversation gaps, got %d want %d", got, want)
 	}
 	view := xansi.Strip(m.View())
@@ -1064,6 +1065,30 @@ func TestChatBodyHeightIncludesConversationGaps(t *testing.T) {
 	}
 	if blanks := countBlankLinesBetweenText(t, view, "Hello! How can I help you today?", "hah"); blanks < chatListGap {
 		t.Fatalf("expected visible assistant-to-user gap to survive body height calculation, got %d blank lines:\n%s", blanks, view)
+	}
+}
+
+func TestChatBodyHeightUsesProvidedLeadingGap(t *testing.T) {
+	m := newModel(nil, "deepseek-v4-flash", "max", "off")
+	m.width = 80
+	m.height = 40
+	m.startupHeaderPrinted = true
+	*m.startupHeaderOnce = true
+	m.transcript = []tuirender.UIMessage{
+		{Role: "you", Kind: tuirender.KindText, Text: "hi"},
+	}
+	m.nativeScrollbackPrinted = len(m.transcript)
+
+	messages := m.chatViewportMessages()
+	renderWidth := max(20, m.width-2)
+	leadingGap := 3
+	want := chatListRenderedLineCountWithLeadingGap(messages, renderWidth, leadingGap)
+
+	if got := m.chatBodyHeightForView(m.width, 100, messages, leadingGap); got != want {
+		t.Fatalf("expected chat body height to use provided leading gap, got %d want %d", got, want)
+	}
+	if derived := m.chatViewportLeadingGap(nil, messages); derived == leadingGap {
+		t.Fatalf("test setup expected provided leading gap %d to differ from derived gap", leadingGap)
 	}
 }
 

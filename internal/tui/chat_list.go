@@ -60,6 +60,8 @@ func (l *chatList) SetSize(width, height int) {
 	l.clampOffset()
 }
 
+// SetMessages resets leadingGap to 0. Callers that need a leading gap must
+// call SetLeadingGap after SetMessages.
 func (l *chatList) SetMessages(messages []tuirender.UIMessage, renderWidth int) {
 	items := make([]chatItem, 0, len(messages))
 	nextCache := make(map[chatItemRenderKey][]string, len(messages))
