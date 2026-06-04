@@ -468,7 +468,16 @@ func TestSubmitIntentWithAttachmentsPersistsMessageParts(t *testing.T) {
 	if len(msgs) == 0 {
 		t.Fatal("expected messages")
 	}
-	user := msgs[0]
+	var user core.Message
+	for _, msg := range msgs {
+		if msg.Role == core.RoleUser && !msg.Hidden {
+			user = msg
+			break
+		}
+	}
+	if user.ID == "" {
+		t.Fatalf("missing visible user message: %+v", msgs)
+	}
 	if len(user.Parts) != 2 || user.Parts[1].Attachment == nil {
 		t.Fatalf("user parts = %+v", user.Parts)
 	}
