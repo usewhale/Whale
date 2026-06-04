@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/llm"
 	llmretry "github.com/usewhale/whale/internal/llm/retry"
 )
@@ -35,6 +36,41 @@ func (p *tooManyToolsProvider) StreamResponse(_ context.Context, _ []Message, to
 		toolCall("tc-2", "echo", `{"n":2}`),
 		toolCall("tc-3", "echo", `{"n":3}`),
 	))
+}
+
+func TestRunStreamWithContentOptionsPersistsMessageParts(t *testing.T) {
+	store := NewInMemoryStore()
+	a := NewAgent(&mockProvider{}, store, []Tool{echoTool{}})
+
+	events, err := a.RunStreamWithContentOptions(context.Background(), "s-content", []core.MessagePart{
+		{Type: core.MessagePartText, Text: "describe"},
+		{Type: core.MessagePartAttachment, Attachment: &core.AttachmentRef{
+			Kind:        core.AttachmentKindImage,
+			DisplayName: "screen.png",
+		}},
+	}, RunOptions{HiddenInput: true})
+	if err != nil {
+		t.Fatalf("RunStreamWithContentOptions: %v", err)
+	}
+	for ev := range events {
+		if ev.Type == AgentEventTypeError {
+			t.Fatalf("unexpected error: %v", ev.Err)
+		}
+	}
+
+	msgs, err := store.List(context.Background(), "s-content")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(msgs) == 0 {
+		t.Fatal("expected persisted messages")
+	}
+	if !msgs[0].Hidden {
+		t.Fatal("expected hidden input to be preserved")
+	}
+	if len(msgs[0].Parts) != 2 || msgs[0].Parts[1].Attachment == nil {
+		t.Fatalf("unexpected parts: %#v", msgs[0].Parts)
+	}
 }
 
 func TestAgentMaxToolCallsDropsExcessAndForcesSummary(t *testing.T) {

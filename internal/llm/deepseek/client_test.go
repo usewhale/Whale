@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -768,6 +769,636 @@ func TestStreamResponseWithPrefixFallsBackForCustomNonBetaBaseURL(t *testing.T) 
 	}
 }
 
+func TestStreamResponseWithAttachmentRequiresMultimodalConfig(t *testing.T) {
+	c, err := New(WithAPIKey("test-key"))
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	imagePath := writeDeepSeekTestFile(t, "screen.png", []byte("fake-image"))
+	history := []core.Message{core.UserMessageFromParts("s1", []core.MessagePart{
+		{Type: core.MessagePartText, Text: "describe"},
+		{Type: core.MessagePartAttachment, Attachment: &core.AttachmentRef{
+			Kind:        core.AttachmentKindImage,
+			Path:        imagePath,
+			MIME:        "image/png",
+			Filename:    "screen.png",
+			DisplayName: "screen.png",
+		}},
+	}, false)}
+
+	var gotErr error
+	for ev := range c.StreamResponse(context.Background(), history, nil) {
+		if ev.Type == llm.EventError {
+			gotErr = ev.Err
+		}
+	}
+	if gotErr == nil || !strings.Contains(gotErr.Error(), "multimodal attachments require") {
+		t.Fatalf("error = %v, want multimodal config error", gotErr)
+	}
+}
+
+func TestStreamResponseWithAttachmentUsesMultimodalEndpoint(t *testing.T) {
+	var payload map[string]any
+	var auth string
+	var path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		auth = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	imagePath := writeDeepSeekTestFile(t, "screen.png", []byte("fake-image"))
+	c, err := New(
+		WithAPIKey("main-key"),
+		WithBaseURL("https://api.deepseek.example/v1"),
+		WithHTTPClient(srv.Client()),
+		WithModel("deepseek-chat"),
+		WithMultimodal(MultimodalConfig{
+			Enabled: true,
+			Compat:  "openai",
+			BaseURL: srv.URL,
+			APIKey:  "mm-key",
+			Model:   "gpt-4o",
+		}),
+	)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	history := []core.Message{core.UserMessageFromParts("s1", []core.MessagePart{
+		{Type: core.MessagePartText, Text: "describe"},
+		{Type: core.MessagePartAttachment, Attachment: &core.AttachmentRef{
+			Kind:        core.AttachmentKindImage,
+			Path:        imagePath,
+			MIME:        "image/png",
+			Filename:    "screen.png",
+			DisplayName: "screen.png",
+		}},
+	}, false)}
+
+	var final string
+	for ev := range c.StreamResponse(context.Background(), history, nil) {
+		if ev.Type == llm.EventError {
+			t.Fatalf("provider error: %v", ev.Err)
+		}
+		if ev.Type == llm.EventComplete {
+			final = ev.Response.Content
+		}
+	}
+	if final != "ok" {
+		t.Fatalf("final = %q", final)
+	}
+	if path != "/chat/completions" {
+		t.Fatalf("path = %q, want /chat/completions", path)
+	}
+	if auth != "Bearer mm-key" {
+		t.Fatalf("authorization = %q", auth)
+	}
+	if payload["model"] != "gpt-4o" {
+		t.Fatalf("model = %#v", payload["model"])
+	}
+	messages, ok := payload["messages"].([]any)
+	if !ok || len(messages) != 1 {
+		t.Fatalf("messages = %+v", payload["messages"])
+	}
+	msg, ok := messages[0].(map[string]any)
+	if !ok || msg["role"] != "user" {
+		t.Fatalf("message = %+v", messages[0])
+	}
+	parts, ok := msg["content"].([]any)
+	if !ok || len(parts) != 2 {
+		t.Fatalf("content = %+v", msg["content"])
+	}
+	if parts[0].(map[string]any)["text"] != "describe" {
+		t.Fatalf("text part = %+v", parts[0])
+	}
+	imagePart := parts[1].(map[string]any)
+	imageURL := imagePart["image_url"].(map[string]any)
+	if imagePart["type"] != "image_url" || !strings.HasPrefix(fmt.Sprint(imageURL["url"]), "data:image/png;base64,") {
+		t.Fatalf("image part = %+v", imagePart)
+	}
+}
+
+func TestStreamResponseWithInjectedAttachmentTurnUsesMultimodalEndpoint(t *testing.T) {
+	var payload map[string]any
+	var auth string
+	var path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		auth = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	imagePath := writeDeepSeekTestFile(t, "screen.png", []byte("fake-image"))
+	c, err := New(
+		WithAPIKey("main-key"),
+		WithBaseURL("https://api.deepseek.example/v1"),
+		WithHTTPClient(srv.Client()),
+		WithModel("deepseek-chat"),
+		WithMultimodal(MultimodalConfig{
+			Enabled: true,
+			Compat:  "openai",
+			BaseURL: srv.URL,
+			APIKey:  "mm-key",
+			Model:   "gpt-4o",
+		}),
+	)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	history := []core.Message{
+		core.UserMessageFromParts("s1", []core.MessagePart{
+			{Type: core.MessagePartText, Text: "describe"},
+			{Type: core.MessagePartAttachment, Attachment: &core.AttachmentRef{
+				Kind:        core.AttachmentKindImage,
+				Path:        imagePath,
+				MIME:        "image/png",
+				Filename:    "screen.png",
+				DisplayName: "screen.png",
+			}},
+		}, false),
+		core.TextMessage("s1", core.RoleUser, "<skill>synthetic instructions</skill>", true),
+	}
+
+	var final string
+	for ev := range c.StreamResponse(context.Background(), history, nil) {
+		if ev.Type == llm.EventError {
+			t.Fatalf("provider error: %v", ev.Err)
+		}
+		if ev.Type == llm.EventComplete {
+			final = ev.Response.Content
+		}
+	}
+	if final != "ok" {
+		t.Fatalf("final = %q", final)
+	}
+	if path != "/chat/completions" {
+		t.Fatalf("path = %q, want multimodal endpoint", path)
+	}
+	if auth != "Bearer mm-key" {
+		t.Fatalf("authorization = %q", auth)
+	}
+	if payload["model"] != "gpt-4o" {
+		t.Fatalf("model = %#v", payload["model"])
+	}
+}
+
+func TestStreamResponseWithAttachmentStripsReasoningContentForOpenAIPayload(t *testing.T) {
+	var payload map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	imagePath := writeDeepSeekTestFile(t, "screen.png", []byte("fake-image"))
+	c, err := New(
+		WithAPIKey("main-key"),
+		WithHTTPClient(srv.Client()),
+		WithThinking(true),
+		WithMultimodal(MultimodalConfig{
+			Enabled: true,
+			Compat:  "openai",
+			BaseURL: srv.URL,
+			APIKey:  "mm-key",
+			Model:   "gpt-4o",
+		}),
+	)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	history := []core.Message{
+		{
+			Role:      core.RoleAssistant,
+			Text:      "I should inspect a file.",
+			Reasoning: "private DeepSeek reasoning",
+			ToolCalls: []core.ToolCall{{
+				ID:    "call_1",
+				Name:  "read_file",
+				Input: `{"path":"README.md"}`,
+			}},
+		},
+		{
+			Role: core.RoleTool,
+			ToolResults: []core.ToolResult{{
+				ToolCallID: "call_1",
+				Content:    `{"success":true}`,
+			}},
+		},
+		core.UserMessageFromParts("s1", []core.MessagePart{
+			{Type: core.MessagePartText, Text: "describe"},
+			{Type: core.MessagePartAttachment, Attachment: &core.AttachmentRef{Kind: core.AttachmentKindImage, Path: imagePath, MIME: "image/png", Filename: "screen.png"}},
+		}, false),
+	}
+
+	for ev := range c.StreamResponse(context.Background(), history, nil) {
+		if ev.Type == llm.EventError {
+			t.Fatalf("provider error: %v", ev.Err)
+		}
+	}
+	messages, ok := payload["messages"].([]any)
+	if !ok || len(messages) == 0 {
+		t.Fatalf("messages = %+v", payload["messages"])
+	}
+	for _, item := range messages {
+		msg, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, ok := msg["reasoning_content"]; ok {
+			t.Fatalf("OpenAI-compatible multimodal message kept reasoning_content: %+v", msg)
+		}
+	}
+}
+
+func TestStreamResponseAfterAttachmentFollowUpUsesMainEndpoint(t *testing.T) {
+	var payload map[string]any
+	var auth string
+	var path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		auth = r.Header.Get("Authorization")
+		if strings.HasPrefix(r.URL.Path, "/mm/") {
+			t.Fatalf("text-only follow-up should not use multimodal endpoint: %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	imagePath := writeDeepSeekTestFile(t, "screen.png", []byte("fake-image"))
+	c, err := New(
+		WithAPIKey("main-key"),
+		WithBaseURL(srv.URL+"/main"),
+		WithHTTPClient(srv.Client()),
+		WithModel("deepseek-chat"),
+		WithMultimodal(MultimodalConfig{
+			Enabled: true,
+			Compat:  "openai",
+			BaseURL: srv.URL + "/mm",
+			APIKey:  "mm-key",
+			Model:   "gpt-4o",
+		}),
+	)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	history := []core.Message{
+		core.UserMessageFromParts("s1", []core.MessagePart{
+			{Type: core.MessagePartText, Text: "describe"},
+			{Type: core.MessagePartAttachment, Attachment: &core.AttachmentRef{
+				Kind:        core.AttachmentKindImage,
+				Path:        imagePath,
+				MIME:        "image/png",
+				Filename:    "screen.png",
+				DisplayName: "screen.png",
+			}},
+		}, false),
+		{Role: core.RoleAssistant, Text: "It is a screenshot."},
+		{Role: core.RoleUser, Text: "summarize the prior answer"},
+	}
+
+	var final string
+	for ev := range c.StreamResponse(context.Background(), history, nil) {
+		if ev.Type == llm.EventError {
+			t.Fatalf("provider error: %v", ev.Err)
+		}
+		if ev.Type == llm.EventComplete {
+			final = ev.Response.Content
+		}
+	}
+	if final != "ok" {
+		t.Fatalf("final = %q", final)
+	}
+	if path != "/main/chat/completions" {
+		t.Fatalf("path = %q, want main endpoint", path)
+	}
+	if auth != "Bearer main-key" {
+		t.Fatalf("authorization = %q, want main key", auth)
+	}
+	if payload["model"] != "deepseek-chat" {
+		t.Fatalf("model = %#v", payload["model"])
+	}
+}
+
+func TestStreamResponseHiddenFollowUpAfterAttachmentUsesMainEndpoint(t *testing.T) {
+	var auth string
+	var path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		auth = r.Header.Get("Authorization")
+		if strings.HasPrefix(r.URL.Path, "/mm/") {
+			t.Fatalf("hidden follow-up should not use stale multimodal endpoint: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	imagePath := writeDeepSeekTestFile(t, "screen.png", []byte("fake-image"))
+	c, err := New(
+		WithAPIKey("main-key"),
+		WithBaseURL(srv.URL+"/main"),
+		WithHTTPClient(srv.Client()),
+		WithModel("deepseek-chat"),
+		WithMultimodal(MultimodalConfig{
+			Enabled: true,
+			Compat:  "openai",
+			BaseURL: srv.URL + "/mm",
+			APIKey:  "mm-key",
+			Model:   "gpt-4o",
+		}),
+	)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	history := []core.Message{
+		core.UserMessageFromParts("s1", []core.MessagePart{
+			{Type: core.MessagePartText, Text: "describe"},
+			{Type: core.MessagePartAttachment, Attachment: &core.AttachmentRef{Kind: core.AttachmentKindImage, Path: imagePath, MIME: "image/png", Filename: "screen.png"}},
+		}, false),
+		{Role: core.RoleAssistant, Text: "It is a screenshot."},
+		core.TextMessage("s1", core.RoleUser, "<hidden command follow-up>", true),
+	}
+
+	var final string
+	for ev := range c.StreamResponse(context.Background(), history, nil) {
+		if ev.Type == llm.EventError {
+			t.Fatalf("provider error: %v", ev.Err)
+		}
+		if ev.Type == llm.EventComplete {
+			final = ev.Response.Content
+		}
+	}
+	if final != "ok" {
+		t.Fatalf("final = %q", final)
+	}
+	if path != "/main/chat/completions" {
+		t.Fatalf("path = %q, want main endpoint", path)
+	}
+	if auth != "Bearer main-key" {
+		t.Fatalf("authorization = %q, want main key", auth)
+	}
+}
+
+func TestStreamResponseWithAttachmentErrorsWhenConfiguredMultimodalKeyEnvMissing(t *testing.T) {
+	imagePath := writeDeepSeekTestFile(t, "screen.png", []byte("fake-image"))
+	c, err := New(
+		WithAPIKey("main-key"),
+		WithMultimodal(MultimodalConfig{
+			Enabled:   true,
+			Compat:    "openai",
+			BaseURL:   "https://api.openai.example/v1",
+			APIKeyEnv: "WHALE_TEST_MISSING_MULTIMODAL_KEY",
+			Model:     "gpt-4o",
+		}),
+	)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	history := []core.Message{core.UserMessageFromParts("s1", []core.MessagePart{
+		{Type: core.MessagePartAttachment, Attachment: &core.AttachmentRef{
+			Kind:     core.AttachmentKindImage,
+			Path:     imagePath,
+			MIME:     "image/png",
+			Filename: "screen.png",
+		}},
+	}, false)}
+
+	var gotErr error
+	for ev := range c.StreamResponse(context.Background(), history, nil) {
+		if ev.Type == llm.EventError {
+			gotErr = ev.Err
+		}
+	}
+	if gotErr == nil || !strings.Contains(gotErr.Error(), "WHALE_TEST_MISSING_MULTIMODAL_KEY") {
+		t.Fatalf("error = %v, want missing multimodal key env error", gotErr)
+	}
+}
+
+func TestStreamResponseWithAttachmentResolvesConfiguredMultimodalKeyEnv(t *testing.T) {
+	t.Setenv("WHALE_TEST_MULTIMODAL_KEY", "env-mm-key")
+	var auth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	imagePath := writeDeepSeekTestFile(t, "screen.png", []byte("fake-image"))
+	c, err := New(
+		WithAPIKey("main-key"),
+		WithHTTPClient(srv.Client()),
+		WithMultimodal(MultimodalConfig{
+			Enabled:   true,
+			Compat:    "openai",
+			BaseURL:   srv.URL,
+			APIKeyEnv: "WHALE_TEST_MULTIMODAL_KEY",
+			Model:     "gpt-4o",
+		}),
+	)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	history := []core.Message{core.UserMessageFromParts("s1", []core.MessagePart{
+		{Type: core.MessagePartAttachment, Attachment: &core.AttachmentRef{
+			Kind:     core.AttachmentKindImage,
+			Path:     imagePath,
+			MIME:     "image/png",
+			Filename: "screen.png",
+		}},
+	}, false)}
+
+	for ev := range c.StreamResponse(context.Background(), history, nil) {
+		if ev.Type == llm.EventError {
+			t.Fatalf("provider error: %v", ev.Err)
+		}
+	}
+	if auth != "Bearer env-mm-key" {
+		t.Fatalf("authorization = %q, want env multimodal key", auth)
+	}
+}
+
+func TestStreamResponseWithPrefixAndAttachmentSkipsBetaEndpoint(t *testing.T) {
+	var path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		messages, _ := payload["messages"].([]any)
+		for _, item := range messages {
+			msg, _ := item.(map[string]any)
+			if msg["prefix"] == true {
+				t.Fatalf("attachment prefix request should not include prefix message: %+v", msg)
+			}
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	imagePath := writeDeepSeekTestFile(t, "screen.png", []byte("fake-image"))
+	c, err := New(
+		WithAPIKey("test-key"),
+		WithBaseURL(srv.URL+"/beta"),
+		WithHTTPClient(srv.Client()),
+		WithPrefixCompletion(true),
+		WithMultimodal(MultimodalConfig{Enabled: true, Compat: "openai", BaseURL: srv.URL}),
+	)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	history := []core.Message{core.UserMessageFromParts("s1", []core.MessagePart{
+		{Type: core.MessagePartText, Text: "describe"},
+		{Type: core.MessagePartAttachment, Attachment: &core.AttachmentRef{Kind: core.AttachmentKindImage, Path: imagePath, MIME: "image/png", Filename: "screen.png"}},
+	}, false)}
+
+	for ev := range c.StreamResponseWithPrefix(context.Background(), history, "{", nil) {
+		if ev.Type == llm.EventError {
+			t.Fatalf("provider error: %v", ev.Err)
+		}
+	}
+	if path != "/chat/completions" {
+		t.Fatalf("path = %q, want multimodal /chat/completions without beta prefix", path)
+	}
+}
+
+func TestStreamResponseWithPrefixAfterAttachmentFollowUpUsesBetaEndpoint(t *testing.T) {
+	var payload map[string]any
+	var path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.URL.Path
+		if strings.HasPrefix(r.URL.Path, "/mm/") {
+			t.Fatalf("text-only prefix follow-up should not use multimodal endpoint: %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"\\\"ok\\\":true}\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	imagePath := writeDeepSeekTestFile(t, "screen.png", []byte("fake-image"))
+	c, err := New(
+		WithAPIKey("main-key"),
+		WithBaseURL(srv.URL+"/beta"),
+		WithHTTPClient(srv.Client()),
+		WithPrefixCompletion(true),
+		WithMultimodal(MultimodalConfig{Enabled: true, Compat: "openai", BaseURL: srv.URL + "/mm", APIKey: "mm-key"}),
+	)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	history := []core.Message{
+		core.UserMessageFromParts("s1", []core.MessagePart{
+			{Type: core.MessagePartText, Text: "describe"},
+			{Type: core.MessagePartAttachment, Attachment: &core.AttachmentRef{Kind: core.AttachmentKindImage, Path: imagePath, MIME: "image/png", Filename: "screen.png"}},
+		}, false),
+		{Role: core.RoleAssistant, Text: "It is a screenshot."},
+		{Role: core.RoleUser, Text: "return json"},
+	}
+
+	var final string
+	var usage llm.Usage
+	for ev := range c.StreamResponseWithPrefix(context.Background(), history, "{", nil) {
+		if ev.Type == llm.EventError {
+			t.Fatalf("provider error: %v", ev.Err)
+		}
+		if ev.Type == llm.EventComplete {
+			final = ev.Response.Content
+			usage = ev.Response.Usage
+		}
+	}
+	if path != "/beta/chat/completions" {
+		t.Fatalf("path = %q, want beta endpoint", path)
+	}
+	if final != `{"ok":true}` {
+		t.Fatalf("final = %q", final)
+	}
+	if usage.PrefixCompletionRequests != 1 {
+		t.Fatalf("prefix completion requests = %d, want 1", usage.PrefixCompletionRequests)
+	}
+	messages, ok := payload["messages"].([]any)
+	if !ok || len(messages) == 0 {
+		t.Fatalf("messages = %+v", payload["messages"])
+	}
+	last, ok := messages[len(messages)-1].(map[string]any)
+	if !ok || last["role"] != "assistant" || last["content"] != "{" || last["prefix"] != true {
+		t.Fatalf("last message should be assistant prefix, got %+v", last)
+	}
+}
+
+func TestToOpenAICompatibleMessagesEncodesPDFAndAudio(t *testing.T) {
+	pdfPath := writeDeepSeekTestFile(t, "paper.pdf", []byte("%PDF-1.7\nbody"))
+	mp3Path := writeDeepSeekTestFile(t, "sound.mp3", []byte("mp3"))
+	history := []core.Message{core.UserMessageFromParts("s1", []core.MessagePart{
+		{Type: core.MessagePartAttachment, Attachment: &core.AttachmentRef{Kind: core.AttachmentKindPDF, Path: pdfPath, MIME: "application/pdf", Filename: "paper.pdf"}},
+		{Type: core.MessagePartAttachment, Attachment: &core.AttachmentRef{Kind: core.AttachmentKindAudio, Path: mp3Path, MIME: "audio/mpeg", Filename: "sound.mp3"}},
+	}, false)}
+
+	out, err := toOpenAICompatibleMessages(history)
+	if err != nil {
+		t.Fatalf("toOpenAICompatibleMessages: %v", err)
+	}
+	parts := out[0]["content"].([]map[string]any)
+	filePart := parts[0]["file"].(map[string]any)
+	if parts[0]["type"] != "file" || filePart["filename"] != "paper.pdf" || !strings.HasPrefix(fmt.Sprint(filePart["file_data"]), "data:application/pdf;base64,") {
+		t.Fatalf("file part = %+v", parts[0])
+	}
+	audioPart := parts[1]["input_audio"].(map[string]any)
+	if parts[1]["type"] != "input_audio" || audioPart["format"] != "mp3" {
+		t.Fatalf("audio part = %+v", parts[1])
+	}
+}
+
+func TestToOpenAICompatibleMessagesRejectsUnsupportedAudio(t *testing.T) {
+	audioPath := writeDeepSeekTestFile(t, "sound.flac", []byte("flac"))
+	history := []core.Message{core.UserMessageFromParts("s1", []core.MessagePart{
+		{Type: core.MessagePartAttachment, Attachment: &core.AttachmentRef{Kind: core.AttachmentKindAudio, Path: audioPath, MIME: "audio/flac", Filename: "sound.flac"}},
+	}, false)}
+
+	_, err := toOpenAICompatibleMessages(history)
+	if err == nil || !strings.Contains(err.Error(), "unsupported OpenAI-compatible format") {
+		t.Fatalf("error = %v, want unsupported audio error", err)
+	}
+}
+
+func writeDeepSeekTestFile(t *testing.T, name string, content []byte) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+	return path
+}
+
 func TestToDeepSeekMessagesRecoversMissingToolResults(t *testing.T) {
 	history := []core.Message{
 		{
@@ -839,6 +1470,27 @@ func TestToDeepSeekMessagesDoesNotSendToolResultMetadata(t *testing.T) {
 	}
 	if content, _ := toolMsg["content"].(string); strings.Contains(content, "unified_diff") || strings.Contains(content, "-old") {
 		t.Fatalf("tool content must not include metadata diff: %q", content)
+	}
+}
+
+func TestToDeepSeekMessagesUsesAttachmentPlaceholders(t *testing.T) {
+	history := []core.Message{
+		core.UserMessageFromParts("s1", []core.MessagePart{
+			{Type: core.MessagePartText, Text: "describe"},
+			{Type: core.MessagePartAttachment, Attachment: &core.AttachmentRef{
+				Kind:        core.AttachmentKindImage,
+				DisplayName: "screen.png",
+			}},
+		}, false),
+	}
+
+	out := toDeepSeekMessages(history)
+	if len(out) != 1 {
+		t.Fatalf("message count = %d, want 1", len(out))
+	}
+	want := "describe\n[image: screen.png]"
+	if got := out[0]["content"]; got != want {
+		t.Fatalf("content = %#v, want %q", got, want)
 	}
 }
 

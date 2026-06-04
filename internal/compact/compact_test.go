@@ -52,3 +52,21 @@ func TestToolResultReplayContentCompactsLargeOutput(t *testing.T) {
 		t.Fatal("expected compacted replay to retain head and tail")
 	}
 }
+
+func TestEstimateMessagesTokensUsesMessagePartsPlainText(t *testing.T) {
+	msg := core.UserMessageFromParts("s1", []core.MessagePart{
+		{Type: core.MessagePartText, Text: strings.Repeat("a", 8)},
+		{Type: core.MessagePartAttachment, Attachment: &core.AttachmentRef{
+			Kind:        core.AttachmentKindPDF,
+			DisplayName: "paper.pdf",
+		}},
+	}, false)
+
+	got := EstimateMessagesTokens([]core.Message{msg})
+	if got == 0 {
+		t.Fatal("expected non-zero estimate")
+	}
+	if got > EstimateTokens(msg.Text)+1 {
+		t.Fatalf("estimate = %d unexpectedly exceeds plain text mirror", got)
+	}
+}

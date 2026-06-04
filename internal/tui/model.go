@@ -231,6 +231,7 @@ type model struct {
 	pendingSteers                    []pendingSteer
 	nextClientInputID                int
 	submitQueuedPromptAfterInterrupt bool
+	composerAttachments              []composerAttachment
 	nativeScrollbackPrinted          int
 	pendingMouseCSIFragment          bool
 	windowsPaste                     windowsPasteFallbackState
@@ -249,6 +250,7 @@ type modelViewCache struct {
 type queuedPrompt struct {
 	Text         string
 	SkillBinding *protocol.SkillBinding
+	Attachments  []composerAttachment
 }
 
 type pendingSteer struct {

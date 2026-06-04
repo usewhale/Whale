@@ -47,6 +47,7 @@ type Config struct {
 	RetryStreamIdleTimeout         time.Duration
 	RetryMaxDelay                  time.Duration
 	DeepSeekPrefixCompletion       bool
+	DeepSeekMultimodal             MultimodalProviderConfig
 	MaxParallelSubagents           int
 	MCPConfigPath                  string
 	APIBaseURL                     string
@@ -58,6 +59,15 @@ type Config struct {
 	WorkflowKeywordTriggerExplicit bool
 	TrustedWorkflows               []string
 	configDefaulted                bool
+}
+
+type MultimodalProviderConfig struct {
+	Enabled   bool
+	Compat    string
+	BaseURL   string
+	APIKey    string
+	APIKeyEnv string
+	Model     string
 }
 
 type StartOptions struct {

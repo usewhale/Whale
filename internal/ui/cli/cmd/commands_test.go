@@ -685,7 +685,7 @@ func TestRunExecTextOutput(t *testing.T) {
 	var errOut bytes.Buffer
 	opts := &cliOptions{cfg: app.DefaultConfig()}
 	opts.cfg.DataDir = dir
-	if err := runExec(&out, &errOut, strings.NewReader(""), opts, []string{"hi"}, false, 0); err != nil {
+	if err := runExec(&out, &errOut, strings.NewReader(""), opts, []string{"hi"}, false, 0, nil); err != nil {
 		t.Fatalf("runExec: %v", err)
 	}
 	if got := out.String(); got != "hello from exec\n" {
@@ -717,7 +717,7 @@ func TestRunExecJSONOutput(t *testing.T) {
 	var errOut bytes.Buffer
 	opts := &cliOptions{cfg: app.DefaultConfig()}
 	opts.cfg.DataDir = dir
-	if err := runExec(&out, &errOut, strings.NewReader("stdin prompt"), opts, nil, true, 0); err != nil {
+	if err := runExec(&out, &errOut, strings.NewReader("stdin prompt"), opts, nil, true, 0, nil); err != nil {
 		t.Fatalf("runExec: %v", err)
 	}
 	var res app.ExecResult
@@ -732,6 +732,88 @@ func TestRunExecJSONOutput(t *testing.T) {
 	}
 	if errOut.Len() != 0 {
 		t.Fatalf("stderr = %q", errOut.String())
+	}
+}
+
+func TestRunExecAttachSendsOpenAICompatibleFilePart(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "sk-1234567890abcdef1234")
+	requests := make(chan map[string]any, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Errorf("decode request: %v", err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		requests <- payload
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(w, "data: {\"choices\":[{\"delta\":{\"content\":%q},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n", "attached")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	t.Setenv("DEEPSEEK_BASE_URL", srv.URL)
+
+	dir := t.TempDir()
+	workspace := t.TempDir()
+	attachment := filepath.Join(workspace, "note.txt")
+	if err := os.WriteFile(attachment, []byte("attachment body"), 0o644); err != nil {
+		t.Fatalf("write attachment: %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	var out bytes.Buffer
+	var errOut bytes.Buffer
+	opts := &cliOptions{cfg: app.DefaultConfig()}
+	opts.cfg.DataDir = dir
+	opts.cfg.DeepSeekMultimodal = app.MultimodalProviderConfig{
+		Enabled: true,
+		Compat:  "openai",
+		BaseURL: srv.URL,
+		Model:   "gpt-4o",
+	}
+	if err := runExec(&out, &errOut, strings.NewReader(""), opts, []string{"inspect"}, false, 0, []string{attachment}); err != nil {
+		t.Fatalf("runExec: %v", err)
+	}
+	var payload map[string]any
+	select {
+	case payload = <-requests:
+	default:
+		t.Fatal("expected exec request payload")
+	}
+	messages, ok := payload["messages"].([]any)
+	if !ok || len(messages) == 0 {
+		t.Fatalf("messages = %+v", payload["messages"])
+	}
+	var msg map[string]any
+	for _, item := range messages {
+		candidate, _ := item.(map[string]any)
+		if candidate["role"] == "user" {
+			msg = candidate
+			break
+		}
+	}
+	if msg == nil {
+		t.Fatalf("missing user message: %+v", messages)
+	}
+	parts, ok := msg["content"].([]any)
+	if !ok || len(parts) != 2 {
+		t.Fatalf("content = %+v", msg["content"])
+	}
+	if parts[0].(map[string]any)["text"] != "inspect" {
+		t.Fatalf("text part = %+v", parts[0])
+	}
+	filePart := parts[1].(map[string]any)
+	fileInfo := filePart["file"].(map[string]any)
+	if filePart["type"] != "file" || fileInfo["filename"] != "note.txt" || !strings.HasPrefix(fmt.Sprint(fileInfo["file_data"]), "data:text/plain") {
+		t.Fatalf("file part = %+v", filePart)
 	}
 }
 

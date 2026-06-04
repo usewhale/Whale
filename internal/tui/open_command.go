@@ -74,7 +74,7 @@ func (m *model) finishLocalSubmit() tea.Cmd {
 		pendingWindowsInput := m.snapshotWindowsBusyInput()
 		if next, ok := m.popQueuedPrompt(); ok {
 			m.deferredPlanPicker = false
-			eventCmd := m.submitPromptWithBinding(next.Text, next.SkillBinding)
+			eventCmd := m.submitPromptWithBindingAndAttachments(next.Text, next.SkillBinding, attachmentInputsFromComposerAttachments(next.Attachments))
 			restoreCmd := m.restoreWindowsBusyInput(pendingWindowsInput)
 			return tea.Batch(eventCmd, restoreCmd)
 		}

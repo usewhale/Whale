@@ -1,6 +1,9 @@
 package core
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 type Role string
 
@@ -25,6 +28,7 @@ type Message struct {
 	SessionID    string
 	Role         Role
 	Text         string
+	Parts        []MessagePart `json:"parts,omitempty"`
 	Hidden       bool
 	Reasoning    string
 	ToolCalls    []ToolCall
@@ -32,6 +36,126 @@ type Message struct {
 	FinishReason FinishReason
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+}
+
+type MessagePartType string
+
+const (
+	MessagePartText       MessagePartType = "text"
+	MessagePartAttachment MessagePartType = "attachment"
+)
+
+type AttachmentKind string
+
+const (
+	AttachmentKindImage AttachmentKind = "image"
+	AttachmentKindPDF   AttachmentKind = "pdf"
+	AttachmentKindAudio AttachmentKind = "audio"
+	AttachmentKindFile  AttachmentKind = "file"
+)
+
+type MessagePart struct {
+	Type       MessagePartType `json:"type"`
+	Text       string          `json:"text,omitempty"`
+	Attachment *AttachmentRef  `json:"attachment,omitempty"`
+}
+
+type AttachmentRef struct {
+	Kind         AttachmentKind `json:"kind"`
+	Path         string         `json:"path,omitempty"`
+	OriginalPath string         `json:"original_path,omitempty"`
+	MIME         string         `json:"mime,omitempty"`
+	Filename     string         `json:"filename,omitempty"`
+	SizeBytes    int64          `json:"size_bytes,omitempty"`
+	SHA256       string         `json:"sha256,omitempty"`
+	DisplayName  string         `json:"display_name,omitempty"`
+}
+
+func TextMessage(sessionID string, role Role, text string, hidden bool) Message {
+	return NormalizeMessageContent(Message{
+		SessionID: sessionID,
+		Role:      role,
+		Text:      text,
+		Hidden:    hidden,
+	})
+}
+
+func UserMessageFromParts(sessionID string, parts []MessagePart, hidden bool) Message {
+	return NormalizeMessageContent(Message{
+		SessionID: sessionID,
+		Role:      RoleUser,
+		Parts:     cloneMessageParts(parts),
+		Hidden:    hidden,
+	})
+}
+
+func NormalizeMessageContent(msg Message) Message {
+	if len(msg.Parts) == 0 && msg.Text != "" {
+		msg.Parts = []MessagePart{{Type: MessagePartText, Text: msg.Text}}
+	} else if msg.Text == "" && len(msg.Parts) > 0 {
+		msg.Text = MessagePartsPlainText(msg.Parts)
+	}
+	return msg
+}
+
+func MessagePlainText(msg Message) string {
+	if len(msg.Parts) == 0 {
+		return msg.Text
+	}
+	return MessagePartsPlainText(msg.Parts)
+}
+
+func MessagePartsPlainText(parts []MessagePart) string {
+	fragments := make([]string, 0, len(parts))
+	for _, part := range parts {
+		switch part.Type {
+		case MessagePartText:
+			if part.Text != "" {
+				fragments = append(fragments, part.Text)
+			}
+		case MessagePartAttachment:
+			if label := attachmentPlaceholder(part.Attachment); label != "" {
+				fragments = append(fragments, label)
+			}
+		}
+	}
+	return strings.Join(fragments, "\n")
+}
+
+func attachmentPlaceholder(att *AttachmentRef) string {
+	if att == nil {
+		return ""
+	}
+	kind := strings.TrimSpace(string(att.Kind))
+	if kind == "" {
+		kind = string(AttachmentKindFile)
+	}
+	name := strings.TrimSpace(att.DisplayName)
+	if name == "" {
+		name = strings.TrimSpace(att.Filename)
+	}
+	if name == "" {
+		name = strings.TrimSpace(att.Path)
+	}
+	if name == "" {
+		return "[" + kind + "]"
+	}
+	return "[" + kind + ": " + name + "]"
+}
+
+func cloneMessageParts(in []MessagePart) []MessagePart {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]MessagePart, len(in))
+	for i, part := range in {
+		out[i] = part
+		if part.Attachment != nil {
+			att := *part.Attachment
+			out[i].Attachment = &att
+		}
+	}
+	return out
 }
 
 type ToolCall struct {

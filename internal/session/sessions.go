@@ -99,6 +99,7 @@ func FirstVisibleUserMessage(sessionsDir, sessionID string) (string, error) {
 		var msg struct {
 			Role   string
 			Text   string
+			Parts  []core.MessagePart `json:"parts,omitempty"`
 			Hidden bool
 		}
 		if err := json.Unmarshal([]byte(line), &msg); err != nil {
@@ -107,7 +108,11 @@ func FirstVisibleUserMessage(sessionsDir, sessionID string) (string, error) {
 		if msg.Role != "user" || msg.Hidden {
 			continue
 		}
-		if text := strings.TrimSpace(msg.Text); text != "" {
+		text := msg.Text
+		if len(msg.Parts) > 0 {
+			text = core.MessagePartsPlainText(msg.Parts)
+		}
+		if text := strings.TrimSpace(text); text != "" {
 			return singleLine(text), nil
 		}
 	}

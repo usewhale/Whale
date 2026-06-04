@@ -44,6 +44,7 @@ type Intent struct {
 	Input              string                `json:"input,omitempty"`
 	ClientInputID      string                `json:"client_input_id,omitempty"`
 	HiddenInput        bool                  `json:"hidden_input,omitempty"`
+	Attachments        []AttachmentInput     `json:"attachments,omitempty"`
 	ToolCallID         string                `json:"tool_call_id,omitempty"`
 	UserInput          *UserInputResponse    `json:"user_input,omitempty"`
 	SessionInput       string                `json:"session_input,omitempty"`
@@ -76,6 +77,11 @@ type Intent struct {
 type ConfigSettingUpdate struct {
 	ID    string `json:"id"`
 	Value string `json:"value"`
+}
+
+type AttachmentInput struct {
+	Path        string `json:"path"`
+	DisplayName string `json:"display_name,omitempty"`
 }
 
 type SkillBinding struct {

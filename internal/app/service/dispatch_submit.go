@@ -1,21 +1,26 @@
 package service
 
 import (
+	"context"
 	"fmt"
+	"strings"
+
 	"github.com/usewhale/whale/internal/agent"
 	"github.com/usewhale/whale/internal/app"
+	"github.com/usewhale/whale/internal/attachments"
 	appcommands "github.com/usewhale/whale/internal/commands"
+	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/session"
-	"strings"
 )
 
-func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.SkillBinding, clientInputID string) {
+func (s *Service) handleSubmit(line string, hiddenInput bool, skillBinding *app.SkillBinding, clientInputID string, attachmentInputs []AttachmentInput) {
 	state := submitState{
-		line:          strings.TrimSpace(line),
-		clientInputID: clientInputID,
-		hiddenInput:   hiddenInput,
-		turnOptions:   agent.RunOptions{HiddenInput: hiddenInput},
-		skillBinding:  skillBinding,
+		line:             strings.TrimSpace(line),
+		clientInputID:    clientInputID,
+		hiddenInput:      hiddenInput,
+		turnOptions:      agent.RunOptions{HiddenInput: hiddenInput},
+		skillBinding:     skillBinding,
+		attachmentInputs: append([]AttachmentInput(nil), attachmentInputs...),
 	}
 	if state.line == "" {
 		return
@@ -49,6 +54,7 @@ type submitState struct {
 	skipSkillInjection bool
 	turnOptions        agent.RunOptions
 	skillBinding       *app.SkillBinding
+	attachmentInputs   []AttachmentInput
 }
 
 func (s *Service) handleSubmitMenuCommand(state *submitState) bool {
@@ -242,6 +248,33 @@ func (s *Service) applySubmitHooks(state *submitState) bool {
 }
 
 func (s *Service) startSubmitTurn(state *submitState) {
+	if len(state.attachmentInputs) > 0 {
+		parts, err := s.prepareAttachmentParts(state.line, state.attachmentInputs)
+		if err != nil {
+			s.emit(Event{Kind: EventError, Text: err.Error()})
+			s.emit(Event{Kind: EventTurnDone})
+			return
+		}
+		if state.hiddenInput || state.skipSkillInjection {
+			s.goTracked(func() { s.runTurnWithContentOptions(parts, state.turnOptions) })
+			return
+		}
+		skillMention, skillOut, skillSynthetic, err := s.app.BuildSkillMentionSyntheticPromptWithBinding(state.line, state.skillBinding)
+		if err != nil {
+			s.emit(Event{Kind: EventError, Text: err.Error()})
+			s.emit(Event{Kind: EventTurnDone})
+			return
+		}
+		if skillMention {
+			if skillOut != "" {
+				s.emit(Event{Kind: EventSkillLoaded, Text: skillOut})
+			}
+			s.goTracked(func() { s.runInjectedTurnWithContentOptions(parts, skillSynthetic, state.turnOptions) })
+			return
+		}
+		s.goTracked(func() { s.runTurnWithContentOptions(parts, state.turnOptions) })
+		return
+	}
 	if state.hiddenInput || state.skipSkillInjection {
 		if s.injectActiveTurn(state.line, state.turnOptions, state.clientInputID) {
 			return
@@ -269,4 +302,24 @@ func (s *Service) startSubmitTurn(state *submitState) {
 		return
 	}
 	s.goTracked(func() { s.runTurn(state.line, state.hiddenInput) })
+}
+
+func (s *Service) prepareAttachmentParts(line string, inputs []AttachmentInput) ([]core.MessagePart, error) {
+	sources := make([]attachments.Source, 0, len(inputs))
+	for _, input := range inputs {
+		if strings.TrimSpace(input.Path) == "" {
+			continue
+		}
+		sources = append(sources, attachments.Source{Path: input.Path, DisplayName: input.DisplayName})
+	}
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	parts, _, err := attachments.PrepareMessageParts(ctx, line, sources, attachments.Options{
+		SessionsDir:   s.app.SessionsDir(),
+		SessionID:     s.app.SessionID(),
+		WorkspaceRoot: s.app.WorkspaceRoot(),
+	})
+	return parts, err
 }

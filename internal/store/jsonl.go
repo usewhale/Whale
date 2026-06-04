@@ -121,6 +121,7 @@ func (s *JSONLStore) List(_ context.Context, sessionID string) ([]core.Message, 
 func (s *JSONLStore) Create(_ context.Context, msg core.Message) (core.Message, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	msg = core.NormalizeMessageContent(msg)
 
 	msgs, seq, err := s.readSessionLocked(msg.SessionID)
 	if err != nil {
@@ -146,6 +147,7 @@ func (s *JSONLStore) Create(_ context.Context, msg core.Message) (core.Message, 
 func (s *JSONLStore) Update(_ context.Context, msg core.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	msg = core.NormalizeMessageContent(msg)
 
 	msgs, seq, err := s.readSessionLocked(msg.SessionID)
 	if err != nil {
@@ -194,6 +196,7 @@ func (s *JSONLStore) readSessionLocked(sessionID string) ([]core.Message, int, e
 		if err := json.Unmarshal([]byte(line), &m); err != nil {
 			continue
 		}
+		m = core.NormalizeMessageContent(m)
 		out = append(out, m)
 		if n := parseMessageSeq(m.ID); n > maxSeq {
 			maxSeq = n
@@ -206,6 +209,7 @@ func (s *JSONLStore) readSessionLocked(sessionID string) ([]core.Message, int, e
 }
 
 func (s *JSONLStore) appendMessageLocked(sessionID string, msg core.Message) error {
+	msg = core.NormalizeMessageContent(msg)
 	path := s.sessionPath(sessionID)
 	f, err := securefs.OpenPrivateAppend(path)
 	if err != nil {
@@ -230,6 +234,7 @@ func (s *JSONLStore) rewriteSessionLocked(sessionID string, msgs []core.Message)
 		return fmt.Errorf("open temp: %w", err)
 	}
 	for _, msg := range msgs {
+		msg = core.NormalizeMessageContent(msg)
 		b, err := json.Marshal(msg)
 		if err != nil {
 			_ = f.Close()

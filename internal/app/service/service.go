@@ -57,6 +57,7 @@ type Intent struct {
 	Input              string
 	ClientInputID      string
 	HiddenInput        bool
+	Attachments        []AttachmentInput
 	ToolCallID         string
 	UserInput          *core.UserInputResponse
 	SessionInput       string
@@ -84,6 +85,11 @@ type Intent struct {
 	WorkflowScript     string
 	WorkflowSaveAs     string
 	WorkflowScriptPath string
+}
+
+type AttachmentInput struct {
+	Path        string
+	DisplayName string
 }
 
 type EventKind = protocol.EventKind

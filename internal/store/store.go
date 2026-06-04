@@ -40,13 +40,16 @@ func (s *InMemoryStore) List(_ context.Context, sessionID string) ([]core.Messag
 	defer s.mu.Unlock()
 	msgs := s.bySesID[sessionID]
 	out := make([]core.Message, len(msgs))
-	copy(out, msgs)
+	for i, msg := range msgs {
+		out[i] = core.NormalizeMessageContent(msg)
+	}
 	return out, nil
 }
 
 func (s *InMemoryStore) Create(_ context.Context, msg core.Message) (core.Message, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	msg = core.NormalizeMessageContent(msg)
 	s.seq++
 	msg.ID = fmt.Sprintf("m-%d", s.seq)
 	now := time.Now()
@@ -59,6 +62,7 @@ func (s *InMemoryStore) Create(_ context.Context, msg core.Message) (core.Messag
 func (s *InMemoryStore) Update(_ context.Context, msg core.Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	msg = core.NormalizeMessageContent(msg)
 	msgs := s.bySesID[msg.SessionID]
 	for i := range msgs {
 		if msgs[i].ID == msg.ID {
@@ -96,7 +100,9 @@ func (s *InMemoryStore) RewriteSession(_ context.Context, sessionID string, msgs
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]core.Message, len(msgs))
-	copy(out, msgs)
+	for i, msg := range msgs {
+		out[i] = core.NormalizeMessageContent(msg)
+	}
 	s.bySesID[sessionID] = out
 	return nil
 }

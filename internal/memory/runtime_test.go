@@ -99,3 +99,17 @@ func TestRuntimeBuildProviderHistoryAppendsRuntimeSystemAfterPrefix(t *testing.T
 		t.Fatalf("unexpected log message: %+v", got[2])
 	}
 }
+
+func TestRuntimeClonesMessageParts(t *testing.T) {
+	att := &core.AttachmentRef{Kind: core.AttachmentKindImage, DisplayName: "screen.png"}
+	msg := core.UserMessageFromParts("s1", []core.MessagePart{{Type: core.MessagePartAttachment, Attachment: att}}, false)
+	rt := HydrateRuntime(NewImmutablePrefix(nil), []core.Message{msg})
+
+	first := rt.BuildProviderHistory()
+	first[0].Parts[0].Attachment.DisplayName = "changed.png"
+	second := rt.BuildProviderHistory()
+
+	if got := second[0].Parts[0].Attachment.DisplayName; got != "screen.png" {
+		t.Fatalf("attachment display name = %q, want screen.png", got)
+	}
+}

@@ -14,12 +14,14 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/usewhale/whale/internal/app"
+	"github.com/usewhale/whale/internal/attachments"
 	"github.com/usewhale/whale/internal/core"
 )
 
 func newExecCmd(opts *cliOptions) *cobra.Command {
 	var jsonOutput bool
 	var timeoutSec int
+	var attachPaths []string
 	c := &cobra.Command{
 		Use:   "exec [prompt]",
 		Short: "Run a single prompt non-interactively",
@@ -31,11 +33,12 @@ func newExecCmd(opts *cliOptions) *cobra.Command {
 			if err := prepareCLIConfig(cmd, opts); err != nil {
 				return err
 			}
-			return runExec(cmd.OutOrStdout(), cmd.ErrOrStderr(), cmd.InOrStdin(), opts, args, jsonOutput, timeoutSec)
+			return runExec(cmd.OutOrStdout(), cmd.ErrOrStderr(), cmd.InOrStdin(), opts, args, jsonOutput, timeoutSec, attachPaths)
 		},
 	}
 	c.Flags().BoolVar(&jsonOutput, "json", false, "Emit machine-readable JSON output")
 	c.Flags().IntVar(&timeoutSec, "timeout-sec", 0, "Optional timeout in seconds for this exec run")
+	c.Flags().StringArrayVar(&attachPaths, "attach", nil, "Attach a local file to the prompt")
 	return c
 }
 
@@ -210,7 +213,7 @@ func doctorBadge(level app.DoctorLevel) string {
 	}
 }
 
-func runExec(out io.Writer, errOut io.Writer, in io.Reader, opts *cliOptions, args []string, jsonOutput bool, timeoutSec int) error {
+func runExec(out io.Writer, errOut io.Writer, in io.Reader, opts *cliOptions, args []string, jsonOutput bool, timeoutSec int, attachPaths []string) error {
 	prompt, err := readExecPrompt(in, args)
 	if err != nil {
 		return err
@@ -224,7 +227,7 @@ func runExec(out io.Writer, errOut io.Writer, in io.Reader, opts *cliOptions, ar
 		defer cancel()
 	}
 
-	res, execErr := app.RunExec(ctx, opts.cfg, start, prompt)
+	res, execErr := app.RunExecWithAttachments(ctx, opts.cfg, start, prompt, attachmentSourcesFromPaths(attachPaths))
 	if jsonOutput {
 		if err := writeExecJSON(out, res); err != nil {
 			return err
@@ -253,6 +256,20 @@ func runExec(out io.Writer, errOut io.Writer, in io.Reader, opts *cliOptions, ar
 		return ExitError{Code: 1}
 	}
 	return nil
+}
+
+func attachmentSourcesFromPaths(paths []string) []attachments.Source {
+	if len(paths) == 0 {
+		return nil
+	}
+	out := make([]attachments.Source, 0, len(paths))
+	for _, path := range paths {
+		if strings.TrimSpace(path) == "" {
+			continue
+		}
+		out = append(out, attachments.Source{Path: path})
+	}
+	return out
 }
 
 func readExecPrompt(in io.Reader, args []string) (string, error) {

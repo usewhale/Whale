@@ -237,7 +237,7 @@ func (m *model) handleTurnDone(ev protocol.Event) tea.Cmd {
 	} else if !wasStopping {
 		if next, ok := m.popQueuedPrompt(); ok {
 			m.deferredPlanPicker = false
-			eventCmd = tea.Batch(eventCmd, m.submitPromptWithBinding(next.Text, next.SkillBinding), m.restoreWindowsBusyInput(pendingWindowsInput))
+			eventCmd = tea.Batch(eventCmd, m.submitPromptWithBindingAndAttachments(next.Text, next.SkillBinding, attachmentInputsFromComposerAttachments(next.Attachments)), m.restoreWindowsBusyInput(pendingWindowsInput))
 			queuedTurnStarted = true
 		}
 	}

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"os"
 	"strings"
 	"time"
 
@@ -20,6 +21,7 @@ type providerOptions struct {
 	StreamMaxAttempts        int
 	StreamIdleTimeout        time.Duration
 	DeepSeekPrefixCompletion bool
+	DeepSeekMultimodal       MultimodalProviderConfig
 }
 
 func newDeepSeekProvider(opts providerOptions) (llm.Provider, error) {
@@ -51,6 +53,25 @@ func newDeepSeekProvider(opts providerOptions) (llm.Provider, error) {
 	}
 	if opts.DeepSeekPrefixCompletion {
 		dsOpts = append(dsOpts, deepseek.WithPrefixCompletion(true))
+	}
+	if opts.DeepSeekMultimodal.Enabled {
+		mm := opts.DeepSeekMultimodal
+		apiKey := strings.TrimSpace(mm.APIKey)
+		apiKeyEnv := strings.TrimSpace(mm.APIKeyEnv)
+		if apiKey == "" && apiKeyEnv != "" {
+			apiKey = strings.TrimSpace(os.Getenv(apiKeyEnv))
+		}
+		if apiKey == "" && apiKeyEnv == "" {
+			apiKey = opts.APIKey
+		}
+		dsOpts = append(dsOpts, deepseek.WithMultimodal(deepseek.MultimodalConfig{
+			Enabled:   true,
+			Compat:    mm.Compat,
+			BaseURL:   mm.BaseURL,
+			APIKey:    apiKey,
+			APIKeyEnv: apiKeyEnv,
+			Model:     mm.Model,
+		}))
 	}
 	return deepseek.New(dsOpts...)
 }

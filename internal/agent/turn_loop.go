@@ -26,12 +26,13 @@ func (a *Agent) RunStreamWithOptions(ctx context.Context, sessionID, input strin
 }
 
 func (a *Agent) RunStreamWithTurnOptions(ctx context.Context, sessionID, input string, opts RunOptions) (<-chan AgentEvent, error) {
-	return a.runStreamWithNewMessages(ctx, sessionID, []core.Message{{
-		SessionID: sessionID,
-		Role:      core.RoleUser,
-		Text:      input,
-		Hidden:    opts.HiddenInput,
-	}}, opts)
+	return a.RunStreamWithContentOptions(ctx, sessionID, []core.MessagePart{{Type: core.MessagePartText, Text: input}}, opts)
+}
+
+func (a *Agent) RunStreamWithContentOptions(ctx context.Context, sessionID string, parts []core.MessagePart, opts RunOptions) (<-chan AgentEvent, error) {
+	return a.runStreamWithNewMessages(ctx, sessionID, []core.Message{
+		core.UserMessageFromParts(sessionID, parts, opts.HiddenInput),
+	}, opts)
 }
 
 func (a *Agent) RunStreamWithInjectedInput(ctx context.Context, sessionID, visibleInput, hiddenInput string) (<-chan AgentEvent, error) {
@@ -39,9 +40,13 @@ func (a *Agent) RunStreamWithInjectedInput(ctx context.Context, sessionID, visib
 }
 
 func (a *Agent) RunStreamWithInjectedInputOptions(ctx context.Context, sessionID, visibleInput, hiddenInput string, opts RunOptions) (<-chan AgentEvent, error) {
+	return a.RunStreamWithInjectedContentOptions(ctx, sessionID, []core.MessagePart{{Type: core.MessagePartText, Text: visibleInput}}, hiddenInput, opts)
+}
+
+func (a *Agent) RunStreamWithInjectedContentOptions(ctx context.Context, sessionID string, visibleParts []core.MessagePart, hiddenInput string, opts RunOptions) (<-chan AgentEvent, error) {
 	return a.runStreamWithNewMessages(ctx, sessionID, []core.Message{
-		{SessionID: sessionID, Role: core.RoleUser, Text: visibleInput},
-		{SessionID: sessionID, Role: core.RoleUser, Text: hiddenInput, Hidden: true},
+		core.UserMessageFromParts(sessionID, visibleParts, false),
+		core.TextMessage(sessionID, core.RoleUser, hiddenInput, true),
 	}, opts)
 }
 
@@ -85,6 +90,7 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 	createdMessages := make([]core.Message, 0, len(newMessages))
 	for _, msg := range newMessages {
 		msg.SessionID = sessionID
+		msg = core.NormalizeMessageContent(msg)
 		created, err := a.store.Create(ctx, msg)
 		if err != nil {
 			a.active.Delete(sessionID)

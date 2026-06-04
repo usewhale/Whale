@@ -187,6 +187,8 @@ func TestClassifySubmitSlashCommands(t *testing.T) {
 		{line: "/help", want: appcommands.SubmitLocalReadOnly},
 		{line: "/copy", want: appcommands.SubmitLocalReadOnly},
 		{line: "/copy 2", want: appcommands.SubmitLocalReadOnly},
+		{line: "/attach", want: appcommands.SubmitUsageError},
+		{line: "/attach ./note.txt", want: appcommands.SubmitUsageError},
 		{line: "/model", want: appcommands.SubmitLocalUI},
 		{line: "/permissions", want: appcommands.SubmitLocalUI},
 		{line: "/focus", want: appcommands.SubmitLocalUI},

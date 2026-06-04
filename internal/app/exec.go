@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/usewhale/whale/internal/agent"
+	"github.com/usewhale/whale/internal/attachments"
+	"github.com/usewhale/whale/internal/core"
 )
 
 type ExecToolSummary struct {
@@ -24,6 +26,13 @@ type ExecResult struct {
 }
 
 func RunExec(ctx context.Context, cfg Config, start StartOptions, prompt string) (ExecResult, error) {
+	return RunExecWithContent(ctx, cfg, start, []core.MessagePart{{Type: core.MessagePartText, Text: prompt}})
+}
+
+func RunExecWithAttachments(ctx context.Context, cfg Config, start StartOptions, prompt string, sources []attachments.Source) (ExecResult, error) {
+	if len(sources) == 0 {
+		return RunExec(ctx, cfg, start, prompt)
+	}
 	a, err := New(ctx, cfg, start)
 	if err != nil {
 		return ExecResult{
@@ -34,7 +43,43 @@ func RunExec(ctx context.Context, cfg Config, start StartOptions, prompt string)
 	}
 	defer a.Close()
 	a.InitializeMCP(ctx, nil)
-	res, err := a.ExecPrompt(ctx, prompt, false)
+	parts, _, err := attachments.PrepareMessageParts(ctx, prompt, sources, attachments.Options{
+		SessionsDir:   a.SessionsDir(),
+		SessionID:     a.SessionID(),
+		WorkspaceRoot: a.WorkspaceRoot(),
+	})
+	if err != nil {
+		return ExecResult{
+			SessionID: a.SessionID(),
+			Model:     a.Model(),
+			Status:    "error",
+			Error:     err.Error(),
+		}, err
+	}
+	res, err := a.ExecPromptWithContent(ctx, parts, false)
+	if err != nil {
+		return res, err
+	}
+	if err := a.FinalizeTurn(res.Output, res.Status == "completed"); err != nil {
+		res.Status = "error"
+		res.Error = err.Error()
+		return res, err
+	}
+	return res, nil
+}
+
+func RunExecWithContent(ctx context.Context, cfg Config, start StartOptions, parts []core.MessagePart) (ExecResult, error) {
+	a, err := New(ctx, cfg, start)
+	if err != nil {
+		return ExecResult{
+			Model:  strings.TrimSpace(cfg.Model),
+			Status: "error",
+			Error:  err.Error(),
+		}, err
+	}
+	defer a.Close()
+	a.InitializeMCP(ctx, nil)
+	res, err := a.ExecPromptWithContent(ctx, parts, false)
 	if err != nil {
 		return res, err
 	}
@@ -47,12 +92,16 @@ func RunExec(ctx context.Context, cfg Config, start StartOptions, prompt string)
 }
 
 func (a *App) ExecPrompt(ctx context.Context, prompt string, hiddenInput bool) (ExecResult, error) {
+	return a.ExecPromptWithContent(ctx, []core.MessagePart{{Type: core.MessagePartText, Text: prompt}}, hiddenInput)
+}
+
+func (a *App) ExecPromptWithContent(ctx context.Context, parts []core.MessagePart, hiddenInput bool) (ExecResult, error) {
 	result := ExecResult{
 		SessionID: a.SessionID(),
 		Model:     a.Model(),
 		Status:    "completed",
 	}
-	events, err := a.RunTurn(ctx, prompt, hiddenInput)
+	events, err := a.RunTurnWithContentOptions(ctx, parts, agent.RunOptions{HiddenInput: hiddenInput})
 	if err != nil {
 		result.Status = "error"
 		result.Error = err.Error()

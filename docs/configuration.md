@@ -92,6 +92,21 @@ deepseek_prefix_completion = true
 
 启用 DeepSeek Beta 的 Prefix completion。Whale 只会在明确适合的无工具、强格式文本请求中使用它，例如需要模型直接返回 JSON 的内部 hook prompt。这个功能主要提升格式稳定性，不承诺节省 token。
 
+### 多模态附件 harness
+
+DeepSeek 多模态 API 可能还不是所有账号都可用。你可以先用 OpenAI-compatible 的多模态 endpoint 测试图片、PDF、文件或音频附件：
+
+```toml
+[providers.deepseek.multimodal]
+enabled = true
+compat = "openai"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+model = "gpt-4o"
+```
+
+这个 override 只用于带附件的 turn，例如 `whale exec --attach screen.png "describe this"`，或者在 TUI 里粘贴图片/本地图片路径后提交的 prompt。普通纯文本 turn 仍使用常规 DeepSeek 配置。DeepSeek 多模态公开可用后，把 `base_url`、`api_key_env` 和 `model` 指回 DeepSeek 兼容值即可。
+
 ---
 
 ## 参考
@@ -147,6 +162,13 @@ enabled = true                         # 每个插件单独配置启用状态
 
 [experimental]
 deepseek_prefix_completion = false     # DeepSeek Prefix completion（实验功能）
+
+[providers.deepseek.multimodal]
+enabled = false                        # 将带附件的 turn 路由到 OpenAI-compatible 多模态 endpoint
+compat = "openai"
+base_url = ""
+api_key_env = ""
+model = ""
 
 [logging]
 level = "info"                         # debug | info | warn | error

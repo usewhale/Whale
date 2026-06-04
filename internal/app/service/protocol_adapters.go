@@ -375,7 +375,7 @@ func protocolMessages(messages []core.Message) []protocol.Message {
 			ID:           message.ID,
 			SessionID:    message.SessionID,
 			Role:         string(message.Role),
-			Text:         message.Text,
+			Text:         core.MessagePlainText(message),
 			Hidden:       message.Hidden,
 			Reasoning:    message.Reasoning,
 			ToolCalls:    protocolToolCalls(message.ToolCalls),

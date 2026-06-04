@@ -16,7 +16,7 @@ const (
 func EstimateMessagesTokens(msgs []core.Message) int {
 	total := 0
 	for _, m := range msgs {
-		total += EstimateTokens(m.Text)
+		total += EstimateTokens(core.MessagePlainText(m))
 		total += EstimateTokens(m.Reasoning)
 		for _, tc := range m.ToolCalls {
 			total += EstimateTokens(tc.Name) + EstimateTokens(tc.Input)

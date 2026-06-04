@@ -51,8 +51,9 @@ func (p *ImmutablePrefix) ToMessages() []core.Message {
 		return nil
 	}
 	return []core.Message{{
-		Role: core.RoleSystem,
-		Text: strings.Join(p.systemBlocks, "\n\n"),
+		Role:  core.RoleSystem,
+		Text:  strings.Join(p.systemBlocks, "\n\n"),
+		Parts: []core.MessagePart{{Type: core.MessagePartText, Text: strings.Join(p.systemBlocks, "\n\n")}},
 	}}
 }
 

@@ -58,6 +58,9 @@ func ApplyFileConfig(cfg *Config, file FileConfig) error {
 	if strings.TrimSpace(file.API.BaseURL) != "" {
 		cfg.APIBaseURL = strings.TrimRight(strings.TrimSpace(file.API.BaseURL), "/")
 	}
+	if err := applyMultimodalProviderConfig(cfg, file.Providers.DeepSeek.Multimodal); err != nil {
+		return err
+	}
 	if file.Retry.MaxAttempts != nil {
 		if *file.Retry.MaxAttempts < 0 {
 			return fmt.Errorf("invalid retry.max_attempts: must be 0 or greater")
@@ -222,6 +225,9 @@ func overlayExplicitConfig(dst *Config, src Config) {
 	if src.DeepSeekPrefixCompletion != def.DeepSeekPrefixCompletion {
 		dst.DeepSeekPrefixCompletion = src.DeepSeekPrefixCompletion
 	}
+	if src.DeepSeekMultimodal != def.DeepSeekMultimodal {
+		dst.DeepSeekMultimodal = normalizeMultimodalProviderConfig(src.DeepSeekMultimodal)
+	}
 	if src.MaxParallelSubagents != 0 && src.MaxParallelSubagents != def.MaxParallelSubagents {
 		dst.MaxParallelSubagents = src.MaxParallelSubagents
 	}
@@ -248,6 +254,46 @@ func overlayExplicitConfig(dst *Config, src Config) {
 	if len(src.TrustedWorkflows) > 0 {
 		dst.TrustedWorkflows = trimList(src.TrustedWorkflows)
 	}
+}
+
+func applyMultimodalProviderConfig(cfg *Config, file FileMultimodalProviderConfig) error {
+	next := cfg.DeepSeekMultimodal
+	if file.Enabled != nil {
+		next.Enabled = *file.Enabled
+	}
+	if strings.TrimSpace(file.Compat) != "" {
+		compat := strings.ToLower(strings.TrimSpace(file.Compat))
+		if compat != "openai" {
+			return fmt.Errorf("invalid providers.deepseek.multimodal.compat: must be \"openai\"")
+		}
+		next.Compat = compat
+	}
+	if strings.TrimSpace(file.BaseURL) != "" {
+		next.BaseURL = strings.TrimRight(strings.TrimSpace(file.BaseURL), "/")
+	}
+	if strings.TrimSpace(file.APIKey) != "" {
+		next.APIKey = strings.TrimSpace(file.APIKey)
+	}
+	if strings.TrimSpace(file.APIKeyEnv) != "" {
+		next.APIKeyEnv = strings.TrimSpace(file.APIKeyEnv)
+	}
+	if strings.TrimSpace(file.Model) != "" {
+		next.Model = strings.TrimSpace(file.Model)
+	}
+	cfg.DeepSeekMultimodal = normalizeMultimodalProviderConfig(next)
+	return nil
+}
+
+func normalizeMultimodalProviderConfig(in MultimodalProviderConfig) MultimodalProviderConfig {
+	in.Compat = strings.ToLower(strings.TrimSpace(in.Compat))
+	if in.Compat == "" && in.Enabled {
+		in.Compat = "openai"
+	}
+	in.BaseURL = strings.TrimRight(strings.TrimSpace(in.BaseURL), "/")
+	in.APIKey = strings.TrimSpace(in.APIKey)
+	in.APIKeyEnv = strings.TrimSpace(in.APIKeyEnv)
+	in.Model = strings.TrimSpace(in.Model)
+	return in
 }
 
 func clonePluginConfigMap(in plugins.ConfigMap) plugins.ConfigMap {

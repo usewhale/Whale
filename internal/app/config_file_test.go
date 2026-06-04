@@ -117,6 +117,50 @@ func TestApplyFileConfigSupportsDeepSeekPrefixCompletion(t *testing.T) {
 	}
 }
 
+func TestApplyFileConfigSupportsDeepSeekMultimodalProvider(t *testing.T) {
+	cfg := DefaultConfig()
+	enabled := true
+	if err := ApplyFileConfig(&cfg, FileConfig{
+		Providers: FileProvidersConfig{
+			DeepSeek: FileDeepSeekProviderConfig{
+				Multimodal: FileMultimodalProviderConfig{
+					Enabled:   &enabled,
+					Compat:    "OpenAI",
+					BaseURL:   "https://api.openai.com/v1/",
+					APIKey:    "sk-test-mm",
+					APIKeyEnv: "OPENAI_API_KEY",
+					Model:     "gpt-4o",
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("ApplyFileConfig: %v", err)
+	}
+	if !cfg.DeepSeekMultimodal.Enabled ||
+		cfg.DeepSeekMultimodal.Compat != "openai" ||
+		cfg.DeepSeekMultimodal.BaseURL != "https://api.openai.com/v1" ||
+		cfg.DeepSeekMultimodal.APIKey != "sk-test-mm" ||
+		cfg.DeepSeekMultimodal.APIKeyEnv != "OPENAI_API_KEY" ||
+		cfg.DeepSeekMultimodal.Model != "gpt-4o" {
+		t.Fatalf("deepseek multimodal config: %+v", cfg.DeepSeekMultimodal)
+	}
+}
+
+func TestApplyFileConfigRejectsInvalidDeepSeekMultimodalCompat(t *testing.T) {
+	cfg := DefaultConfig()
+	enabled := true
+	err := ApplyFileConfig(&cfg, FileConfig{
+		Providers: FileProvidersConfig{
+			DeepSeek: FileDeepSeekProviderConfig{
+				Multimodal: FileMultimodalProviderConfig{Enabled: &enabled, Compat: "anthropic"},
+			},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "providers.deepseek.multimodal.compat") {
+		t.Fatalf("error = %v, want invalid compat error", err)
+	}
+}
+
 func TestApplyFileConfigRejectsInvalidMaxParallelSubagents(t *testing.T) {
 	for _, value := range []int{0, -1} {
 		cfg := DefaultConfig()

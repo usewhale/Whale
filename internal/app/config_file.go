@@ -26,6 +26,7 @@ type FileConfig struct {
 	Permissions  FilePermissionsConfig         `toml:"permissions,omitempty"`
 	UI           FileUIConfig                  `toml:"ui,omitempty"`
 	API          FileAPIConfig                 `toml:"api,omitempty"`
+	Providers    FileProvidersConfig           `toml:"providers,omitempty"`
 	Retry        FileRetryConfig               `toml:"retry,omitempty"`
 	Experimental FileExperimentalConfig        `toml:"experimental,omitempty"`
 	Tasks        FileTasksConfig               `toml:"tasks,omitempty"`
@@ -62,6 +63,23 @@ type FilePermissionsConfig struct {
 
 type FileAPIConfig struct {
 	BaseURL string `toml:"base_url,omitempty"`
+}
+
+type FileProvidersConfig struct {
+	DeepSeek FileDeepSeekProviderConfig `toml:"deepseek,omitempty"`
+}
+
+type FileDeepSeekProviderConfig struct {
+	Multimodal FileMultimodalProviderConfig `toml:"multimodal,omitempty"`
+}
+
+type FileMultimodalProviderConfig struct {
+	Enabled   *bool  `toml:"enabled,omitempty"`
+	Compat    string `toml:"compat,omitempty"`
+	BaseURL   string `toml:"base_url,omitempty"`
+	APIKey    string `toml:"api_key,omitempty"`
+	APIKeyEnv string `toml:"api_key_env,omitempty"`
+	Model     string `toml:"model,omitempty"`
 }
 
 type FileRetryConfig struct {

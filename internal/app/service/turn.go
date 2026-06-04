@@ -25,6 +25,13 @@ func (s *Service) runTurnWithOptions(line string, opts agent.RunOptions) {
 	})
 }
 
+func (s *Service) runTurnWithContentOptions(parts []core.MessagePart, opts agent.RunOptions) {
+	opts = s.tuiRunOptions(opts)
+	s.runTurnWith(func(ctx context.Context) (<-chan agent.AgentEvent, error) {
+		return s.app.RunTurnWithContentOptions(ctx, parts, opts)
+	})
+}
+
 func (s *Service) runInjectedTurn(visibleInput, hiddenInput string) {
 	s.runInjectedTurnWithOptions(visibleInput, hiddenInput, agent.RunOptions{})
 }
@@ -33,6 +40,13 @@ func (s *Service) runInjectedTurnWithOptions(visibleInput, hiddenInput string, o
 	opts = s.tuiRunOptions(opts)
 	s.runTurnWith(func(ctx context.Context) (<-chan agent.AgentEvent, error) {
 		return s.app.RunTurnWithInjectedInputOptions(ctx, visibleInput, hiddenInput, opts)
+	})
+}
+
+func (s *Service) runInjectedTurnWithContentOptions(visibleParts []core.MessagePart, hiddenInput string, opts agent.RunOptions) {
+	opts = s.tuiRunOptions(opts)
+	s.runTurnWith(func(ctx context.Context) (<-chan agent.AgentEvent, error) {
+		return s.app.RunTurnWithInjectedContentOptions(ctx, visibleParts, hiddenInput, opts)
 	})
 }
 

@@ -38,6 +38,22 @@ func (m *model) submitPromptWithBinding(value string, binding *protocol.SkillBin
 	if submit.LocalNoTurn() {
 		return m.submitLocalNoTurn(submit)
 	}
+	return m.submitPromptTurn(value, binding, attachmentInputsFromComposerAttachments(m.consumeVisibleComposerAttachments(value)))
+}
+
+func (m *model) submitPromptWithBindingAndAttachments(value string, binding *protocol.SkillBinding, attachments []protocol.AttachmentInput) tea.Cmd {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	submit := m.classifySubmit(value)
+	if submit.LocalNoTurn() {
+		return m.submitLocalNoTurn(submit)
+	}
+	return m.submitPromptTurn(value, binding, cloneAttachmentInputs(attachments))
+}
+
+func (m *model) submitPromptTurn(value string, binding *protocol.SkillBinding, attachments []protocol.AttachmentInput) tea.Cmd {
 	m.clearEphemeralMessages()
 	if m.assembler != nil && m.assembler.Len() > 0 {
 		m.commitLiveTranscript(false)
@@ -55,7 +71,7 @@ func (m *model) submitPromptWithBinding(value string, binding *protocol.SkillBin
 	clearFileSuggestions(m)
 	m.startBusy()
 	m.status = "running"
-	m.dispatchIntent(protocol.Intent{Kind: protocol.IntentSubmit, Input: value, SkillBinding: binding})
+	m.dispatchIntent(protocol.Intent{Kind: protocol.IntentSubmit, Input: value, SkillBinding: binding, Attachments: attachments})
 	m.refreshViewportContentFollow(true)
 	return busyTickCmd()
 }
@@ -340,7 +356,7 @@ func (m *model) enqueuePrompt(value string) bool {
 	if value == "" {
 		return false
 	}
-	m.queuedPrompts = append(m.queuedPrompts, queuedPrompt{Text: value, SkillBinding: m.currentSkillBinding(value)})
+	m.queuedPrompts = append(m.queuedPrompts, queuedPrompt{Text: value, SkillBinding: m.currentSkillBinding(value), Attachments: m.consumeVisibleComposerAttachments(value)})
 	m.input.SetValue("")
 	m.skillBinding = nil
 	m.resetWindowsPasteFallbackInputState()
@@ -393,6 +409,7 @@ func (m *model) restoreQueuedPromptsToComposerWithCurrent(currentValue string) (
 		if text := strings.TrimSpace(prompt.Text); text != "" {
 			parts = append(parts, text)
 		}
+		m.composerAttachments = append(m.composerAttachments, cloneComposerAttachments(prompt.Attachments)...)
 	}
 	if current := strings.TrimSpace(currentValue); current != "" {
 		parts = append(parts, current)

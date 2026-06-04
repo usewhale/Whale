@@ -153,9 +153,10 @@ func (m *model) handleGlobalKey(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 		// 80ms quiet-delay window before chunks flush into the textarea) —
 		// otherwise pasting during a busy turn and immediately hitting
 		// Ctrl+C would arm quit instead of dropping the pasted draft.
-		if m.input.Value() != "" || m.hasWindowsPasteBuffer() {
+		if m.input.Value() != "" || m.hasWindowsPasteBuffer() || len(m.composerAttachments) > 0 {
 			m.input.Reset()
 			m.skillBinding = nil
+			m.composerAttachments = nil
 			m.resetWindowsPasteFallbackInputState()
 			m.resetHistoryNavigation()
 			_ = m.updateSlashMatches()

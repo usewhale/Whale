@@ -92,6 +92,21 @@ deepseek_prefix_completion = true
 
 Enables DeepSeek Beta Prefix completion. Whale only uses it for explicit no-tool, strongly formatted text requests, such as internal hook prompts that must return JSON. This is a format-stability feature, not a promised token-saving feature.
 
+### Multimodal attachment harness
+
+DeepSeek multimodal API access may not be available on every account yet. To test image, PDF, file, or audio attachments with an OpenAI-compatible multimodal endpoint, configure a multimodal override:
+
+```toml
+[providers.deepseek.multimodal]
+enabled = true
+compat = "openai"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+model = "gpt-4o"
+```
+
+This override is used only for turns that include attachments, such as `whale exec --attach screen.png "describe this"` or TUI prompts submitted after pasting an image or local image path. Normal text-only turns keep using the regular DeepSeek configuration. When DeepSeek multimodal becomes publicly available, point `base_url`, `api_key_env`, and `model` back to the DeepSeek-compatible values.
+
 ---
 
 ## Reference
@@ -147,6 +162,13 @@ enabled = true                         # configure each plugin by id
 
 [experimental]
 deepseek_prefix_completion = false     # DeepSeek Prefix completion (experimental)
+
+[providers.deepseek.multimodal]
+enabled = false                        # Route attachment turns through an OpenAI-compatible multimodal endpoint
+compat = "openai"
+base_url = ""
+api_key_env = ""
+model = ""
 
 [logging]
 level = "info"                         # debug | info | warn | error

@@ -90,6 +90,7 @@ func (a *App) ensureAgent() (*agent.Agent, error) {
 			StreamMaxAttempts:        a.cfg.RetryStreamMaxAttempts,
 			StreamIdleTimeout:        a.cfg.RetryStreamIdleTimeout,
 			DeepSeekPrefixCompletion: a.cfg.DeepSeekPrefixCompletion,
+			DeepSeekMultimodal:       a.cfg.DeepSeekMultimodal,
 		})
 		if err != nil {
 			return nil, err
@@ -140,6 +141,11 @@ func (a *App) RunTurn(ctx context.Context, input string, hiddenInput bool) (<-ch
 }
 
 func (a *App) RunTurnWithOptions(ctx context.Context, input string, opts agent.RunOptions) (<-chan agent.AgentEvent, error) {
+	return a.RunTurnWithContentOptions(ctx, []core.MessagePart{{Type: core.MessagePartText, Text: input}}, opts)
+}
+
+func (a *App) RunTurnWithContentOptions(ctx context.Context, parts []core.MessagePart, opts agent.RunOptions) (<-chan agent.AgentEvent, error) {
+	input := core.MessagePartsPlainText(parts)
 	if !opts.HiddenInput && strings.TrimSpace(input) != "" {
 		_, _ = session.PatchSessionMeta(a.sessionsDir, a.sessionID, session.SessionMetaPatch{Title: input})
 	}
@@ -150,7 +156,7 @@ func (a *App) RunTurnWithOptions(ctx context.Context, input string, opts agent.R
 		a.pendingGoalTurn = false
 		return nil, err
 	}
-	return ag.RunStreamWithTurnOptions(ctx, a.sessionID, input, opts)
+	return ag.RunStreamWithContentOptions(ctx, a.sessionID, parts, opts)
 }
 
 func (a *App) RunTurnWithInjectedInput(ctx context.Context, visibleInput, hiddenInput string) (<-chan agent.AgentEvent, error) {
@@ -158,6 +164,11 @@ func (a *App) RunTurnWithInjectedInput(ctx context.Context, visibleInput, hidden
 }
 
 func (a *App) RunTurnWithInjectedInputOptions(ctx context.Context, visibleInput, hiddenInput string, opts agent.RunOptions) (<-chan agent.AgentEvent, error) {
+	return a.RunTurnWithInjectedContentOptions(ctx, []core.MessagePart{{Type: core.MessagePartText, Text: visibleInput}}, hiddenInput, opts)
+}
+
+func (a *App) RunTurnWithInjectedContentOptions(ctx context.Context, visibleParts []core.MessagePart, hiddenInput string, opts agent.RunOptions) (<-chan agent.AgentEvent, error) {
+	visibleInput := core.MessagePartsPlainText(visibleParts)
 	if strings.TrimSpace(visibleInput) != "" {
 		_, _ = session.PatchSessionMeta(a.sessionsDir, a.sessionID, session.SessionMetaPatch{Title: visibleInput})
 	}
@@ -166,7 +177,7 @@ func (a *App) RunTurnWithInjectedInputOptions(ctx context.Context, visibleInput,
 	if err != nil {
 		return nil, err
 	}
-	return ag.RunStreamWithInjectedInputOptions(ctx, a.sessionID, visibleInput, hiddenInput, opts)
+	return ag.RunStreamWithInjectedContentOptions(ctx, a.sessionID, visibleParts, hiddenInput, opts)
 }
 
 func (a *App) InjectTurnInput(ctx context.Context, input string, opts agent.RunOptions) (bool, error) {

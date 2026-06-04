@@ -17,12 +17,27 @@ func cloneMessages(in []core.Message) []core.Message {
 }
 
 func cloneMessage(msg core.Message) core.Message {
-	out := msg
+	out := core.NormalizeMessageContent(msg)
+	if len(out.Parts) > 0 {
+		out.Parts = cloneMessageParts(out.Parts)
+	}
 	if len(msg.ToolCalls) > 0 {
 		out.ToolCalls = append([]core.ToolCall(nil), msg.ToolCalls...)
 	}
 	if len(msg.ToolResults) > 0 {
 		out.ToolResults = append([]core.ToolResult(nil), msg.ToolResults...)
+	}
+	return out
+}
+
+func cloneMessageParts(in []core.MessagePart) []core.MessagePart {
+	out := make([]core.MessagePart, len(in))
+	for i, part := range in {
+		out[i] = part
+		if part.Attachment != nil {
+			att := *part.Attachment
+			out[i].Attachment = &att
+		}
 	}
 	return out
 }

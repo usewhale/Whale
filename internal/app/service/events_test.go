@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -411,6 +413,71 @@ func TestRunTurnWithResponseResetClearsLastResponse(t *testing.T) {
 		case <-deadline:
 			t.Fatal("timed out waiting for turn done")
 		}
+	}
+}
+
+func TestSubmitIntentWithAttachmentsPersistsMessageParts(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "sk-1234567890abcdef1234")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	t.Setenv("DEEPSEEK_BASE_URL", srv.URL)
+
+	cfg := app.DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	workspace := t.TempDir()
+	attachment := filepath.Join(workspace, "note.txt")
+	if err := os.WriteFile(attachment, []byte("attachment body"), 0o644); err != nil {
+		t.Fatalf("write attachment: %v", err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	svc, err := New(t.Context(), cfg, app.StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer svc.Close()
+	waitForServiceEvent(t, svc, EventSessionHydrated)
+	svc.Dispatch(Intent{
+		Kind:  IntentSubmit,
+		Input: "inspect",
+		Attachments: []AttachmentInput{
+			{Path: attachment, DisplayName: "note.txt"},
+		},
+	})
+	waitForServiceEvent(t, svc, EventTurnDone)
+
+	st, err := store.NewJSONLStore(store.DefaultSessionsDir(cfg.DataDir))
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	msgs, err := st.List(t.Context(), svc.SessionID())
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(msgs) == 0 {
+		t.Fatal("expected messages")
+	}
+	user := msgs[0]
+	if len(user.Parts) != 2 || user.Parts[1].Attachment == nil {
+		t.Fatalf("user parts = %+v", user.Parts)
+	}
+	ref := user.Parts[1].Attachment
+	if ref.Path == attachment || ref.OriginalPath != attachment || ref.DisplayName != "note.txt" {
+		t.Fatalf("attachment ref = %+v", ref)
+	}
+	if _, err := os.Stat(ref.Path); err != nil {
+		t.Fatalf("stored attachment missing: %v", err)
 	}
 }
 

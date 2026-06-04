@@ -26,7 +26,13 @@ func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 		}
 		return m.handleDiffPageKey(msg), false, true
 	}
+	if m.mode == modeChat && isClipboardImagePasteKey(msg) {
+		return m.handleClipboardImagePaste(), false, true
+	}
 	if m.mode == modeChat && msg.Paste {
+		if cmd, handled := m.handlePastedImagePath(string(msg.Runes)); handled {
+			return cmd, false, true
+		}
 		m.cancelWindowsDeferredEnter()
 		m.input.HandlePaste(string(msg.Runes))
 		m.markWindowsPastedInput()

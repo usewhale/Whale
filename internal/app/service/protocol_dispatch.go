@@ -12,6 +12,7 @@ func (s *Service) DispatchProtocol(in protocol.Intent) {
 		Input:              in.Input,
 		ClientInputID:      in.ClientInputID,
 		HiddenInput:        in.HiddenInput,
+		Attachments:        serviceAttachmentInputs(in.Attachments),
 		ToolCallID:         in.ToolCallID,
 		UserInput:          coreUserInputResponse(in.UserInput),
 		SessionInput:       in.SessionInput,
@@ -115,6 +116,17 @@ func serviceIntentKind(kind protocol.IntentKind) IntentKind {
 	default:
 		return IntentKind(kind)
 	}
+}
+
+func serviceAttachmentInputs(in []protocol.AttachmentInput) []AttachmentInput {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]AttachmentInput, 0, len(in))
+	for _, item := range in {
+		out = append(out, AttachmentInput{Path: item.Path, DisplayName: item.DisplayName})
+	}
+	return out
 }
 
 func coreUserInputResponse(resp *protocol.UserInputResponse) *core.UserInputResponse {

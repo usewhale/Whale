@@ -37,6 +37,7 @@ func (a *App) rebuildTaskRuntimeLocked() error {
 			StreamMaxAttempts:        cfg.RetryStreamMaxAttempts,
 			StreamIdleTimeout:        cfg.RetryStreamIdleTimeout,
 			DeepSeekPrefixCompletion: cfg.DeepSeekPrefixCompletion,
+			DeepSeekMultimodal:       cfg.DeepSeekMultimodal,
 		})
 	}
 	providerFactoryWithOptions := func(req tasks.ProviderRequest) (llm.Provider, error) {
@@ -56,6 +57,7 @@ func (a *App) rebuildTaskRuntimeLocked() error {
 			StreamMaxAttempts:        cfg.RetryStreamMaxAttempts,
 			StreamIdleTimeout:        cfg.RetryStreamIdleTimeout,
 			DeepSeekPrefixCompletion: cfg.DeepSeekPrefixCompletion,
+			DeepSeekMultimodal:       cfg.DeepSeekMultimodal,
 		})
 	}
 	workspaceTools := func(workspace tasks.ToolWorkspace) (*core.ToolRegistry, error) {

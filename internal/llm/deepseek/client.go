@@ -21,9 +21,13 @@ import (
 )
 
 const (
-	defaultBaseURL           = "https://api.deepseek.com"
-	defaultStreamMaxAttempts = 6
-	defaultStreamIdleTimeout = 90 * time.Second
+	defaultBaseURL               = "https://api.deepseek.com"
+	defaultStreamMaxAttempts     = 6
+	defaultStreamIdleTimeout     = 90 * time.Second
+	maxToolResultReplayTokens    = 2000
+	maxToolResultReplayChars     = 12 * 1024
+	compactedToolResultKeepRunes = 3000
+	defaultImageDetail           = "auto"
 )
 
 var errIncompleteStream = errors.New("stream disconnected before completion")
@@ -41,9 +45,19 @@ type Client struct {
 	streamMaxAttempts       int
 	streamIdleTimeout       time.Duration
 	prefixCompletionEnabled bool
+	multimodal              MultimodalConfig
 }
 
 type Option func(*Client)
+
+type MultimodalConfig struct {
+	Enabled   bool
+	Compat    string
+	BaseURL   string
+	APIKey    string
+	APIKeyEnv string
+	Model     string
+}
 
 func WithBaseURL(v string) Option {
 	return func(c *Client) { c.baseURL = strings.TrimRight(v, "/") }
@@ -75,6 +89,17 @@ func WithMaxTokens(v int) Option {
 
 func WithPrefixCompletion(enabled bool) Option {
 	return func(c *Client) { c.prefixCompletionEnabled = enabled }
+}
+
+func WithMultimodal(cfg MultimodalConfig) Option {
+	return func(c *Client) {
+		cfg.Compat = strings.ToLower(strings.TrimSpace(cfg.Compat))
+		cfg.BaseURL = strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
+		cfg.APIKey = strings.TrimSpace(cfg.APIKey)
+		cfg.APIKeyEnv = strings.TrimSpace(cfg.APIKeyEnv)
+		cfg.Model = strings.TrimSpace(cfg.Model)
+		c.multimodal = cfg
+	}
 }
 
 func WithRetryPolicy(policy llmretry.Policy) Option {
@@ -175,6 +200,9 @@ func (c *Client) StreamResponseWithPrefix(ctx context.Context, history []core.Me
 }
 
 func (c *Client) stream(ctx context.Context, history []core.Message, tools []core.Tool, out chan<- llm.ProviderEvent) error {
+	if latestUserMessageHasAttachments(history) {
+		return c.streamMultimodal(ctx, history, tools, out)
+	}
 	msgs, sanitizeDiag := sanitizeDeepSeekMessagesForRequest(toDeepSeekMessages(history), c.thinkingEnabled)
 	replayDiag := toolResultReplayDiagnostics(history, msgs)
 	payload := map[string]any{
@@ -206,7 +234,7 @@ func (c *Client) stream(ctx context.Context, history []core.Message, tools []cor
 }
 
 func (c *Client) streamPrefix(ctx context.Context, history []core.Message, prefix string, stop []string, out chan<- llm.ProviderEvent) error {
-	if !c.prefixCompletionEnabled || strings.TrimSpace(prefix) == "" {
+	if latestUserMessageHasAttachments(history) || !c.prefixCompletionEnabled || strings.TrimSpace(prefix) == "" {
 		return c.stream(ctx, history, nil, out)
 	}
 	requestBaseURL, ok := c.prefixCompletionBaseURL()
@@ -306,11 +334,15 @@ func joinPrefixCompletionContent(prefix, content string) string {
 }
 
 func (c *Client) streamWithRetries(ctx context.Context, requestBaseURL string, body []byte, msgs []map[string]any, sanitizeDiag deepSeekMessageDiagnostics, replayDiag deepSeekReplayDiagnostics, out chan<- llm.ProviderEvent) error {
+	return c.streamWithRetriesAuth(ctx, requestBaseURL, c.apiKey, c.model, body, msgs, sanitizeDiag, replayDiag, out)
+}
+
+func (c *Client) streamWithRetriesAuth(ctx context.Context, requestBaseURL, apiKey, model string, body []byte, msgs []map[string]any, sanitizeDiag deepSeekMessageDiagnostics, replayDiag deepSeekReplayDiagnostics, out chan<- llm.ProviderEvent) error {
 	policy := llmretry.NormalizePolicy(c.retryPolicy)
 	requestAttempt := 1
 	streamAttempt := 1
 	for {
-		resp, err := c.sendStreamRequest(ctx, requestBaseURL, body)
+		resp, err := c.sendStreamRequestWithKey(ctx, requestBaseURL, apiKey, body)
 		if err != nil {
 			var buildErr *requestBuildError
 			if errors.As(err, &buildErr) {
@@ -328,7 +360,7 @@ func (c *Client) streamWithRetries(ctx context.Context, requestBaseURL string, b
 			continue
 		}
 
-		parseErr := parseSSE(resp.Body, c.model, estimateReasoningReplayTokens(msgs), replayDiag, c.streamIdleTimeout, out)
+		parseErr := parseSSE(resp.Body, model, estimateReasoningReplayTokens(msgs), replayDiag, c.streamIdleTimeout, out)
 		_ = resp.Body.Close()
 		if parseErr == nil {
 			return nil
@@ -346,6 +378,10 @@ func (c *Client) streamWithRetries(ctx context.Context, requestBaseURL string, b
 }
 
 func (c *Client) sendStreamRequest(ctx context.Context, requestBaseURL string, body []byte) (*http.Response, error) {
+	return c.sendStreamRequestWithKey(ctx, requestBaseURL, c.apiKey, body)
+}
+
+func (c *Client) sendStreamRequestWithKey(ctx context.Context, requestBaseURL, apiKey string, body []byte) (*http.Response, error) {
 	requestBaseURL = strings.TrimRight(strings.TrimSpace(requestBaseURL), "/")
 	if requestBaseURL == "" {
 		requestBaseURL = c.baseURL
@@ -354,7 +390,7 @@ func (c *Client) sendStreamRequest(ctx context.Context, requestBaseURL string, b
 	if err != nil {
 		return nil, &requestBuildError{err: fmt.Errorf("new request: %w", err)}
 	}
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 
@@ -909,15 +945,15 @@ func toDeepSeekMessages(history []core.Message) []map[string]any {
 		switch msg.Role {
 		case core.RoleSystem:
 			flushPending()
-			out = append(out, map[string]any{"role": "system", "content": msg.Text})
+			out = append(out, map[string]any{"role": "system", "content": core.MessagePlainText(msg)})
 		case core.RoleUser:
 			flushPending()
-			out = append(out, map[string]any{"role": "user", "content": msg.Text})
+			out = append(out, map[string]any{"role": "user", "content": core.MessagePlainText(msg)})
 		case core.RoleAssistant:
 			flushPending()
 			m := map[string]any{
 				"role":              "assistant",
-				"content":           msg.Text,
+				"content":           core.MessagePlainText(msg),
 				"reasoning_content": msg.Reasoning,
 			}
 			if len(msg.ToolCalls) > 0 {
