@@ -1,4 +1,0 @@
-interface:
-  display_name: "Fact-Grounded Q&A"
-  short_description: "Answer only from verifiable local facts"
-  default_prompt: "Use $fact-grounded-qa to answer this using only verifiable local evidence and list anything unknown."
