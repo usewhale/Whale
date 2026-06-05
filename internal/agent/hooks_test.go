@@ -270,6 +270,67 @@ func TestLoadHooksProjectThenLocalThenGlobalOrder(t *testing.T) {
 	if hooks[0].Command != "echo project" || hooks[1].Command != "echo project-local" || hooks[2].Command != "echo global" {
 		t.Fatalf("unexpected order: %+v", hooks)
 	}
+	if hooks[0].DefaultTrusted || !hooks[1].DefaultTrusted || !hooks[2].DefaultTrusted {
+		t.Fatalf("unexpected default trust by source: %+v", hooks)
+	}
+}
+
+func TestPersonalHooksAreActiveWithoutReview(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	ws := filepath.Join(root, "ws")
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatalf("mkdir home hooks failed: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(ws, ".whale"), 0o755); err != nil {
+		t.Fatalf("mkdir workspace hooks failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".whale", "config.toml"), []byte("[[hooks.PreToolUse]]\ncommand = \"echo project\"\n"), 0o600); err != nil {
+		t.Fatalf("write project config failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, ".whale", "config.local.toml"), []byte("[[hooks.PreToolUse]]\ncommand = \"echo local\"\n"), 0o600); err != nil {
+		t.Fatalf("write project local config failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte("[[hooks.PreToolUse]]\ncommand = \"echo global\"\n"), 0o600); err != nil {
+		t.Fatalf("write global config failed: %v", err)
+	}
+
+	hooks, _, err := LoadHooks(ws, home)
+	if err != nil {
+		t.Fatalf("load hooks failed: %v", err)
+	}
+	entries := NewHookRunnerWithState(hooks, ws, HookStates{}).ListHooks()
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 entries, got %+v", entries)
+	}
+	byCommand := map[string]HookListEntry{}
+	for _, entry := range entries {
+		byCommand[entry.Command] = entry
+	}
+	if entry := byCommand["echo project"]; entry.Trust != HookTrustUntrusted || entry.Active {
+		t.Fatalf("project hook should require review: %+v", entry)
+	}
+	if entry := byCommand["echo local"]; entry.Trust != HookTrustTrusted || !entry.Active {
+		t.Fatalf("project local hook should be trusted active: %+v", entry)
+	}
+	if entry := byCommand["echo global"]; entry.Trust != HookTrustTrusted || !entry.Active {
+		t.Fatalf("global hook should be trusted active: %+v", entry)
+	}
+}
+
+func TestDefaultTrustedHookCanBeDisabled(t *testing.T) {
+	hook := ResolvedHook{
+		HookConfig:     HookConfig{Command: "echo local"},
+		Event:          HookEventPreToolUse,
+		Source:         ".whale/config.local.toml",
+		DefaultTrusted: true,
+	}
+	entries := NewHookRunnerWithState([]ResolvedHook{hook}, ".", HookStates{}).ListHooks()
+	states := SetHookEnabledStates(entries, nil, []string{entries[0].Key}, false)
+	disabled := NewHookRunnerWithState([]ResolvedHook{hook}, ".", states).ListHooks()[0]
+	if disabled.Trust != HookTrustTrusted || disabled.Enabled || disabled.Active {
+		t.Fatalf("default trusted hook should be disabled but still trusted: %+v", disabled)
+	}
 }
 
 func TestHookConfigTimeoutIsSeconds(t *testing.T) {

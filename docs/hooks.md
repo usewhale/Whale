@@ -113,7 +113,9 @@ printf '%s\n' "$payload" >> .whale/hook-input.log
 
 ## 信任与启停
 
-项目配置里的 hooks 会执行 shell 命令，所以 Whale 会把它们当作需要 review 的内容。未信任或已修改的项目 hooks 不会运行。
+共享项目配置 `.whale/config.toml` 里的 hooks 会执行 shell 命令，所以 Whale 会把它们当作需要 review 的内容。未信任或已修改的共享项目 hooks 不会运行。
+
+个人配置 `.whale/config.local.toml` 和全局配置 `~/.whale/config.toml` / `$WHALE_HOME/config.toml` 默认视为用户本人信任的配置，会直接生效；仍然可以用 `/hooks disable <key>` 临时关闭。
 
 在 TUI 中运行：
 

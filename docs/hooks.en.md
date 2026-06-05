@@ -113,7 +113,9 @@ Even if stdout contains `"decision":"pass"`, Whale will not let partial output o
 
 ## Trust and Enablement
 
-Project hooks run shell commands, so Whale treats them as reviewable. Untrusted or modified project hooks do not run.
+Shared project hooks in `.whale/config.toml` run shell commands, so Whale treats them as reviewable. Untrusted or modified shared project hooks do not run.
+
+Personal hooks in `.whale/config.local.toml` and global hooks in `~/.whale/config.toml` / `$WHALE_HOME/config.toml` are treated as user-trusted config and are active by default. You can still disable them with `/hooks disable <key>`.
 
 In the TUI, run:
 

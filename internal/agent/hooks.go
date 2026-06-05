@@ -114,6 +114,7 @@ type HookListEntry struct {
 	Hash           string            `json:"hash,omitempty"`
 	Enabled        bool              `json:"enabled"`
 	Managed        bool              `json:"managed"`
+	DefaultTrusted bool              `json:"-"`
 	Active         bool              `json:"active"`
 	Trust          HookTrustStatus   `json:"trust"`
 }
@@ -143,9 +144,10 @@ type HookSettings struct {
 
 type ResolvedHook struct {
 	HookConfig
-	Event   HookEvent
-	Source  string
-	Managed bool
+	Event          HookEvent
+	Source         string
+	Managed        bool
+	DefaultTrusted bool
 }
 
 type HookPayload struct {
@@ -835,6 +837,7 @@ func LoadHooks(workspaceRoot, dataDir string) ([]ResolvedHook, []string, error) 
 		return nil, loaded, err
 	}
 	if projectLocalLoaded && len(projectLocalHooks) > 0 {
+		markHooksDefaultTrusted(projectLocalHooks)
 		out = append(out, projectLocalHooks...)
 		loaded = append(loaded, projectLocalPath)
 	}
@@ -851,11 +854,18 @@ func LoadHooks(workspaceRoot, dataDir string) ([]ResolvedHook, []string, error) 
 			return nil, loaded, err
 		}
 		if globalLoaded && len(globalHooks) > 0 {
+			markHooksDefaultTrusted(globalHooks)
 			out = append(out, globalHooks...)
 			loaded = append(loaded, globalPath)
 		}
 	}
 	return out, loaded, nil
+}
+
+func markHooksDefaultTrusted(hooks []ResolvedHook) {
+	for i := range hooks {
+		hooks[i].DefaultTrusted = true
+	}
 }
 
 func loadHooksFile(path string) ([]ResolvedHook, bool, error) {
@@ -991,6 +1001,7 @@ func hookEntryFromResolved(h ResolvedHook, states HookStates, ordinal int) HookL
 		AllowedEnvVars: normalizedHookStringSet(h.AllowedEnvVars),
 		Enabled:        true,
 		Managed:        h.Managed,
+		DefaultTrusted: h.DefaultTrusted,
 	}
 	entry.Hash = hookContentHash(entry)
 	entry.Key = hookStableKey(entry, ordinal)
@@ -1026,6 +1037,9 @@ func hookTrustForEntry(entry HookListEntry, states HookStates) (HookTrustStatus,
 	}
 	if entry.Managed {
 		return HookTrustManaged, enabled, enabled
+	}
+	if entry.DefaultTrusted {
+		return HookTrustTrusted, enabled, enabled
 	}
 	if states == nil {
 		return HookTrustTrusted, enabled, enabled
