@@ -97,7 +97,7 @@ func classifyToolFailure(res core.ToolResult, dispatchErr error) FailureClass {
 				return FailureClassPermissionDenied
 			}
 			return FailureClassMCPToolError
-		case "invalid_input", "invalid_args":
+		case "invalid_input", "invalid_args", "invalid_pattern":
 			return ""
 		case "parse_failed", "invalid_plan_update":
 			return FailureClassParseFailed

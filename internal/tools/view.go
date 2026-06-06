@@ -38,7 +38,15 @@ func (b *Toolset) readFile(ctx context.Context, call core.ToolCall) (core.ToolRe
 		return marshalToolError(call, "read_failed", err.Error()), nil
 	}
 	if info.IsDir() {
-		return marshalToolError(call, "not_file", abs+" is a directory; use list_dir or search_files for directories"), nil
+		return marshalToolErrorWithRecovery(call, "not_file", abs+" is a directory; use list_dir or search_files for directories", toolRecoveryHint{
+			Code:                "read_file_target_is_directory",
+			RecommendedNextTool: "list_dir",
+			RecommendedInput: map[string]any{
+				"path": toolInputPath(in.FilePath),
+			},
+			Retryable: false,
+			Reason:    "read_file requires a file path; inspect the directory first, then read a specific file",
+		}), nil
 	}
 	data, err := os.ReadFile(abs)
 	if err != nil {

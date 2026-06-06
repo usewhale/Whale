@@ -142,6 +142,39 @@ func marshalToolError(call core.ToolCall, code, msg string) core.ToolResult {
 	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}
 }
 
+type toolRecoveryHint struct {
+	Code                  string         `json:"code,omitempty"`
+	RecommendedNextTool   string         `json:"recommended_next_tool,omitempty"`
+	RecommendedInput      map[string]any `json:"recommended_input,omitempty"`
+	RecommendedInputPatch map[string]any `json:"recommended_input_patch,omitempty"`
+	Retryable             bool           `json:"retryable"`
+	Reason                string         `json:"reason,omitempty"`
+}
+
+func marshalToolErrorWithRecovery(call core.ToolCall, code, msg string, recovery toolRecoveryHint) core.ToolResult {
+	env := core.NewToolErrorEnvelope(code, msg)
+	if recovery.Code == "" {
+		recovery.Code = code
+	}
+	if recovery.Reason != "" {
+		env.Summary = recovery.Reason
+	}
+	env.Data = map[string]any{"recovery": recovery}
+	content, err := core.MarshalToolEnvelope(env)
+	if err != nil {
+		content = fmt.Sprintf(`{"success":false,"code":%q,"message":%q}`, code, msg)
+	}
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}
+}
+
+func toolInputPath(raw string) string {
+	path := strings.TrimSpace(raw)
+	if path == "" {
+		return "."
+	}
+	return path
+}
+
 func (b *Toolset) marshalReadPathError(call core.ToolCall, raw string, err error) core.ToolResult {
 	return marshalToolError(call, "permission_denied", b.pathDiagnosticMessage(raw, "", err.Error()))
 }

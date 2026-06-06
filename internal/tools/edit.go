@@ -47,7 +47,15 @@ func (b *Toolset) editFile(ctx context.Context, call core.ToolCall) (core.ToolRe
 	replace := normalizeLineEndingText(in.Replace)
 	resolved, ok, errMsg := resolveEditSearch(before, search, replace, in.All)
 	if !ok {
-		return marshalToolError(call, "search_not_found", errMsg), nil
+		return marshalToolErrorWithRecovery(call, "search_not_found", errMsg, toolRecoveryHint{
+			Code:                "edit_search_not_found",
+			RecommendedNextTool: "read_file",
+			RecommendedInput: map[string]any{
+				"file_path": toolInputPath(in.FilePath),
+			},
+			Retryable: false,
+			Reason:    "edit search text must exactly match the current file content; read the file again and copy the literal text before retrying edit",
+		}), nil
 	}
 	after := ""
 	replacements := 1

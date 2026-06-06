@@ -40,6 +40,9 @@ func (b *Toolset) searchContent(ctx context.Context, call core.ToolCall) (core.T
 	limit := normalizeGrepLimit(in.Limit)
 	matches, byFile, meta, err := b.runContentSearch(in, abs, limit)
 	if err != nil {
+		if isInvalidGrepPatternError(err) {
+			return marshalToolErrorWithRecovery(call, "invalid_pattern", err.Error(), grepInvalidPatternRecovery()), nil
+		}
 		return marshalToolError(call, "exec_failed", err.Error()), nil
 	}
 	return marshalToolResult(call, buildGrepResult(in.Pattern, matches, byFile, meta, limit))
@@ -62,6 +65,29 @@ func (b *Toolset) runContentSearch(in grepInput, abs string, limit int) ([]match
 		}
 	}
 	return matches, byFile, meta, nil
+}
+
+func isInvalidGrepPatternError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "invalid include pattern") {
+		return false
+	}
+	return strings.Contains(msg, "invalid pattern:") || strings.Contains(msg, "regex parse error")
+}
+
+func grepInvalidPatternRecovery() toolRecoveryHint {
+	return toolRecoveryHint{
+		Code:                "grep_invalid_pattern",
+		RecommendedNextTool: "grep",
+		RecommendedInputPatch: map[string]any{
+			"literal_text": true,
+		},
+		Retryable: true,
+		Reason:    "grep pattern is parsed as a regular expression; retry with literal_text=true for plain text or escape regexp metacharacters",
+	}
 }
 
 func buildGrepResult(pattern string, matches []matchRow, byFile map[string]int, meta grepMeta, limit int) map[string]any {

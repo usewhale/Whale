@@ -67,7 +67,7 @@ func (b *Toolset) applyPatch(ctx context.Context, call core.ToolCall) (core.Tool
 
 	ops, err := parseBeginPatch(in.Patch)
 	if err != nil {
-		return marshalToolError(call, "patch_parse_failed", err.Error()), nil
+		return marshalToolErrorWithRecovery(call, "patch_parse_failed", err.Error(), applyPatchParseRecovery()), nil
 	}
 	plans, err := b.planPatch(ops)
 	if err != nil {
@@ -117,6 +117,18 @@ func patchApplyErrorCode(err error) string {
 		return "permission_denied"
 	}
 	return "patch_apply_failed"
+}
+
+func applyPatchParseRecovery() toolRecoveryHint {
+	return toolRecoveryHint{
+		Code:                "apply_patch_parse_failed",
+		RecommendedNextTool: "apply_patch",
+		RecommendedInputPatch: map[string]any{
+			"patch": "Rewrite the patch using *** Begin Patch / *** Update File: <path> sections; inside each update hunk, every line must start with space for context, '-' for removals, or '+' for additions.",
+		},
+		Retryable: true,
+		Reason:    "apply_patch input must use Whale patch syntax; raw unified-diff headers or unprefixed hunk lines cannot be parsed",
+	}
 }
 
 func (b *Toolset) previewApplyPatch(_ context.Context, call core.ToolCall) (map[string]any, error) {

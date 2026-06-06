@@ -318,6 +318,17 @@ func TestEditFileValidStateStillReportsMissingSearch(t *testing.T) {
 	if got := toolErrorCode(t, res); got != "search_not_found" {
 		t.Fatalf("code = %q, want search_not_found; content=%s", got, res.Content)
 	}
+	recovery := toolRecoveryData(t, res)
+	if got := recovery["code"]; got != "edit_search_not_found" {
+		t.Fatalf("recovery code = %#v, want edit_search_not_found", got)
+	}
+	if got := recovery["recommended_next_tool"]; got != "read_file" {
+		t.Fatalf("recommended_next_tool = %#v, want read_file", got)
+	}
+	input := recovery["recommended_input"].(map[string]any)
+	if got := input["file_path"]; got != "a.txt" {
+		t.Fatalf("recommended file_path = %#v, want a.txt", got)
+	}
 }
 
 func TestEditFileSuccessfulEditRefreshesRuntimeState(t *testing.T) {
@@ -485,6 +496,17 @@ func TestReadFileDirectoryReturnsStableToolError(t *testing.T) {
 	}
 	if !strings.Contains(res.Content, "not_file") || strings.Contains(res.Content, "Incorrect function") {
 		t.Fatalf("expected stable not_file error without OS-specific text, got: %s", res.Content)
+	}
+	recovery := toolRecoveryData(t, res)
+	if got := recovery["code"]; got != "read_file_target_is_directory" {
+		t.Fatalf("recovery code = %#v, want read_file_target_is_directory", got)
+	}
+	if got := recovery["recommended_next_tool"]; got != "list_dir" {
+		t.Fatalf("recommended_next_tool = %#v, want list_dir", got)
+	}
+	input := recovery["recommended_input"].(map[string]any)
+	if got := input["path"]; got != "subdir" {
+		t.Fatalf("recommended path = %#v, want subdir", got)
 	}
 }
 
@@ -1457,6 +1479,44 @@ func TestApplyPatchParseErrorsGuideBadUpdateHeader(t *testing.T) {
 	}
 	if !strings.Contains(env.Error, "must start with the exact header *** Update File: <path>") {
 		t.Fatalf("parse error did not explain update header:\n%s", env.Error)
+	}
+}
+
+func TestApplyPatchInvalidHunkLineIncludesRecovery(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello\nworld\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	patch := strings.Join([]string{
+		"*** Begin Patch",
+		"*** Update File: a.txt",
+		"@@",
+		"world",
+		"+whale",
+		"*** End Patch",
+	}, "\n")
+
+	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
+	if err != nil {
+		t.Fatalf("apply patch returned dispatch error: %v", err)
+	}
+	if got := toolErrorCode(t, res); got != "patch_parse_failed" {
+		t.Fatalf("code = %q, want patch_parse_failed; content=%s", got, res.Content)
+	}
+	recovery := toolRecoveryData(t, res)
+	if got := recovery["code"]; got != "apply_patch_parse_failed" {
+		t.Fatalf("recovery code = %#v, want apply_patch_parse_failed", got)
+	}
+	if got := recovery["recommended_next_tool"]; got != "apply_patch" {
+		t.Fatalf("recommended_next_tool = %#v, want apply_patch", got)
+	}
+	patchHint := recovery["recommended_input_patch"].(map[string]any)
+	if got := patchHint["patch"].(string); !strings.Contains(got, "every line must start with space") {
+		t.Fatalf("patch recovery hint missing hunk prefix guidance: %q", got)
 	}
 }
 
@@ -2909,6 +2969,38 @@ func TestGrepDefaultsAndClampsLimit(t *testing.T) {
 	}
 }
 
+func TestGrepInvalidPatternIncludesLiteralRecovery(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("needle\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.searchContent(context.Background(), tc("grep", map[string]any{
+		"pattern": "[",
+	}))
+	if err != nil {
+		t.Fatalf("grep dispatch error: %v", err)
+	}
+	if got := toolErrorCode(t, res); got != "invalid_pattern" {
+		t.Fatalf("code = %q, want invalid_pattern; content=%s", got, res.Content)
+	}
+	recovery := toolRecoveryData(t, res)
+	if got := recovery["code"]; got != "grep_invalid_pattern" {
+		t.Fatalf("recovery code = %#v, want grep_invalid_pattern", got)
+	}
+	if got := recovery["recommended_next_tool"]; got != "grep" {
+		t.Fatalf("recommended_next_tool = %#v, want grep", got)
+	}
+	patch := recovery["recommended_input_patch"].(map[string]any)
+	if got := patch["literal_text"]; got != true {
+		t.Fatalf("literal_text patch = %#v, want true", got)
+	}
+}
+
 func TestGrepTruncatesLongLines(t *testing.T) {
 	dir := t.TempDir()
 	long := strings.Repeat("x", maxGrepLineChars+50) + "needle\n"
@@ -3562,6 +3654,22 @@ func toolErrorCode(t *testing.T, res core.ToolResult) string {
 		t.Fatalf("expected error code in envelope: %+v", env)
 	}
 	return env.Code
+}
+
+func toolRecoveryData(t *testing.T, res core.ToolResult) map[string]any {
+	t.Helper()
+	if !res.IsError {
+		t.Fatalf("expected tool error, got %+v", res)
+	}
+	env, ok := core.ParseToolEnvelope(res.Content)
+	if !ok {
+		t.Fatalf("parse tool envelope: %s", res.Content)
+	}
+	recovery, ok := env.Data["recovery"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected object recovery in envelope data, got %#v from %s", env.Data["recovery"], res.Content)
+	}
+	return recovery
 }
 
 func readFileData(t *testing.T, res core.ToolResult) map[string]any {
