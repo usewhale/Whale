@@ -1,0 +1,12 @@
+{
+  "name": "@usewhale/whale-linux-x64",
+  "version": "0.0.0-dev",
+  "description": "Whale binary for Linux x86_64",
+  "author": "usewhale",
+  "license": "MIT",
+  "os": ["linux"],
+  "cpu": ["x64"],
+  "files": [
+    "vendor/**"
+  ]
+}

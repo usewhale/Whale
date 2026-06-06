@@ -1,0 +1,12 @@
+{
+  "name": "@usewhale/whale-win32-arm64",
+  "version": "0.0.0-dev",
+  "description": "Whale binary for Windows arm64",
+  "author": "usewhale",
+  "license": "MIT",
+  "os": ["win32"],
+  "cpu": ["arm64"],
+  "files": [
+    "vendor/**"
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "name": "@usewhale/whale",
+  "version": "0.0.0-dev",
+  "description": "DeepSeek-native coding agent for the terminal — 1M-token context, thinking-mode, full tool-use.",
+  "author": "usewhale",
+  "license": "MIT",
+  "homepage": "https://github.com/usewhale/DeepSeek-Code-Whale",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/usewhale/DeepSeek-Code-Whale.git"
+  },
+  "bugs": {
+    "url": "https://github.com/usewhale/DeepSeek-Code-Whale/issues"
+  },
+  "keywords": [
+    "deepseek",
+    "cli",
+    "tui",
+    "coding-agent",
+    "terminal",
+    "whale"
+  ],
+  "type": "module",
+  "bin": {
+    "whale": "bin/whale.js"
+  },
+  "optionalDependencies": {
+    "@usewhale/whale-darwin-arm64": "0.x.x",
+    "@usewhale/whale-darwin-x64": "0.x.x",
+    "@usewhale/whale-linux-arm64": "0.x.x",
+    "@usewhale/whale-linux-x64": "0.x.x",
+    "@usewhale/whale-win32-x64": "0.x.x",
+    "@usewhale/whale-win32-arm64": "0.x.x"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin/whale.js"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "preferGlobal": true
+}

@@ -236,3 +236,122 @@ jobs:
           git add Formula/whale.rb
           git commit -m "Update whale to ${TAG}"
           git push
+
+  npm-publish:
+    needs: build
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Inject binaries into platform packages
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+
+          # Map CI asset names to npm platform directory names
+          declare -A ASSET_MAP
+          ASSET_MAP["whale-darwin-arm64"]="npm/whale-darwin-arm64"
+          ASSET_MAP["whale-darwin-amd64"]="npm/whale-darwin-x64"
+          ASSET_MAP["whale-linux-arm64"]="npm/whale-linux-arm64"
+          ASSET_MAP["whale-linux-amd64"]="npm/whale-linux-x64"
+          ASSET_MAP["whale-windows-amd64"]="npm/whale-win32-x64"
+          ASSET_MAP["whale-windows-arm64"]="npm/whale-win32-arm64"
+
+          for asset in "${!ASSET_MAP[@]}"; do
+            target_dir="${ASSET_MAP[$asset]}"
+            echo "=== Injecting $asset into $target_dir ==="
+
+            # Locate the archive
+            archive=$(find dist/"$asset" -name "${asset}.tar.gz" -o -name "${asset}.zip" 2>/dev/null | head -1)
+            if [ -z "$archive" ]; then
+              echo "WARNING: No archive found for $asset, skipping"
+              continue
+            fi
+
+            # Extract binary
+            case "$archive" in
+              *.tar.gz)
+                tar xzf "$archive" -C "$target_dir/vendor/"
+                # Rename from platform-specific name to canonical "whale"
+                mv "$target_dir/vendor/$asset" "$target_dir/vendor/whale" 2>/dev/null || true
+                ;;
+              *.zip)
+                unzip -o "$archive" -d "$target_dir/vendor/"
+                mv "$target_dir/vendor/${asset}.exe" "$target_dir/vendor/whale.exe" 2>/dev/null || true
+                ;;
+            esac
+
+            chmod +x "$target_dir/vendor/whale" 2>/dev/null || true
+            chmod +x "$target_dir/vendor/whale.exe" 2>/dev/null || true
+          done
+
+      - name: Verify binaries injected
+        run: |
+          set -euo pipefail
+          for dir in npm/whale-*; do
+            if [ "$dir" = "npm/whale" ]; then continue; fi
+            binary="$dir/vendor/whale"
+            if [ -f "$binary" ]; then
+              file "$binary"
+            else
+              binary="$dir/vendor/whale.exe"
+              if [ -f "$binary" ]; then
+                file "$binary"
+              else
+                echo "ERROR: No binary found in $dir/vendor/"
+                ls -la "$dir/vendor/"
+                exit 1
+              fi
+            fi
+          done
+
+      - name: Set version and publish platform packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+
+          for dir in npm/whale-*; do
+            pkg_name="$(basename "$dir")"
+            # Skip the meta package (whale without platform suffix)
+            if [ "$pkg_name" = "whale" ]; then continue; fi
+
+            echo "=== Publishing $pkg_name @ $version ==="
+            (cd "$dir" && \
+              npm version "$version" --allow-same-version --no-git-tag-version && \
+              npm publish --access public)
+          done
+
+      - name: Publish meta package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          echo "=== Publishing @usewhale/whale @ $version ==="
+          cd npm/whale
+          npm version "$version" --allow-same-version --no-git-tag-version
+          npm publish --access public

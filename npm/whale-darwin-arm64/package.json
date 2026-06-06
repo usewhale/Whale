@@ -1,0 +1,12 @@
+{
+  "name": "@usewhale/whale-darwin-arm64",
+  "version": "0.0.0-dev",
+  "description": "Whale binary for macOS Apple Silicon (arm64)",
+  "author": "usewhale",
+  "license": "MIT",
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "files": [
+    "vendor/**"
+  ]
+}
