@@ -77,9 +77,8 @@ func (m model) renderWorkflowPanelSnapshot(snapshot *protocol.WorkflowPanelSnaps
 	if width <= 0 {
 		width = 100
 	}
-	contentWidth := max(40, width-2)
-	leftWidth := clampInt(contentWidth/4, 22, 34)
-	rightWidth := max(30, contentWidth-leftWidth-1)
+	contentWidth := max(1, width)
+	leftWidth, rightWidth := workflowPanelTwoColumnWidths(contentWidth, 22, 34, 30)
 	lines := []string{"", workflowPanelRunHeader(snapshot, contentWidth)}
 	if snapshot.Error != "" {
 		lines = append(lines, lipgloss.NewStyle().Foreground(tuitheme.Default.Error).Render("Error · "+snapshot.Error))
@@ -100,9 +99,8 @@ func (m model) renderWorkflowPanelTaskDetail(snapshot *protocol.WorkflowPanelSna
 	if width <= 0 {
 		width = 100
 	}
-	contentWidth := max(40, width-2)
-	leftWidth := clampInt(contentWidth/4, 24, 36)
-	rightWidth := max(32, contentWidth-leftWidth-1)
+	contentWidth := max(1, width)
+	leftWidth, rightWidth := workflowPanelTwoColumnWidths(contentWidth, 24, 36, 32)
 	phase, task, ok := workflowPanelSelectedTask(snapshot, m.workflowPanel.selectedPhase, m.workflowPanel.selectedTask)
 	lines := []string{"", workflowPanelRunHeader(snapshot, contentWidth)}
 	if !ok {
@@ -115,7 +113,7 @@ func (m model) renderWorkflowPanelTaskDetail(snapshot *protocol.WorkflowPanelSna
 		return lines
 	}
 	if m.workflowPanel.detailExpanded && (m.workflowPanel.expandedSection == workflowPanelDetailPrompt || m.workflowPanel.expandedSection == workflowPanelDetailOutcome) {
-		lines = append(lines, "", m.workflowPanelExpandedDetailBox(task, contentWidth))
+		lines = append(lines, "", m.workflowPanelExpandedDetailBox(task, workflowPanelSingleColumnInnerWidth(contentWidth)))
 		return lines
 	}
 	lines = append(lines, "", workflowPanelTwoColumnBox(
@@ -136,6 +134,25 @@ func workflowPanelSelectedTask(snapshot *protocol.WorkflowPanelSnapshot, phaseIn
 		return phase, protocol.WorkflowPanelTask{}, false
 	}
 	return phase, phase.Tasks[taskIndex], true
+}
+
+const (
+	workflowPanelTwoColumnBoxOverhead = 7
+	workflowPanelSingleColumnOverhead = 4
+)
+
+func workflowPanelTwoColumnWidths(totalWidth, leftMin, leftMax, rightMin int) (int, int) {
+	innerWidth := max(2, totalWidth-workflowPanelTwoColumnBoxOverhead)
+	leftWidth := clampInt(innerWidth/4, min(leftMin, innerWidth-1), min(leftMax, innerWidth-1))
+	if innerWidth-leftWidth < rightMin && innerWidth > rightMin {
+		leftWidth = innerWidth - rightMin
+	}
+	leftWidth = clampInt(leftWidth, 1, innerWidth-1)
+	return leftWidth, innerWidth - leftWidth
+}
+
+func workflowPanelSingleColumnInnerWidth(totalWidth int) int {
+	return max(1, totalWidth-workflowPanelSingleColumnOverhead)
 }
 
 func workflowPanelDetailTaskListLines(phase protocol.WorkflowPanelPhase, selected int, focused bool, width int) []string {

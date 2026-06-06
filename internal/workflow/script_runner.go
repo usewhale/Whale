@@ -466,7 +466,7 @@ func agentSpecFromJS(prompt, currentPhase string, args []*qjs.Value) (AgentTaskS
 		spec.OutputSchema = schema
 	}
 	spec.Label = stringProperty(opts, "label")
-	if phase := stringProperty(opts, "phase"); phase != "" {
+	if phase := strings.TrimSpace(stringProperty(opts, "phase")); phase != "" {
 		spec.Phase = phase
 	}
 	if hasDefinedProperty(opts, "agent") {

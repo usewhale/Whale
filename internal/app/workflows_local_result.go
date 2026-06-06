@@ -558,8 +558,10 @@ func workflowTaskElapsedValue(task *workflowTaskSnapshot) string {
 
 func workflowTasksForPhase(tasks []*workflowTaskSnapshot, phase string) []*workflowTaskSnapshot {
 	out := []*workflowTaskSnapshot{}
+	phase = normalizeWorkflowPhaseName(phase)
 	for _, task := range tasks {
-		if task.Phase == phase || (phase == "Tasks" && task.Phase == "") {
+		taskPhase := normalizeWorkflowPhaseName(task.Phase)
+		if taskPhase == phase || (phase == "Tasks" && taskPhase == "") {
 			out = append(out, task)
 		}
 	}
@@ -639,12 +641,17 @@ func workflowTaskTone(status string) string {
 }
 
 func containsWorkflowString(values []string, value string) bool {
+	value = normalizeWorkflowPhaseName(value)
 	for _, candidate := range values {
-		if candidate == value {
+		if normalizeWorkflowPhaseName(candidate) == value {
 			return true
 		}
 	}
 	return false
+}
+
+func normalizeWorkflowPhaseName(phase string) string {
+	return strings.TrimSpace(phase)
 }
 
 func lastWorkflowStrings(values []string, limit int) []string {

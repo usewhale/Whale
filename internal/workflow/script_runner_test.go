@@ -30,7 +30,7 @@ phase('Explore')
 log('starting ' + args.topic)
 const result = await agent('explain ' + args.topic, {
   label: 'explain',
-  phase: 'Explore',
+  phase: ' Explore ',
   model: 'deepseek-test',
 })
 log(result)

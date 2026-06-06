@@ -423,6 +423,82 @@ func TestWorkflowPanelUsesSemanticColorSegments(t *testing.T) {
 	}
 }
 
+func TestWorkflowPanelLongRunningSnapshotStaysWithinTerminalWidth(t *testing.T) {
+	oldProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.ANSI256)
+	t.Cleanup(func() { lipgloss.SetColorProfile(oldProfile) })
+
+	m := model{width: 100, height: 32}
+	snapshot := issue251WorkflowPanelSnapshot()
+
+	assertWorkflowPanelLinesWithinWidth(t, strings.Join(m.renderWorkflowPanelSnapshot(snapshot), "\n"), 100)
+
+	m.workflowPanel.detail = true
+	m.workflowPanel.focus = workflowPanelFocusTask
+	m.workflowPanel.detailRight = true
+	m.workflowPanel.detailSection = workflowPanelDetailOutcome
+	assertWorkflowPanelLinesWithinWidth(t, strings.Join(m.renderWorkflowPanelTaskDetail(snapshot), "\n"), 100)
+
+	m.workflowPanel.detailExpanded = true
+	m.workflowPanel.expandedSection = workflowPanelDetailOutcome
+	assertWorkflowPanelLinesWithinWidth(t, strings.Join(m.renderWorkflowPanelTaskDetail(snapshot), "\n"), 100)
+}
+
+func assertWorkflowPanelLinesWithinWidth(t *testing.T, rendered string, maxWidth int) {
+	t.Helper()
+	for _, line := range strings.Split(rendered, "\n") {
+		if width := xansi.StringWidth(line); width > maxWidth {
+			t.Fatalf("rendered line width = %d, want <= %d:\n%s\n\nfull render:\n%s", width, maxWidth, line, rendered)
+		}
+	}
+}
+
+func issue251WorkflowPanelSnapshot() *protocol.WorkflowPanelSnapshot {
+	return &protocol.WorkflowPanelSnapshot{
+		RunID:     "run-4d98df11-5167-443f-b17a-7d8bbf5642d5",
+		Status:    "running",
+		Summary:   "Batch enrichment of Base from Trash/notes. 1 file = 1 sub-agent, rg-dedup, markup validation, INDEX.md.",
+		ElapsedMS: 55_000,
+		Phases: []protocol.WorkflowPanelPhase{
+			{
+				Name:    "Preparation",
+				Status:  "running",
+				Done:    2,
+				Running: 1,
+				Total:   3,
+				Tasks: []protocol.WorkflowPanelTask{
+					{
+						ID:               "preparer",
+						Label:            "preparer",
+						Status:           "completed",
+						CompletionTokens: 4700,
+						ToolCalls:        4,
+						DurationMS:       47_000,
+						Outcome:          "## Preparer result\n\n**Structured output successfully sent.**\n\n### What was done\nCollected Trash/notes candidates, normalized Base references, and prepared a long validation checklist that should not break table borders.",
+					},
+					{
+						ID:               "ensure-pending-review-dir",
+						Label:            "ensure-pending-review-dir",
+						Status:           "completed",
+						CompletionTokens: 210,
+						ToolCalls:        1,
+						DurationMS:       4_000,
+						Outcome:          "**Result:** Directory `Trash/pending-review/` successfully created with validation notes and follow-up instructions.",
+					},
+					{
+						ID:      "get-today-date",
+						Label:   "get-today-date",
+						Status:  "running",
+						Message: "Used shell_run",
+					},
+				},
+			},
+			{Name: "Enrichment", Status: "queued"},
+			{Name: "Report", Status: "queued"},
+		},
+	}
+}
+
 func workflowLaunchTestResult() *protocol.LocalResult {
 	return &protocol.LocalResult{
 		Kind:      "workflow-launch",

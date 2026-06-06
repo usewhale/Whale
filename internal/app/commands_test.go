@@ -1815,6 +1815,51 @@ func TestExecuteLocalWorkflowRunReturnsStructuredLocalResult(t *testing.T) {
 	}
 }
 
+func TestWorkflowPanelSnapshotNormalizesTaskPhaseNames(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	cfg.WorkflowsEnabled = true
+	app, err := New(t.Context(), cfg, StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer app.Close()
+
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-normalized", Type: workflow.EventRunStarted, Status: workflow.RunStatusRunning, Message: "normalize phase"})
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-normalized", Type: workflow.EventScriptReady, Status: workflow.RunStatusRunning, Data: map[string]any{
+		"name": "normalize-phase",
+		"phases": []any{
+			map[string]any{"title": "Preparation"},
+			map[string]any{"title": "Enrichment"},
+			map[string]any{"title": "Report"},
+		},
+	}})
+	appendWorkflowTestEvent(t, app, workflow.RunEvent{RunID: "run-normalized", TaskID: "task-a", Type: workflow.EventTaskStarted, Status: workflow.TaskStatusRunning, Phase: " Enrichment ", Label: "ensure-pending-review-dir"})
+
+	result := app.WorkflowPanelLocalResult("run-normalized")
+	if result == nil || result.WorkflowPanelSnapshot == nil {
+		t.Fatalf("expected workflow panel snapshot, got %+v", result)
+	}
+	var enrichmentCount int
+	var enrichmentTasks int
+	for _, phase := range result.WorkflowPanelSnapshot.Phases {
+		if phase.Name == "Enrichment" {
+			enrichmentCount++
+			enrichmentTasks = phase.Total
+		}
+		if strings.TrimSpace(phase.Name) == "Enrichment" && phase.Name != "Enrichment" {
+			t.Fatalf("phase name was not normalized: %q", phase.Name)
+		}
+	}
+	if enrichmentCount != 1 || enrichmentTasks != 1 {
+		t.Fatalf("expected one normalized Enrichment phase with one task, got phases=%+v", result.WorkflowPanelSnapshot.Phases)
+	}
+	if !strings.Contains(result.PlainText, "Enrichment 0/1 done") || strings.Contains(result.PlainText, "Enrichment 0/0") {
+		t.Fatalf("plain text did not normalize phase grouping:\n%s", result.PlainText)
+	}
+}
+
 func TestWorkflowTerminalResultPreviewDoesNotInferBusinessMeaning(t *testing.T) {
 	lines := workflowTerminalResultLinesFor(map[string]any{
 		"candidateCount": float64(0),

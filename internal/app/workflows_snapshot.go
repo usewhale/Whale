@@ -167,7 +167,7 @@ func buildWorkflowSnapshot(run workflow.Run) workflowSnapshot {
 	phaseSeen := map[string]bool{}
 	tasks := map[workflow.TaskID]*workflowTaskSnapshot{}
 	addPhase := func(phase string) {
-		phase = strings.TrimSpace(phase)
+		phase = normalizeWorkflowPhaseName(phase)
 		if phase == "" || phaseSeen[phase] {
 			return
 		}
@@ -193,8 +193,8 @@ func buildWorkflowSnapshot(run workflow.Run) workflowSnapshot {
 		} else if task.Label == "" {
 			task.Label = string(taskID)
 		}
-		if ev.Phase != "" {
-			task.Phase = ev.Phase
+		if phase := normalizeWorkflowPhaseName(ev.Phase); phase != "" {
+			task.Phase = phase
 		}
 		if task.Phase == "" && out.CurrentPhase != "" {
 			task.Phase = out.CurrentPhase
@@ -259,11 +259,12 @@ func buildWorkflowSnapshot(run workflow.Run) workflowSnapshot {
 			}
 		case workflow.EventPhaseStarted:
 			if ev.Phase != "" {
-				addPhase(ev.Phase)
-				out.CurrentPhase = ev.Phase
+				phase := normalizeWorkflowPhaseName(ev.Phase)
+				addPhase(phase)
+				out.CurrentPhase = phase
 			} else {
 				addPhase(ev.Message)
-				out.CurrentPhase = strings.TrimSpace(ev.Message)
+				out.CurrentPhase = normalizeWorkflowPhaseName(ev.Message)
 			}
 		case workflow.EventLog:
 			if msg := strings.TrimSpace(ev.Message); msg != "" {
@@ -330,15 +331,17 @@ func buildWorkflowPanelSnapshot(run workflow.Run, summary workflowSummary, snaps
 
 	phaseNames := append([]string(nil), snapshot.DeclaredPhases...)
 	for _, phase := range snapshot.Phases {
-		if strings.TrimSpace(phase) != "" && !containsWorkflowString(phaseNames, phase) {
+		phase = normalizeWorkflowPhaseName(phase)
+		if phase != "" && !containsWorkflowString(phaseNames, phase) {
 			phaseNames = append(phaseNames, phase)
 		}
 	}
 	for _, task := range snapshot.Tasks {
-		if strings.TrimSpace(task.Phase) == "" || containsWorkflowString(phaseNames, task.Phase) {
+		phase := normalizeWorkflowPhaseName(task.Phase)
+		if phase == "" || containsWorkflowString(phaseNames, phase) {
 			continue
 		}
-		phaseNames = append(phaseNames, task.Phase)
+		phaseNames = append(phaseNames, phase)
 	}
 	if len(phaseNames) == 0 && len(snapshot.Tasks) > 0 {
 		phaseNames = []string{"Tasks"}
@@ -466,15 +469,17 @@ func workflowSnapshotProgressDisplay(snapshot workflowSnapshot) ([]LocalResultSe
 	}
 	phaseNames := append([]string(nil), snapshot.DeclaredPhases...)
 	for _, phase := range snapshot.Phases {
-		if strings.TrimSpace(phase) != "" && !containsWorkflowString(phaseNames, phase) {
+		phase = normalizeWorkflowPhaseName(phase)
+		if phase != "" && !containsWorkflowString(phaseNames, phase) {
 			phaseNames = append(phaseNames, phase)
 		}
 	}
 	for _, task := range snapshot.Tasks {
-		if strings.TrimSpace(task.Phase) == "" || containsWorkflowString(phaseNames, task.Phase) {
+		phase := normalizeWorkflowPhaseName(task.Phase)
+		if phase == "" || containsWorkflowString(phaseNames, phase) {
 			continue
 		}
-		phaseNames = append(phaseNames, task.Phase)
+		phaseNames = append(phaseNames, phase)
 	}
 	if len(phaseNames) == 0 {
 		phaseNames = []string{"Tasks"}
