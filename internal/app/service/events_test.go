@@ -2163,6 +2163,13 @@ func TestSummarizeToolCall_TaskTools(t *testing.T) {
 	if got != "workflow: /tmp/check-workflow.js" {
 		t.Fatalf("unexpected workflow summary: %q", got)
 	}
+	got = summarizeToolCall(core.ToolCall{
+		Name:  "workflow",
+		Input: `{"action":"create","saveAs":"todo-scan","script":"export const meta = { name: 'todo-scan' }"}`,
+	})
+	if got != "workflow: create todo-scan" {
+		t.Fatalf("unexpected workflow create summary: %q", got)
+	}
 }
 
 func TestSummarizeTaskActivity(t *testing.T) {

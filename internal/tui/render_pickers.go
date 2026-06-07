@@ -51,26 +51,28 @@ func (m model) renderModelPicker() string {
 }
 
 func (m model) renderPermissionsMenu() string {
-	state := "off"
-	stateTone := "muted"
-	action := "Enable session auto-accept"
-	if m.permissionsMenu.autoAccept {
-		state = "on"
-		stateTone = "info"
-		action = "Disable session auto-accept"
-	}
 	rows := []string{
 		pickerTitle("Permissions"),
 		"",
-		pickerStateLine("Session auto-accept", state, stateTone),
-		"",
 	}
-	items := []string{action, "Cancel"}
+	items := []string{
+		permissionsMenuOptionLabel("on", m.permissionsMenu.autoAccept),
+		permissionsMenuOptionLabel("off", !m.permissionsMenu.autoAccept),
+		"cancel",
+	}
 	for i, item := range items {
-		rows = append(rows, pickerRow(item, i == m.permissionsMenu.selected, item == "Cancel"))
+		rows = append(rows, pickerRow(item, i == m.permissionsMenu.selected, item == "cancel"))
 	}
 	rows = append(rows, "", pickerHint("(up/down choose, enter confirm, esc cancel)"))
 	return strings.Join(rows, "\n")
+}
+
+func permissionsMenuOptionLabel(state string, current bool) string {
+	label := "auto-accept: " + state
+	if current {
+		label += " (current)"
+	}
+	return label
 }
 
 func (m model) renderSessionPicker() string {

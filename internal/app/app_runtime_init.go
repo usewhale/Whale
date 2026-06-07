@@ -135,7 +135,7 @@ func initAppRuntime(cfg Config, sessionInit appSessionInit, toolInit appToolInit
 	goalTools := newGoalTools(cfg.DataDir, sessionInit.sessionsDir, parentSessionIDFunc)
 	var workflowManager *workflow.RunManager
 	var workflowRunner *workflow.ScriptRunner
-	var workflowTools []core.Tool
+	workflowLibrary := workflow.NewLibrary(workspaceRoot)
 	if cfg.WorkflowsEnabled {
 		workflowStore, err := workflow.NewFileRunEventStore(cfg.DataDir)
 		if err != nil {
@@ -144,12 +144,14 @@ func initAppRuntime(cfg Config, sessionInit appSessionInit, toolInit appToolInit
 		workflowScheduler := workflow.NewTaskScheduler(workflowStore, taskRunner)
 		workflowManager = workflow.NewRunManager(workflowStore, workflowScheduler)
 		workflowRunner = workflow.NewScriptRunner(cfg.DataDir, workflowManager)
-		workflowRunner.Library = workflow.NewLibrary(workspaceRoot)
-		workflowTools = []core.Tool{workflow.NewToolWithOptions(workflowRunner, workflow.ToolOptions{
-			ParentSessionIDFunc:   parentSessionIDFunc,
-			KeywordTriggerEnabled: cfg.WorkflowKeywordTrigger,
-		})}
+		workflowRunner.Library = workflowLibrary
 	}
+	workflowTools := []core.Tool{workflow.NewToolWithOptions(workflowRunner, workflow.ToolOptions{
+		ParentSessionIDFunc:   parentSessionIDFunc,
+		KeywordTriggerEnabled: cfg.WorkflowKeywordTrigger,
+		Enabled:               cfg.WorkflowsEnabled,
+		Library:               workflowLibrary,
+	})}
 	registeredTools := append([]core.Tool{}, toolInit.baseTools...)
 	registeredTools = append(registeredTools, toolInit.pluginTools...)
 	registeredTools = append(registeredTools, taskTools...)

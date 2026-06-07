@@ -48,6 +48,15 @@ func (e echoTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
 	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok:" + call.Input}, nil
 }
 
+type namedTestTool struct {
+	name string
+}
+
+func (t namedTestTool) Name() string { return t.name }
+func (t namedTestTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok:" + call.Input}, nil
+}
+
 type oneToolProvider struct {
 	calls int
 	tool  string

@@ -108,15 +108,7 @@ func (a *App) ensureAgent() (*agent.Agent, error) {
 			}),
 			agent.WithHookRunner(a.hookRunner),
 			agent.WithExtraSystemBlocks(pluginBlocks...),
-			agent.WithDynamicSystemBlocks(func() string {
-				if a.workflowRunner == nil || a.workflowRunner.Library == nil {
-					return ""
-				}
-				if !a.cfg.WorkflowsEnabled || !a.cfg.WorkflowKeywordTrigger {
-					return ""
-				}
-				return workflow.RenderPromptCatalog(context.Background(), a.workflowRunner.Library, workflow.DefaultPromptCatalogLimit)
-			}),
+			agent.WithDynamicSystemBlocksForTurn(a.workflowDynamicSystemBlock),
 			agent.WithProjectMemory(a.cfg.MemoryEnabled, a.cfg.MemoryMaxChars, parseCSVList(a.cfg.MemoryFileOrder), a.workspaceRoot),
 			agent.WithWorktreeContext(a.worktree.Path, a.worktree.OriginalWorkspace),
 			agent.WithMaxParallelSubagents(a.cfg.MaxParallelSubagents),
@@ -149,8 +141,18 @@ func (a *App) RunTurnWithContentOptions(ctx context.Context, parts []core.Messag
 	if !opts.HiddenInput && strings.TrimSpace(input) != "" {
 		_, _ = session.PatchSessionMeta(a.sessionsDir, a.sessionID, session.SessionMetaPatch{Title: input})
 	}
+	if err := a.reloadWorkflowConfigForTurn(); err != nil {
+		a.pendingGoalTurn = false
+		return nil, err
+	}
 	a.pendingGoalTurn = opts.GoalContinuation
 	opts = a.applyRunOptionsDefaults(opts)
+	if !opts.WorkflowAuthoring {
+		opts.WorkflowAuthoring = workflowAuthoringRequested(input)
+	}
+	if workflowShortcutRequested(input, opts.WorkflowAuthoring, a.cfg.WorkflowsEnabled) {
+		opts.WorkflowShortcutInput = input
+	}
 	if err := a.ensureCurrentModeMarker(); err != nil {
 		a.pendingGoalTurn = false
 		return nil, err
@@ -176,7 +178,16 @@ func (a *App) RunTurnWithInjectedContentOptions(ctx context.Context, visiblePart
 	if strings.TrimSpace(visibleInput) != "" {
 		_, _ = session.PatchSessionMeta(a.sessionsDir, a.sessionID, session.SessionMetaPatch{Title: visibleInput})
 	}
+	if err := a.reloadWorkflowConfigForTurn(); err != nil {
+		return nil, err
+	}
 	opts = a.applyRunOptionsDefaults(opts)
+	if !opts.WorkflowAuthoring {
+		opts.WorkflowAuthoring = workflowAuthoringRequested(visibleInput + "\n" + hiddenInput)
+	}
+	if workflowShortcutRequested(visibleInput+"\n"+hiddenInput, opts.WorkflowAuthoring, a.cfg.WorkflowsEnabled) {
+		opts.WorkflowShortcutInput = visibleInput
+	}
 	if err := a.ensureCurrentModeMarker(); err != nil {
 		return nil, err
 	}
@@ -209,6 +220,82 @@ func (a *App) InjectTurnInputWithHidden(ctx context.Context, visibleInput, hidde
 
 func (a *App) applyRunOptionsDefaults(opts agent.RunOptions) agent.RunOptions {
 	return opts
+}
+
+func (a *App) workflowDynamicSystemBlock(opts agent.RunOptions) string {
+	if !a.cfg.WorkflowsEnabled {
+		return strings.TrimSpace(`
+Workflow runtime.
+
+- Dynamic workflows are disabled in Whale.
+- If the user asks to list, resolve, run, create, or inspect workflows, call the workflow tool for the current status instead of answering from prior workflow_disabled results.
+- Do not inspect workflow directories, read configuration, edit configuration, auto-enable workflows, retry within the same turn, or offer shell/manual substitutes.
+`)
+	}
+	blocks := []string{strings.TrimSpace(`
+Workflow runtime.
+
+- Dynamic workflows are enabled in Whale.
+- For workflow discovery or launch, use the workflow tool instead of inspecting workflow directories with file or shell tools.
+- Use the full workflow authoring rules only when the user asks to create, generate, write, or save a new workflow.
+`)}
+	if opts.WorkflowAuthoring {
+		blocks = append(blocks, agent.WorkflowAuthoringSystemBlock())
+	}
+	if a.cfg.WorkflowKeywordTrigger && a.workflowRunner != nil && a.workflowRunner.Library != nil {
+		if catalog := strings.TrimSpace(workflow.RenderPromptCatalog(context.Background(), a.workflowRunner.Library, workflow.DefaultPromptCatalogLimit)); catalog != "" {
+			blocks = append(blocks, catalog)
+		}
+	}
+	return strings.Join(blocks, "\n\n")
+}
+
+func workflowAuthoringRequested(input string) bool {
+	text := strings.ToLower(strings.TrimSpace(input))
+	if text == "" {
+		return false
+	}
+	if !strings.Contains(text, "workflow") && !strings.Contains(text, "工作流") {
+		return false
+	}
+	for _, marker := range []string{
+		"create",
+		"generate",
+		"write",
+		"author",
+		"save",
+		"new workflow",
+		"add workflow",
+		"新增",
+		"创建",
+		"生成",
+		"编写",
+		"写一个",
+		"保存",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func workflowRequestRequested(input string) bool {
+	text := strings.ToLower(strings.TrimSpace(input))
+	if text == "" {
+		return false
+	}
+	return strings.Contains(text, "workflow") || strings.Contains(text, "workflows") || strings.Contains(text, "工作流")
+}
+
+func workflowShortcutRequested(input string, authoring bool, enabled bool) bool {
+	if !workflowRequestRequested(input) {
+		return false
+	}
+	if !enabled {
+		return true
+	}
+	return !authoring
 }
 
 func (a *App) FinalizeTurn(lastAssistantText string, completed bool) error {

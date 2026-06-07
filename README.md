@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/usewhale/DeepSeek-Code-Whale/releases"><img src="https://img.shields.io/github/v/release/usewhale/DeepSeek-Code-Whale?label=release" alt="release"></a>
+  <a href="https://www.npmjs.com/package/@usewhale/whale"><img src="https://img.shields.io/npm/v/@usewhale/whale" alt="npm"></a>
   <a href="https://github.com/usewhale/DeepSeek-Code-Whale/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/usewhale/DeepSeek-Code-Whale/ci.yml?label=CI" alt="CI"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/github/license/usewhale/DeepSeek-Code-Whale" alt="license"></a>
   <a href="https://github.com/usewhale/DeepSeek-Code-Whale/stargazers"><img src="https://img.shields.io/github/stars/usewhale/DeepSeek-Code-Whale?style=flat&logo=github&label=stars" alt="GitHub stars"></a>
@@ -22,13 +23,19 @@
 
 <p align="center">
   <b>Whale — AI coding agent for DeepSeek, in any environment.</b><br>
-  Persistent sessions, long context, tools, and programmable workflows —<br>
+  Long context, tools, and programmable workflows —<br>
   start in the terminal, scale to desktop and beyond.
 </p>
 
 ---
 
 ## 🚀 Quick Start
+
+Any platform:
+
+```bash
+npm install -g @usewhale/whale
+```
 
 macOS:
 
@@ -73,13 +80,11 @@ editing code, searching the web.
 
 | What | Why it matters |
 |---|---|
-| 🐋 **DeepSeek-native** | Built for DeepSeek's long context (1M tokens), tool calling, and cost efficiency — no generic multi-model wrapper |
-| 💬 **Persistent sessions** | Come back days later, context is still there. Search, branch, resume. |
-| 🎛️ **Multiple interfaces** | TUI for interactive coding, CLI for one-shot tasks, headless for CI — desktop and more on the way |
-| ⚙️ **Tools & MCP** | Read/edit files, run commands, search web — and plug in 1,000+ MCP servers |
-| 🧩 **Skills + Plugins** | Install community skills (code review, git workflows, etc.) or write your own |
-| 🔁 **Dynamic Workflows** | Write JavaScript scripts that orchestrate multiple agents — fan-out research, multi-perspective review, pipelines. Claude Code compatible. |
 | 💰 **~98% prompt cache hit** | Whale reuses cached context aggressively — most prompts hit cache, slashing costs to pennies per session. DeepSeek pricing × Whale caching = AI-assisted coding at scale. |
+| 🐋 **DeepSeek-native** | Built for DeepSeek's long context (1M tokens), tool calling, and cost efficiency — no generic multi-model wrapper |
+| 🔁 **Dynamic Workflows** | Write JavaScript scripts that orchestrate multiple agents — fan-out research, multi-perspective review, pipelines. Claude Code compatible. |
+| 🔌 **MCP** | Plug in 1,000+ MCP servers for extended tooling — file ops, shell, git, web, and more |
+| 🧩 **Skills + Plugins** | Install community skills (code review, git workflows, etc.) or write your own |
 
 ---
 

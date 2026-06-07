@@ -30,7 +30,6 @@ func (a *Agent) buildImmutableSystemBlocksWithTools(_ *core.ToolRegistry, opts .
 	systemBlocks = append(systemBlocks, renderDelegationPolicyBlock())
 	systemBlocks = append(systemBlocks, "For questions about the current date or time, use an available read-only shell/time command to verify the answer instead of guessing from model memory.")
 	systemBlocks = append(systemBlocks, renderToolPolicyBlock())
-	systemBlocks = append(systemBlocks, renderWorkflowAuthoringBlock())
 	systemBlocks = append(systemBlocks, "For branch decisions or key assumptions requiring user choice, call request_user_input instead of presenting long A/B/C prose menus.")
 	return systemBlocks
 }
@@ -61,7 +60,7 @@ func (a *Agent) buildRuntimeSystemBlocks(opts ...RunOptions) []string {
 		if render == nil {
 			continue
 		}
-		if trimmed := strings.TrimSpace(render()); trimmed != "" {
+		if trimmed := strings.TrimSpace(render(turnOpts)); trimmed != "" {
 			systemBlocks = append(systemBlocks, trimmed)
 		}
 	}
@@ -106,6 +105,10 @@ Workflow authoring.
 - End generated workflows by returning a final JSON-serializable result, usually the synthesis/report object.
 - For create-workflow launches, tell the user the workflow was saved and that /workflows opens the workflow panel. Do not mention /workflows with run ids or hidden subcommands.
 `)
+}
+
+func WorkflowAuthoringSystemBlock() string {
+	return renderWorkflowAuthoringBlock()
 }
 
 func renderOutputStyleBlock(viewMode string) string {

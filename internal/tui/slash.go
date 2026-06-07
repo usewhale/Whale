@@ -144,7 +144,9 @@ func (m *model) updateSlashArgumentMatches(raw string) {
 		})
 	}
 	m.slash.matches = matches
-	if m.slash.selected >= len(m.slash.matches) {
+	if strings.TrimSpace(raw) == spec.Name {
+		m.slash.selected = 0
+	} else if m.slash.selected >= len(m.slash.matches) {
 		m.slash.selected = max(0, len(m.slash.matches)-1)
 	}
 }

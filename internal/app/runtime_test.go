@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/usewhale/whale/internal/agent"
+	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/store"
 	"github.com/usewhale/whale/internal/telemetry"
@@ -154,8 +155,16 @@ func TestRuntimeRespectsWorkflowToggles(t *testing.T) {
 		t.Fatalf("New disabled workflows: %v", err)
 	}
 	defer app.Close()
-	if app.toolRegistry.Get("workflow") != nil {
-		t.Fatal("workflow tool should not be registered when workflows are disabled")
+	workflowTool := app.toolRegistry.Get("workflow")
+	if workflowTool == nil {
+		t.Fatal("workflow status tool should remain registered when workflows are disabled")
+	}
+	res, err := workflowTool.Run(t.Context(), core.ToolCall{ID: "wf-disabled", Name: "workflow", Input: `{"action":"list"}`})
+	if err != nil {
+		t.Fatalf("disabled workflow tool Run: %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Content, "workflow_disabled") {
+		t.Fatalf("disabled workflow tool should return workflow_disabled, got error=%v content=%s", res.IsError, res.Content)
 	}
 
 	cfg = DefaultConfig()
@@ -182,6 +191,242 @@ func TestRuntimeRespectsWorkflowToggles(t *testing.T) {
 	desc := spec.Description
 	if strings.Contains(desc, "system prompt catalog") {
 		t.Fatalf("workflow tool description should not advertise catalog when keyword trigger is disabled: %s", desc)
+	}
+}
+
+func TestTurnReloadsWorkflowConfigChanges(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
+	workspace := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	disabled := false
+	if err := SaveConfigFile(ProjectConfigPath(workspace), FileConfig{Workflows: FileWorkflowsConfig{Enabled: &disabled}}); err != nil {
+		t.Fatalf("SaveConfigFile disabled workflows: %v", err)
+	}
+	app, err := New(t.Context(), cfg, StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer app.Close()
+
+	workflowTool := app.toolRegistry.Get("workflow")
+	if workflowTool == nil {
+		t.Fatal("workflow tool should be registered")
+	}
+	res, err := workflowTool.Run(t.Context(), core.ToolCall{ID: "wf-disabled", Name: "workflow", Input: `{"action":"run","name":"dead-code-scan"}`})
+	if err != nil {
+		t.Fatalf("disabled workflow Run: %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Content, "workflow_disabled") {
+		t.Fatalf("expected disabled workflow result, got error=%v content=%s", res.IsError, res.Content)
+	}
+
+	enabled := true
+	if err := SaveConfigFile(ProjectConfigPath(workspace), FileConfig{Workflows: FileWorkflowsConfig{Enabled: &enabled}}); err != nil {
+		t.Fatalf("SaveConfigFile enabled workflows: %v", err)
+	}
+	if err := app.reloadWorkflowConfigForTurn(); err != nil {
+		t.Fatalf("reloadWorkflowConfigForTurn: %v", err)
+	}
+	if !app.cfg.WorkflowsEnabled {
+		t.Fatal("expected workflows enabled after turn reload")
+	}
+	workflowTool = app.toolRegistry.Get("workflow")
+	if workflowTool == nil {
+		t.Fatal("workflow tool should remain registered")
+	}
+	res, err = workflowTool.Run(t.Context(), core.ToolCall{ID: "wf-enabled", Name: "workflow", Input: `{"action":"list"}`})
+	if err != nil {
+		t.Fatalf("enabled workflow Run: %v", err)
+	}
+	if res.IsError || strings.Contains(res.Content, "workflow_disabled") {
+		t.Fatalf("expected enabled workflow list result, got error=%v content=%s", res.IsError, res.Content)
+	}
+}
+
+func TestTurnReloadPreservesExplicitWorkflowOverrides(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
+	workspace := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	cfg := DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	cfg.WorkflowsEnabled = true
+	app, err := New(t.Context(), cfg, StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New explicit true: %v", err)
+	}
+	defer app.Close()
+	if !app.cfg.WorkflowsEnabled || !app.cfg.WorkflowsEnabledExplicit {
+		t.Fatalf("expected programmatic workflow enable to be explicit after New: enabled=%v explicit=%v", app.cfg.WorkflowsEnabled, app.cfg.WorkflowsEnabledExplicit)
+	}
+	if err := app.reloadWorkflowConfigForTurn(); err != nil {
+		t.Fatalf("reloadWorkflowConfigForTurn explicit true: %v", err)
+	}
+	if !app.cfg.WorkflowsEnabled {
+		t.Fatal("turn reload should preserve explicit programmatic workflows.enabled=true")
+	}
+
+	enabled := true
+	if err := SaveConfigFile(ProjectConfigPath(workspace), FileConfig{Workflows: FileWorkflowsConfig{Enabled: &enabled}}); err != nil {
+		t.Fatalf("SaveConfigFile enabled workflows: %v", err)
+	}
+	cfg = DefaultConfig()
+	cfg.DataDir = t.TempDir()
+	cfg.WorkflowsEnabled = false
+	cfg.WorkflowsEnabledExplicit = true
+	app, err = New(t.Context(), cfg, StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New explicit false: %v", err)
+	}
+	defer app.Close()
+	if app.cfg.WorkflowsEnabled {
+		t.Fatal("explicit programmatic workflows.enabled=false should override file during New")
+	}
+	if err := app.reloadWorkflowConfigForTurn(); err != nil {
+		t.Fatalf("reloadWorkflowConfigForTurn explicit false: %v", err)
+	}
+	if app.cfg.WorkflowsEnabled {
+		t.Fatal("turn reload should preserve explicit programmatic workflows.enabled=false")
+	}
+}
+
+func TestTurnReloadDoesNotFreezeLoadedWorkflowConfig(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
+	workspace := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	defer func() { _ = os.Chdir(oldwd) }()
+
+	disabled := false
+	if err := SaveConfigFile(ProjectConfigPath(workspace), FileConfig{Workflows: FileWorkflowsConfig{Enabled: &disabled}}); err != nil {
+		t.Fatalf("SaveConfigFile disabled workflows: %v", err)
+	}
+	loaded, err := LoadAndApplyConfig(Config{DataDir: t.TempDir()}, workspace)
+	if err != nil {
+		t.Fatalf("LoadAndApplyConfig: %v", err)
+	}
+	if !loaded.ConfigLoaded || !loaded.WorkflowsEnabledExplicit || loaded.WorkflowsEnabled {
+		t.Fatalf("expected loaded file config to be explicit disabled: loaded=%+v", loaded)
+	}
+	app, err := New(t.Context(), loaded, StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer app.Close()
+
+	enabled := true
+	if err := SaveConfigFile(ProjectConfigPath(workspace), FileConfig{Workflows: FileWorkflowsConfig{Enabled: &enabled}}); err != nil {
+		t.Fatalf("SaveConfigFile enabled workflows: %v", err)
+	}
+	if err := app.reloadWorkflowConfigForTurn(); err != nil {
+		t.Fatalf("reloadWorkflowConfigForTurn: %v", err)
+	}
+	if !app.cfg.WorkflowsEnabled {
+		t.Fatal("turn reload should not reapply stale file-loaded workflows.enabled=false")
+	}
+}
+
+func TestWorkflowAuthoringPromptIsTurnScoped(t *testing.T) {
+	a := &App{cfg: DefaultConfig()}
+	disabledBlock := a.workflowDynamicSystemBlock(agent.RunOptions{})
+	if !strings.Contains(disabledBlock, "Dynamic workflows are disabled in Whale.") {
+		t.Fatalf("disabled workflow runtime block missing status: %s", disabledBlock)
+	}
+	if !strings.Contains(disabledBlock, "call the workflow tool for the current status") {
+		t.Fatalf("disabled workflow runtime should require fresh tool status: %s", disabledBlock)
+	}
+
+	a.cfg.WorkflowsEnabled = true
+
+	runBlock := a.workflowDynamicSystemBlock(agent.RunOptions{})
+	if !strings.Contains(runBlock, "Workflow runtime.") {
+		t.Fatalf("enabled workflow runtime block missing: %s", runBlock)
+	}
+	if strings.Contains(runBlock, "Workflow authoring.") {
+		t.Fatalf("run/list workflow runtime should not include authoring guidance: %s", runBlock)
+	}
+
+	createBlock := a.workflowDynamicSystemBlock(agent.RunOptions{WorkflowAuthoring: true})
+	if !strings.Contains(createBlock, "Workflow authoring.") {
+		t.Fatalf("create workflow turn should include authoring guidance: %s", createBlock)
+	}
+}
+
+func TestWorkflowAuthoringIntentDetection(t *testing.T) {
+	for _, input := range []string{
+		"create a repo-review workflow",
+		"generate workflow for dead code",
+		"新增一个 dead-code workflow",
+		"创建一个工作流",
+		"编写 workflow",
+	} {
+		if !workflowAuthoringRequested(input) {
+			t.Fatalf("expected authoring intent for %q", input)
+		}
+	}
+	for _, input := range []string{
+		"run dead-code-scan workflow",
+		"有哪些 workflow",
+		"list workflows",
+		"workflow 状态",
+	} {
+		if workflowAuthoringRequested(input) {
+			t.Fatalf("did not expect authoring intent for %q", input)
+		}
+	}
+}
+
+func TestWorkflowRequestDetection(t *testing.T) {
+	for _, input := range []string{
+		"有哪些 workflow",
+		"run dead-code-scan workflow",
+		"创建一个工作流",
+	} {
+		if !workflowRequestRequested(input) {
+			t.Fatalf("expected workflow request detection for %q", input)
+		}
+	}
+	for _, input := range []string{
+		"list files",
+		"检查 TODO 注释",
+	} {
+		if workflowRequestRequested(input) {
+			t.Fatalf("unexpected workflow request detection for %q", input)
+		}
+	}
+}
+
+func TestWorkflowShortcutDetection(t *testing.T) {
+	if !workflowShortcutRequested("run dead-code-scan workflow", false, true) {
+		t.Fatal("enabled run/list workflow requests should use shortcut")
+	}
+	if workflowShortcutRequested("create a workflow", true, true) {
+		t.Fatal("enabled authoring workflow requests should stay with model generation")
+	}
+	if !workflowShortcutRequested("create a workflow", true, false) {
+		t.Fatal("disabled workflow authoring requests should still short-circuit disabled status")
 	}
 }
 

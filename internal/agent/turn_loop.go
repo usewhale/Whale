@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/usewhale/whale/internal/compact"
 	"github.com/usewhale/whale/internal/core"
@@ -12,13 +13,15 @@ import (
 )
 
 type RunOptions struct {
-	HiddenInput        bool
-	ReadOnly           bool
-	GoalContinuation   bool
-	ShellAllowPrefixes []string
-	ViewMode           string
-	AssistantPrefix    string
-	PrefixCompletion   bool
+	HiddenInput           bool
+	ReadOnly              bool
+	GoalContinuation      bool
+	ShellAllowPrefixes    []string
+	ViewMode              string
+	AssistantPrefix       string
+	PrefixCompletion      bool
+	WorkflowAuthoring     bool
+	WorkflowShortcutInput string
 }
 
 func (a *Agent) RunStreamWithOptions(ctx context.Context, sessionID, input string, hiddenInput bool) (<-chan AgentEvent, error) {
@@ -116,12 +119,21 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 	go func() {
 		defer close(out)
 		defer a.active.Delete(sessionID)
-		toolSnapshot, err := a.refreshToolSnapshot(ctx)
+		toolSnapshot, err := a.refreshToolSnapshotForTurn(ctx, opts)
 		if err != nil {
 			emit := func(ev AgentEvent) bool {
 				return sendAgentEvent(ctx, out, ev)
 			}
 			emit(AgentEvent{Type: AgentEventTypeError, Err: err})
+			return
+		}
+		if strings.TrimSpace(opts.WorkflowShortcutInput) != "" {
+			if err := a.runWorkflowShortcut(ctx, sessionID, opts.WorkflowShortcutInput, toolSnapshot, out); err != nil {
+				emit := func(ev AgentEvent) bool {
+					return sendAgentEvent(ctx, out, ev)
+				}
+				emit(AgentEvent{Type: AgentEventTypeError, Err: err})
+			}
 			return
 		}
 		rt := memory.HydrateRuntime(memory.NewImmutablePrefix(a.buildImmutableSystemBlocksWithTools(toolSnapshot, opts)), history)
@@ -157,7 +169,7 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 			rt.Scratch.ResetTurn()
 			if !firstRequest {
 				var err error
-				toolSnapshot, err = a.refreshToolSnapshot(ctx)
+				toolSnapshot, err = a.refreshToolSnapshotForTurn(ctx, opts)
 				if err != nil {
 					emit(AgentEvent{Type: AgentEventTypeError, Err: err})
 					return

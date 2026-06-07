@@ -12,6 +12,10 @@ import (
 
 func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 	workspaceRoot, _ := os.Getwd()
+	var workflowOverlay workflowConfigOverlay
+	if !cfg.ConfigLoaded {
+		workflowOverlay = workflowConfigOverlayFromInput(cfg)
+	}
 	cfg, err := loadNewConfig(cfg, workspaceRoot)
 	if err != nil {
 		return nil, err
@@ -85,6 +89,7 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 		checkpoints:           checkpoint.NewManager(sessionInit.sessionsDir, workspaceRoot),
 		workflowManager:       runtimeInit.workflowManager,
 		workflowRunner:        runtimeInit.workflowRunner,
+		workflowConfigOverlay: workflowOverlay,
 		worktree:              start.Worktree,
 		apiKey:                runtimeInit.apiKey,
 		approvalFn:            defaultApprovalFunc(start.ApprovalFunc),

@@ -52,6 +52,32 @@ func SummarizeHydratedToolCall(call core.ToolCall) string {
 			}
 		}
 	}
+	if call.Name == "workflow" {
+		var body map[string]any
+		if err := json.Unmarshal([]byte(call.Input), &body); err == nil {
+			action, _ := body["action"].(string)
+			saveAs, _ := body["saveAs"].(string)
+			name, _ := body["name"].(string)
+			scriptPath, _ := body["scriptPath"].(string)
+			action = strings.TrimSpace(action)
+			switch {
+			case strings.TrimSpace(saveAs) != "":
+				if action == "" {
+					action = "create"
+				}
+				return "workflow: " + action + " " + strings.TrimSpace(saveAs)
+			case strings.TrimSpace(scriptPath) != "":
+				return "workflow: " + strings.TrimSpace(scriptPath)
+			case strings.TrimSpace(name) != "":
+				if action == "" {
+					return "workflow: " + strings.TrimSpace(name)
+				}
+				return "workflow: " + action + " " + strings.TrimSpace(name)
+			case action == "list":
+				return "workflow: list"
+			}
+		}
+	}
 	switch call.Name {
 	case "todo_add", "todo_update":
 		var body map[string]any

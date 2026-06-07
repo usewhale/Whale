@@ -47,12 +47,66 @@ func summarizeToolCallForChat(toolName, text string) string {
 		return todoToolTitle(toolName, text, "running")
 	case "mcp":
 		return mcpStartedText(toolName, text)
+	case "workflow":
+		return workflowToolCallTitle(text)
 	default:
 		if detail == "" {
 			detail = toolName
 		}
 		return "Running " + detail
 	}
+}
+
+func workflowToolCallTitle(text string) string {
+	detail := workflowToolCallDetail(text)
+	if detail == "" || detail == "workflow" {
+		return "Running workflow"
+	}
+	if target := strings.TrimSpace(strings.TrimPrefix(detail, "create ")); target != detail && target != "" {
+		return "Creating workflow: " + target
+	}
+	if target := strings.TrimSpace(strings.TrimPrefix(detail, "list ")); target != detail {
+		return "Listing workflows"
+	}
+	if target := strings.TrimSpace(strings.TrimPrefix(detail, "run ")); target != detail && target != "" {
+		return "Running " + target
+	}
+	return "Running " + detail
+}
+
+func workflowToolCallDetail(text string) string {
+	t := strings.TrimSpace(text)
+	if idx := strings.Index(t, ":"); idx >= 0 {
+		t = strings.TrimSpace(t[idx+1:])
+	}
+	if strings.HasPrefix(t, "{") {
+		var body map[string]any
+		if err := json.Unmarshal([]byte(t), &body); err == nil {
+			action := strings.TrimSpace(core.AsString(body["action"]))
+			saveAs := strings.TrimSpace(core.AsString(body["saveAs"]))
+			name := strings.TrimSpace(core.AsString(body["name"]))
+			scriptPath := strings.TrimSpace(core.AsString(body["scriptPath"]))
+			if saveAs != "" {
+				if action == "" {
+					action = "create"
+				}
+				return strings.TrimSpace(action + " " + saveAs)
+			}
+			if name != "" {
+				if action == "" {
+					return name
+				}
+				return strings.TrimSpace(action + " " + name)
+			}
+			if scriptPath != "" {
+				return scriptPath
+			}
+			if action == "list" {
+				return "list"
+			}
+		}
+	}
+	return strings.TrimSpace(t)
 }
 
 func summarizeTaskProgressForChat(toolName, text string) string {

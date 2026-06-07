@@ -791,6 +791,17 @@ func TestWorkflowAsyncLaunchRendersAsRunningNotFailed(t *testing.T) {
 	}
 }
 
+func TestWorkflowCreateToolCallTitleUsesSaveAs(t *testing.T) {
+	got := summarizeToolCallForChat("workflow", `workflow: create todo-scan`)
+	if got != "Creating workflow: todo-scan" {
+		t.Fatalf("unexpected workflow create title: %q", got)
+	}
+	got = summarizeToolCallForChat("workflow", `workflow: {"action":"create","saveAs":"todo-scan","script":"export const meta = { name: 'todo-scan' }"}`)
+	if got != "Creating workflow: todo-scan" {
+		t.Fatalf("unexpected workflow create json title: %q", got)
+	}
+}
+
 func TestTaskActivityEventsUpdateStatusOnly(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat}
 	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventTaskStarted, ToolName: "spawn_subagent", Text: "spawn_subagent started · review"}))

@@ -129,7 +129,7 @@ func (a *App) rebuildTaskRuntimeLocked() error {
 	a.taskTools = tasks.NewTools(taskRunner)
 	a.workflowManager = nil
 	a.workflowRunner = nil
-	a.workflowTools = nil
+	workflowLibrary := workflow.NewLibrary(a.workspaceRoot)
 	if cfg.WorkflowsEnabled {
 		workflowStore, err := workflow.NewFileRunEventStore(cfg.DataDir)
 		if err != nil {
@@ -138,11 +138,91 @@ func (a *App) rebuildTaskRuntimeLocked() error {
 		workflowScheduler := workflow.NewTaskScheduler(workflowStore, taskRunner)
 		a.workflowManager = workflow.NewRunManager(workflowStore, workflowScheduler)
 		a.workflowRunner = workflow.NewScriptRunner(cfg.DataDir, a.workflowManager)
-		a.workflowRunner.Library = workflow.NewLibrary(a.workspaceRoot)
-		a.workflowTools = []core.Tool{workflow.NewToolWithOptions(a.workflowRunner, workflow.ToolOptions{
-			ParentSessionIDFunc:   func() string { return a.sessionID },
-			KeywordTriggerEnabled: cfg.WorkflowKeywordTrigger,
-		})}
+		a.workflowRunner.Library = workflowLibrary
 	}
+	a.workflowTools = []core.Tool{workflow.NewToolWithOptions(a.workflowRunner, workflow.ToolOptions{
+		ParentSessionIDFunc:   func() string { return a.sessionID },
+		KeywordTriggerEnabled: cfg.WorkflowKeywordTrigger,
+		Enabled:               cfg.WorkflowsEnabled,
+		Library:               workflowLibrary,
+	})}
 	return nil
+}
+
+func (a *App) reloadWorkflowConfigForTurn() error {
+	if a == nil {
+		return nil
+	}
+	loaded, err := LoadAndApplyConfig(a.workflowReloadConfigOverlay(), a.workspaceRoot)
+	if err != nil {
+		return err
+	}
+	changed := a.cfg.WorkflowsEnabled != loaded.WorkflowsEnabled ||
+		a.cfg.WorkflowKeywordTrigger != loaded.WorkflowKeywordTrigger ||
+		!sameStringSlice(a.cfg.TrustedWorkflows, loaded.TrustedWorkflows)
+	if !changed {
+		return nil
+	}
+	a.cfg.WorkflowsEnabled = loaded.WorkflowsEnabled
+	a.cfg.WorkflowKeywordTrigger = loaded.WorkflowKeywordTrigger
+	a.cfg.TrustedWorkflows = append([]string(nil), loaded.TrustedWorkflows...)
+	a.toolMu.Lock()
+	if err := a.rebuildTaskRuntimeLocked(); err != nil {
+		a.toolMu.Unlock()
+		return err
+	}
+	a.toolMu.Unlock()
+	if err := a.refreshMCPTools(); err != nil {
+		return err
+	}
+	a.a = nil
+	return nil
+}
+
+func (a *App) workflowReloadConfigOverlay() Config {
+	if a == nil {
+		return Config{}
+	}
+	cfg := Config{DataDir: a.cfg.DataDir}
+	if a.workflowConfigOverlay.workflowsEnabledSet {
+		cfg.WorkflowsEnabled = a.workflowConfigOverlay.workflowsEnabled
+		cfg.WorkflowsEnabledExplicit = true
+	}
+	if a.workflowConfigOverlay.workflowKeywordTriggerSet {
+		cfg.WorkflowKeywordTrigger = a.workflowConfigOverlay.workflowKeywordTrigger
+		cfg.WorkflowKeywordTriggerExplicit = true
+	}
+	if len(a.workflowConfigOverlay.trustedWorkflows) > 0 {
+		cfg.TrustedWorkflows = append([]string(nil), a.workflowConfigOverlay.trustedWorkflows...)
+	}
+	return cfg
+}
+
+func workflowConfigOverlayFromInput(cfg Config) workflowConfigOverlay {
+	def := DefaultConfig()
+	overlay := workflowConfigOverlay{}
+	if cfg.WorkflowsEnabledExplicit || (cfg.configDefaulted && cfg.WorkflowsEnabled != def.WorkflowsEnabled) {
+		overlay.workflowsEnabledSet = true
+		overlay.workflowsEnabled = cfg.WorkflowsEnabled
+	}
+	if cfg.WorkflowKeywordTriggerExplicit || (cfg.configDefaulted && cfg.WorkflowKeywordTrigger != def.WorkflowKeywordTrigger) {
+		overlay.workflowKeywordTriggerSet = true
+		overlay.workflowKeywordTrigger = cfg.WorkflowKeywordTrigger
+	}
+	if len(cfg.TrustedWorkflows) > 0 {
+		overlay.trustedWorkflows = append([]string(nil), cfg.TrustedWorkflows...)
+	}
+	return overlay
+}
+
+func sameStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

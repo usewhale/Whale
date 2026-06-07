@@ -121,6 +121,7 @@ type Run struct {
 }
 
 type WorkflowInput struct {
+	Action          string `json:"action,omitempty"`
 	Script          string `json:"script,omitempty"`
 	Name            string `json:"name,omitempty"`
 	Args            any    `json:"args,omitempty"`

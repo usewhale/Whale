@@ -249,6 +249,9 @@ func TestSlashCommandWithOptionsDrillsDownWhenSelected(t *testing.T) {
 	if len(m.slash.matches) == 0 {
 		t.Fatal("expected /stats option suggestions after selection")
 	}
+	if selected, ok := m.selectedSlashSuggestion(); !ok || selected.InsertText != "/stats usage" {
+		t.Fatalf("expected /stats usage to be selected after drilling down, got %+v ok=%v", selected, ok)
+	}
 	if rendered := m.renderSlashSuggestions(); !strings.Contains(rendered, "usage") || !strings.Contains(rendered, "Show token and cost usage") {
 		t.Fatalf("expected /stats option list after selection, got:\n%s", rendered)
 	}

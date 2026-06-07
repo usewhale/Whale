@@ -103,9 +103,23 @@ func TestRuntimeSystemBlocksIncludeDynamicSystemBlocks(t *testing.T) {
 	}
 }
 
-func TestImmutableSystemBlocksIncludeWorkflowAuthoringGuidance(t *testing.T) {
+func TestImmutableSystemBlocksDoNotIncludeWorkflowAuthoringGuidance(t *testing.T) {
 	a := NewAgentWithRegistry(nil, nil, core.NewToolRegistry(nil), WithProjectMemory(false, 0, nil, "/repo"))
 	joined := strings.Join(a.buildImmutableSystemBlocks(), "\n\n")
+
+	for _, unexpected := range []string{
+		"Workflow authoring.",
+		"use the workflow tool with both script and saveAs",
+		"Claude Code-compatible raw JavaScript workflow",
+	} {
+		if strings.Contains(joined, unexpected) {
+			t.Fatalf("immutable system blocks should not include workflow authoring %q:\n%s", unexpected, joined)
+		}
+	}
+}
+
+func TestWorkflowAuthoringSystemBlockIncludesGuidance(t *testing.T) {
+	joined := WorkflowAuthoringSystemBlock()
 
 	for _, want := range []string{
 		"Workflow authoring.",

@@ -146,6 +146,7 @@ type App struct {
 	checkpoints           *checkpoint.Manager
 	workflowManager       *workflow.RunManager
 	workflowRunner        *workflow.ScriptRunner
+	workflowConfigOverlay workflowConfigOverlay
 	worktree              WorktreeSession
 	mcpInitMu             sync.Mutex
 	mcpInitStarted        bool
@@ -163,4 +164,12 @@ type App struct {
 	userInput  agent.UserInputFunc
 
 	pendingGoalTurn bool
+}
+
+type workflowConfigOverlay struct {
+	workflowsEnabledSet       bool
+	workflowsEnabled          bool
+	workflowKeywordTriggerSet bool
+	workflowKeywordTrigger    bool
+	trustedWorkflows          []string
 }

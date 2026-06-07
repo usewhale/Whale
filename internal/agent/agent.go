@@ -274,7 +274,7 @@ type Agent struct {
 	disabledSkills         []string
 	extraSkills            []*skills.Skill
 	extraSystemBlocks      []string
-	dynamicSystemBlocks    []func() string
+	dynamicSystemBlocks    []func(RunOptions) string
 	sessionRuntime         *memory.SessionRuntime
 	sessionsDir            string
 	budgetWarningUSD       float64
@@ -556,7 +556,22 @@ func WithExtraSystemBlocks(blocks ...string) AgentOption {
 
 func WithDynamicSystemBlocks(blocks ...func() string) AgentOption {
 	return func(a *Agent) {
-		a.dynamicSystemBlocks = append([]func() string(nil), blocks...)
+		a.dynamicSystemBlocks = make([]func(RunOptions) string, 0, len(blocks))
+		for _, block := range blocks {
+			render := block
+			a.dynamicSystemBlocks = append(a.dynamicSystemBlocks, func(RunOptions) string {
+				if render == nil {
+					return ""
+				}
+				return render()
+			})
+		}
+	}
+}
+
+func WithDynamicSystemBlocksForTurn(blocks ...func(RunOptions) string) AgentOption {
+	return func(a *Agent) {
+		a.dynamicSystemBlocks = append([]func(RunOptions) string(nil), blocks...)
 	}
 }
 

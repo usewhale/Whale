@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/usewhale/DeepSeek-Code-Whale/releases"><img src="https://img.shields.io/github/v/release/usewhale/DeepSeek-Code-Whale?label=release" alt="release"></a>
+  <a href="https://www.npmjs.com/package/@usewhale/whale"><img src="https://img.shields.io/npm/v/@usewhale/whale" alt="npm"></a>
   <a href="https://github.com/usewhale/DeepSeek-Code-Whale/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/usewhale/DeepSeek-Code-Whale/ci.yml?label=CI" alt="CI"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/github/license/usewhale/DeepSeek-Code-Whale" alt="license"></a>
   <a href="https://github.com/usewhale/DeepSeek-Code-Whale/stargazers"><img src="https://img.shields.io/github/stars/usewhale/DeepSeek-Code-Whale?style=flat&logo=github&label=stars" alt="GitHub stars"></a>
@@ -22,13 +23,19 @@
 
 <p align="center">
   <b>Whale — 面向 DeepSeek 的 AI 编程 Agent，适配任何环境。</b><br>
-  持久会话、超长上下文、工具调用、可编程工作流——<br>
+  超长上下文、工具调用、可编程工作流——<br>
   从终端出发，向桌面及更多场景延伸。
 </p>
 
 ---
 
 ## 🚀 快速开始
+
+任意平台：
+
+```bash
+npm install -g @usewhale/whale
+```
 
 macOS：
 
@@ -72,13 +79,11 @@ whale
 
 | 特性 | 为什么重要 |
 |---|---|
-| 🐋 **DeepSeek 原生** | 针对 DeepSeek 的 1M 长上下文、工具调用和成本优势深度优化，不做通用多模型外壳 |
-| 💬 **持久会话** | 隔天回来上下文还在，支持搜索、分支、恢复 |
-| 🎛️ **多界面** | TUI 交互编程、CLI 一次性任务、Headless 自动化 CI——桌面端及其他环境即将到来 |
-| ⚙️ **工具 & MCP** | 读/写文件、执行命令、搜索网页，接入 1,000+ MCP 服务器 |
-| 🧩 **Skills + 插件** | 安装社区技能（代码审查、git 工作流等）或自己编写 |
-| 🔁 **动态 Workflow** | 用 JavaScript 编排多个子 agent——扇出研究、多视角审查、流水线处理。兼容 Claude Code。 |
 | 💰 **~98% prompt cache hit** | Whale 激进地复用缓存上下文——大多数 prompt 命中缓存，每次会话成本低至几美分。DeepSeek 定价 × Whale 缓存 = 可规模化的 AI 辅助编码。 |
+| 🐋 **DeepSeek 原生** | 针对 DeepSeek 的 1M 长上下文、工具调用和成本优势深度优化，不做通用多模型外壳 |
+| 🔁 **动态 Workflow** | 用 JavaScript 编排多个子 agent——扇出研究、多视角审查、流水线处理。兼容 Claude Code。 |
+| 🔌 **MCP** | 接入 1,000+ MCP 服务器，扩展工具能力——文件操作、Shell、Git、网络等 |
+| 🧩 **Skills + 插件** | 安装社区技能（代码审查、git 工作流等）或自己编写 |
 
 ---
 

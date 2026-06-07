@@ -472,6 +472,13 @@ func summarizeToolCall(call core.ToolCall) string {
 		}
 		return "spawn_subagent: " + role
 	case "workflow":
+		action := strings.TrimSpace(core.AsString(body["action"]))
+		if saveAs := strings.TrimSpace(core.AsString(body["saveAs"])); saveAs != "" {
+			if action == "" {
+				action = "create"
+			}
+			return fmt.Sprintf("workflow: %s %s", action, saveAs)
+		}
 		if path := strings.TrimSpace(core.AsString(body["scriptPath"])); path != "" {
 			return fmt.Sprintf("workflow: %s", path)
 		}
