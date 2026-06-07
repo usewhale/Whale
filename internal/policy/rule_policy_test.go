@@ -602,6 +602,7 @@ func TestRulePolicyWriteStdinEmptyPollUsesReadPermission(t *testing.T) {
 	spec := core.ToolSpec{Name: "write_stdin", Capabilities: []string{"terminal.write"}}
 
 	for _, input := range []string{
+		`{"task_id":"task-1"}`,
 		`{"task_id":"task-1","chars":""}`,
 		`{"task_id":"task-1","chars":"","keys":[]}`,
 	} {
@@ -614,6 +615,21 @@ func TestRulePolicyWriteStdinEmptyPollUsesReadPermission(t *testing.T) {
 	enterOnly := p.Decide(spec, core.ToolCall{Name: "write_stdin", Input: `{"task_id":"task-1","keys":["enter"]}`})
 	if !enterOnly.Allow || enterOnly.RequiresApproval || enterOnly.MatchedRule != "" {
 		t.Fatalf("non-empty write_stdin should be allowed by default: %+v", enterOnly)
+	}
+
+	terminalDeny := RulePolicy{
+		Default: PermissionAllow,
+		Rules: []PermissionRule{
+			{Permission: "terminal", Pattern: "write_stdin", Action: PermissionDeny},
+		},
+	}
+	poll := terminalDeny.Decide(spec, core.ToolCall{Name: "write_stdin", Input: `{"task_id":"task-1"}`})
+	if !poll.Allow || poll.RequiresApproval || poll.Permission == "terminal" {
+		t.Fatalf("task-only write_stdin poll should bypass terminal write rules, got %+v", poll)
+	}
+	write := terminalDeny.Decide(spec, core.ToolCall{Name: "write_stdin", Input: `{"task_id":"task-1","keys":["enter"]}`})
+	if write.Allow || write.Permission != "terminal" {
+		t.Fatalf("non-empty write_stdin should still honor terminal deny, got %+v", write)
 	}
 }
 

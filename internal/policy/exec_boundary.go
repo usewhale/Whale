@@ -26,6 +26,34 @@ func (p RulePolicy) DecideExecBoundary(req ExecBoundaryRequest) PolicyDecision {
 			Permission: "shell",
 		}
 	}
+	externalDecision, externalHandled := p.decideExecBoundaryExternalDirectory(req, patterns[0])
+	if externalHandled && !externalDecision.Allow {
+		return externalDecision
+	}
+	shellDecision := p.decideExecBoundaryShell(patterns)
+	if !shellDecision.Allow {
+		return shellDecision
+	}
+	if shellDecision.RequiresApproval {
+		if externalHandled && externalDecision.RequiresApproval {
+			externalDecision.ApprovalRequirements = append(
+				[]ApprovalRequirement{{Permission: "shell", Pattern: shellDecision.Pattern}},
+				externalDecision.ApprovalRequirements...,
+			)
+			return externalDecision
+		}
+		if externalHandled {
+			shellDecision.AllowedRequirements = append(shellDecision.AllowedRequirements, externalDecision.AllowedRequirements...)
+		}
+		return shellDecision
+	}
+	if externalHandled {
+		return externalDecision
+	}
+	return shellDecision
+}
+
+func (p RulePolicy) decideExecBoundaryShell(patterns []string) PolicyDecision {
 	fallback := PermissionRule{Permission: "shell", Pattern: "*", Action: p.Default}
 	if fallback.Action == "" {
 		fallback.Action = PermissionAllow
@@ -69,6 +97,15 @@ func (p RulePolicy) DecideExecBoundary(req ExecBoundaryRequest) PolicyDecision {
 	default:
 		return PolicyDecision{Allow: true, Code: "permission_allow", Phase: "allowed", Permission: "shell", Pattern: patterns[0]}
 	}
+}
+
+func (p RulePolicy) decideExecBoundaryExternalDirectory(req ExecBoundaryRequest, command string) (PolicyDecision, bool) {
+	pathRoot := strings.TrimSpace(req.CWD)
+	if pathRoot == "" {
+		pathRoot = p.WorkspaceRoot
+	}
+	plan := p.execBoundaryEffectPlan(req, command, pathRoot)
+	return p.decidePermissionRequests(permissionRequestsFromEffects(plan))
 }
 
 func execBoundaryDecision(rule PermissionRule, pattern string, allow, ask bool) PolicyDecision {

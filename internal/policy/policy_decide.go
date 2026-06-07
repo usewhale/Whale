@@ -68,6 +68,13 @@ func (p RulePolicy) Decide(spec core.ToolSpec, call core.ToolCall) PolicyDecisio
 	if len(requests) == 0 {
 		requests = []permissionRequest{{Kind: permissionKind(spec.Name), Pattern: permissionTarget(call)}}
 	}
+	if decision, ok := p.decidePermissionRequests(requests); ok {
+		return decision
+	}
+	return PolicyDecision{Allow: true, Code: "permission_allow", Phase: "allowed"}
+}
+
+func (p RulePolicy) decidePermissionRequests(requests []permissionRequest) (PolicyDecision, bool) {
 	var ask *PermissionRule
 	var askReq permissionRequest
 	var askReqs []permissionRequest
@@ -86,7 +93,7 @@ func (p RulePolicy) Decide(spec core.ToolSpec, call core.ToolCall) PolicyDecisio
 				MatchedRule: ruleLabel(rule),
 				Permission:  req.Kind,
 				Pattern:     req.Pattern,
-			}
+			}, true
 		case PermissionAsk:
 			copy := rule
 			ask = &copy
@@ -113,7 +120,7 @@ func (p RulePolicy) Decide(spec core.ToolSpec, call core.ToolCall) PolicyDecisio
 			Pattern:              askReq.Pattern,
 			ApprovalRequirements: approvalRequirementsFromRequests(askReqs),
 			AllowedRequirements:  approvalRequirementsFromRequests(allowedReqs),
-		}
+		}, true
 	}
 	if allowedExternal != nil {
 		return PolicyDecision{
@@ -127,9 +134,9 @@ func (p RulePolicy) Decide(spec core.ToolSpec, call core.ToolCall) PolicyDecisio
 				Permission: allowedExternal.Kind,
 				Pattern:    allowedExternal.Pattern,
 			}},
-		}
+		}, true
 	}
-	return PolicyDecision{Allow: true, Code: "permission_allow", Phase: "allowed"}
+	return PolicyDecision{}, false
 }
 func (p DefaultToolPolicy) Decide(spec core.ToolSpec, call core.ToolCall) PolicyDecision {
 	rules := append([]PermissionRule{}, DefaultRules()...)
@@ -227,12 +234,14 @@ func writeStdinPollCall(call core.ToolCall) bool {
 		return false
 	}
 	chars, hasChars := body["chars"]
-	keys, hasKeys := body["keys"]
-	if !hasChars && !hasKeys {
-		return false
-	}
+	keys := body["keys"]
 	if s, ok := chars.(string); ok && s != "" {
 		return false
+	}
+	if hasChars && chars != nil {
+		if _, ok := chars.(string); !ok {
+			return false
+		}
 	}
 	if keysLen(keys) > 0 {
 		return false

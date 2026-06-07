@@ -12,7 +12,11 @@ import (
 )
 
 func (p RulePolicy) externalDirs(command string) []string {
-	root := cleanAbs(p.WorkspaceRoot)
+	return p.externalDirsFromRoot(command, p.WorkspaceRoot)
+}
+
+func (p RulePolicy) externalDirsFromRoot(command, pathRoot string) []string {
+	root := cleanAbs(pathRoot)
 	if command == "" || root == "" {
 		return nil
 	}
@@ -49,6 +53,18 @@ func (p RulePolicy) externalDirs(command string) []string {
 	}
 	return uniqueStrings(out)
 }
+
+func (p RulePolicy) execBoundaryImplicitCWDExternalDir(req ExecBoundaryRequest) string {
+	if !execBoundaryFileCommandUsesImplicitCWD(req) {
+		return ""
+	}
+	cwd := cleanAbs(req.CWD)
+	if cwd == "" || pathInsideAny(cwd, p.projectRoots()) {
+		return ""
+	}
+	return externalDirForToken(cwd)
+}
+
 func (p RulePolicy) externalDirsFromMCPInput(input string) []string {
 	root := cleanAbs(p.WorkspaceRoot)
 	if root == "" || strings.TrimSpace(input) == "" {
@@ -214,6 +230,26 @@ func shellFileCommand(command string) bool {
 		return false
 	}
 }
+
+func execBoundaryFileCommandUsesImplicitCWD(req ExecBoundaryRequest) bool {
+	program := strings.TrimSpace(req.Program)
+	argv := append([]string(nil), req.Argv...)
+	if len(argv) == 0 {
+		argv = []string{program}
+	}
+	if !shellFileCommand(program) && !shellFileCommand(argv[0]) {
+		return false
+	}
+	for _, arg := range argv[1:] {
+		arg = strings.Trim(arg, `"'`)
+		arg = shellPathArgBeforeRedirection(arg)
+		if shellFileCommandPathArg(arg) {
+			return false
+		}
+	}
+	return true
+}
+
 func shellFileCommandPathArg(arg string) bool {
 	if arg == "" || strings.HasPrefix(arg, "-") || strings.Contains(arg, "://") {
 		return false
