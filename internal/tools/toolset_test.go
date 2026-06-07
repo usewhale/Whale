@@ -2543,6 +2543,30 @@ func TestListDirAndShellRun(t *testing.T) {
 	}
 }
 
+func TestWriteStdinRequiresTerminalWriteCapability(t *testing.T) {
+	ts, err := NewToolset(t.TempDir())
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	for _, tool := range ts.Tools() {
+		if tool.Name() != "write_stdin" {
+			continue
+		}
+		spec := core.DescribeTool(tool)
+		if !containsString(spec.Capabilities, "terminal.write") {
+			t.Fatalf("write_stdin should expose terminal.write capability, got %#v", spec.Capabilities)
+		}
+		if containsString(spec.Capabilities, "shell.run") {
+			t.Fatalf("write_stdin must not expose shell.run capability, got %#v", spec.Capabilities)
+		}
+		if containsString(spec.Capabilities, "shell.read") {
+			t.Fatalf("write_stdin must not expose shell.read capability, got %#v", spec.Capabilities)
+		}
+		return
+	}
+	t.Fatal("write_stdin not registered")
+}
+
 func TestListDirIgnoresLegacyIgnoreInput(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{".gitignore", "node_modules", "x.txt"} {

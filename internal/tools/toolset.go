@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/skills"
 	"github.com/usewhale/whale/internal/webfetch"
 )
@@ -32,6 +33,9 @@ type Toolset struct {
 	beforeFileCommit func(string)
 	skillDisabled    []string
 	extraSkills      []*skills.Skill
+	execBoundary     policy.RulePolicy
+	execApproval     policy.ApprovalFunc
+	sessionIDFunc    func() string
 }
 
 type externalReadRootsKey struct{}
@@ -70,7 +74,40 @@ func NewToolset(root string) (*Toolset, error) {
 		tasks:         newShellTaskRegistry(),
 		fileLocks:     newFileMutationLocks(),
 		fileStates:    newFileStateCache(),
+		execBoundary: policy.RulePolicy{
+			Default: policy.PermissionAllow,
+			Rules:   policy.DefaultRules(),
+		},
 	}, nil
+}
+
+func (b *Toolset) SetExecBoundaryPolicy(p policy.RulePolicy) {
+	p.Rules = append([]policy.PermissionRule(nil), p.Rules...)
+	if p.Default == "" {
+		p.Default = policy.PermissionAllow
+	}
+	b.execBoundary = p
+}
+
+func (b *Toolset) SetExecBoundaryApproval(sessionIDFunc func() string, fn policy.ApprovalFunc) {
+	b.sessionIDFunc = sessionIDFunc
+	b.execApproval = fn
+}
+
+func (b *Toolset) execBoundaryPolicy() policy.RulePolicy {
+	p := b.execBoundary
+	p.Rules = append([]policy.PermissionRule(nil), p.Rules...)
+	if p.Default == "" {
+		p.Default = policy.PermissionAllow
+	}
+	return p
+}
+
+func (b *Toolset) execBoundarySessionID() string {
+	if b.sessionIDFunc == nil {
+		return ""
+	}
+	return strings.TrimSpace(b.sessionIDFunc())
 }
 
 func (b *Toolset) SetWebFetchExtractor(extractor webfetch.Extractor) {

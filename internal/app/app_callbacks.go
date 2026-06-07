@@ -27,6 +27,16 @@ func (a *App) SetApprovalFunc(fn policy.ApprovalFunc) {
 		return
 	}
 	a.approvalFn = fn
+	if a.toolset != nil {
+		a.toolset.SetExecBoundaryApproval(func() string { return a.sessionID }, func(req policy.ApprovalRequest) policy.ApprovalDecision {
+			a.approvalMu.Lock()
+			defer a.approvalMu.Unlock()
+			if a.autoAcceptPermissions {
+				return policy.ApprovalAllow
+			}
+			return a.approvalFn(req)
+		})
+	}
 	a.a = nil
 }
 

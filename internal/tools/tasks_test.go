@@ -108,7 +108,7 @@ func TestShellTaskRegistryCompletionPrunesWithoutLaterAccess(t *testing.T) {
 
 	tasks := make([]*shellTask, 0, shellTaskMaxRetained+5)
 	for i := 0; i < shellTaskMaxRetained+5; i++ {
-		tasks = append(tasks, r.create(fmt.Sprintf("cmd-%03d", i), "."))
+		tasks = append(tasks, r.create(fmt.Sprintf("cmd-%03d", i), ".", shellTransportPipe))
 	}
 
 	base := time.Now().Add(-10 * time.Minute)
@@ -143,7 +143,7 @@ func TestShellTaskRegistryCompletionSchedulesExpiryCleanup(t *testing.T) {
 		scheduled = fn
 	}
 
-	task := r.create("cmd", ".")
+	task := r.create("cmd", ".", shellTransportPipe)
 	finished := time.Now()
 	task.mu.Lock()
 	task.finishedAt = &finished

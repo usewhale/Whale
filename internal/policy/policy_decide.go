@@ -180,8 +180,11 @@ func (p RulePolicy) requestsFor(spec core.ToolSpec, call core.ToolCall) []permis
 	}
 	requests := []permissionRequest{{Kind: kind, Pattern: target}}
 	if spec.Name == "shell_run" {
-		cmd := shellCommandFromInput(call.Input)
-		requests[0].Pattern = cmd
+		if req, ok := shellExecutionRequestFromToolCall(call); ok {
+			requests[0].Pattern = req.Command
+		} else {
+			requests[0].Pattern = ""
+		}
 	}
 	requests = append(requests, permissionRequestsFromEffects(p.effectPlanFor(spec, call))...)
 	switch spec.Name {
@@ -190,6 +193,10 @@ func (p RulePolicy) requestsFor(spec core.ToolSpec, call core.ToolCall) []permis
 			requests[0].Pattern = "readonly"
 		} else {
 			requests[0].Pattern = "mutating"
+		}
+	case "write_stdin":
+		if writeStdinPollCall(call) {
+			requests[0] = permissionRequest{Kind: "read", Pattern: "*"}
 		}
 	case "grep", "search_files":
 		// These read-scoped tools carry a search regex/glob in their non-path
@@ -211,12 +218,45 @@ func (p RulePolicy) requestsFor(spec core.ToolSpec, call core.ToolCall) []permis
 	return requests
 }
 
+func writeStdinPollCall(call core.ToolCall) bool {
+	if call.Name != "write_stdin" {
+		return false
+	}
+	var body map[string]any
+	if err := json.Unmarshal([]byte(call.Input), &body); err != nil {
+		return false
+	}
+	chars, hasChars := body["chars"]
+	keys, hasKeys := body["keys"]
+	if !hasChars && !hasKeys {
+		return false
+	}
+	if s, ok := chars.(string); ok && s != "" {
+		return false
+	}
+	if keysLen(keys) > 0 {
+		return false
+	}
+	return true
+}
+
+func keysLen(v any) int {
+	switch keys := v.(type) {
+	case []any:
+		return len(keys)
+	case []string:
+		return len(keys)
+	default:
+		return 0
+	}
+}
+
 // isMappedPermissionKind reports whether kind is one of the built-in permission
 // categories permissionKind resolves known tools to, as opposed to a raw,
 // unmapped custom or plugin tool name.
 func isMappedPermissionKind(kind string) bool {
 	switch kind {
-	case "read", "edit", "shell", "memory", "task", "mcp", "web_search", "web_fetch":
+	case "read", "edit", "shell", "terminal", "memory", "task", "mcp", "web_search", "web_fetch":
 		return true
 	default:
 		return false

@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/shell"
 )
 
@@ -20,18 +22,25 @@ type shellTask struct {
 	CWD       string
 	StartedAt time.Time
 
-	mu         sync.RWMutex
-	status     string
-	exitCode   *int
-	finishedAt *time.Time
-	stdout     bytes.Buffer
-	stderr     bytes.Buffer
-	lastOutput *time.Time
-	diagnosis  shellDiagnosis
-	timeoutCtx shellTimeoutContext
-	cancel     context.CancelFunc
-	done       chan struct{}
-	doneOnce   sync.Once
+	mu          sync.RWMutex
+	status      string
+	transport   shellTransportKind
+	exitCode    *int
+	finishedAt  *time.Time
+	stdout      bytes.Buffer
+	stderr      bytes.Buffer
+	lastOutput  *time.Time
+	diagnosis   shellDiagnosis
+	timeoutCtx  shellTimeoutContext
+	cancel      context.CancelFunc
+	stdin       io.WriteCloser
+	stdinReady  chan struct{}
+	stdinOnce   sync.Once
+	done        chan struct{}
+	doneOnce    sync.Once
+	execPolicy  policy.RulePolicy
+	execApprove policy.ApprovalFunc
+	sessionID   string
 }
 
 func (t *shellTask) snapshot() shellTaskSnapshot {
@@ -42,6 +51,7 @@ func (t *shellTask) snapshot() shellTaskSnapshot {
 		Command:    t.Command,
 		CWD:        t.CWD,
 		Status:     t.status,
+		Transport:  t.transport,
 		ExitCode:   t.exitCode,
 		StartedAt:  t.StartedAt,
 		FinishedAt: t.finishedAt,
@@ -49,6 +59,7 @@ func (t *shellTask) snapshot() shellTaskSnapshot {
 		Stderr:     decodeShellOutput(t.stderr.Bytes()),
 		LastOutput: t.lastOutput,
 		Diagnosis:  diagnoseShellTaskLocked(t),
+		CanWrite:   t.stdin != nil && t.status == "running" && t.transport == shellTransportPTY,
 	}
 }
 
@@ -57,6 +68,7 @@ type shellTaskSnapshot struct {
 	Command    string
 	CWD        string
 	Status     string
+	Transport  shellTransportKind
 	ExitCode   *int
 	StartedAt  time.Time
 	FinishedAt *time.Time
@@ -64,11 +76,19 @@ type shellTaskSnapshot struct {
 	Stderr     string
 	LastOutput *time.Time
 	Diagnosis  shellDiagnosis
+	CanWrite   bool
 }
 
 const (
 	shellTaskCompletedTTL = time.Duration(maxBackgroundShellTimeoutMS) * time.Millisecond
 	shellTaskMaxRetained  = 128
+)
+
+type shellTransportKind string
+
+const (
+	shellTransportPipe shellTransportKind = "pipe"
+	shellTransportPTY  shellTransportKind = "pty"
 )
 
 type shellTaskRegistry struct {
@@ -92,13 +112,50 @@ func (r *shellTaskRegistry) nextID() string {
 	return "task-" + time.Now().Format("20060102150405") + "-" + itoa(n)
 }
 
-func (r *shellTaskRegistry) create(command, cwd string) *shellTask {
-	t := &shellTask{ID: r.nextID(), Command: command, CWD: cwd, StartedAt: time.Now(), status: "running", done: make(chan struct{})}
+func (r *shellTaskRegistry) create(command, cwd string, transport shellTransportKind) *shellTask {
+	if transport == "" {
+		transport = shellTransportPipe
+	}
+	t := &shellTask{ID: r.nextID(), Command: command, CWD: cwd, StartedAt: time.Now(), status: "running", transport: transport, stdinReady: make(chan struct{}), done: make(chan struct{})}
 	r.mu.Lock()
 	r.tasks[t.ID] = t
 	r.pruneCompletedLocked(time.Now(), t.ID)
 	r.mu.Unlock()
 	return t
+}
+
+func (t *shellTask) setExecBoundaryPolicy(p policy.RulePolicy) {
+	p.Rules = append([]policy.PermissionRule(nil), p.Rules...)
+	if p.Default == "" {
+		p.Default = policy.PermissionAllow
+	}
+	t.mu.Lock()
+	t.execPolicy = p
+	t.mu.Unlock()
+}
+
+func (t *shellTask) execBoundaryPolicy() policy.RulePolicy {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	p := t.execPolicy
+	p.Rules = append([]policy.PermissionRule(nil), p.Rules...)
+	if p.Default == "" {
+		p.Default = policy.PermissionAllow
+	}
+	return p
+}
+
+func (t *shellTask) setExecBoundaryApproval(sessionID string, fn policy.ApprovalFunc) {
+	t.mu.Lock()
+	t.sessionID = strings.TrimSpace(sessionID)
+	t.execApprove = fn
+	t.mu.Unlock()
+}
+
+func (t *shellTask) execBoundaryApproval() (string, policy.ApprovalFunc) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.sessionID, t.execApprove
 }
 
 func (r *shellTaskRegistry) get(id string) (*shellTask, bool) {
@@ -125,6 +182,107 @@ func (t *shellTask) setCancel(cancel context.CancelFunc) {
 	t.cancel = cancel
 	t.mu.Unlock()
 }
+
+func (t *shellTask) setStdin(stdin io.WriteCloser) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.stdin = stdin
+	t.mu.Unlock()
+	if stdin != nil {
+		t.stdinOnce.Do(func() {
+			close(t.stdinReady)
+		})
+	}
+}
+
+func (t *shellTask) writeStdin(ctx context.Context, input string) error {
+	if err := t.waitForStdin(ctx, time.Duration(shellStdinReadyTimeoutMS)*time.Millisecond); err != nil {
+		return err
+	}
+	t.mu.RLock()
+	stdin := t.stdin
+	status := t.status
+	transport := t.transport
+	t.mu.RUnlock()
+	if transport != shellTransportPTY {
+		return errShellStdinUnavailable
+	}
+	if stdin == nil || status != "running" {
+		return errShellStdinClosed
+	}
+	if deadlineWriter, ok := stdin.(interface{ SetWriteDeadline(time.Time) error }); ok {
+		deadline := time.Now().Add(time.Duration(shellStdinWriteTimeoutMS) * time.Millisecond)
+		if ctx != nil {
+			if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+				deadline = ctxDeadline
+			}
+		}
+		if err := deadlineWriter.SetWriteDeadline(deadline); err == nil {
+			defer func() {
+				_ = deadlineWriter.SetWriteDeadline(time.Time{})
+			}()
+		}
+	}
+	_, err := io.Copy(stdin, strings.NewReader(input))
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (t *shellTask) waitForStdin(ctx context.Context, timeout time.Duration) error {
+	if t == nil {
+		return errShellStdinClosed
+	}
+	t.mu.RLock()
+	stdin := t.stdin
+	status := t.status
+	transport := t.transport
+	ready := t.stdinReady
+	done := t.done
+	t.mu.RUnlock()
+	if transport != shellTransportPTY {
+		return errShellStdinUnavailable
+	}
+	if stdin != nil && status == "running" {
+		return nil
+	}
+	if status != "running" {
+		return errShellStdinClosed
+	}
+	if timeout <= 0 {
+		timeout = time.Duration(shellStdinReadyTimeoutMS) * time.Millisecond
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-ready:
+	case <-done:
+		return errShellStdinClosed
+	case <-timer.C:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.stdin != nil && t.status == "running" {
+		return nil
+	}
+	if t.transport != shellTransportPTY {
+		return errShellStdinUnavailable
+	}
+	return errShellStdinClosed
+}
+
+var (
+	errShellStdinUnavailable = errors.New("stdin is only available for PTY shell tasks")
+	errShellStdinClosed      = errors.New("stdin is closed")
+)
 
 func (t *shellTask) cancelRun() {
 	t.mu.RLock()
@@ -278,12 +436,17 @@ func runShellBackgroundWithAfter(ctx context.Context, dir, command string, task 
 	}
 	cmd := shell.Command(spec)
 	cmd.Dir = dir
-	cmd.Stdout = task.outputWriter(false)
-	cmd.Stderr = task.outputWriter(true)
-	err = shell.RunCommand(ctx, cmd)
+	if task.transport == shellTransportPTY {
+		err = runShellExecBoundaryPTY(ctx, dir, command, task)
+	} else {
+		cmd.Stdout = task.outputWriter(false)
+		cmd.Stderr = task.outputWriter(true)
+		err = shell.RunCommand(ctx, cmd)
+	}
 
 	task.mu.Lock()
 	defer task.mu.Unlock()
+	task.stdin = nil
 	now := time.Now()
 	task.finishedAt = &now
 	if err != nil {

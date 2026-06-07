@@ -48,6 +48,59 @@ func TestApprovalKeysKeepShellCommandScope(t *testing.T) {
 	}
 }
 
+func TestApprovalKeysTreatWriteStdinAsTerminalWrite(t *testing.T) {
+	call := core.ToolCall{ID: "stdin-1", Name: "write_stdin", Input: `{"task_id":"task-1","keys":["enter"]}`}
+
+	wantKey := WriteStdinApprovalKey(map[string]any{"task_id": "task-1", "keys": []any{"enter"}})
+	if got, want := ApprovalKeys(call), []string{wantKey}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("write_stdin keys = %v, want %v", got, want)
+	}
+	if !strings.HasPrefix(wantKey, "terminal:write_stdin:task-1:payload:") {
+		t.Fatalf("write_stdin key should include task and payload hash, got %q", wantKey)
+	}
+	same := core.ToolCall{ID: "stdin-2", Name: "write_stdin", Input: `{"keys":["enter"],"task_id":"task-1"}`}
+	if got := ApprovalKeys(same); !reflect.DeepEqual(got, []string{wantKey}) {
+		t.Fatalf("same write_stdin payload should keep same key, got %v want %v", got, []string{wantKey})
+	}
+	otherTask := core.ToolCall{ID: "stdin-3", Name: "write_stdin", Input: `{"task_id":"task-2","keys":["enter"]}`}
+	if got := ApprovalKeys(otherTask); reflect.DeepEqual(got, []string{wantKey}) {
+		t.Fatalf("different task should not reuse write_stdin key: %v", got)
+	}
+	otherInput := core.ToolCall{ID: "stdin-4", Name: "write_stdin", Input: `{"task_id":"task-1","chars":"rm -rf /","keys":["enter"]}`}
+	if got := ApprovalKeys(otherInput); reflect.DeepEqual(got, []string{wantKey}) {
+		t.Fatalf("different stdin payload should not reuse write_stdin key: %v", got)
+	}
+	if got := ApprovalKind(call); got != "terminal" {
+		t.Fatalf("approval kind = %q, want terminal", got)
+	}
+	if got := ApprovalScope(call); got != "terminal" {
+		t.Fatalf("approval scope = %q, want terminal", got)
+	}
+	if got := ApprovalSessionScope(call); got != "this stdin write" {
+		t.Fatalf("session scope = %q", got)
+	}
+}
+
+func TestApprovalSummaryShowsWriteStdinPayload(t *testing.T) {
+	call := core.ToolCall{Name: "write_stdin", Input: `{"task_id":"task-1","chars":"npm install left-pad\n","keys":["enter"]}`}
+	got := ApprovalSummary(call)
+	for _, want := range []string{
+		"write_stdin: task-1",
+		`chars="npm install left-pad\n"`,
+		"keys=[enter]",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("ApprovalSummary missing %q in %q", want, got)
+		}
+	}
+
+	long := core.ToolCall{Name: "write_stdin", Input: `{"task_id":"task-2","chars":"` + strings.Repeat("x", 200) + `"}`}
+	got = ApprovalSummary(long)
+	if !strings.Contains(got, "task-2") || !strings.Contains(got, "[truncated]") || strings.Contains(got, strings.Repeat("x", 200)) {
+		t.Fatalf("ApprovalSummary should show truncated write_stdin payload, got %q", got)
+	}
+}
+
 func TestApprovalKeysUseWebCommandAndHostScopes(t *testing.T) {
 	search := core.ToolCall{Name: "web_search", Input: `{"query":"Node.js permission model"}`}
 	if got, want := ApprovalKeys(search), []string{"web_search:*"}; !reflect.DeepEqual(got, want) {

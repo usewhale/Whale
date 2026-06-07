@@ -625,6 +625,48 @@ func TestAgentRegistryShellReadGuardsMutatingCommands(t *testing.T) {
 	}
 }
 
+func TestAgentRegistryShellReadDoesNotExposeWriteStdin(t *testing.T) {
+	parent := core.NewToolRegistry([]core.Tool{
+		testTool{name: "shell_wait", readOnly: true, capabilities: []string{CapabilityShellRead, CapabilityShellRun}},
+		testTool{name: "write_stdin", readOnly: false, capabilities: []string{CapabilityTerminalWrite}},
+	})
+	child, err := BuildAgentRegistry(parent, []string{CapabilityShellRead}, AgentPermissionAsk)
+	if err != nil {
+		t.Fatalf("BuildAgentRegistry: %v", err)
+	}
+	if child.Get("shell_wait") == nil {
+		t.Fatal("shell.read child should expose shell_wait")
+	}
+	if child.Get("write_stdin") != nil {
+		t.Fatal("shell.read child must not expose write_stdin")
+	}
+}
+
+func TestAgentRegistryShellRunDoesNotExposeTerminalWrite(t *testing.T) {
+	parent := core.NewToolRegistry([]core.Tool{
+		testTool{name: "shell_run", readOnly: false, capabilities: []string{CapabilityShellRun}},
+		testTool{name: "write_stdin", readOnly: false, capabilities: []string{CapabilityTerminalWrite}},
+	})
+	child, err := BuildAgentRegistry(parent, []string{CapabilityShellRun}, AgentPermissionAsk)
+	if err != nil {
+		t.Fatalf("BuildAgentRegistry: %v", err)
+	}
+	if child.Get("shell_run") == nil {
+		t.Fatal("shell.run child should expose shell_run")
+	}
+	if child.Get("write_stdin") != nil {
+		t.Fatal("shell.run child must not expose write_stdin without terminal.write")
+	}
+
+	withTerminal, err := BuildAgentRegistry(parent, []string{CapabilityShellRun, CapabilityTerminalWrite}, AgentPermissionAsk)
+	if err != nil {
+		t.Fatalf("BuildAgentRegistry with terminal.write: %v", err)
+	}
+	if withTerminal.Get("write_stdin") == nil {
+		t.Fatal("terminal.write child should expose write_stdin")
+	}
+}
+
 func TestAgentRegistryShellRunAndWorkspaceWriteNeedNonReadOnlyPermission(t *testing.T) {
 	parent := core.NewToolRegistry([]core.Tool{
 		testTool{name: "shell_run", readOnlyCheck: func(map[string]any) bool { return false }, capabilities: []string{CapabilityShellRead, CapabilityShellRun}},
@@ -729,7 +771,7 @@ func TestMergeWorkspaceAndParentToolsPreservesNonWorkspaceTools(t *testing.T) {
 }
 
 func TestChildAskPolicyRequiresApprovalForMutableTools(t *testing.T) {
-	p := childToolPolicy(nil, AgentPermissionAsk, "/repo", []string{CapabilityShellRun, CapabilityWorkspaceWrite})
+	p := childToolPolicy(nil, AgentPermissionAsk, "/repo", []string{CapabilityShellRun, CapabilityWorkspaceWrite, CapabilityTerminalWrite})
 	shellDecision := p.Decide(
 		core.ToolSpec{Name: "shell_run", Capabilities: []string{CapabilityShellRun}},
 		core.ToolCall{Name: "shell_run", Input: `{"command":"go test ./..."}`},
@@ -743,6 +785,13 @@ func TestChildAskPolicyRequiresApprovalForMutableTools(t *testing.T) {
 	)
 	if !editDecision.Allow || !editDecision.RequiresApproval {
 		t.Fatalf("ask write should require approval, got %+v", editDecision)
+	}
+	stdinDecision := p.Decide(
+		core.ToolSpec{Name: "write_stdin", Capabilities: []string{CapabilityTerminalWrite}},
+		core.ToolCall{Name: "write_stdin", Input: `{"task_id":"task-1","keys":["enter"]}`},
+	)
+	if !stdinDecision.Allow || !stdinDecision.RequiresApproval {
+		t.Fatalf("ask terminal write should require approval, got %+v", stdinDecision)
 	}
 	exactPolicy := childToolPolicy(nil, AgentPermissionAsk, "/repo", []string{"shell_run", "write_file"})
 	exactShellDecision := exactPolicy.Decide(

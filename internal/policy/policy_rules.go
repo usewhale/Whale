@@ -116,6 +116,7 @@ func RulesFromConfig(config PermissionConfig) ([]PermissionRule, error) {
 		{name: "read", rules: config.Read},
 		{name: "edit", rules: config.Edit},
 		{name: "shell", rules: config.Shell},
+		{name: "terminal", rules: config.Terminal},
 		{name: "external_directory", rules: config.ExternalDirectory},
 		{name: "mcp", rules: config.MCP},
 		{name: "memory", rules: config.Memory},

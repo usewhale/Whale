@@ -53,6 +53,9 @@ func DefaultPermissionConfig() PermissionConfig {
 			"mkfs*":                   "deny",
 			"diskutil erase*":         "deny",
 		},
+		Terminal: map[string]string{
+			"*": "allow",
+		},
 		ExternalDirectory: map[string]string{
 			"*": "ask",
 		},

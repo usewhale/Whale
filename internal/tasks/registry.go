@@ -15,6 +15,7 @@ const (
 	CapabilityWorkspaceWrite = "workspace.write"
 	CapabilityShellRead      = "shell.read"
 	CapabilityShellRun       = "shell.run"
+	CapabilityTerminalWrite  = "terminal.write"
 	CapabilityWebSearch      = "web.search"
 	CapabilityWebFetch       = "web.fetch"
 	CapabilityMCPRead        = "mcp.read"
@@ -25,6 +26,7 @@ var knownSubagentCapabilities = map[string]bool{
 	CapabilityWorkspaceWrite: true,
 	CapabilityShellRead:      true,
 	CapabilityShellRun:       true,
+	CapabilityTerminalWrite:  true,
 	CapabilityWebSearch:      true,
 	CapabilityWebFetch:       true,
 	CapabilityMCPRead:        true,
@@ -184,7 +186,7 @@ func addToolSelectors(parent *core.ToolRegistry, selectors []string, caps, tools
 			continue
 		}
 		if parent == nil || parent.Get(selector) == nil {
-			known := []string{CapabilityWorkspaceRead, CapabilityWorkspaceWrite, CapabilityShellRead, CapabilityShellRun, CapabilityWebSearch, CapabilityWebFetch, CapabilityMCPRead}
+			known := []string{CapabilityWorkspaceRead, CapabilityWorkspaceWrite, CapabilityShellRead, CapabilityShellRun, CapabilityTerminalWrite, CapabilityWebSearch, CapabilityWebFetch, CapabilityMCPRead}
 			return fmt.Errorf("unknown agent %s selector %q; use a known capability (%s) or an available tool name", field, selector, strings.Join(known, ", "))
 		}
 		if excludedChildTools[selector] {

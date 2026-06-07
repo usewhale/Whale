@@ -6,6 +6,7 @@ import (
 	"github.com/usewhale/whale/internal/core"
 	whalemcp "github.com/usewhale/whale/internal/mcp"
 	"github.com/usewhale/whale/internal/plugins"
+	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/tools"
 	"strings"
 )
@@ -16,6 +17,12 @@ func initAppTools(cfg Config, start StartOptions, workspaceRoot string) (appTool
 		return appToolInit{}, fmt.Errorf("init tools failed: %w", err)
 	}
 	toolset.SetWorktreeContext(start.Worktree.Path, start.Worktree.OriginalWorkspace)
+	toolset.SetExecBoundaryPolicy(policy.RulePolicy{
+		Default:       cfg.PermissionDefault,
+		Rules:         append([]policy.PermissionRule(nil), cfg.PermissionRules...),
+		WorkspaceRoot: workspaceRoot,
+		WorktreeRoot:  start.Worktree.Path,
+	})
 	toolset.SetSkillDisabled(cfg.SkillsDisabled)
 	mcpConfigPath := strings.TrimSpace(cfg.MCPConfigPath)
 	if mcpConfigPath == "" {

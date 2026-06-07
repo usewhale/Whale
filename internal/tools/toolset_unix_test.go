@@ -6,16 +6,77 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/execboundary"
+	"github.com/usewhale/whale/internal/execenv"
+	"github.com/usewhale/whale/internal/policy"
+	"golang.org/x/sys/unix"
 )
+
+func TestMain(m *testing.M) {
+	if os.Getenv(execenv.WrapperModeEnv) == "1" {
+		os.Exit(execboundary.RunWrapper(os.Args[1:], os.Stdout, os.Stderr))
+	}
+	os.Exit(m.Run())
+}
+
+func enableTestPTYShell(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	fakeShell := filepath.Join(dir, "exec-boundary-shell")
+	if err := os.WriteFile(fakeShell, []byte(`#!/bin/sh
+if [ "$1" = "-lc" ]; then
+  case "$2" in
+    "command /bin/echo whale-exec-boundary-probe")
+      "$EXEC_WRAPPER" /bin/echo echo whale-exec-boundary-probe
+      exit $?
+      ;;
+    *)
+      exec /bin/sh -lc "$2"
+      ;;
+  esac
+fi
+exec /bin/sh "$@"
+`), 0o755); err != nil {
+		t.Fatalf("write fake exec-boundary shell: %v", err)
+	}
+	t.Setenv(execenv.ShellEnv, fakeShell)
+	t.Setenv(execenv.WrapperPathEnv, os.Args[0])
+}
+
+func TestShellExecBoundaryShellCandidatesIncludeBundledRuntimePaths(t *testing.T) {
+	got := shellExecBoundaryShellCandidatesFor("/opt/whale/bin/whale", "/home/alice")
+	want := []string{
+		"/opt/whale/bin/runtime/zsh",
+		"/opt/whale/bin/zsh",
+		"/opt/whale/libexec/runtime/zsh",
+		"/opt/whale/libexec/whale/zsh",
+		"/opt/whale/libexec/whale/runtime/zsh",
+		"/opt/whale/lib/whale/zsh",
+		"/opt/whale/share/whale/runtime/zsh",
+		"/home/alice/.whale/runtime/zsh",
+		"/home/alice/.local/share/whale/runtime/zsh",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("unexpected boundary shell candidates:\ngot:  %q\nwant: %q", got, want)
+	}
+}
+
+func TestShellExecBoundaryShellPathPrefersExplicitEnv(t *testing.T) {
+	t.Setenv(execenv.ShellEnv, "/tmp/explicit-zsh")
+	got, source := shellExecBoundaryShellPath()
+	if got != "/tmp/explicit-zsh" || source != execenv.ShellEnv {
+		t.Fatalf("explicit env shell path not preferred, got path=%q source=%q", got, source)
+	}
+}
 
 func TestShellRunCancelKillsProcessGroup(t *testing.T) {
 	dir := t.TempDir()
@@ -55,6 +116,827 @@ func TestShellRunCancelKillsProcessGroup(t *testing.T) {
 	}
 
 	waitForProcessExit(t, pid)
+}
+
+func TestShellRunPTYModeAcceptsWriteStdin(t *testing.T) {
+	enableTestPTYShell(t)
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "printf 'ready\\n'; read line; printf 'got:%s\\n' \"$line\"",
+		"mode":       "pty",
+		"timeout_ms": 50,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run should return running PTY task, err=%v res=%+v", err, startRes)
+	}
+	data := shellRunData(t, startRes)
+	payload := data["payload"].(map[string]any)
+	if payload["transport"] != "pty" || payload["can_write"] != true {
+		t.Fatalf("expected writable PTY payload, got %#v", payload)
+	}
+
+	writeRes, err := ts.writeStdin(context.Background(), tc("write_stdin", map[string]any{
+		"task_id":    payload["task_id"],
+		"chars":      "hello",
+		"keys":       []string{"enter"},
+		"timeout_ms": 3000,
+	}))
+	if err != nil || writeRes.IsError {
+		t.Fatalf("write_stdin failed: err=%v res=%+v", err, writeRes)
+	}
+	writeData := shellRunData(t, writeRes)
+	if writeData["status"] != "exited" {
+		t.Fatalf("expected completed task, got %#v: %s", writeData["status"], writeRes.Content)
+	}
+	writePayload := writeData["payload"].(map[string]any)
+	if !strings.Contains(writePayload["stdout"].(string), "got:hello") {
+		t.Fatalf("expected write_stdin output, got %#v", writePayload)
+	}
+	if writePayload["can_write"] != false {
+		t.Fatalf("completed task should not be writable, got %#v", writePayload)
+	}
+}
+
+func TestWriteStdinEmptyInputPollsWithoutWriting(t *testing.T) {
+	enableTestPTYShell(t)
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "printf 'ready\\n'; read line; printf 'got:%s\\n' \"$line\"",
+		"mode":       "pty",
+		"timeout_ms": 50,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run should return running PTY task, err=%v res=%+v", err, startRes)
+	}
+	payload := shellRunData(t, startRes)["payload"].(map[string]any)
+
+	pollRes, err := ts.writeStdin(context.Background(), tc("write_stdin", map[string]any{
+		"task_id":    payload["task_id"],
+		"chars":      "",
+		"timeout_ms": 50,
+	}))
+	if err != nil || pollRes.IsError {
+		t.Fatalf("empty write_stdin poll failed: err=%v res=%+v", err, pollRes)
+	}
+	pollData := shellRunData(t, pollRes)
+	if pollData["status"] != "running" {
+		t.Fatalf("poll should leave task running, got %#v: %s", pollData["status"], pollRes.Content)
+	}
+	metrics := pollData["metrics"].(map[string]any)
+	if metrics["stdin_written"] != false || metrics["chars_written"] != float64(0) || metrics["keys_written"] != float64(0) {
+		t.Fatalf("poll should not write stdin, metrics=%#v", metrics)
+	}
+	pollPayload := pollData["payload"].(map[string]any)
+	if !strings.Contains(pollPayload["stdout"].(string), "ready") {
+		t.Fatalf("poll should return current task output, got %#v", pollPayload)
+	}
+
+	_, _ = ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{"task_id": payload["task_id"]}))
+}
+
+func TestShellRunRejectsManagedPTYMode(t *testing.T) {
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "bash",
+		"mode":       "managed_pty",
+		"background": true,
+	}))
+	if err != nil {
+		t.Fatalf("shell_run returned dispatch error: %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Content, `"code":"invalid_args"`) || !strings.Contains(res.Content, "mode must be auto, pipe, or pty") {
+		t.Fatalf("managed_pty should be rejected as invalid args, got %+v", res)
+	}
+}
+
+func TestShellRunPTYModeRequiresExecBoundaryShell(t *testing.T) {
+	t.Setenv(execenv.ShellEnv, "")
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command": "read line",
+		"mode":    "pty",
+	}))
+	if err != nil {
+		t.Fatalf("shell_run returned dispatch error: %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Content, `"code":"unsupported_transport"`) || !strings.Contains(res.Content, "exec-boundary shell") {
+		t.Fatalf("pty without exec-boundary shell should be rejected, got %+v", res)
+	}
+}
+
+func TestShellRunPTYModeRejectsShellWithoutExecWrapperSupport(t *testing.T) {
+	t.Setenv(execenv.ShellEnv, "/bin/sh")
+	t.Setenv(execenv.WrapperPathEnv, os.Args[0])
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command": "read line",
+		"mode":    "pty",
+	}))
+	if err != nil {
+		t.Fatalf("shell_run returned dispatch error: %v", err)
+	}
+	if !res.IsError || !strings.Contains(res.Content, `"code":"unsupported_transport"`) {
+		t.Fatalf("pty with ordinary shell should be rejected, got %+v", res)
+	}
+	if shellExecBoundaryEnabled() {
+		t.Fatal("ordinary /bin/sh must not be treated as an exec-boundary shell")
+	}
+}
+
+func TestShellRunExecBoundaryDeniesSplitPathQualifiedRecursiveRemove(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	if err := os.Mkdir(target, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	fakeShell := filepath.Join(dir, "exec-boundary-shell")
+	if err := os.WriteFile(fakeShell, []byte(`#!/bin/sh
+if [ "$1" = "-lc" ] && [ "$2" = "command /bin/echo whale-exec-boundary-probe" ]; then
+  "$EXEC_WRAPPER" /bin/echo echo whale-exec-boundary-probe
+  exit $?
+fi
+printf 'ready\n'
+line=''
+while IFS= read -r chunk; do
+  line="${line}${chunk}"
+  case "$line" in
+    /bin/rm\ -rf\ *)
+      set -- $line
+      "$EXEC_WRAPPER" /bin/rm rm -rf "$3"
+      line=''
+      ;;
+    exit)
+      exit 0
+      ;;
+  esac
+done
+`), 0o755); err != nil {
+		t.Fatalf("write fake shell: %v", err)
+	}
+	t.Setenv(execenv.ShellEnv, fakeShell)
+	t.Setenv(execenv.WrapperPathEnv, os.Args[0])
+
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "bash",
+		"mode":       "pty",
+		"background": true,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run exec-boundary PTY failed: err=%v res=%+v", err, startRes)
+	}
+	payload := shellRunData(t, startRes)["payload"].(map[string]any)
+	taskID := payload["task_id"].(string)
+	if payload["transport"] != "pty" || payload["can_write"] != true {
+		t.Fatalf("expected writable PTY payload, got %#v", payload)
+	}
+
+	_, err = ts.writeStdin(context.Background(), tc("write_stdin", map[string]any{
+		"task_id":    taskID,
+		"chars":      "/bin/rm -",
+		"timeout_ms": 100,
+	}))
+	if err != nil {
+		t.Fatalf("first split write_stdin returned dispatch error: %v", err)
+	}
+	writeRes, err := ts.writeStdin(context.Background(), tc("write_stdin", map[string]any{
+		"task_id":    taskID,
+		"chars":      "rf " + target,
+		"keys":       []string{"enter"},
+		"timeout_ms": 3000,
+	}))
+	if err != nil || writeRes.IsError {
+		t.Fatalf("second split write_stdin failed: err=%v res=%+v", err, writeRes)
+	}
+	stdout := shellRunData(t, writeRes)["payload"].(map[string]any)["stdout"].(string)
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("exec-boundary shell allowed recursive remove, target stat: %v stdout=%q", err, stdout)
+	}
+	if !strings.Contains(stdout, "Whale policy denied shell command: rm -rf") {
+		t.Fatalf("expected exec-boundary denial output, got %q", stdout)
+	}
+
+	_, _ = ts.writeStdin(context.Background(), tc("write_stdin", map[string]any{
+		"task_id": taskID,
+		"chars":   "exit",
+		"keys":    []string{"enter"},
+	}))
+	waitForTaskDone(t, ts, taskID)
+}
+
+func TestShellRunExecBoundaryUsesToolsetPolicy(t *testing.T) {
+	dir := t.TempDir()
+	fakeShell := filepath.Join(dir, "exec-boundary-shell")
+	if err := os.WriteFile(fakeShell, []byte(`#!/bin/sh
+if [ "$1" = "-lc" ] && [ "$2" = "command /bin/echo whale-exec-boundary-probe" ]; then
+  "$EXEC_WRAPPER" /bin/echo echo whale-exec-boundary-probe
+  exit $?
+fi
+printf 'ready\n'
+while IFS= read -r line; do
+  case "$line" in
+    echo\ *)
+      "$EXEC_WRAPPER" /bin/echo echo "${line#echo }"
+      ;;
+    exit)
+      exit 0
+      ;;
+  esac
+done
+`), 0o755); err != nil {
+		t.Fatalf("write fake shell: %v", err)
+	}
+	t.Setenv(execenv.ShellEnv, fakeShell)
+	t.Setenv(execenv.WrapperPathEnv, os.Args[0])
+
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	ts.SetExecBoundaryPolicy(policy.RulePolicy{
+		Default: policy.PermissionAllow,
+		Rules: []policy.PermissionRule{
+			{Permission: "shell", Pattern: "/bin/echo *", Action: policy.PermissionDeny},
+		},
+	})
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "sh",
+		"mode":       "pty",
+		"background": true,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run exec-boundary PTY failed: err=%v res=%+v", err, startRes)
+	}
+	payload := shellRunData(t, startRes)["payload"].(map[string]any)
+	taskID := payload["task_id"].(string)
+
+	writeRes, err := ts.writeStdin(context.Background(), tc("write_stdin", map[string]any{
+		"task_id":    taskID,
+		"chars":      "echo blocked",
+		"keys":       []string{"enter"},
+		"timeout_ms": 3000,
+	}))
+	if err != nil || writeRes.IsError {
+		t.Fatalf("write_stdin failed: err=%v res=%+v", err, writeRes)
+	}
+	stdout := shellRunData(t, writeRes)["payload"].(map[string]any)["stdout"].(string)
+	if !strings.Contains(stdout, "Whale policy denied shell command: echo blocked") {
+		t.Fatalf("expected custom exec-boundary policy denial, got %q", stdout)
+	}
+
+	_, _ = ts.writeStdin(context.Background(), tc("write_stdin", map[string]any{
+		"task_id": taskID,
+		"chars":   "exit",
+		"keys":    []string{"enter"},
+	}))
+	waitForTaskDone(t, ts, taskID)
+}
+
+func TestShellRunExecBoundaryApprovalAllowsPromptRule(t *testing.T) {
+	dir := t.TempDir()
+	fakeShell := filepath.Join(dir, "exec-boundary-shell")
+	if err := os.WriteFile(fakeShell, []byte(`#!/bin/sh
+if [ "$1" = "-lc" ] && [ "$2" = "command /bin/echo whale-exec-boundary-probe" ]; then
+  "$EXEC_WRAPPER" /bin/echo echo whale-exec-boundary-probe
+  exit $?
+fi
+printf 'ready\n'
+while IFS= read -r line; do
+  case "$line" in
+    echo\ *)
+      "$EXEC_WRAPPER" /bin/echo echo "${line#echo }"
+      ;;
+    exit)
+      exit 0
+      ;;
+  esac
+done
+`), 0o755); err != nil {
+		t.Fatalf("write fake shell: %v", err)
+	}
+	t.Setenv(execenv.ShellEnv, fakeShell)
+	t.Setenv(execenv.WrapperPathEnv, os.Args[0])
+
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	ts.SetExecBoundaryPolicy(policy.RulePolicy{
+		Default: policy.PermissionAllow,
+		Rules: []policy.PermissionRule{
+			{Permission: "shell", Pattern: "/bin/echo *", Action: policy.PermissionAsk},
+		},
+	})
+	var approvalReq policy.ApprovalRequest
+	ts.SetExecBoundaryApproval(func() string { return "session-pty" }, func(req policy.ApprovalRequest) policy.ApprovalDecision {
+		approvalReq = req
+		return policy.ApprovalAllow
+	})
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "sh",
+		"mode":       "pty",
+		"background": true,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run exec-boundary PTY failed: err=%v res=%+v", err, startRes)
+	}
+	taskID := shellRunData(t, startRes)["payload"].(map[string]any)["task_id"].(string)
+
+	writeRes, err := ts.writeStdin(context.Background(), tc("write_stdin", map[string]any{
+		"task_id":    taskID,
+		"chars":      "echo allowed",
+		"keys":       []string{"enter"},
+		"timeout_ms": 3000,
+	}))
+	if err != nil || writeRes.IsError {
+		t.Fatalf("write_stdin failed: err=%v res=%+v", err, writeRes)
+	}
+	stdout := shellRunData(t, writeRes)["payload"].(map[string]any)["stdout"].(string)
+	if !strings.Contains(stdout, "allowed") {
+		t.Fatalf("expected approved command output, got %q", stdout)
+	}
+	if approvalReq.SessionID != "session-pty" || approvalReq.ToolCall.Name != "shell_run" {
+		t.Fatalf("unexpected exec-boundary approval request: %+v", approvalReq)
+	}
+	if !strings.Contains(policy.ApprovalSummary(approvalReq.ToolCall), "/bin/echo allowed") {
+		t.Fatalf("approval summary should show intercepted command, got %q", policy.ApprovalSummary(approvalReq.ToolCall))
+	}
+
+	_, _ = ts.writeStdin(context.Background(), tc("write_stdin", map[string]any{
+		"task_id": taskID,
+		"chars":   "exit",
+		"keys":    []string{"enter"},
+	}))
+	waitForTaskDone(t, ts, taskID)
+}
+
+func TestShellRunExecBoundaryApprovalDeniesPromptRule(t *testing.T) {
+	dir := t.TempDir()
+	fakeShell := filepath.Join(dir, "exec-boundary-shell")
+	if err := os.WriteFile(fakeShell, []byte(`#!/bin/sh
+if [ "$1" = "-lc" ] && [ "$2" = "command /bin/echo whale-exec-boundary-probe" ]; then
+  "$EXEC_WRAPPER" /bin/echo echo whale-exec-boundary-probe
+  exit $?
+fi
+printf 'ready\n'
+while IFS= read -r line; do
+  case "$line" in
+    echo\ *)
+      "$EXEC_WRAPPER" /bin/echo echo "${line#echo }"
+      ;;
+    exit)
+      exit 0
+      ;;
+  esac
+done
+`), 0o755); err != nil {
+		t.Fatalf("write fake shell: %v", err)
+	}
+	t.Setenv(execenv.ShellEnv, fakeShell)
+	t.Setenv(execenv.WrapperPathEnv, os.Args[0])
+
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	ts.SetExecBoundaryPolicy(policy.RulePolicy{
+		Default: policy.PermissionAllow,
+		Rules: []policy.PermissionRule{
+			{Permission: "shell", Pattern: "/bin/echo *", Action: policy.PermissionAsk},
+		},
+	})
+	ts.SetExecBoundaryApproval(func() string { return "session-pty" }, func(policy.ApprovalRequest) policy.ApprovalDecision {
+		return policy.ApprovalDeny
+	})
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "sh",
+		"mode":       "pty",
+		"background": true,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run exec-boundary PTY failed: err=%v res=%+v", err, startRes)
+	}
+	taskID := shellRunData(t, startRes)["payload"].(map[string]any)["task_id"].(string)
+
+	writeRes, err := ts.writeStdin(context.Background(), tc("write_stdin", map[string]any{
+		"task_id":    taskID,
+		"chars":      "echo denied",
+		"keys":       []string{"enter"},
+		"timeout_ms": 3000,
+	}))
+	if err != nil || writeRes.IsError {
+		t.Fatalf("write_stdin failed: err=%v res=%+v", err, writeRes)
+	}
+	stdout := shellRunData(t, writeRes)["payload"].(map[string]any)["stdout"].(string)
+	if strings.Contains(stdout, "\r\ndenied\r\n") || strings.Contains(stdout, "\ndenied\n") {
+		t.Fatalf("denied command should not execute, got %q", stdout)
+	}
+	if !strings.Contains(stdout, "Whale policy denied shell command: echo denied") {
+		t.Fatalf("expected exec-boundary denial output, got %q", stdout)
+	}
+
+	_, _ = ts.writeStdin(context.Background(), tc("write_stdin", map[string]any{
+		"task_id": taskID,
+		"chars":   "exit",
+		"keys":    []string{"enter"},
+	}))
+	waitForTaskDone(t, ts, taskID)
+}
+
+func TestShellRunBackgroundPTYReportsActualWritableState(t *testing.T) {
+	enableTestPTYShell(t)
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "sleep 5",
+		"mode":       "pty",
+		"background": true,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run background PTY failed: err=%v res=%+v", err, startRes)
+	}
+	payload := shellRunData(t, startRes)["payload"].(map[string]any)
+	taskID := payload["task_id"].(string)
+	task, ok := ts.tasks.get(taskID)
+	if !ok {
+		t.Fatalf("task %s not found", taskID)
+	}
+	snap := task.snapshot()
+	if payload["can_write"] != snap.CanWrite {
+		t.Fatalf("can_write should reflect actual task state, payload=%#v snapshot=%#v", payload["can_write"], snap.CanWrite)
+	}
+	if payload["can_write"] != true {
+		t.Fatalf("background PTY should be writable when shell_run returns, got %#v", payload)
+	}
+	_, _ = ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{"task_id": taskID}))
+}
+
+func TestWriteStdinImmediatelyAfterBackgroundPTY(t *testing.T) {
+	enableTestPTYShell(t)
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "read line; printf 'got:%s\\n' \"$line\"",
+		"mode":       "pty",
+		"background": true,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run background PTY failed: err=%v res=%+v", err, startRes)
+	}
+	payload := shellRunData(t, startRes)["payload"].(map[string]any)
+	writeRes, err := ts.writeStdin(context.Background(), tc("write_stdin", map[string]any{
+		"task_id":    payload["task_id"],
+		"chars":      "ready",
+		"keys":       []string{"enter"},
+		"timeout_ms": 3000,
+	}))
+	if err != nil || writeRes.IsError {
+		t.Fatalf("immediate write_stdin failed: err=%v res=%+v", err, writeRes)
+	}
+	writePayload := shellRunData(t, writeRes)["payload"].(map[string]any)
+	if !strings.Contains(writePayload["stdout"].(string), "got:ready") {
+		t.Fatalf("expected immediate stdin output, got %#v", writePayload)
+	}
+}
+
+func TestWriteStdinRejectsOversizedInput(t *testing.T) {
+	enableTestPTYShell(t)
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "sleep 5",
+		"mode":       "pty",
+		"timeout_ms": 50,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run should return running PTY task, err=%v res=%+v", err, startRes)
+	}
+	taskID := shellRunData(t, startRes)["payload"].(map[string]any)["task_id"].(string)
+	waitForTaskWritable(t, ts, taskID)
+
+	writeRes, err := ts.writeStdin(context.Background(), tc("write_stdin", map[string]any{
+		"task_id": taskID,
+		"chars":   strings.Repeat("x", maxShellStdinBytes+1),
+	}))
+	if err != nil {
+		t.Fatalf("write_stdin dispatch failed: %v", err)
+	}
+	if !writeRes.IsError || !strings.Contains(writeRes.Content, `"code":"stdin_too_large"`) {
+		t.Fatalf("expected stdin_too_large, got %+v", writeRes)
+	}
+	_, _ = ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{"task_id": taskID}))
+}
+
+func waitForTaskWritable(t *testing.T, ts *Toolset, taskID string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		task, ok := ts.tasks.get(taskID)
+		if ok && task.snapshot().CanWrite {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("task %s did not become writable", taskID)
+}
+
+func waitForTaskDone(t *testing.T, ts *Toolset, taskID string) {
+	t.Helper()
+	task, ok := ts.tasks.get(taskID)
+	if !ok {
+		return
+	}
+	select {
+	case <-task.done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("task %s did not finish", taskID)
+	}
+}
+
+func TestWriteStdinRejectsUnsupportedKey(t *testing.T) {
+	enableTestPTYShell(t)
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "read line",
+		"mode":       "pty",
+		"timeout_ms": 50,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run should return running PTY task, err=%v res=%+v", err, startRes)
+	}
+	taskID := shellRunData(t, startRes)["payload"].(map[string]any)["task_id"].(string)
+
+	writeRes, err := ts.writeStdin(context.Background(), tc("write_stdin", map[string]any{
+		"task_id": taskID,
+		"keys":    []string{"return"},
+	}))
+	if err != nil {
+		t.Fatalf("write_stdin dispatch failed: %v", err)
+	}
+	if !writeRes.IsError || !strings.Contains(writeRes.Content, `unsupported key \"return\"`) {
+		t.Fatalf("expected unsupported key error, got %+v", writeRes)
+	}
+	_, _ = ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{"task_id": taskID}))
+}
+
+func TestShellRunPTYModeStartsNewSession(t *testing.T) {
+	if os.Getenv("WHALE_PTY_SESSION_HELPER") == "1" {
+		sid, err := unix.Getsid(0)
+		if err != nil {
+			t.Fatalf("getsid: %v", err)
+		}
+		fmt.Printf("sid=%d\n", sid)
+		return
+	}
+
+	enableTestPTYShell(t)
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	helperPath := shellQuoteForTest(os.Args[0])
+	res, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    fmt.Sprintf(`printf 'shell_pid=%%s ' "$$"; WHALE_PTY_SESSION_HELPER=1 %s -test.run=TestShellRunPTYModeStartsNewSession --`, helperPath),
+		"mode":       "pty",
+		"timeout_ms": 3000,
+	}))
+	if err != nil || res.IsError {
+		t.Fatalf("shell_run failed: err=%v res=%+v", err, res)
+	}
+	payload := shellRunData(t, res)["payload"].(map[string]any)
+	stdout := payload["stdout"].(string)
+	fields := strings.Fields(strings.ReplaceAll(stdout, "\r", ""))
+	values := map[string]string{}
+	for _, field := range fields {
+		key, value, ok := strings.Cut(field, "=")
+		if ok {
+			values[key] = value
+		}
+	}
+	if values["shell_pid"] == "" || values["sid"] == "" {
+		t.Fatalf("expected shell pid and session id in PTY output, got %q", stdout)
+	}
+	if values["shell_pid"] != values["sid"] {
+		t.Fatalf("expected PTY shell to start a new session, got %q", stdout)
+	}
+}
+
+func shellQuoteForTest(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func TestShellRunAutoInteractiveAuthUsesPTYAndWriteStdin(t *testing.T) {
+	enableTestPTYShell(t)
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	fakeNPM := filepath.Join(binDir, "npm")
+	if err := os.WriteFile(fakeNPM, []byte("#!/bin/sh\nif [ \"$1\" = login ]; then printf 'Press ENTER to open in the browser...'; read _; printf '\\nLogged in on https://registry.npmjs.org/.\\n'; else exit 2; fi\n"), 0o755); err != nil {
+		t.Fatalf("write fake npm: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "npm login",
+		"timeout_ms": 50,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run should background npm login as PTY, err=%v res=%+v", err, startRes)
+	}
+	data := shellRunData(t, startRes)
+	payload := data["payload"].(map[string]any)
+	if payload["transport"] != "pty" || payload["can_write"] != true {
+		t.Fatalf("expected npm login to use writable PTY, got %#v", payload)
+	}
+	diagnosis := data["diagnosis"].(map[string]any)
+	if diagnosis["reason"] != "interactive_or_auth" || diagnosis["suggested_next_action"] != "write_stdin" {
+		t.Fatalf("unexpected diagnosis: %#v", diagnosis)
+	}
+	taskID := payload["task_id"].(string)
+	deadline := time.Now().Add(2 * time.Second)
+	sawPrompt := false
+	for time.Now().Before(deadline) {
+		task, ok := ts.tasks.get(taskID)
+		if ok && strings.Contains(task.snapshot().Stdout, "Press ENTER") {
+			sawPrompt = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !sawPrompt {
+		t.Fatalf("npm login prompt did not appear before write_stdin: %s", startRes.Content)
+	}
+
+	writeRes, err := ts.writeStdin(context.Background(), tc("write_stdin", map[string]any{
+		"task_id":    taskID,
+		"keys":       []string{"enter"},
+		"timeout_ms": 3000,
+	}))
+	if err != nil || writeRes.IsError {
+		t.Fatalf("write_stdin failed: err=%v res=%+v", err, writeRes)
+	}
+	writePayload := shellRunData(t, writeRes)["payload"].(map[string]any)
+	if !strings.Contains(writePayload["stdout"].(string), "Logged in on https://registry.npmjs.org/.") {
+		t.Fatalf("expected npm login completion, got %#v", writePayload)
+	}
+}
+
+func TestShellRunAutoInteractiveAuthUsesPipeWithoutExecBoundaryShell(t *testing.T) {
+	t.Setenv(execenv.ShellEnv, "")
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	fakeNPM := filepath.Join(binDir, "npm")
+	if err := os.WriteFile(fakeNPM, []byte("#!/bin/sh\nif [ \"$1\" = login ]; then printf 'Press ENTER to open in the browser...'; sleep 30; else exit 2; fi\n"), 0o755); err != nil {
+		t.Fatalf("write fake npm: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "npm login",
+		"timeout_ms": 50,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run should background npm login as pipe without boundary shell, err=%v res=%+v", err, startRes)
+	}
+	data := shellRunData(t, startRes)
+	payload := data["payload"].(map[string]any)
+	if payload["transport"] != "pipe" || payload["can_write"] != false {
+		t.Fatalf("expected pipe task without writable stdin, got %#v", payload)
+	}
+	diagnosis := data["diagnosis"].(map[string]any)
+	if diagnosis["reason"] != "interactive_or_auth" || diagnosis["suggested_next_action"] == "write_stdin" {
+		t.Fatalf("pipe auth diagnosis must not suggest write_stdin: %#v", diagnosis)
+	}
+	taskID := payload["task_id"].(string)
+	_, _ = ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{"task_id": taskID}))
+}
+
+func TestShellRunPipeInteractiveAuthDoesNotSuggestWriteStdin(t *testing.T) {
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	fakeNPM := filepath.Join(binDir, "npm")
+	if err := os.WriteFile(fakeNPM, []byte("#!/bin/sh\nif [ \"$1\" = login ]; then printf 'Press ENTER to open in the browser...'; sleep 30; else exit 2; fi\n"), 0o755); err != nil {
+		t.Fatalf("write fake npm: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "npm login",
+		"timeout_ms": 50,
+		"mode":       "pipe",
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run should background pipe npm login, err=%v res=%+v", err, startRes)
+	}
+	data := shellRunData(t, startRes)
+	payload := data["payload"].(map[string]any)
+	if payload["transport"] != "pipe" || payload["can_write"] != false {
+		t.Fatalf("expected pipe task without writable stdin, got %#v", payload)
+	}
+	diagnosis := data["diagnosis"].(map[string]any)
+	if diagnosis["reason"] != "interactive_or_auth" || diagnosis["suggested_next_action"] == "write_stdin" {
+		t.Fatalf("pipe auth diagnosis must not suggest write_stdin: %#v", diagnosis)
+	}
+	taskID := payload["task_id"].(string)
+	cancelRes, cancelErr := ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{"task_id": taskID}))
+	if cancelErr != nil || cancelRes.IsError {
+		t.Fatalf("cleanup shell_cancel failed: err=%v res=%+v", cancelErr, cancelRes)
+	}
+}
+
+func TestWriteStdinRejectsPipeTask(t *testing.T) {
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "sleep 1",
+		"background": true,
+		"mode":       "pipe",
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run background failed: err=%v res=%+v", err, startRes)
+	}
+	taskID := backgroundTaskID(t, startRes.Content)
+	writeRes, err := ts.writeStdin(context.Background(), tc("write_stdin", map[string]any{
+		"task_id": taskID,
+		"chars":   "x",
+	}))
+	if err != nil {
+		t.Fatalf("write_stdin dispatch failed: %v", err)
+	}
+	if !writeRes.IsError || !strings.Contains(writeRes.Content, `"code":"stdin_not_available"`) {
+		t.Fatalf("expected stdin_not_available, got %+v", writeRes)
+	}
+	_, _ = ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{"task_id": taskID}))
 }
 
 func TestShellRunBackgroundTimeoutKillsProcessGroup(t *testing.T) {
@@ -585,12 +1467,17 @@ func TestShellWaitRunningReturnsPartialOutputAndPromptDiagnosis(t *testing.T) {
 	}
 	taskID := shellRunData(t, startRes)["payload"].(map[string]any)["task_id"].(string)
 	deadline := time.Now().Add(2 * time.Second)
+	sawPrompt := false
 	for time.Now().Before(deadline) {
 		task, ok := ts.tasks.get(taskID)
 		if ok && strings.Contains(task.snapshot().Stderr, "Password:") {
+			sawPrompt = true
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	if !sawPrompt {
+		t.Fatalf("promptcmd stderr did not appear before shell_wait: %s", startRes.Content)
 	}
 	waitRes, err := ts.shellWait(context.Background(), tc("shell_wait", map[string]any{
 		"task_id":    taskID,
@@ -608,7 +1495,7 @@ func TestShellWaitRunningReturnsPartialOutputAndPromptDiagnosis(t *testing.T) {
 		t.Fatalf("expected partial stderr, got %#v", payload)
 	}
 	diagnosis := data["diagnosis"].(map[string]any)
-	if diagnosis["reason"] != "interactive_prompt" || diagnosis["suggested_next_action"] != "shell_cancel" {
+	if diagnosis["reason"] != "interactive_prompt" || diagnosis["suggested_next_action"] != "rerun_non_interactive" {
 		t.Fatalf("unexpected diagnosis: %#v", diagnosis)
 	}
 	_, _ = ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{"task_id": taskID}))
@@ -781,8 +1668,8 @@ func waitForProcessExit(t *testing.T, pid int) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		err := syscall.Kill(pid, 0)
-		if errors.Is(err, syscall.ESRCH) {
+		err := unix.Kill(pid, 0)
+		if errors.Is(err, unix.ESRCH) {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)

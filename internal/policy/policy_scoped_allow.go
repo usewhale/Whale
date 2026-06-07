@@ -1,18 +1,7 @@
 package policy
 
-import (
-	"encoding/json"
-	"strings"
-)
+import "strings"
 
-func shellCommandFromInput(input string) string {
-	var body map[string]any
-	if err := json.Unmarshal([]byte(input), &body); err != nil {
-		return ""
-	}
-	cmd, _ := body["command"].(string)
-	return strings.TrimSpace(cmd)
-}
 func shellCommandEligibleForScopedAllow(command string) bool {
 	if command == "" {
 		return false

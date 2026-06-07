@@ -17,8 +17,8 @@ func TestShellPolicyClassifiesLongRunningCommands(t *testing.T) {
 		{name: "download", command: "curl https://example.com/file", autoBackground: true, reason: "download_long_running"},
 		{name: "remote", command: "prlctl exec whale-test true", autoBackground: true, reason: "remote_command_long_running"},
 		{name: "unknown simple", command: "pytest", autoBackground: true, reason: "unknown_long_running"},
-		{name: "sudo", command: "sudo make test", autoBackground: false, reason: "interactive_or_auth"},
-		{name: "auth arg", command: "gh auth login", autoBackground: false, reason: "interactive_or_auth"},
+		{name: "sudo", command: "sudo make test", autoBackground: true, reason: "interactive_or_auth"},
+		{name: "auth arg", command: "gh auth login", autoBackground: true, reason: "interactive_or_auth"},
 		{name: "plain sleep", command: "sleep 30", autoBackground: false, reason: "idle_sleep"},
 		{name: "complex shell", command: "printf before; sleep 30", autoBackground: false, reason: "complex_shell"},
 	}
@@ -30,6 +30,22 @@ func TestShellPolicyClassifiesLongRunningCommands(t *testing.T) {
 				t.Fatalf("policy = {auto:%v reason:%q}, want {auto:%v reason:%q}", got.AutoBackground, got.Reason, tt.autoBackground, tt.reason)
 			}
 		})
+	}
+}
+
+func TestShellPolicyDoesNotAutoBackgroundInteractiveAuthWithoutPTY(t *testing.T) {
+	orig := shellPTYSupportedForPolicy
+	shellPTYSupportedForPolicy = func() bool { return false }
+	t.Cleanup(func() {
+		shellPTYSupportedForPolicy = orig
+	})
+
+	got := shellPolicy("npm login", 1000)
+	if got.AutoBackground {
+		t.Fatalf("interactive auth without PTY must stay foreground, got %#v", got)
+	}
+	if got.Reason != "interactive_or_auth" || got.SuggestedNextAction != "rerun_non_interactive" {
+		t.Fatalf("unexpected no-PTY auth policy: %#v", got)
 	}
 }
 
@@ -56,5 +72,17 @@ func TestShellOutputDiagnosis(t *testing.T) {
 	}
 	if diagnosis.Reason != "ordinary_timeout" {
 		t.Fatalf("unexpected diagnosis: %#v", diagnosis)
+	}
+
+	authPipeDiagnosis := shellTimeoutDiagnosis(shellTaskSnapshot{Transport: shellTransportPipe}, shellTimeoutContext{
+		Policy:             shellContinuationPolicy{Reason: "interactive_or_auth"},
+		RequestedTimeoutMS: defaultForegroundShellWaitMS,
+		EffectiveTimeoutMS: defaultForegroundShellWaitMS,
+	})
+	if authPipeDiagnosis.SuggestedNextAction == "write_stdin" {
+		t.Fatalf("pipe auth diagnosis must not suggest write_stdin: %#v", authPipeDiagnosis)
+	}
+	if authPipeDiagnosis.SuggestedNextAction != "rerun_non_interactive" {
+		t.Fatalf("unexpected pipe auth diagnosis: %#v", authPipeDiagnosis)
 	}
 }

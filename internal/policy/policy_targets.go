@@ -18,6 +18,8 @@ func permissionKind(toolName string) string {
 		return "edit"
 	case "shell_run":
 		return "shell"
+	case "write_stdin":
+		return "terminal"
 	case "remember", "remember_update", "forget":
 		return "memory"
 	case "spawn_subagent":
@@ -51,6 +53,9 @@ func readScopeTarget(call core.ToolCall) string {
 	return "*"
 }
 func permissionTarget(call core.ToolCall) string {
+	if call.Name == "write_stdin" {
+		return "write_stdin"
+	}
 	if strings.HasPrefix(call.Name, "mcp__") {
 		return call.Name
 	}
@@ -93,4 +98,21 @@ func webFetchPermissionHost(body map[string]any) string {
 func hashString(v string) string {
 	sum := sha256.Sum256([]byte(v))
 	return fmt.Sprintf("%x", sum[:8])
+}
+
+func stringSliceValue(v any) []string {
+	switch raw := v.(type) {
+	case []string:
+		return append([]string(nil), raw...)
+	case []any:
+		out := make([]string, 0, len(raw))
+		for _, item := range raw {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }

@@ -29,6 +29,13 @@ func initAppRuntime(cfg Config, sessionInit appSessionInit, toolInit appToolInit
 	if err != nil {
 		return appRuntimeInit{}, fmt.Errorf("load api key failed: %w", err)
 	}
+	toolInit.toolset.SetExecBoundaryPolicy(policy.RulePolicy{
+		Default:       cfg.PermissionDefault,
+		Rules:         append([]policy.PermissionRule(nil), cfg.PermissionRules...),
+		WorkspaceRoot: workspaceRoot,
+		WorktreeRoot:  worktreeRoot,
+	})
+	toolInit.toolset.SetExecBoundaryApproval(parentSessionIDFunc, approvalFunc)
 	toolInit.toolset.SetWebFetchExtractor(newDeepSeekWebFetchExtractor(webFetchExtractorOptions{
 		APIKey:  apiKey,
 		BaseURL: cfg.APIBaseURL,
@@ -77,6 +84,13 @@ func initAppRuntime(cfg Config, sessionInit appSessionInit, toolInit appToolInit
 			return nil, err
 		}
 		toolset.SetWorktreeContext(workspace.WorktreeRoot, workspace.OriginalWorkspace)
+		toolset.SetExecBoundaryPolicy(policy.RulePolicy{
+			Default:       cfg.PermissionDefault,
+			Rules:         append([]policy.PermissionRule(nil), cfg.PermissionRules...),
+			WorkspaceRoot: workspace.WorkspaceRoot,
+			WorktreeRoot:  workspace.WorktreeRoot,
+		})
+		toolset.SetExecBoundaryApproval(parentSessionIDFunc, approvalFunc)
 		toolset.SetSkillDisabled(cfg.SkillsDisabled)
 		if toolInit.pluginManager != nil {
 			toolset.SetExtraSkills(toolInit.pluginManager.Skills())

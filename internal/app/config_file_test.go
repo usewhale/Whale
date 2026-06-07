@@ -605,6 +605,7 @@ func TestApplyFileConfigLoadsPermissionRules(t *testing.T) {
 			AutoAccept: boolPtr(true),
 			Read:       map[string]string{"*": "allow", "*.env": "ask"},
 			Shell:      map[string]string{"*": "allow", "git push*": "ask", "rm -rf*": "deny"},
+			Terminal:   map[string]string{"write_stdin": "ask"},
 			MCP:        map[string]string{"*": "ask"},
 			WebSearch:  map[string]string{"*": "ask"},
 			WebFetch:   map[string]string{"host:nodejs.org": "allow"},
@@ -621,14 +622,17 @@ func TestApplyFileConfigLoadsPermissionRules(t *testing.T) {
 	if !cfg.AutoAcceptPermissions {
 		t.Fatal("auto accept not applied")
 	}
-	if len(cfg.PermissionRules) != 9 {
-		t.Fatalf("permission rules = %d, want 9: %+v", len(cfg.PermissionRules), cfg.PermissionRules)
+	if len(cfg.PermissionRules) != 10 {
+		t.Fatalf("permission rules = %d, want 10: %+v", len(cfg.PermissionRules), cfg.PermissionRules)
 	}
 	if got := cfg.PermissionRules[0]; got.Permission != "read" || got.Pattern != "*" || got.Action != policy.PermissionAllow {
 		t.Fatalf("first rule = %+v", got)
 	}
 	if !hasPermissionRule(cfg.PermissionRules, "web_search", "*", policy.PermissionAsk) {
 		t.Fatalf("missing web_search rule: %+v", cfg.PermissionRules)
+	}
+	if !hasPermissionRule(cfg.PermissionRules, "terminal", "write_stdin", policy.PermissionAsk) {
+		t.Fatalf("missing terminal rule: %+v", cfg.PermissionRules)
 	}
 	if !hasPermissionRule(cfg.PermissionRules, "web_fetch", "host:nodejs.org", policy.PermissionAllow) {
 		t.Fatalf("missing web_fetch rule: %+v", cfg.PermissionRules)

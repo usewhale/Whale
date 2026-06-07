@@ -2,10 +2,11 @@ package policy
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/usewhale/whale/internal/core"
-	whaleTools "github.com/usewhale/whale/internal/tools"
+	"github.com/usewhale/whale/internal/policy/shellrisk"
 )
 
 func TestDefaultToolPolicyAllowsOrdinaryShellCommands(t *testing.T) {
@@ -371,15 +372,13 @@ func TestApprovalMetadataPreservesToolPreviewValues(t *testing.T) {
 
 func productionShellRunSpec(t *testing.T) core.ToolSpec {
 	t.Helper()
-	ts, err := whaleTools.NewToolset(t.TempDir())
-	if err != nil {
-		t.Fatalf("new toolset: %v", err)
+	return core.ToolSpec{
+		Name:         "shell_run",
+		Capabilities: []string{"shell.read", "shell.run"},
+		ReadOnlyCheck: func(args map[string]any) bool {
+			cmd, _ := args["command"].(string)
+			decision := shellrisk.Classify(strings.TrimSpace(cmd))
+			return decision.Allow && decision.Level == shellrisk.LevelSafeRead
+		},
 	}
-	for _, tool := range ts.Tools() {
-		if tool.Name() == "shell_run" {
-			return core.DescribeTool(tool)
-		}
-	}
-	t.Fatal("production shell_run tool not found")
-	return core.ToolSpec{}
 }

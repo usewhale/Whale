@@ -43,6 +43,9 @@ func (p childToolApprovalPolicy) requiresApproval(spec core.ToolSpec, call core.
 	if caps[CapabilityShellRun] && slices.Contains(spec.Capabilities, CapabilityShellRun) {
 		return true
 	}
+	if caps[CapabilityTerminalWrite] && slices.Contains(spec.Capabilities, CapabilityTerminalWrite) {
+		return true
+	}
 	for _, cap := range spec.Capabilities {
 		if strings.TrimSpace(cap) == "mutates_state" {
 			return true

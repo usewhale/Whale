@@ -23,6 +23,7 @@ func (b *Toolset) shellTools() []core.Tool {
 					"timeout_ms": map[string]any{"type": "integer", "minimum": 1, "maximum": maxBackgroundShellTimeoutMS, "description": shellRunTimeoutDescription()},
 					"background": map[string]any{"type": "boolean", "description": fmt.Sprintf("When true, return immediately with task_id. The task runtime defaults to %dms.", defaultBackgroundShellTimeoutMS)},
 					"cwd":        map[string]any{"type": "string", "description": "Optional working directory relative to the workspace root. Must stay inside the workspace. Use this for subdirectory commands instead of cd."},
+					"mode":       map[string]any{"type": "string", "enum": []string{"auto", "pipe", "pty"}, "description": "Execution transport. auto uses a PTY for recognized interactive or authentication commands and a normal pipe otherwise; pty enables write_stdin interaction."},
 				},
 				"required": []string{"command"},
 			},
@@ -45,6 +46,28 @@ func (b *Toolset) shellTools() []core.Tool {
 			readOnly:     true,
 			capabilities: []string{"shell.read", "shell.run"},
 			fn:           b.shellWait,
+		},
+		toolFn{
+			name:        "write_stdin",
+			description: "Write stdin bytes or control keys to a running PTY shell task by task_id, then wait briefly for output. Use shell_wait to poll without writing.",
+			parameters: map[string]any{
+				"type":                 "object",
+				"additionalProperties": false,
+				"properties": map[string]any{
+					"task_id": map[string]any{"type": "string"},
+					"chars":   map[string]any{"type": "string", "description": "Literal bytes to send to the PTY stdin. For control keys, prefer keys instead of escape sequences."},
+					"keys": map[string]any{
+						"type":        "array",
+						"description": "Control keys to send after chars. Use [\"enter\"] to press ENTER.",
+						"items":       map[string]any{"type": "string", "enum": []string{"enter", "tab", "escape", "ctrl-c"}},
+					},
+					"timeout_ms": map[string]any{"type": "integer", "minimum": 1, "maximum": maxShellWaitTimeoutMS, "description": shellWaitTimeoutDescription()},
+				},
+				"required": []string{"task_id"},
+			},
+			readOnly:     false,
+			capabilities: []string{"terminal.write"},
+			fn:           b.writeStdin,
 		},
 		toolFn{
 			name:        "shell_cancel",

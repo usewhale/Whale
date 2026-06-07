@@ -9,4 +9,8 @@ const (
 
 	defaultBackgroundShellTimeoutMS = 1_800_000
 	maxBackgroundShellTimeoutMS     = 1_800_000
+
+	maxShellStdinBytes       = 512
+	shellStdinWriteTimeoutMS = 2_000
+	shellStdinReadyTimeoutMS = 2_000
 )

@@ -543,6 +543,80 @@ func TestRulePolicyUserShellRuleOverridesDefaultAllow(t *testing.T) {
 	}
 }
 
+func TestRulePolicyWriteStdinUsesTerminalPermission(t *testing.T) {
+	p := RulePolicy{
+		Default: PermissionAllow,
+		Rules: []PermissionRule{
+			{Permission: "terminal", Pattern: "write_stdin", Action: PermissionAsk},
+		},
+	}
+	got := p.Decide(
+		core.ToolSpec{Name: "write_stdin", Capabilities: []string{"terminal.write"}},
+		core.ToolCall{Name: "write_stdin", Input: `{"task_id":"task-1","keys":["enter"]}`},
+	)
+	if !got.Allow || !got.RequiresApproval || got.Permission != "terminal" || got.Pattern != "write_stdin" || got.MatchedRule != "terminal:write_stdin=ask" {
+		t.Fatalf("write_stdin should use terminal permission path: %+v", got)
+	}
+
+	denied := RulePolicy{
+		Default: PermissionAllow,
+		Rules: []PermissionRule{
+			{Permission: "terminal", Pattern: "write_stdin", Action: PermissionDeny},
+		},
+	}.Decide(
+		core.ToolSpec{Name: "write_stdin", Capabilities: []string{"terminal.write"}},
+		core.ToolCall{Name: "write_stdin", Input: `{"task_id":"task-1","chars":"x"}`},
+	)
+	if denied.Allow || denied.Code != "permission_denied" || denied.Permission != "terminal" {
+		t.Fatalf("write_stdin deny should use terminal permission path: %+v", denied)
+	}
+}
+
+func TestRulePolicyWriteStdinPayloadDoesNotUseShellRules(t *testing.T) {
+	p := RulePolicy{Default: PermissionAllow, Rules: DefaultRules()}
+	spec := core.ToolSpec{Name: "write_stdin", Capabilities: []string{"terminal.write"}}
+
+	danger := p.Decide(spec, core.ToolCall{Name: "write_stdin", Input: `{"task_id":"task-1","chars":"rm -rf /tmp/x","keys":["enter"]}`})
+	if !danger.Allow || danger.RequiresApproval || danger.MatchedRule != "" {
+		t.Fatalf("write_stdin payload should be terminal input transport by default, got %+v", danger)
+	}
+
+	install := p.Decide(spec, core.ToolCall{Name: "write_stdin", Input: `{"task_id":"task-1","chars":"npm install left-pad\n"}`})
+	if !install.Allow || install.RequiresApproval || install.MatchedRule != "" {
+		t.Fatalf("write_stdin command-like payload should be terminal input transport by default: %+v", install)
+	}
+
+	fragment := p.Decide(spec, core.ToolCall{Name: "write_stdin", Input: `{"task_id":"task-1","chars":"hello"}`})
+	if !fragment.Allow || fragment.RequiresApproval || fragment.MatchedRule != "" {
+		t.Fatalf("write_stdin character payload should be allowed by default: %+v", fragment)
+	}
+
+	enterOnly := p.Decide(spec, core.ToolCall{Name: "write_stdin", Input: `{"task_id":"task-1","keys":["enter"]}`})
+	if !enterOnly.Allow || enterOnly.RequiresApproval || enterOnly.MatchedRule != "" {
+		t.Fatalf("write_stdin enter-only payload should be allowed by default: %+v", enterOnly)
+	}
+}
+
+func TestRulePolicyWriteStdinEmptyPollUsesReadPermission(t *testing.T) {
+	p := RulePolicy{Default: PermissionAllow, Rules: DefaultRules()}
+	spec := core.ToolSpec{Name: "write_stdin", Capabilities: []string{"terminal.write"}}
+
+	for _, input := range []string{
+		`{"task_id":"task-1","chars":""}`,
+		`{"task_id":"task-1","chars":"","keys":[]}`,
+	} {
+		got := p.Decide(spec, core.ToolCall{Name: "write_stdin", Input: input})
+		if !got.Allow || got.RequiresApproval || got.Permission != "" || got.MatchedRule != "" {
+			t.Fatalf("empty write_stdin poll should be allowed as read-only poll, got %+v for %s", got, input)
+		}
+	}
+
+	enterOnly := p.Decide(spec, core.ToolCall{Name: "write_stdin", Input: `{"task_id":"task-1","keys":["enter"]}`})
+	if !enterOnly.Allow || enterOnly.RequiresApproval || enterOnly.MatchedRule != "" {
+		t.Fatalf("non-empty write_stdin should be allowed by default: %+v", enterOnly)
+	}
+}
+
 func TestRulePolicyExternalDirectoryDenyOverridesShellApproval(t *testing.T) {
 	rules := append(DefaultRules(), PermissionRule{Permission: "external_directory", Pattern: "*", Action: PermissionDeny})
 	p := RulePolicy{Default: PermissionAllow, Rules: rules, WorkspaceRoot: "/repo"}

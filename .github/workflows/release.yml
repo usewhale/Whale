@@ -8,6 +8,11 @@ on:
 permissions:
   contents: write
 
+env:
+  CODEX_ZSH_RELEASE_TAG: rust-v0.104.0
+  CODEX_ZSH_PACKAGE_VERSION: 0.104.0
+  CODEX_ZSH_PACKAGE_SHA512: b5e256fc1a7f7383856dfe2b59490c0ac02298677db143b4cc43d1636038006a5db0cb82f41118c7ec7ad16576f4becbbd54a67e2ff750b5be27a78ab0687b6d
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -83,10 +88,38 @@ jobs:
             output="${output}.exe"
           fi
           go build -trimpath -ldflags "-s -w -X github.com/usewhale/whale/internal/build.Version=${VERSION}" -o "${output}" ./cmd/whale
+          runtime_source=""
+          case "${GOOS}/${GOARCH}" in
+            darwin/arm64)
+              runtime_source="package/vendor/aarch64-apple-darwin/zsh/macos-15/zsh"
+              ;;
+            linux/amd64)
+              runtime_source="package/vendor/x86_64-unknown-linux-musl/zsh/ubuntu-24.04/zsh"
+              ;;
+            linux/arm64)
+              runtime_source="package/vendor/aarch64-unknown-linux-musl/zsh/ubuntu-24.04/zsh"
+              ;;
+          esac
+          if [ -n "${runtime_source}" ]; then
+            runtime_tmp="$(mktemp -d)"
+            runtime_archive="${runtime_tmp}/codex-shell-tool-mcp.tgz"
+            runtime_url="https://github.com/openai/codex/releases/download/${CODEX_ZSH_RELEASE_TAG}/codex-shell-tool-mcp-npm-${CODEX_ZSH_PACKAGE_VERSION}.tgz"
+            curl --fail --location --retry 3 --connect-timeout 20 --output "${runtime_archive}" "${runtime_url}"
+            actual_runtime_sha512="$(sha512sum "${runtime_archive}" | awk '{print $1}')"
+            if [ "${actual_runtime_sha512}" != "${CODEX_ZSH_PACKAGE_SHA512}" ]; then
+              echo "codex zsh runtime checksum mismatch" >&2
+              echo "expected: ${CODEX_ZSH_PACKAGE_SHA512}" >&2
+              echo "actual:   ${actual_runtime_sha512}" >&2
+              exit 1
+            fi
+            tar -xzf "${runtime_archive}" -C "${runtime_tmp}"
+            install -D -m 0755 "${runtime_tmp}/${runtime_source}" dist/runtime/zsh
+            rm -rf "${runtime_tmp}"
+          fi
           if [ "${GOOS}" = "windows" ]; then
             (cd dist && zip "${{ matrix.asset_name }}.zip" "${{ matrix.asset_name }}.exe")
           else
-            tar -czf "dist/${{ matrix.asset_name }}.tar.gz" -C dist "${{ matrix.asset_name }}"
+            tar -czf "dist/${{ matrix.asset_name }}.tar.gz" -C dist "${{ matrix.asset_name }}" $(if [ -d dist/runtime ]; then printf '%s' runtime; fi)
           fi
 
       - name: Upload build artifact
@@ -211,6 +244,7 @@ jobs:
 
             def install
               bin.install Dir["whale-*"].first => "whale"
+              libexec.install "runtime" if Dir.exist?("runtime")
             end
 
             test do
@@ -303,6 +337,7 @@ jobs:
 
             chmod +x "$target_dir/vendor/whale" 2>/dev/null || true
             chmod +x "$target_dir/vendor/whale.exe" 2>/dev/null || true
+            chmod +x "$target_dir/vendor/runtime/zsh" 2>/dev/null || true
           done
 
       - name: Verify binaries injected

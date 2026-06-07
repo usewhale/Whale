@@ -52,6 +52,7 @@ type FilePermissionsConfig struct {
 	Read              map[string]string `toml:"read,omitempty"`
 	Edit              map[string]string `toml:"edit,omitempty"`
 	Shell             map[string]string `toml:"shell,omitempty"`
+	Terminal          map[string]string `toml:"terminal,omitempty"`
 	ExternalDirectory map[string]string `toml:"external_directory,omitempty"`
 	MCP               map[string]string `toml:"mcp,omitempty"`
 	Memory            map[string]string `toml:"memory,omitempty"`

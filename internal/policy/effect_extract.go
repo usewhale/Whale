@@ -16,10 +16,11 @@ func (p RulePolicy) effectPlanFor(spec core.ToolSpec, call core.ToolCall) effect
 	}
 	switch spec.Name {
 	case "shell_run":
-		cmd := shellCommandFromInput(call.Input)
-		add(effects.ShellExecEffect(cmd))
-		for _, dir := range p.externalDirs(cmd) {
-			add(effects.ExternalDirectoryEffect(dir))
+		if req, ok := shellExecutionRequestFromToolCall(call); ok {
+			add(effects.ShellExecEffect(req.Command))
+			for _, dir := range p.externalDirs(req.Command) {
+				add(effects.ExternalDirectoryEffect(dir))
+			}
 		}
 	case "read_file", "list_dir", "grep", "search_files":
 		target := readScopeTarget(call)

@@ -66,6 +66,20 @@ func (a *App) rebuildTaskRuntimeLocked() error {
 			return nil, err
 		}
 		toolset.SetWorktreeContext(workspace.WorktreeRoot, workspace.OriginalWorkspace)
+		toolset.SetExecBoundaryPolicy(policy.RulePolicy{
+			Default:       a.permissionPolicy.Default,
+			Rules:         append([]policy.PermissionRule(nil), a.permissionPolicy.Rules...),
+			WorkspaceRoot: workspace.WorkspaceRoot,
+			WorktreeRoot:  workspace.WorktreeRoot,
+		})
+		toolset.SetExecBoundaryApproval(func() string { return a.sessionID }, func(req policy.ApprovalRequest) policy.ApprovalDecision {
+			a.approvalMu.Lock()
+			defer a.approvalMu.Unlock()
+			if a.autoAcceptPermissions {
+				return policy.ApprovalAllow
+			}
+			return a.approvalFn(req)
+		})
 		toolset.SetSkillDisabled(cfg.SkillsDisabled)
 		if a.pluginManager != nil {
 			toolset.SetExtraSkills(a.pluginManager.Skills())

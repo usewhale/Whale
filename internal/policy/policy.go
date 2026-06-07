@@ -37,6 +37,7 @@ type PermissionConfig struct {
 	Read              map[string]string
 	Edit              map[string]string
 	Shell             map[string]string
+	Terminal          map[string]string
 	ExternalDirectory map[string]string
 	MCP               map[string]string
 	Memory            map[string]string

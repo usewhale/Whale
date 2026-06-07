@@ -112,6 +112,21 @@ install_binary() {
   printf '%s\n' "$target"
 }
 
+install_runtime() {
+  src="$1"
+  dst="$2"
+  target="$dst/runtime"
+  if [ ! -d "$src" ]; then
+    rm -rf "$target"
+    return 0
+  fi
+  tmp_target="$(mktemp -d "$dst/.whale-runtime.tmp.XXXXXX")"
+  cp -R "$src/." "$tmp_target/"
+  find "$tmp_target" -type f -name zsh -exec chmod 0755 {} \;
+  rm -rf "$target"
+  mv "$tmp_target" "$target"
+}
+
 warn_if_shadowed() {
   target="$1"
   hash -r 2>/dev/null || true
@@ -180,13 +195,17 @@ if [ "$DOWNLOAD_NAME" = "$ARCHIVE_NAME" ]; then
   mkdir -p "$EXTRACT_DIR"
   tar -xzf "$ARCHIVE_PATH" -C "$EXTRACT_DIR"
   ASSET_PATH="$EXTRACT_DIR/$ASSET_NAME"
+  RUNTIME_PATH="$EXTRACT_DIR/runtime"
   if [ ! -f "$ASSET_PATH" ]; then
     printf '%s\n' "whale install: archive did not contain $ASSET_NAME" >&2
     exit 1
   fi
+else
+  RUNTIME_PATH=""
 fi
 printf '%s\n' "Installing to $BIN_DIR/whale..."
 TARGET="$(install_binary "$ASSET_PATH" "$BIN_DIR")"
+install_runtime "$RUNTIME_PATH" "$BIN_DIR"
 
 printf '%s\n' "Installed whale $RESOLVED_VERSION to $TARGET"
 "$TARGET" --version

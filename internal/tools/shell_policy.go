@@ -9,6 +9,8 @@ import (
 
 var shellStallThreshold = 45 * time.Second
 
+var shellPTYSupportedForPolicy = shellPTYSupported
+
 type shellContinuationPolicy struct {
 	AutoBackground      bool
 	ForegroundWaitMS    int
@@ -68,7 +70,22 @@ func shellPolicy(command string, requestedTimeoutMS int) shellContinuationPolicy
 	recognizedReason := ""
 	for _, part := range parts {
 		partPolicy := shellCommandPartPolicy(part)
-		if partPolicy.Reason == "interactive_or_auth" || partPolicy.Reason == "idle_sleep" || partPolicy.Reason == "complex_shell" {
+		if partPolicy.Reason == "interactive_or_auth" {
+			policy.AutoBackground = shellPTYSupportedForPolicy()
+			policy.Reason = partPolicy.Reason
+			if policy.AutoBackground {
+				policy.Hint = partPolicy.Hint
+				policy.SuggestedNextAction = partPolicy.SuggestedNextAction
+				policy.ForegroundWaitMS = requestedForegroundWaitMS(requestedTimeoutMS, defaultForegroundShellWaitMS)
+			} else {
+				diagnosis := shellInteractiveAuthDiagnosis(shellTransportPipe)
+				policy.Hint = diagnosis.Hint
+				policy.SuggestedNextAction = diagnosis.SuggestedNextAction
+				policy.ForegroundWaitMS = requestedForegroundWaitMS(requestedTimeoutMS, maxForegroundShellWaitMS)
+			}
+			return policy
+		}
+		if partPolicy.Reason == "idle_sleep" || partPolicy.Reason == "complex_shell" {
 			policy.AutoBackground = false
 			policy.Reason = partPolicy.Reason
 			policy.Hint = partPolicy.Hint
@@ -236,10 +253,10 @@ func diagnoseShellTaskLocked(task *shellTask) shellDiagnosis {
 	}
 	if shellOutputLooksInteractivePrompt(text) {
 		if task.status != "running" {
-			return shellDiagnosisForReason("interactive_prompt")
+			return shellInteractivePromptDiagnosis(task.transport)
 		}
 		if last := task.lastOutput; last == nil || time.Since(*last) >= shellStallThreshold {
-			return shellDiagnosisForReason("interactive_prompt")
+			return shellInteractivePromptDiagnosis(task.transport)
 		}
 	}
 	if task.status == "timeout" {
@@ -271,6 +288,8 @@ func (t *shellTask) snapshotWithoutDiagnosisLocked() shellTaskSnapshot {
 		Stdout:     decodeShellOutput(t.stdout.Bytes()),
 		Stderr:     decodeShellOutput(t.stderr.Bytes()),
 		LastOutput: t.lastOutput,
+		Transport:  t.transport,
+		CanWrite:   t.stdin != nil && t.status == "running" && t.transport == shellTransportPTY,
 	}
 }
 
@@ -280,16 +299,14 @@ func shellTimeoutDiagnosis(snap shellTaskSnapshot, timeoutCtx shellTimeoutContex
 		return shellDiagnosisForReason("network_blocked")
 	}
 	if shellOutputLooksInteractivePrompt(text) {
-		diagnosis := shellDiagnosisForReason("interactive_prompt")
-		diagnosis.SuggestedNextAction = "rerun_non_interactive"
-		return diagnosis
+		return shellInteractivePromptDiagnosis(snap.Transport)
 	}
 	if timeoutCtx.BackgroundRuntime {
 		return shellDiagnosisForReason("background_runtime_timeout")
 	}
 	switch timeoutCtx.Policy.Reason {
 	case "interactive_or_auth":
-		return shellDiagnosisForReason("interactive_or_auth")
+		return shellInteractiveAuthDiagnosis(snap.Transport)
 	case "build_test_long_running":
 		return shellDiagnosisForReason("build_or_test_timeout")
 	}
@@ -317,9 +334,9 @@ func shellDiagnosisForReason(reason string) shellDiagnosis {
 	case "unknown_long_running":
 		return shellDiagnosis{Reason: reason, Hint: "Command is still running. Use shell_wait with the task_id instead of rerunning the command.", SuggestedNextAction: "shell_wait"}
 	case "interactive_or_auth":
-		return shellDiagnosis{Reason: reason, Hint: "Command may require interactive input or authentication, so Whale will not auto-background it.", SuggestedNextAction: "ask_user"}
+		return shellInteractiveAuthDiagnosis(shellTransportPTY)
 	case "interactive_prompt":
-		return shellDiagnosis{Reason: reason, Hint: "Command appears blocked on an interactive prompt. Cancel it and rerun with non-interactive flags or piped input.", SuggestedNextAction: "shell_cancel"}
+		return shellInteractivePromptDiagnosis(shellTransportPTY)
 	case "network_blocked":
 		return shellDiagnosis{Reason: reason, Hint: "Output looks like a network or sandbox restriction. Check network access before retrying.", SuggestedNextAction: "check_network"}
 	case "foreground_timeout_too_short":
@@ -339,6 +356,20 @@ func shellDiagnosisForReason(reason string) shellDiagnosis {
 	default:
 		return shellDiagnosis{}
 	}
+}
+
+func shellInteractiveAuthDiagnosis(transport shellTransportKind) shellDiagnosis {
+	if transport == shellTransportPTY {
+		return shellDiagnosis{Reason: "interactive_or_auth", Hint: "Command may require interactive input or authentication. Whale keeps it as a PTY task; use write_stdin with the task_id to send input, or shell_wait to poll without writing.", SuggestedNextAction: "write_stdin"}
+	}
+	return shellDiagnosis{Reason: "interactive_or_auth", Hint: "Command may require interactive input or authentication, but this platform has no writable PTY stdin for auto mode. Rerun with non-interactive flags or complete authentication outside this shell task.", SuggestedNextAction: "rerun_non_interactive"}
+}
+
+func shellInteractivePromptDiagnosis(transport shellTransportKind) shellDiagnosis {
+	if transport == shellTransportPTY {
+		return shellDiagnosis{Reason: "interactive_prompt", Hint: "Command appears blocked on an interactive prompt. Use write_stdin with the task_id to send input, or shell_wait to poll without writing.", SuggestedNextAction: "write_stdin"}
+	}
+	return shellDiagnosis{Reason: "interactive_prompt", Hint: "Command appears blocked on an interactive prompt, but this task has no writable PTY stdin. Cancel it or rerun with non-interactive flags.", SuggestedNextAction: "rerun_non_interactive"}
 }
 
 func shellOutputLooksInteractivePrompt(text string) bool {

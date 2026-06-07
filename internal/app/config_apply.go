@@ -376,6 +376,7 @@ func applyPermissionsConfig(cfg *Config, file FilePermissionsConfig) error {
 		Read:              file.Read,
 		Edit:              file.Edit,
 		Shell:             file.Shell,
+		Terminal:          file.Terminal,
 		ExternalDirectory: file.ExternalDirectory,
 		MCP:               file.MCP,
 		Memory:            file.Memory,

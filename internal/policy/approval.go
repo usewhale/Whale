@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -183,6 +184,8 @@ func ApprovalKeys(call core.ToolCall) []string {
 		if v, _ := body["command"].(string); strings.TrimSpace(v) != "" {
 			return ShellApprovalKeys(v)
 		}
+	case "write_stdin":
+		return []string{WriteStdinApprovalKey(body)}
 	case "web_search":
 		return []string{"web_search:*"}
 	case "fetch", "web_fetch":
@@ -370,6 +373,8 @@ func ApprovalKind(call core.ToolCall) string {
 		return "file_diff_review"
 	case "shell_run":
 		return "shell"
+	case "write_stdin":
+		return "terminal"
 	case "web_search":
 		return "web_search"
 	case "fetch", "web_fetch":
@@ -388,6 +393,9 @@ func ApprovalSessionScope(call core.ToolCall) string {
 				return decision.SessionScope
 			}
 			return "this shell command"
+		}
+		if call.Name == "write_stdin" {
+			return "this stdin write"
 		}
 		if call.Name == "web_search" {
 			return "Web Search commands"
@@ -416,6 +424,23 @@ func ShellApprovalKeys(command string) []string {
 		return compactApprovalKeys(decision.ApprovalKeys)
 	}
 	return []string{"shell_run|cmd:" + NormalizeShellApprovalCommand(command)}
+}
+
+func WriteStdinApprovalKey(body map[string]any) string {
+	taskID, _ := body["task_id"].(string)
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		taskID = "missing-task"
+	}
+	payload := map[string]any{}
+	if v, ok := body["chars"]; ok {
+		payload["chars"] = v
+	}
+	if v, ok := body["keys"]; ok {
+		payload["keys"] = v
+	}
+	encoded, _ := json.Marshal(payload)
+	return "terminal:write_stdin:" + taskID + ":payload:" + hashString(string(encoded))
 }
 
 func ShellRiskDecision(call core.ToolCall) shellrisk.Decision {
@@ -499,6 +524,8 @@ func ApprovalSummary(call core.ToolCall) string {
 		if v, _ := body["command"].(string); strings.TrimSpace(v) != "" {
 			return fmt.Sprintf("shell_run: %s", strings.TrimSpace(v))
 		}
+	case "write_stdin":
+		return writeStdinApprovalSummary(body)
 	case "write":
 		if v, _ := body["file_path"].(string); strings.TrimSpace(v) != "" {
 			return fmt.Sprintf("write: %s", strings.TrimSpace(v))
@@ -524,6 +551,33 @@ func ApprovalSummary(call core.ToolCall) string {
 	return call.Name
 }
 
+func writeStdinApprovalSummary(body map[string]any) string {
+	taskID, _ := body["task_id"].(string)
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		taskID = "unknown-task"
+	}
+	parts := []string{"write_stdin:", taskID}
+	if chars, ok := body["chars"].(string); ok {
+		parts = append(parts, "chars="+strconv.Quote(shortApprovalPreview(chars, 120)))
+	}
+	if keys := stringSliceValue(body["keys"]); len(keys) > 0 {
+		parts = append(parts, "keys=["+strings.Join(keys, ",")+"]")
+	}
+	return strings.Join(parts, " ")
+}
+
+func shortApprovalPreview(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes]) + "...[truncated]"
+}
+
 func ApprovalScope(call core.ToolCall) string {
 	var body map[string]any
 	if err := json.Unmarshal([]byte(call.Input), &body); err != nil {
@@ -547,6 +601,9 @@ func ApprovalScope(call core.ToolCall) string {
 	}
 	if call.Name == "shell_run" {
 		return "shell"
+	}
+	if call.Name == "write_stdin" {
+		return "terminal"
 	}
 	return "workspace"
 }
