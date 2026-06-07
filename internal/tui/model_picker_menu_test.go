@@ -66,10 +66,12 @@ func TestPermissionsMenuRendersStateAndDispatchesExplicitMode(t *testing.T) {
 	}
 	rendered := m.renderPermissionsMenu()
 	plain := xansi.Strip(rendered)
-	if !strings.Contains(plain, "Session auto-accept: off") || !strings.Contains(plain, "Enable session auto-accept") {
+	if !strings.Contains(plain, "  auto-accept: on") || !strings.Contains(plain, "> auto-accept: off (current)") || !strings.Contains(plain, "  cancel") {
 		t.Fatalf("unexpected permissions menu:\n%s", rendered)
 	}
 
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m = next.(model)
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(model)
 	if m.mode != modeChat {
@@ -84,13 +86,24 @@ func TestPermissionsMenuRendersStateAndDispatchesExplicitMode(t *testing.T) {
 	m = next.(model)
 	rendered = m.renderPermissionsMenu()
 	plain = xansi.Strip(rendered)
-	if !strings.Contains(plain, "Session auto-accept: on") || !strings.Contains(plain, "Disable session auto-accept") {
+	if !strings.Contains(plain, "> auto-accept: on (current)") || !strings.Contains(plain, "  auto-accept: off") || !strings.Contains(plain, "  cancel") {
 		t.Fatalf("unexpected enabled permissions menu:\n%s", rendered)
 	}
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = next.(model)
 	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = next.(model)
 	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentSetApprovalMode || (*intents)[0].ApprovalMode != "ask" {
 		t.Fatalf("unexpected dispatched intent: %+v", *intents)
+	}
+
+	m, intents = newModelWithDispatchSpy()
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventPermissionsSelectionRequested, AutoAccept: false}))
+	m = next.(model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(model)
+	if len(*intents) != 0 || m.mode != modeChat {
+		t.Fatalf("current selection should not dispatch and should return to chat, intents=%+v mode=%v", *intents, m.mode)
 	}
 
 	m, intents = newModelWithDispatchSpy()
@@ -111,12 +124,13 @@ func TestPermissionsMenuUsesSegmentedPickerStyles(t *testing.T) {
 
 	m := newModel(nil, "", "", "")
 	m.mode = modePermissionsMenu
+	m.permissionsMenu.selected = 1
 	rendered := m.renderPermissionsMenu()
 	if !strings.Contains(rendered, "\x1b[") {
 		t.Fatalf("expected styled permissions menu, got:\n%s", rendered)
 	}
 	plain := xansi.Strip(rendered)
-	for _, want := range []string{"Permissions", "Session auto-accept: off", "> Enable session auto-accept", "  Cancel"} {
+	for _, want := range []string{"Permissions", "  auto-accept: on", "> auto-accept: off (current)", "  cancel"} {
 		if !strings.Contains(plain, want) {
 			t.Fatalf("expected plain menu to contain %q, got:\n%s", want, plain)
 		}
@@ -1006,8 +1020,9 @@ func TestPickerAndModalViewsHideComposer(t *testing.T) {
 			name: "permissions menu",
 			setup: func(m *model) {
 				m.mode = modePermissionsMenu
+				m.permissionsMenu.selected = 1
 			},
-			want: "Session auto-accept:",
+			want: "auto-accept: off (current)",
 		},
 		{
 			name: "plan implementation picker",

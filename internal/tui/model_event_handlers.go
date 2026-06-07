@@ -499,7 +499,11 @@ func (m *model) handlePermissionsMenuEvent(ev protocol.Event) {
 	m.stopping = false
 	m.mode = modePermissionsMenu
 	m.permissionsMenu.autoAccept = ev.AutoAccept
-	m.permissionsMenu.selected = 0
+	if ev.AutoAccept {
+		m.permissionsMenu.selected = 0
+	} else {
+		m.permissionsMenu.selected = 1
+	}
 	m.slash.matches = nil
 	m.slash.selected = 0
 	m.slash.argumentHint = ""

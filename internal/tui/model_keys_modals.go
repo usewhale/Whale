@@ -208,14 +208,16 @@ func (m *model) handlePermissionsMenuKey(msg tea.KeyMsg) tea.Cmd {
 			m.permissionsMenu.selected--
 		}
 	case "down", "j", "right", "l", "tab":
-		if m.permissionsMenu.selected < 1 {
+		if m.permissionsMenu.selected < 2 {
 			m.permissionsMenu.selected++
 		}
 	case "enter":
-		if m.permissionsMenu.selected == 0 {
-			mode := "auto_accept"
-			if m.permissionsMenu.autoAccept {
-				mode = "ask"
+		selectedAutoAccept := m.permissionsMenu.selected == 0
+		selectedAsk := m.permissionsMenu.selected == 1
+		if (selectedAutoAccept || selectedAsk) && selectedAutoAccept != m.permissionsMenu.autoAccept {
+			mode := "ask"
+			if selectedAutoAccept {
+				mode = "auto_accept"
 			}
 			m.dispatchIntent(protocol.Intent{Kind: protocol.IntentSetApprovalMode, ApprovalMode: mode})
 		}
