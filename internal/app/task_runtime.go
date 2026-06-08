@@ -66,6 +66,7 @@ func (a *App) rebuildTaskRuntimeLocked() error {
 			return nil, err
 		}
 		toolset.SetWorktreeContext(workspace.WorktreeRoot, workspace.OriginalWorkspace)
+		toolset.SetForegroundShellWait(cfg.ShellForegroundWaitDefaultMS, cfg.ShellForegroundWaitMaxMS)
 		toolset.SetExecBoundaryPolicy(policy.RulePolicy{
 			Default:       a.permissionPolicy.Default,
 			Rules:         append([]policy.PermissionRule(nil), a.permissionPolicy.Rules...),

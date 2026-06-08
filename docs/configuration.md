@@ -79,6 +79,16 @@ model = "deepseek-reasoner"
 tools = ["web_search", "web_fetch"]
 ```
 
+### 提高前台 shell 等待时间
+
+```toml
+[shell]
+foreground_wait_default_ms = 15000
+foreground_wait_max_ms = 120000 # 最大可设为 1800000（30 分钟）
+```
+
+可以为 TUI、subagent 和 workflow 启动的 agent 提高前台 `shell_run` 等待时间。后台 shell task 的行为不变，仍然最多运行 30 分钟。
+
 ### 接入 Hooks
 
 需要在会话开始、用户提交 prompt、工具执行前后或结束前运行脚本？见 [Hooks 文档](hooks.md)。
@@ -147,6 +157,10 @@ tools = []                             # 按名称隐藏内置工具
 
 [mcp]
 config_path = ""                       # 自定义 MCP 配置路径
+
+[shell]
+foreground_wait_default_ms = 15000     # 前台 shell_run 默认等待时间
+foreground_wait_max_ms = 120000        # 前台 shell_run 最大等待时间；硬上限为 1800000
 
 	[workflows]
 	enabled = false                        # 是否启用 workflow runtime/tool

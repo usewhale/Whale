@@ -79,6 +79,16 @@ Config files are merged: `defaults < global < project shared < project local < C
 tools = ["web_search", "web_fetch"]
 ```
 
+### Raise foreground shell wait limits
+
+```toml
+[shell]
+foreground_wait_default_ms = 15000
+foreground_wait_max_ms = 120000 # hard ceiling: 1800000 (30 minutes)
+```
+
+Foreground `shell_run` waits can be increased for long TUI turns, subagents, and workflow-spawned agents. Background shell task limits are unchanged and remain capped at 30 minutes.
+
 ### Add Hooks
 
 Need to run scripts when a session starts, when the user submits a prompt, before or after tools run, or before Whale ends a turn? See [Hooks](hooks.en.md).
@@ -147,6 +157,10 @@ tools = []                             # hide built-in tools by name
 
 [mcp]
 config_path = ""                       # custom MCP config path
+
+[shell]
+foreground_wait_default_ms = 15000     # default foreground shell_run wait
+foreground_wait_max_ms = 120000        # max foreground shell_run wait; hard ceiling is 1800000
 
 	[workflows]
 	enabled = false                        # enable the workflow runtime/tool

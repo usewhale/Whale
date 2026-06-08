@@ -1,6 +1,9 @@
 package tools
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestShellPolicyClassifiesLongRunningCommands(t *testing.T) {
 	tests := []struct {
@@ -30,6 +33,36 @@ func TestShellPolicyClassifiesLongRunningCommands(t *testing.T) {
 				t.Fatalf("policy = {auto:%v reason:%q}, want {auto:%v reason:%q}", got.AutoBackground, got.Reason, tt.autoBackground, tt.reason)
 			}
 		})
+	}
+}
+
+func TestShellPolicyUsesConfiguredForegroundWait(t *testing.T) {
+	waitCfg := foregroundShellWaitConfig{DefaultMS: 45000, MaxMS: 240000}
+	auto := shellPolicyWithForegroundWait("go test ./...", 300000, waitCfg)
+	if auto.ForegroundWaitMS != 45000 {
+		t.Fatalf("auto-background foreground wait = %d, want 45000", auto.ForegroundWaitMS)
+	}
+	foreground := shellPolicyWithForegroundWait("printf before; sleep 30", 300000, waitCfg)
+	if foreground.AutoBackground {
+		t.Fatalf("complex shell should stay foreground: %#v", foreground)
+	}
+	if foreground.ForegroundWaitMS != 240000 {
+		t.Fatalf("foreground wait = %d, want 240000", foreground.ForegroundWaitMS)
+	}
+	short := shellPolicyWithForegroundWait("go test ./...", 50, waitCfg)
+	if short.ForegroundWaitMS != 50 {
+		t.Fatalf("short requested foreground wait = %d, want 50", short.ForegroundWaitMS)
+	}
+}
+
+func TestShellPolicyCapsDefaultForegroundWaits(t *testing.T) {
+	auto := shellPolicy("go test ./...", 300000)
+	if auto.ForegroundWaitMS != defaultForegroundShellWaitMS {
+		t.Fatalf("auto-background foreground wait = %d, want %d", auto.ForegroundWaitMS, defaultForegroundShellWaitMS)
+	}
+	foreground := shellPolicy("printf before; sleep 30", 300000)
+	if foreground.ForegroundWaitMS != maxForegroundShellWaitMS {
+		t.Fatalf("regular foreground wait = %d, want %d", foreground.ForegroundWaitMS, maxForegroundShellWaitMS)
 	}
 }
 
@@ -84,5 +117,17 @@ func TestShellOutputDiagnosis(t *testing.T) {
 	}
 	if authPipeDiagnosis.SuggestedNextAction != "rerun_non_interactive" {
 		t.Fatalf("unexpected pipe auth diagnosis: %#v", authPipeDiagnosis)
+	}
+}
+
+func TestShellTimeoutDiagnosisMissingPolicyStaysGeneric(t *testing.T) {
+	task := &shellTask{
+		Command:   "go test ./...",
+		StartedAt: time.Now(),
+		status:    "timeout",
+	}
+	diagnosis := task.timeoutDiagnosisLocked()
+	if diagnosis.Reason != "ordinary_timeout" {
+		t.Fatalf("diagnosis = %#v, want generic ordinary timeout", diagnosis)
 	}
 }

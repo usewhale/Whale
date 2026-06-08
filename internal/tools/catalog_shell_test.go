@@ -13,7 +13,7 @@ func TestShellRunDescriptionIncludesPowerShellRuntimeGuidance(t *testing.T) {
 	desc := shellRunDescriptionFor(shell.RuntimeDescription{
 		GOOS: "windows",
 		Spec: shell.Spec{Kind: shell.KindPowerShell, DisplayName: "PowerShell"},
-	})
+	}, defaultForegroundShellWaitConfig())
 	for _, want := range []string{
 		"Run a shell command from the current Whale workspace.",
 		"Runtime shell: PowerShell",
@@ -36,7 +36,7 @@ func TestShellRunDescriptionIncludesCmdRuntimeGuidance(t *testing.T) {
 	desc := shellRunDescriptionFor(shell.RuntimeDescription{
 		GOOS: "windows",
 		Spec: shell.Spec{Kind: shell.KindCmd, DisplayName: "cmd.exe"},
-	})
+	}, defaultForegroundShellWaitConfig())
 	for _, want := range []string{
 		"Runtime shell: cmd.exe",
 		"Use cmd.exe syntax",
@@ -55,7 +55,7 @@ func TestShellRunDescriptionIncludesCmdRuntimeGuidance(t *testing.T) {
 }
 
 func TestShellRunDescriptionWarnsAgainstDestructiveGitRestore(t *testing.T) {
-	desc := shellRunDescriptionFor(shell.RuntimeDescription{})
+	desc := shellRunDescriptionFor(shell.RuntimeDescription{}, defaultForegroundShellWaitConfig())
 	for _, want := range []string{
 		"destructive workspace restore operations",
 		"git checkout -- <path>",
@@ -68,6 +68,18 @@ func TestShellRunDescriptionWarnsAgainstDestructiveGitRestore(t *testing.T) {
 		if !strings.Contains(desc, want) {
 			t.Fatalf("description missing %q:\n%s", want, desc)
 		}
+	}
+}
+
+func TestShellRunDescriptionUsesConfiguredForegroundWait(t *testing.T) {
+	waitCfg := foregroundShellWaitConfig{DefaultMS: 45000, MaxMS: 240000}
+	desc := shellRunDescriptionFor(shell.RuntimeDescription{}, waitCfg)
+	if !strings.Contains(desc, "Foreground wait defaults to 45000ms and clamps at 240000ms") {
+		t.Fatalf("description missing configured wait values:\n%s", desc)
+	}
+	timeoutDesc := shellRunTimeoutDescription(waitCfg)
+	if !strings.Contains(timeoutDesc, "defaults to 45000 and clamps at 240000") {
+		t.Fatalf("timeout description missing configured wait values:\n%s", timeoutDesc)
 	}
 }
 

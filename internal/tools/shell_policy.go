@@ -11,6 +11,11 @@ var shellStallThreshold = 45 * time.Second
 
 var shellPTYSupportedForPolicy = shellPTYSupported
 
+type foregroundShellWaitConfig struct {
+	DefaultMS int
+	MaxMS     int
+}
+
 type shellContinuationPolicy struct {
 	AutoBackground      bool
 	ForegroundWaitMS    int
@@ -29,6 +34,7 @@ type shellTimeoutContext struct {
 	Policy             shellContinuationPolicy
 	RequestedTimeoutMS int
 	EffectiveTimeoutMS int
+	DefaultWaitMS      int
 	BackgroundRuntime  bool
 }
 
@@ -49,10 +55,38 @@ func (d shellDiagnosis) asMap() map[string]any {
 	return out
 }
 
+func defaultForegroundShellWaitConfig() foregroundShellWaitConfig {
+	return foregroundShellWaitConfig{
+		DefaultMS: defaultForegroundShellWaitMS,
+		MaxMS:     maxForegroundShellWaitMS,
+	}
+}
+
+func foregroundShellWaitConfigFor(defaultMS, maxMS int) foregroundShellWaitConfig {
+	cfg := defaultForegroundShellWaitConfig()
+	if defaultMS > 0 {
+		cfg.DefaultMS = defaultMS
+	}
+	if maxMS > 0 {
+		cfg.MaxMS = maxMS
+	}
+	if cfg.MaxMS > foregroundShellWaitCeilingMS {
+		cfg.MaxMS = foregroundShellWaitCeilingMS
+	}
+	if cfg.DefaultMS > cfg.MaxMS {
+		cfg.DefaultMS = cfg.MaxMS
+	}
+	return cfg
+}
+
 func shellPolicy(command string, requestedTimeoutMS int) shellContinuationPolicy {
+	return shellPolicyWithForegroundWait(command, requestedTimeoutMS, defaultForegroundShellWaitConfig())
+}
+
+func shellPolicyWithForegroundWait(command string, requestedTimeoutMS int, waitCfg foregroundShellWaitConfig) shellContinuationPolicy {
 	policy := shellContinuationPolicy{
 		AutoBackground:      true,
-		ForegroundWaitMS:    requestedForegroundWaitMS(requestedTimeoutMS, defaultForegroundShellWaitMS),
+		ForegroundWaitMS:    requestedForegroundWaitMS(requestedTimeoutMS, waitCfg.DefaultMS, waitCfg.DefaultMS),
 		Reason:              "unknown_long_running",
 		Hint:                "Command is still running. Use shell_wait with the task_id instead of rerunning the command.",
 		SuggestedNextAction: "shell_wait",
@@ -63,7 +97,7 @@ func shellPolicy(command string, requestedTimeoutMS int) shellContinuationPolicy
 		policy.Reason = "ordinary_timeout"
 		policy.Hint = "Command timed out."
 		policy.SuggestedNextAction = "rerun_with_longer_timeout"
-		policy.ForegroundWaitMS = requestedForegroundWaitMS(requestedTimeoutMS, maxForegroundShellWaitMS)
+		policy.ForegroundWaitMS = requestedForegroundWaitMS(requestedTimeoutMS, waitCfg.MaxMS, waitCfg.DefaultMS)
 		return policy
 	}
 
@@ -76,12 +110,12 @@ func shellPolicy(command string, requestedTimeoutMS int) shellContinuationPolicy
 			if policy.AutoBackground {
 				policy.Hint = partPolicy.Hint
 				policy.SuggestedNextAction = partPolicy.SuggestedNextAction
-				policy.ForegroundWaitMS = requestedForegroundWaitMS(requestedTimeoutMS, defaultForegroundShellWaitMS)
+				policy.ForegroundWaitMS = requestedForegroundWaitMS(requestedTimeoutMS, waitCfg.DefaultMS, waitCfg.DefaultMS)
 			} else {
 				diagnosis := shellInteractiveAuthDiagnosis(shellTransportPipe)
 				policy.Hint = diagnosis.Hint
 				policy.SuggestedNextAction = diagnosis.SuggestedNextAction
-				policy.ForegroundWaitMS = requestedForegroundWaitMS(requestedTimeoutMS, maxForegroundShellWaitMS)
+				policy.ForegroundWaitMS = requestedForegroundWaitMS(requestedTimeoutMS, waitCfg.MaxMS, waitCfg.DefaultMS)
 			}
 			return policy
 		}
@@ -90,7 +124,7 @@ func shellPolicy(command string, requestedTimeoutMS int) shellContinuationPolicy
 			policy.Reason = partPolicy.Reason
 			policy.Hint = partPolicy.Hint
 			policy.SuggestedNextAction = partPolicy.SuggestedNextAction
-			policy.ForegroundWaitMS = requestedForegroundWaitMS(requestedTimeoutMS, maxForegroundShellWaitMS)
+			policy.ForegroundWaitMS = requestedForegroundWaitMS(requestedTimeoutMS, waitCfg.MaxMS, waitCfg.DefaultMS)
 			return policy
 		}
 		if recognizedReason == "" && partPolicy.Reason != "" {
@@ -104,22 +138,14 @@ func shellPolicy(command string, requestedTimeoutMS int) shellContinuationPolicy
 	return policy
 }
 
-func requestedForegroundWaitMS(requested int, limit int) int {
+func requestedForegroundWaitMS(requested int, limit int, defaultMS int) int {
 	if requested <= 0 {
-		return defaultForegroundShellWaitMS
+		return defaultMS
 	}
 	if requested > limit {
 		return limit
 	}
 	return requested
-}
-
-func foregroundShellWaitMS(requested int, autoBackground bool) int {
-	limit := maxForegroundShellWaitMS
-	if autoBackground {
-		limit = defaultForegroundShellWaitMS
-	}
-	return requestedForegroundWaitMS(requested, limit)
 }
 
 func shellCommandPartPolicy(command string) shellDiagnosis {
@@ -269,11 +295,7 @@ func diagnoseShellTaskLocked(task *shellTask) shellDiagnosis {
 }
 
 func (t *shellTask) timeoutDiagnosisLocked() shellDiagnosis {
-	timeoutCtx := t.timeoutCtx
-	if timeoutCtx.Policy.Reason == "" {
-		timeoutCtx.Policy = shellPolicy(t.Command, 0)
-	}
-	return shellTimeoutDiagnosis(t.snapshotWithoutDiagnosisLocked(), timeoutCtx)
+	return shellTimeoutDiagnosis(t.snapshotWithoutDiagnosisLocked(), t.timeoutCtx)
 }
 
 func (t *shellTask) snapshotWithoutDiagnosisLocked() shellTaskSnapshot {
@@ -313,7 +335,11 @@ func shellTimeoutDiagnosis(snap shellTaskSnapshot, timeoutCtx shellTimeoutContex
 	if shellOutputLooksLikeProgress(text) || timeoutCtx.RequestedTimeoutMS > 0 && timeoutCtx.RequestedTimeoutMS <= 1000 {
 		return shellDiagnosisForReason("foreground_timeout_too_short")
 	}
-	if timeoutCtx.EffectiveTimeoutMS > 0 && timeoutCtx.EffectiveTimeoutMS < defaultForegroundShellWaitMS {
+	defaultWaitMS := timeoutCtx.DefaultWaitMS
+	if defaultWaitMS <= 0 {
+		defaultWaitMS = defaultForegroundShellWaitMS
+	}
+	if timeoutCtx.EffectiveTimeoutMS > 0 && timeoutCtx.EffectiveTimeoutMS < defaultWaitMS {
 		return shellDiagnosisForReason("foreground_timeout_too_short")
 	}
 	return shellDiagnosisForReason("ordinary_timeout")
