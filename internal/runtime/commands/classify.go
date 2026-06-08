@@ -33,7 +33,11 @@ func (c SubmitClassification) LocalNoTurn() bool {
 }
 
 func (c SubmitClassification) BusyImmediate() bool {
-	return c.Class == SubmitLocalReadOnly || c.Class == SubmitExit || c.Line == "/focus" || strings.HasPrefix(c.Line, "/btw ")
+	if c.Class == SubmitLocalReadOnly || c.Class == SubmitExit || c.Line == "/focus" || strings.HasPrefix(c.Line, "/btw ") {
+		return true
+	}
+	fields := strings.Fields(c.Line)
+	return c.Class == SubmitLocalMutating && len(fields) == 2 && fields[0] == "/stop"
 }
 
 func (c SubmitClassification) SubmitBarrier() bool {

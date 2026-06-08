@@ -303,6 +303,26 @@ func TestClassifyBtwBusyImmediate(t *testing.T) {
 	}
 }
 
+func TestClassifyStopTaskBusyImmediate(t *testing.T) {
+	got := appcommands.ClassifySubmit("/stop task-123", CommandsHelp, "/mcp")
+	if got.Class != appcommands.SubmitLocalMutating {
+		t.Fatalf("expected /stop task-123 to stay local mutating, got %v", got.Class)
+	}
+	if !got.BusyImmediate() {
+		t.Fatal("expected /stop task-123 to be available while busy")
+	}
+
+	for _, line := range []string{"/new", "/clear", "/hooks trust all"} {
+		got := appcommands.ClassifySubmit(line, CommandsHelp, "/mcp")
+		if got.Class != appcommands.SubmitLocalMutating {
+			t.Fatalf("expected %s to stay local mutating, got %v", line, got.Class)
+		}
+		if got.BusyImmediate() {
+			t.Fatalf("expected %s to remain blocked while busy", line)
+		}
+	}
+}
+
 func TestCommandsHelpMarksBtwQuestionRequired(t *testing.T) {
 	if !strings.Contains(CommandsHelp, "/btw <question>") {
 		t.Fatalf("expected /btw to advertise a required question: %s", CommandsHelp)
