@@ -28,6 +28,7 @@ type FileConfig struct {
 	API          FileAPIConfig                 `toml:"api,omitempty"`
 	Providers    FileProvidersConfig           `toml:"providers,omitempty"`
 	Retry        FileRetryConfig               `toml:"retry,omitempty"`
+	Shell        FileShellConfig               `toml:"shell,omitempty"`
 	Experimental FileExperimentalConfig        `toml:"experimental,omitempty"`
 	Tasks        FileTasksConfig               `toml:"tasks,omitempty"`
 	Budget       FileBudgetConfig              `toml:"budget,omitempty"`
@@ -88,6 +89,11 @@ type FileRetryConfig struct {
 	StreamMaxAttempts *int   `toml:"stream_max_attempts,omitempty"`
 	StreamIdleTimeout string `toml:"stream_idle_timeout,omitempty"`
 	MaxDelay          string `toml:"max_delay,omitempty"`
+}
+
+type FileShellConfig struct {
+	ForegroundWaitDefaultMS *int `toml:"foreground_wait_default_ms,omitempty"`
+	ForegroundWaitMaxMS     *int `toml:"foreground_wait_max_ms,omitempty"`
 }
 
 type FileExperimentalConfig struct {

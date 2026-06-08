@@ -29,13 +29,14 @@ type Toolset struct {
 	fileLocks         *fileMutationLocks
 	fileStates        *fileStateCache
 	// Test hooks for deterministic mutation-race coverage.
-	afterFileRead    func(string)
-	beforeFileCommit func(string)
-	skillDisabled    []string
-	extraSkills      []*skills.Skill
-	execBoundary     policy.RulePolicy
-	execApproval     policy.ApprovalFunc
-	sessionIDFunc    func() string
+	afterFileRead       func(string)
+	beforeFileCommit    func(string)
+	skillDisabled       []string
+	extraSkills         []*skills.Skill
+	execBoundary        policy.RulePolicy
+	execApproval        policy.ApprovalFunc
+	sessionIDFunc       func() string
+	foregroundShellWait foregroundShellWaitConfig
 }
 
 type externalReadRootsKey struct{}
@@ -69,16 +70,21 @@ func NewToolset(root string) (*Toolset, error) {
 		webFetchClient: webfetch.NewClient(webfetch.Options{
 			HTTPClient: httpClient,
 		}),
-		ddgSearchURL:  "https://html.duckduckgo.com/html/?q=%s",
-		bingSearchURL: "https://www.bing.com/search?q=%s",
-		tasks:         newShellTaskRegistry(),
-		fileLocks:     newFileMutationLocks(),
-		fileStates:    newFileStateCache(),
+		ddgSearchURL:        "https://html.duckduckgo.com/html/?q=%s",
+		bingSearchURL:       "https://www.bing.com/search?q=%s",
+		tasks:               newShellTaskRegistry(),
+		fileLocks:           newFileMutationLocks(),
+		fileStates:          newFileStateCache(),
+		foregroundShellWait: defaultForegroundShellWaitConfig(),
 		execBoundary: policy.RulePolicy{
 			Default: policy.PermissionAllow,
 			Rules:   policy.DefaultRules(),
 		},
 	}, nil
+}
+
+func (b *Toolset) SetForegroundShellWait(defaultMS, maxMS int) {
+	b.foregroundShellWait = foregroundShellWaitConfigFor(defaultMS, maxMS)
 }
 
 func (b *Toolset) SetExecBoundaryPolicy(p policy.RulePolicy) {

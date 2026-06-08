@@ -84,6 +84,7 @@ func initAppRuntime(cfg Config, sessionInit appSessionInit, toolInit appToolInit
 			return nil, err
 		}
 		toolset.SetWorktreeContext(workspace.WorktreeRoot, workspace.OriginalWorkspace)
+		toolset.SetForegroundShellWait(cfg.ShellForegroundWaitDefaultMS, cfg.ShellForegroundWaitMaxMS)
 		toolset.SetExecBoundaryPolicy(policy.RulePolicy{
 			Default:       cfg.PermissionDefault,
 			Rules:         append([]policy.PermissionRule(nil), cfg.PermissionRules...),

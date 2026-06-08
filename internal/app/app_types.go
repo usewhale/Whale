@@ -48,6 +48,8 @@ type Config struct {
 	RetryMaxDelay                  time.Duration
 	DeepSeekPrefixCompletion       bool
 	DeepSeekMultimodal             MultimodalProviderConfig
+	ShellForegroundWaitDefaultMS   int
+	ShellForegroundWaitMaxMS       int
 	MaxParallelSubagents           int
 	MCPConfigPath                  string
 	APIBaseURL                     string

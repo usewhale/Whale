@@ -132,6 +132,60 @@ func TestOfficialPluginNoopStopHooksDoNotRenderOutput(t *testing.T) {
 	}
 }
 
+func TestAppShellForegroundWaitConfigUpdatesToolDescription(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
+	dataDir := t.TempDir()
+	workspace := t.TempDir()
+	if err := SaveConfigFile(GlobalConfigPath(dataDir), FileConfig{
+		Shell: FileShellConfig{
+			ForegroundWaitDefaultMS: intPtr(45000),
+			ForegroundWaitMaxMS:     intPtr(240000),
+		},
+	}); err != nil {
+		t.Fatalf("SaveConfigFile: %v", err)
+	}
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(workspace); err != nil {
+		t.Fatalf("chdir workspace: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
+
+	cfg := DefaultConfig()
+	cfg.DataDir = dataDir
+	app, err := New(t.Context(), cfg, StartOptions{NewSession: true})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer app.Close()
+	spec, ok := app.toolRegistry.Spec("shell_run")
+	if !ok {
+		t.Fatal("missing shell_run spec")
+	}
+	if !strings.Contains(spec.Description, "Foreground wait defaults to 45000ms and clamps at 240000ms") {
+		t.Fatalf("shell_run description did not use configured waits:\n%s", spec.Description)
+	}
+	timeout, ok := spec.Parameters["properties"].(map[string]any)["timeout_ms"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing timeout schema: %#v", spec.Parameters)
+	}
+	if timeout["maximum"].(int) != 1800000 {
+		t.Fatalf("timeout schema maximum = %#v, want 1800000", timeout["maximum"])
+	}
+	if !strings.Contains(timeout["description"].(string), "defaults to 45000 and clamps at 240000") {
+		t.Fatalf("timeout description did not use configured waits: %s", timeout["description"])
+	}
+	subagentSpec, ok := app.subagentToolRegistry.Spec("shell_run")
+	if !ok {
+		t.Fatal("missing subagent shell_run spec")
+	}
+	if !strings.Contains(subagentSpec.Description, "Foreground wait defaults to 45000ms and clamps at 240000ms") {
+		t.Fatalf("subagent shell_run description did not use configured waits:\n%s", subagentSpec.Description)
+	}
+}
+
 func TestRuntimeRespectsWorkflowToggles(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
 	workspace := t.TempDir()

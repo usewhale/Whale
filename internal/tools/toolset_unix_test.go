@@ -1530,15 +1530,30 @@ func TestShellCancelStopsBackgroundTask(t *testing.T) {
 	waitForProcessExit(t, pid)
 }
 
-func TestForegroundShellWaitCapsLongCommandRequests(t *testing.T) {
-	if got := foregroundShellWaitMS(300000, true); got != 15000 {
-		t.Fatalf("long-command foreground wait = %d, want 15000", got)
+func TestShellRunConfiguredForegroundMaxAllowsLongerRequest(t *testing.T) {
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
 	}
-	if got := foregroundShellWaitMS(300000, false); got != 120000 {
-		t.Fatalf("regular foreground wait = %d, want 120000", got)
+	ts.SetForegroundShellWait(45000, 240000)
+
+	res, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "printf done; sleep 0.01",
+		"timeout_ms": 180000,
+	}))
+	if err != nil {
+		t.Fatalf("shell_run returned dispatch error: %v", err)
 	}
-	if got := foregroundShellWaitMS(50, true); got != 50 {
-		t.Fatalf("short requested foreground wait = %d, want 50", got)
+	if res.IsError {
+		t.Fatalf("expected shell_run success, got %+v", res)
+	}
+	metrics := shellRunData(t, res)["metrics"].(map[string]any)
+	if metrics["requested_timeout_ms"].(float64) != 180000 || metrics["effective_timeout_ms"].(float64) != 180000 {
+		t.Fatalf("unexpected timeout metrics: %#v", metrics)
+	}
+	if metrics["timeout_clamped"] != false {
+		t.Fatalf("timeout_clamped = %#v, want false", metrics["timeout_clamped"])
 	}
 }
 

@@ -17,6 +17,7 @@ func initAppTools(cfg Config, start StartOptions, workspaceRoot string) (appTool
 		return appToolInit{}, fmt.Errorf("init tools failed: %w", err)
 	}
 	toolset.SetWorktreeContext(start.Worktree.Path, start.Worktree.OriginalWorkspace)
+	toolset.SetForegroundShellWait(cfg.ShellForegroundWaitDefaultMS, cfg.ShellForegroundWaitMaxMS)
 	toolset.SetExecBoundaryPolicy(policy.RulePolicy{
 		Default:       cfg.PermissionDefault,
 		Rules:         append([]policy.PermissionRule(nil), cfg.PermissionRules...),

@@ -14,13 +14,13 @@ func (b *Toolset) shellTools() []core.Tool {
 	return []core.Tool{
 		toolFn{
 			name:        "shell_run",
-			description: shellRunDescriptionFor(rt),
+			description: shellRunDescriptionFor(rt, b.foregroundShellWait),
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
 				"properties": map[string]any{
 					"command":    map[string]any{"type": "string", "description": "Shell command to execute"},
-					"timeout_ms": map[string]any{"type": "integer", "minimum": 1, "maximum": maxBackgroundShellTimeoutMS, "description": shellRunTimeoutDescription()},
+					"timeout_ms": map[string]any{"type": "integer", "minimum": 1, "maximum": maxBackgroundShellTimeoutMS, "description": shellRunTimeoutDescription(b.foregroundShellWait)},
 					"background": map[string]any{"type": "boolean", "description": fmt.Sprintf("When true, return immediately with task_id. The task runtime defaults to %dms.", defaultBackgroundShellTimeoutMS)},
 					"cwd":        map[string]any{"type": "string", "description": "Optional working directory relative to the workspace root. Must stay inside the workspace. Use this for subdirectory commands instead of cd."},
 					"mode":       map[string]any{"type": "string", "enum": []string{"auto", "pipe", "pty"}, "description": "Execution transport. auto uses a PTY for recognized interactive or authentication commands and a normal pipe otherwise; pty enables write_stdin interaction."},
@@ -87,20 +87,16 @@ func (b *Toolset) shellTools() []core.Tool {
 	}
 }
 
-func shellRunDescription() string {
-	return shellRunDescriptionFor(shell.DescribeRuntime())
-}
-
-func shellRunDescriptionFor(rt shell.RuntimeDescription) string {
-	base := fmt.Sprintf("Run a shell command from the current Whale workspace. Commands default to the workspace root; do not assume synthetic paths like /workspace. Use relative paths, or set cwd to a subdirectory inside the workspace, instead of prefixing commands with cd. Foreground wait defaults to %dms and clamps at %dms; long-running commands can return a background task_id when the foreground wait expires. Continue with shell_wait instead of rerunning the same command. Before running destructive workspace restore operations such as git checkout -- <path>, git restore, git reset --hard, or git clean, prefer Whale's /rewind command or /checkpoint alias unless the user explicitly asked to discard local changes.", defaultForegroundShellWaitMS, maxForegroundShellWaitMS)
+func shellRunDescriptionFor(rt shell.RuntimeDescription, waitCfg foregroundShellWaitConfig) string {
+	base := fmt.Sprintf("Run a shell command from the current Whale workspace. Commands default to the workspace root; do not assume synthetic paths like /workspace. Use relative paths, or set cwd to a subdirectory inside the workspace, instead of prefixing commands with cd. Foreground wait defaults to %dms and clamps at %dms; long-running commands can return a background task_id when the foreground wait expires. Continue with shell_wait instead of rerunning the same command. Before running destructive workspace restore operations such as git checkout -- <path>, git restore, git reset --hard, or git clean, prefer Whale's /rewind command or /checkpoint alias unless the user explicitly asked to discard local changes.", waitCfg.DefaultMS, waitCfg.MaxMS)
 	if guidance := rt.ToolGuidance(); strings.TrimSpace(guidance) != "" {
 		return base + " " + strings.TrimSpace(guidance)
 	}
 	return base
 }
 
-func shellRunTimeoutDescription() string {
-	return fmt.Sprintf("Foreground wait in milliseconds for normal shell_run calls; defaults to %d and clamps at %d. Long-running commands may return a background task_id when the foreground wait expires. With background=true, this is the task runtime limit; defaults to %d and clamps at %d.", defaultForegroundShellWaitMS, maxForegroundShellWaitMS, defaultBackgroundShellTimeoutMS, maxBackgroundShellTimeoutMS)
+func shellRunTimeoutDescription(waitCfg foregroundShellWaitConfig) string {
+	return fmt.Sprintf("Foreground wait in milliseconds for normal shell_run calls; defaults to %d and clamps at %d. Long-running commands may return a background task_id when the foreground wait expires. With background=true, this is the task runtime limit; defaults to %d and clamps at %d.", waitCfg.DefaultMS, waitCfg.MaxMS, defaultBackgroundShellTimeoutMS, maxBackgroundShellTimeoutMS)
 }
 
 func shellWaitTimeoutDescription() string {

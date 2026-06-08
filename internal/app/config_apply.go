@@ -6,6 +6,7 @@ import (
 	"github.com/usewhale/whale/internal/plugins"
 	"github.com/usewhale/whale/internal/policy"
 	"github.com/usewhale/whale/internal/store"
+	"github.com/usewhale/whale/internal/tools"
 	"strings"
 	"time"
 )
@@ -94,6 +95,9 @@ func ApplyFileConfig(cfg *Config, file FileConfig) error {
 		}
 		cfg.RetryMaxDelay = d
 	}
+	if err := applyShellConfig(cfg, file.Shell); err != nil {
+		return err
+	}
 	if file.Experimental.DeepSeekPrefixCompletion != nil {
 		cfg.DeepSeekPrefixCompletion = *file.Experimental.DeepSeekPrefixCompletion
 	}
@@ -156,6 +160,9 @@ func LoadAndApplyConfig(cfg Config, workspaceRoot string) (Config, error) {
 		return Config{}, err
 	}
 	overlayExplicitConfig(&base, cfg)
+	if err := validateShellRuntimeConfig(base); err != nil {
+		return Config{}, err
+	}
 	base.ConfigLoaded = true
 	return base, nil
 }
@@ -228,6 +235,12 @@ func overlayExplicitConfig(dst *Config, src Config) {
 	if src.DeepSeekMultimodal != def.DeepSeekMultimodal {
 		dst.DeepSeekMultimodal = normalizeMultimodalProviderConfig(src.DeepSeekMultimodal)
 	}
+	if src.ShellForegroundWaitDefaultMS != 0 && src.ShellForegroundWaitDefaultMS != def.ShellForegroundWaitDefaultMS {
+		dst.ShellForegroundWaitDefaultMS = src.ShellForegroundWaitDefaultMS
+	}
+	if src.ShellForegroundWaitMaxMS != 0 && src.ShellForegroundWaitMaxMS != def.ShellForegroundWaitMaxMS {
+		dst.ShellForegroundWaitMaxMS = src.ShellForegroundWaitMaxMS
+	}
 	if src.MaxParallelSubagents != 0 && src.MaxParallelSubagents != def.MaxParallelSubagents {
 		dst.MaxParallelSubagents = src.MaxParallelSubagents
 	}
@@ -254,6 +267,10 @@ func overlayExplicitConfig(dst *Config, src Config) {
 	if len(src.TrustedWorkflows) > 0 {
 		dst.TrustedWorkflows = trimList(src.TrustedWorkflows)
 	}
+}
+
+func validateShellRuntimeConfig(cfg Config) error {
+	return validateShellForegroundWait(cfg.ShellForegroundWaitDefaultMS, cfg.ShellForegroundWaitMaxMS)
 }
 
 func applyMultimodalProviderConfig(cfg *Config, file FileMultimodalProviderConfig) error {
@@ -294,6 +311,50 @@ func normalizeMultimodalProviderConfig(in MultimodalProviderConfig) MultimodalPr
 	in.APIKeyEnv = strings.TrimSpace(in.APIKeyEnv)
 	in.Model = strings.TrimSpace(in.Model)
 	return in
+}
+
+func applyShellConfig(cfg *Config, file FileShellConfig) error {
+	hasDefault := file.ForegroundWaitDefaultMS != nil
+	hasMax := file.ForegroundWaitMaxMS != nil
+	if !hasDefault && !hasMax {
+		return nil
+	}
+	nextDefault := cfg.ShellForegroundWaitDefaultMS
+	nextMax := cfg.ShellForegroundWaitMaxMS
+	if !hasDefault && nextDefault <= 0 {
+		nextDefault = tools.DefaultForegroundShellWait()
+	}
+	if !hasMax && nextMax <= 0 {
+		nextMax = tools.MaxForegroundShellWait()
+	}
+	if hasDefault {
+		nextDefault = *file.ForegroundWaitDefaultMS
+	}
+	if hasMax {
+		nextMax = *file.ForegroundWaitMaxMS
+	}
+	if err := validateShellForegroundWait(nextDefault, nextMax); err != nil {
+		return err
+	}
+	cfg.ShellForegroundWaitDefaultMS = nextDefault
+	cfg.ShellForegroundWaitMaxMS = nextMax
+	return nil
+}
+
+func validateShellForegroundWait(defaultMS, maxMS int) error {
+	if defaultMS <= 0 {
+		return fmt.Errorf("invalid shell.foreground_wait_default_ms: must be greater than 0")
+	}
+	if maxMS <= 0 {
+		return fmt.Errorf("invalid shell.foreground_wait_max_ms: must be greater than 0")
+	}
+	if maxMS > tools.MaxForegroundShellWaitCeilingMS() {
+		return fmt.Errorf("invalid shell.foreground_wait_max_ms: must be less than or equal to %d", tools.MaxForegroundShellWaitCeilingMS())
+	}
+	if maxMS < defaultMS {
+		return fmt.Errorf("invalid shell.foreground_wait_max_ms: effective value must be greater than or equal to shell.foreground_wait_default_ms")
+	}
+	return nil
 }
 
 func clonePluginConfigMap(in plugins.ConfigMap) plugins.ConfigMap {

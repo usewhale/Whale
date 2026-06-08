@@ -9,10 +9,21 @@ import (
 
 	"github.com/usewhale/whale/internal/plugins"
 	"github.com/usewhale/whale/internal/policy"
+	"github.com/usewhale/whale/internal/tools"
 )
 
 func intPtr(v int) *int    { return &v }
 func boolPtr(v bool) *bool { return &v }
+
+func TestDefaultConfigUsesToolForegroundWaitDefaults(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.ShellForegroundWaitDefaultMS != tools.DefaultForegroundShellWait() {
+		t.Fatalf("default foreground wait = %d, want %d", cfg.ShellForegroundWaitDefaultMS, tools.DefaultForegroundShellWait())
+	}
+	if cfg.ShellForegroundWaitMaxMS != tools.MaxForegroundShellWait() {
+		t.Fatalf("max foreground wait = %d, want %d", cfg.ShellForegroundWaitMaxMS, tools.MaxForegroundShellWait())
+	}
+}
 
 func TestConfigFileRoundTrip(t *testing.T) {
 	dir := t.TempDir()
@@ -561,6 +572,10 @@ func TestApplyFileConfigUsesGroupedConfig(t *testing.T) {
 			StreamIdleTimeout: "30s",
 			MaxDelay:          "45s",
 		},
+		Shell: FileShellConfig{
+			ForegroundWaitDefaultMS: intPtr(45000),
+			ForegroundWaitMaxMS:     intPtr(240000),
+		},
 		Budget: FileBudgetConfig{SessionLimitUSD: &budgetLimit},
 		MCP:    FileMCPConfig{ConfigPath: "~/custom-mcp.json"},
 		Context: FileContextConfig{
@@ -588,11 +603,122 @@ func TestApplyFileConfigUsesGroupedConfig(t *testing.T) {
 	if cfg.RetryMaxAttempts != 5 || cfg.RetryStreamMaxAttempts != 7 || cfg.RetryStreamIdleTimeout != 30*time.Second || cfg.RetryMaxDelay != 45*time.Second {
 		t.Fatalf("retry not applied: %+v", cfg)
 	}
+	if cfg.ShellForegroundWaitDefaultMS != 45000 || cfg.ShellForegroundWaitMaxMS != 240000 {
+		t.Fatalf("shell config not applied: %+v", cfg)
+	}
 	if cfg.AutoCompact || cfg.AutoCompactThreshold != compactThreshold {
 		t.Fatalf("context not applied: %+v", cfg)
 	}
 	if cfg.MemoryEnabled || cfg.MemoryMaxChars != projectDocMaxBytes || cfg.MemoryFileOrder != "AGENTS.md,TEAM.md" {
 		t.Fatalf("project doc not applied: %+v", cfg)
+	}
+}
+
+func TestConfigFileSupportsShellForegroundWait(t *testing.T) {
+	dir := t.TempDir()
+	path := GlobalConfigPath(dir)
+	cfg := FileConfig{
+		Shell: FileShellConfig{
+			ForegroundWaitDefaultMS: intPtr(30000),
+			ForegroundWaitMaxMS:     intPtr(300000),
+		},
+	}
+	if err := SaveConfigFile(path, cfg); err != nil {
+		t.Fatalf("SaveConfigFile: %v", err)
+	}
+	loaded, ok, err := LoadConfigFile(path)
+	if err != nil {
+		t.Fatalf("LoadConfigFile: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected config file")
+	}
+	if loaded.Shell.ForegroundWaitDefaultMS == nil || *loaded.Shell.ForegroundWaitDefaultMS != 30000 ||
+		loaded.Shell.ForegroundWaitMaxMS == nil || *loaded.Shell.ForegroundWaitMaxMS != 300000 {
+		t.Fatalf("shell config not loaded: %+v", loaded.Shell)
+	}
+	appCfg := DefaultConfig()
+	if err := ApplyFileConfig(&appCfg, loaded); err != nil {
+		t.Fatalf("ApplyFileConfig: %v", err)
+	}
+	if appCfg.ShellForegroundWaitDefaultMS != 30000 || appCfg.ShellForegroundWaitMaxMS != 300000 {
+		t.Fatalf("shell config not applied: %+v", appCfg)
+	}
+}
+
+func TestApplyFileConfigRejectsInvalidShellForegroundWait(t *testing.T) {
+	tests := []struct {
+		name string
+		file FileShellConfig
+		want string
+	}{
+		{name: "zero default", file: FileShellConfig{ForegroundWaitDefaultMS: intPtr(0)}, want: "shell.foreground_wait_default_ms"},
+		{name: "negative default", file: FileShellConfig{ForegroundWaitDefaultMS: intPtr(-1)}, want: "shell.foreground_wait_default_ms"},
+		{name: "zero max", file: FileShellConfig{ForegroundWaitMaxMS: intPtr(0)}, want: "shell.foreground_wait_max_ms"},
+		{name: "negative max", file: FileShellConfig{ForegroundWaitMaxMS: intPtr(-1)}, want: "shell.foreground_wait_max_ms"},
+		{name: "max below default same file", file: FileShellConfig{ForegroundWaitDefaultMS: intPtr(60000), ForegroundWaitMaxMS: intPtr(30000)}, want: "shell.foreground_wait_max_ms"},
+		{name: "above ceiling", file: FileShellConfig{ForegroundWaitMaxMS: intPtr(1800001)}, want: "shell.foreground_wait_max_ms"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			err := ApplyFileConfig(&cfg, FileConfig{Shell: tt.file})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestConfigProjectLocalOverridesShellForegroundWait(t *testing.T) {
+	dataDir := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, ".whale"), 0o755); err != nil {
+		t.Fatalf("mkdir .whale: %v", err)
+	}
+	if err := SaveConfigFile(GlobalConfigPath(dataDir), FileConfig{
+		Shell: FileShellConfig{ForegroundWaitDefaultMS: intPtr(30000), ForegroundWaitMaxMS: intPtr(180000)},
+	}); err != nil {
+		t.Fatalf("save global: %v", err)
+	}
+	if err := SaveConfigFile(ProjectLocalConfigPath(workspace), FileConfig{
+		Shell: FileShellConfig{ForegroundWaitDefaultMS: intPtr(45000), ForegroundWaitMaxMS: intPtr(240000)},
+	}); err != nil {
+		t.Fatalf("save project local: %v", err)
+	}
+
+	cfg := DefaultConfig()
+	cfg.DataDir = dataDir
+	loaded, err := LoadAndApplyConfig(cfg, workspace)
+	if err != nil {
+		t.Fatalf("LoadAndApplyConfig: %v", err)
+	}
+	if loaded.ShellForegroundWaitDefaultMS != 45000 || loaded.ShellForegroundWaitMaxMS != 240000 {
+		t.Fatalf("shell wait: want project-local override, got default=%d max=%d", loaded.ShellForegroundWaitDefaultMS, loaded.ShellForegroundWaitMaxMS)
+	}
+}
+
+func TestConfigRejectsLayeredShellMaxBelowDefault(t *testing.T) {
+	dataDir := t.TempDir()
+	workspace := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspace, ".whale"), 0o755); err != nil {
+		t.Fatalf("mkdir .whale: %v", err)
+	}
+	if err := SaveConfigFile(GlobalConfigPath(dataDir), FileConfig{
+		Shell: FileShellConfig{ForegroundWaitDefaultMS: intPtr(240000), ForegroundWaitMaxMS: intPtr(300000)},
+	}); err != nil {
+		t.Fatalf("save global: %v", err)
+	}
+	if err := SaveConfigFile(ProjectConfigPath(workspace), FileConfig{
+		Shell: FileShellConfig{ForegroundWaitMaxMS: intPtr(120000)},
+	}); err != nil {
+		t.Fatalf("save project: %v", err)
+	}
+	cfg := DefaultConfig()
+	cfg.DataDir = dataDir
+	_, err := LoadAndApplyConfig(cfg, workspace)
+	if err == nil || !strings.Contains(err.Error(), "effective value") {
+		t.Fatalf("error = %v, want effective max/default error", err)
 	}
 }
 

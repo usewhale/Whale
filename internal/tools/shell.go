@@ -37,7 +37,7 @@ func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolRe
 	if in.Background {
 		mutationSnapshot := b.captureShellMutationSnapshot(ctx, workdir, in.Command)
 		requestedTimeoutMS := in.TimeoutMS
-		shellPol := shellPolicy(in.Command, requestedTimeoutMS)
+		shellPol := shellPolicyWithForegroundWait(in.Command, requestedTimeoutMS, b.foregroundShellWait)
 		transport, err := shellRunTransport(mode, shellPol)
 		if err != nil {
 			return marshalToolError(call, "unsupported_transport", err.Error()), nil
@@ -56,6 +56,7 @@ func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolRe
 			Policy:             shellPol,
 			RequestedTimeoutMS: requestedTimeoutMS,
 			EffectiveTimeoutMS: effectiveTimeoutMS,
+			DefaultWaitMS:      b.foregroundShellWait.DefaultMS,
 			BackgroundRuntime:  true,
 		})
 		cctx, cancel := context.WithTimeout(context.Background(), time.Duration(effectiveTimeoutMS)*time.Millisecond)
@@ -91,7 +92,7 @@ func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolRe
 	}
 
 	requestedTimeoutMS := in.TimeoutMS
-	shellPol := shellPolicy(in.Command, requestedTimeoutMS)
+	shellPol := shellPolicyWithForegroundWait(in.Command, requestedTimeoutMS, b.foregroundShellWait)
 	effectiveTimeoutMS := shellPol.ForegroundWaitMS
 	mutationSnapshot := b.captureShellMutationSnapshot(ctx, workdir, in.Command)
 	transport, err := shellRunTransport(mode, shellPol)
@@ -105,6 +106,7 @@ func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolRe
 		Policy:             shellPol,
 		RequestedTimeoutMS: requestedTimeoutMS,
 		EffectiveTimeoutMS: effectiveTimeoutMS,
+		DefaultWaitMS:      b.foregroundShellWait.DefaultMS,
 	})
 	cctx, cancel := context.WithTimeout(context.Background(), time.Duration(maxBackgroundShellTimeoutMS)*time.Millisecond)
 	task.setCancel(cancel)
@@ -138,6 +140,7 @@ func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolRe
 				Policy:             shellPol,
 				RequestedTimeoutMS: 0,
 				EffectiveTimeoutMS: maxBackgroundShellTimeoutMS,
+				DefaultWaitMS:      b.foregroundShellWait.DefaultMS,
 				BackgroundRuntime:  true,
 			})
 			snap := task.snapshot()
@@ -158,6 +161,7 @@ func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolRe
 			Policy:             shellPol,
 			RequestedTimeoutMS: requestedTimeoutMS,
 			EffectiveTimeoutMS: effectiveTimeoutMS,
+			DefaultWaitMS:      b.foregroundShellWait.DefaultMS,
 		}))
 		snap = task.snapshot()
 		b.tasks.release(task.ID)
