@@ -61,7 +61,7 @@ func TestAuditOnlyAutoDeniedToolResultDoesNotRenderToolCard(t *testing.T) {
 	}
 }
 
-func TestRepeatedAutoDeniedToolResultRendersNoticeOnly(t *testing.T) {
+func TestRepeatedAutoDeniedToolResultDoesNotRenderNotice(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	next, _ := m.Update(svcMsg(protocol.Event{
 		Kind:       protocol.EventToolResult,
@@ -76,19 +76,11 @@ func TestRepeatedAutoDeniedToolResultRendersNoticeOnly(t *testing.T) {
 		},
 	}))
 	m = next.(model)
-	if m.assembler == nil {
-		t.Fatal("expected live assembler with notice")
+	if len(m.transcript) != 0 {
+		t.Fatalf("repeated audit-only auto-deny should not render transcript entries: %+v", m.transcript)
 	}
-	snap := m.assembler.Snapshot()
-	if len(snap) != 1 {
-		t.Fatalf("expected one notice live entry, got %+v", snap)
-	}
-	got := snap[0]
-	if got.Kind != tuirender.KindNotice || got.Notice == nil || got.Notice.Kind != "auto_deny_repeated" {
-		t.Fatalf("expected repeated auto-deny notice, got %+v", got)
-	}
-	if strings.Contains(got.Text, "success") || strings.Contains(got.Text, "read_only_turn_denied") {
-		t.Fatalf("notice should not render raw tool result: %q", got.Text)
+	if m.assembler != nil && len(m.assembler.Snapshot()) != 0 {
+		t.Fatalf("repeated audit-only auto-deny should not render live entries: %+v", m.assembler.Snapshot())
 	}
 }
 func TestMCPLocalResultRendersAsStructuredTranscriptEntry(t *testing.T) {
