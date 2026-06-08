@@ -272,9 +272,6 @@ func (m *model) handleToolResultEvent(ev protocol.Event) tea.Cmd {
 		if ev.ToolName != "update_plan" {
 			m.ensureTimeline().HandleEvent(ev)
 		}
-		if notice := autoDenyNoticeFromToolResult(ev); notice != nil {
-			m.appendSystemNotice(notice)
-		}
 		m.addLog(logEntry{Kind: "tool_result_audit", Source: ev.ToolName, Summary: truncateLine(ev.Text, 120), Raw: ev.Text})
 		m.captureDiffMetadata(ev.ToolName, ev.Metadata)
 		m.refreshLiveViewportContent()
@@ -307,24 +304,6 @@ func auditOnlyToolResultEvent(ev protocol.Event) bool {
 	}
 	visibility, _ := ev.Metadata["ui_visibility"].(string)
 	return strings.TrimSpace(visibility) == "audit"
-}
-
-func autoDenyNoticeFromToolResult(ev protocol.Event) *tuirender.SystemNotice {
-	if ev.Metadata == nil {
-		return nil
-	}
-	text, _ := ev.Metadata["auto_deny_notice"].(string)
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return nil
-	}
-	return &tuirender.SystemNotice{
-		Kind:    "auto_deny_repeated",
-		Tone:    "muted",
-		Action:  "Blocked",
-		Subject: "repeated tool attempt",
-		Detail:  text,
-	}
 }
 
 func (m *model) handleHookStartedEvent(ev protocol.Event) {
