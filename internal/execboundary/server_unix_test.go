@@ -131,3 +131,31 @@ func TestDecisionForRequestFailsClosedWhenServerUnavailable(t *testing.T) {
 		t.Fatalf("missing parent server should fail closed, got %+v", got)
 	}
 }
+
+func TestExecProgramEnvPreservesBoundaryForChildProcesses(t *testing.T) {
+	got := execProgramEnv([]string{
+		"WHALE_EXEC_BOUNDARY_WRAPPER=1",
+		"WHALE_EXEC_BOUNDARY_RULES=[]",
+		"WHALE_EXEC_BOUNDARY_SOCKET=/tmp/whale-boundary.sock",
+		"WHALE_EXEC_BOUNDARY_SHELL=/opt/whale/runtime/zsh",
+		"WHALE_EXEC_BOUNDARY_WRAPPER_PATH=/opt/whale/whale",
+		"EXEC_WRAPPER=/opt/whale/whale",
+		"PATH=/usr/bin:/bin",
+	})
+	joined := "\n" + strings.Join(got, "\n") + "\n"
+	if strings.Contains(joined, "\nWHALE_EXEC_BOUNDARY_WRAPPER=1\n") {
+		t.Fatalf("wrapper mode marker should not be inherited: %q", got)
+	}
+	for _, want := range []string{
+		"WHALE_EXEC_BOUNDARY_RULES=[]",
+		"WHALE_EXEC_BOUNDARY_SOCKET=/tmp/whale-boundary.sock",
+		"WHALE_EXEC_BOUNDARY_SHELL=/opt/whale/runtime/zsh",
+		"WHALE_EXEC_BOUNDARY_WRAPPER_PATH=/opt/whale/whale",
+		"EXEC_WRAPPER=/opt/whale/whale",
+		"PATH=/usr/bin:/bin",
+	} {
+		if !strings.Contains(joined, "\n"+want+"\n") {
+			t.Fatalf("expected %s to be preserved, got %q", want, got)
+		}
+	}
+}

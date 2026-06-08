@@ -91,6 +91,8 @@ printf '%s\n' 'v0.0.0'
 EOF
 chmod 0755 "$INSTALL_DIR/whale"
 ln "$INSTALL_DIR/whale" "$INSTALL_DIR/whale.oldlink"
+mkdir -p "$INSTALL_DIR/runtime"
+printf '%s\n' "existing runtime" >"$INSTALL_DIR/runtime/zsh"
 
 if command -v sha256sum >/dev/null 2>&1; then
   ASSET_SHA="$(sha256sum "$TMPDIR/$ASSET_NAME" | awk '{print $1}')"
@@ -119,6 +121,11 @@ fi
 
 if [ "$("$INSTALL_DIR/whale.oldlink" --version)" != "v0.0.0" ]; then
   printf '%s\n' "install overwrote the old whale inode instead of replacing it" >&2
+  exit 1
+fi
+
+if [ "$(cat "$INSTALL_DIR/runtime/zsh")" != "existing runtime" ]; then
+  printf '%s\n' "install removed existing runtime when asset did not provide one" >&2
   exit 1
 fi
 

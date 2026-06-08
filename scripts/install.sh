@@ -117,7 +117,6 @@ install_runtime() {
   dst="$2"
   target="$dst/runtime"
   if [ ! -d "$src" ]; then
-    rm -rf "$target"
     return 0
   fi
   tmp_target="$(mktemp -d "$dst/.whale-runtime.tmp.XXXXXX")"
