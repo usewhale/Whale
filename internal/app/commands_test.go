@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -27,6 +28,7 @@ import (
 	"github.com/usewhale/whale/internal/store"
 	"github.com/usewhale/whale/internal/tasks"
 	"github.com/usewhale/whale/internal/telemetry"
+	whaletools "github.com/usewhale/whale/internal/tools"
 	"github.com/usewhale/whale/internal/workflow"
 )
 
@@ -185,6 +187,8 @@ func TestClassifySubmitSlashCommands(t *testing.T) {
 		{line: "/hooks trust all", want: appcommands.SubmitLocalMutating},
 		{line: "/feedback", want: appcommands.SubmitLocalReadOnly},
 		{line: "/help", want: appcommands.SubmitLocalReadOnly},
+		{line: "/ps", want: appcommands.SubmitLocalReadOnly},
+		{line: "/stop task-123", want: appcommands.SubmitLocalMutating},
 		{line: "/copy", want: appcommands.SubmitLocalReadOnly},
 		{line: "/copy 2", want: appcommands.SubmitLocalReadOnly},
 		{line: "/attach", want: appcommands.SubmitUsageError},
@@ -243,6 +247,9 @@ func TestClassifySubmitSlashCommands(t *testing.T) {
 		{line: "/hooks bad", want: appcommands.SubmitUsageError},
 		{line: "/feedback now", want: appcommands.SubmitUsageError},
 		{line: "/help now", want: appcommands.SubmitUsageError},
+		{line: "/ps now", want: appcommands.SubmitUsageError},
+		{line: "/stop", want: appcommands.SubmitUsageError},
+		{line: "/stop task-1 extra", want: appcommands.SubmitUsageError},
 		{line: "/copy 0", want: appcommands.SubmitUsageError},
 		{line: "/copy latest", want: appcommands.SubmitUsageError},
 		{line: "/copy 1 extra", want: appcommands.SubmitUsageError},
@@ -1189,6 +1196,8 @@ func TestHandleLocalCommandHelp(t *testing.T) {
 		"/ask [prompt]",
 		"/compact",
 		"/review [local|branch|pr|commit|<instructions>]",
+		"/ps",
+		"/stop <task_id>",
 		"/status",
 		"/stats [usage|cache|tools|repair|recent|profile|all]",
 		"/plugins",
@@ -1207,6 +1216,81 @@ func TestHandleLocalCommandHelpUsageError(t *testing.T) {
 	if !handled || err == nil || !strings.Contains(err.Error(), "usage: /help") {
 		t.Fatalf("expected /help usage error, handled=%v err=%v", handled, err)
 	}
+}
+
+func TestBackgroundTaskLocalCommands(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("background shell command fixture uses POSIX sleep")
+	}
+	toolset, err := whaletools.NewToolset(t.TempDir())
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	app := &App{ctx: context.Background(), toolset: toolset}
+
+	handled, out, _, err := app.HandleLocalCommand("/ps")
+	if !handled || err != nil {
+		t.Fatalf("/ps empty handled=%v err=%v", handled, err)
+	}
+	if !strings.Contains(out, "No background shell tasks") {
+		t.Fatalf("unexpected empty /ps output:\n%s", out)
+	}
+
+	shellRun := findTestTool(t, toolset.Tools(), "shell_run")
+	startRes, err := shellRun.Call(context.Background(), core.ToolCall{
+		ID:    "tc-shell",
+		Name:  "shell_run",
+		Input: `{"command":"sleep 30","background":true}`,
+	})
+	if err != nil || startRes.IsError {
+		t.Fatalf("start background task: err=%v res=%+v", err, startRes)
+	}
+	taskID := backgroundTaskIDFromToolResult(t, startRes.Content)
+
+	handled, out, _, err = app.HandleLocalCommand("/ps")
+	if !handled || err != nil {
+		t.Fatalf("/ps running handled=%v err=%v", handled, err)
+	}
+	if !strings.Contains(out, taskID) || !strings.Contains(out, "sleep 30") {
+		t.Fatalf("/ps should show running task %s:\n%s", taskID, out)
+	}
+
+	handled, out, _, err = app.HandleLocalCommand("/stop " + taskID)
+	if !handled || err != nil {
+		t.Fatalf("/stop handled=%v err=%v", handled, err)
+	}
+	if !strings.Contains(out, "Stopped background task") || !strings.Contains(out, taskID) {
+		t.Fatalf("/stop should report stopped task:\n%s", out)
+	}
+}
+
+func findTestTool(t *testing.T, tools []core.Tool, name string) core.Tool {
+	t.Helper()
+	for _, tool := range tools {
+		if tool.Name() == name {
+			return tool
+		}
+	}
+	t.Fatalf("tool %q not found", name)
+	return nil
+}
+
+func backgroundTaskIDFromToolResult(t *testing.T, content string) string {
+	t.Helper()
+	var envelope struct {
+		Data struct {
+			Payload struct {
+				TaskID string `json:"task_id"`
+			} `json:"payload"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(content), &envelope); err != nil {
+		t.Fatalf("unmarshal task result: %v", err)
+	}
+	if envelope.Data.Payload.TaskID == "" {
+		t.Fatalf("missing task id in %s", content)
+	}
+	return envelope.Data.Payload.TaskID
 }
 
 func TestCommandsHelpKeepsSkillCommandOutOfPrimaryList(t *testing.T) {

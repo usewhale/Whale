@@ -210,6 +210,15 @@ func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 	if strings.HasPrefix(trimmed, "/diff ") {
 		return CommandExecution{Handled: true}, errors.New("usage: /diff")
 	}
+	if trimmed == "/ps" {
+		return a.executePSCommand(), nil
+	}
+	if strings.HasPrefix(trimmed, "/ps ") {
+		return CommandExecution{Handled: true}, errors.New("usage: /ps")
+	}
+	if trimmed == "/stop" || strings.HasPrefix(trimmed, "/stop ") {
+		return a.executeStopCommand(trimmed)
+	}
 	if trimmed == "/copy" || strings.HasPrefix(trimmed, "/copy ") {
 		return a.executeCopyCommand(trimmed)
 	}

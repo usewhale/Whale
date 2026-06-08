@@ -3505,6 +3505,38 @@ func TestShellRunBackgroundAndWait(t *testing.T) {
 	}
 }
 
+func TestBackgroundShellTasksAndCancel(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("background shell command fixture uses POSIX sleep")
+	}
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "sleep 30",
+		"background": true,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run background failed: err=%v res=%+v", err, startRes)
+	}
+	taskID := toolsetBackgroundTaskID(t, startRes.Content)
+
+	tasks := ts.BackgroundShellTasks()
+	if len(tasks) != 1 || tasks[0].ID != taskID || tasks[0].Status != "running" || !strings.Contains(tasks[0].Command, "sleep 30") {
+		t.Fatalf("unexpected background task snapshot: %+v", tasks)
+	}
+
+	stopped, err := ts.CancelBackgroundShellTask(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("cancel background task: %v", err)
+	}
+	if stopped.ID != taskID || stopped.Status == "running" {
+		t.Fatalf("unexpected stopped task: %+v", stopped)
+	}
+}
+
 func TestShellRunBackgroundFinalWaitReleasesTask(t *testing.T) {
 	dir := t.TempDir()
 	ts, err := NewToolset(dir)
