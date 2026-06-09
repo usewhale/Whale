@@ -1459,6 +1459,25 @@ func TestBtwSlashSuggestionEnterCompletesWithSpace(t *testing.T) {
 		t.Fatalf("expected suggestions hidden after required-arg completion, got %+v", m.slash.matches)
 	}
 }
+
+func TestStopSlashSuggestionEnterWaitsForTaskID(t *testing.T) {
+	m, intents := newModelWithDispatchSpy()
+	m.input.SetValue("/sto")
+	m.updateSlashMatches()
+	selectSlashCommand(t, &m, "/stop ")
+
+	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if len(*intents) != 0 {
+		t.Fatalf("/stop suggestion should wait for task id, got intents %+v", *intents)
+	}
+	if got := m.input.Value(); got != "/stop " {
+		t.Fatalf("expected /stop completion with trailing space, got %q", got)
+	}
+	if m.hasSlashSuggestions() {
+		t.Fatalf("expected suggestions hidden after required-arg completion, got %+v", m.slash.matches)
+	}
+}
 func TestBtwExactSlashEnterShowsUsage(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.input.SetValue("/btw")

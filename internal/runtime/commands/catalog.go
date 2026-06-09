@@ -31,7 +31,7 @@ func DefaultSlashCommands() []SlashCommandSpec {
 		{Name: "/focus", Description: "Toggle focus view", AutoRun: true},
 		{Name: "/diff", Description: "Show current git diff", AutoRun: true},
 		{Name: "/ps", Description: "Show background shell tasks", AutoRun: true},
-		{Name: "/stop", Description: "Stop a background shell task", ArgumentHint: "<task_id>", AutoRun: true},
+		{Name: "/stop", Description: "Stop a background shell task", ArgumentHint: "<task_id>"},
 		{Name: "/goal", Description: "Set or inspect the active session goal", ArgumentHint: "[--tokens 50k] <objective>|status|pause|resume|clear", AutoRun: true, Options: []SlashCommandOption{
 			{Token: "status", Description: "Show the active goal", AutoRun: true},
 			{Token: "pause", Description: "Pause the active goal", AutoRun: true},
