@@ -71,6 +71,23 @@ func TestShellRunDescriptionWarnsAgainstDestructiveGitRestore(t *testing.T) {
 	}
 }
 
+func TestShellRunDescriptionPrefersDedicatedFileTools(t *testing.T) {
+	desc := shellRunDescriptionFor(shell.RuntimeDescription{}, defaultForegroundShellWaitConfig())
+	for _, want := range []string{
+		"Prefer dedicated Whale tools for ordinary file exploration",
+		"use grep for content search",
+		"search_files for file names",
+		"read_file for file contents",
+		"list_dir for directory listings",
+		"Avoid wrapping grep, rg, cat, head, tail, sed, or awk in shell_run",
+		"for/while/$() shell scripts",
+	} {
+		if !strings.Contains(desc, want) {
+			t.Fatalf("description missing %q:\n%s", want, desc)
+		}
+	}
+}
+
 func TestShellRunDescriptionUsesConfiguredForegroundWait(t *testing.T) {
 	waitCfg := foregroundShellWaitConfig{DefaultMS: 45000, MaxMS: 240000}
 	desc := shellRunDescriptionFor(shell.RuntimeDescription{}, waitCfg)
