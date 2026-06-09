@@ -19,11 +19,13 @@ func (b *Toolset) shellTools() []core.Tool {
 				"type":                 "object",
 				"additionalProperties": false,
 				"properties": map[string]any{
-					"command":    map[string]any{"type": "string", "description": "Shell command to execute"},
-					"timeout_ms": map[string]any{"type": "integer", "minimum": 1, "maximum": maxBackgroundShellTimeoutMS, "description": shellRunTimeoutDescription(b.foregroundShellWait)},
-					"background": map[string]any{"type": "boolean", "description": fmt.Sprintf("When true, return immediately with task_id. The task runtime defaults to %dms.", defaultBackgroundShellTimeoutMS)},
-					"cwd":        map[string]any{"type": "string", "description": "Optional working directory relative to the workspace root. Must stay inside the workspace. Use this for subdirectory commands instead of cd."},
-					"mode":       map[string]any{"type": "string", "enum": []string{"auto", "pipe", "pty"}, "description": "Execution transport. auto uses a PTY for recognized interactive or authentication commands and a normal pipe otherwise; pty enables write_stdin interaction."},
+					"command":        map[string]any{"type": "string", "description": "Shell command to execute"},
+					"yield_time_ms":  map[string]any{"type": "integer", "minimum": 1, "maximum": b.foregroundShellWait.MaxMS, "description": shellRunYieldTimeDescription(b.foregroundShellWait)},
+					"max_runtime_ms": map[string]any{"type": "integer", "minimum": 1, "maximum": maxBackgroundShellTimeoutMS, "description": fmt.Sprintf("Maximum process runtime before Whale cancels the task; defaults to %d and clamps at %d.", defaultBackgroundShellTimeoutMS, maxBackgroundShellTimeoutMS)},
+					"timeout_ms":     map[string]any{"type": "integer", "minimum": 1, "maximum": maxBackgroundShellTimeoutMS, "description": shellRunTimeoutDescription(b.foregroundShellWait)},
+					"background":     map[string]any{"type": "boolean", "description": "When true, return immediately with task_id after starting the process."},
+					"cwd":            map[string]any{"type": "string", "description": "Optional working directory relative to the workspace root. Must stay inside the workspace. Use this for subdirectory commands instead of cd."},
+					"mode":           map[string]any{"type": "string", "enum": []string{"auto", "pipe", "pty"}, "description": "Execution transport. auto uses a PTY for recognized interactive or authentication commands and a normal pipe otherwise; pty enables write_stdin interaction."},
 				},
 				"required": []string{"command"},
 			},
@@ -88,7 +90,7 @@ func (b *Toolset) shellTools() []core.Tool {
 }
 
 func shellRunDescriptionFor(rt shell.RuntimeDescription, waitCfg foregroundShellWaitConfig) string {
-	base := fmt.Sprintf("Run a shell command from the current Whale workspace. Commands default to the workspace root; do not assume synthetic paths like /workspace. Use relative paths, or set cwd to a subdirectory inside the workspace, instead of prefixing commands with cd. Foreground wait defaults to %dms and clamps at %dms; long-running commands can return a background task_id when the foreground wait expires. Continue with shell_wait instead of rerunning the same command. Before running destructive workspace restore operations such as git checkout -- <path>, git restore, git reset --hard, or git clean, prefer Whale's /rewind command or /checkpoint alias unless the user explicitly asked to discard local changes.", waitCfg.DefaultMS, waitCfg.MaxMS)
+	base := fmt.Sprintf("Run a shell command from the current Whale workspace as a managed process session. Commands default to the workspace root; do not assume synthetic paths like /workspace. Use relative paths, or set cwd to a subdirectory inside the workspace, instead of prefixing commands with cd. yield_time_ms defaults to %dms and clamps at %dms; when the process is still running Whale returns a task_id and keeps the process alive. Continue with shell_wait instead of rerunning the same command. Before running destructive workspace restore operations such as git checkout -- <path>, git restore, git reset --hard, or git clean, prefer Whale's /rewind command or /checkpoint alias unless the user explicitly asked to discard local changes.", waitCfg.DefaultMS, waitCfg.MaxMS)
 	if guidance := rt.ToolGuidance(); strings.TrimSpace(guidance) != "" {
 		return base + " " + strings.TrimSpace(guidance)
 	}
@@ -96,11 +98,15 @@ func shellRunDescriptionFor(rt shell.RuntimeDescription, waitCfg foregroundShell
 }
 
 func shellRunTimeoutDescription(waitCfg foregroundShellWaitConfig) string {
-	return fmt.Sprintf("Foreground wait in milliseconds for normal shell_run calls; defaults to %d and clamps at %d. Long-running commands may return a background task_id when the foreground wait expires. With background=true, this is the task runtime limit; defaults to %d and clamps at %d.", waitCfg.DefaultMS, waitCfg.MaxMS, defaultBackgroundShellTimeoutMS, maxBackgroundShellTimeoutMS)
+	return fmt.Sprintf("Deprecated alias for yield_time_ms when yield_time_ms is omitted. Foreground yield defaults to %d and clamps at %d. Use max_runtime_ms for the process runtime limit.", waitCfg.DefaultMS, waitCfg.MaxMS)
+}
+
+func shellRunYieldTimeDescription(waitCfg foregroundShellWaitConfig) string {
+	return fmt.Sprintf("How long to wait for output before yielding a task_id. Defaults to %d and clamps at %d. Yield timeout does not cancel the process.", waitCfg.DefaultMS, waitCfg.MaxMS)
 }
 
 func shellWaitTimeoutDescription() string {
-	return fmt.Sprintf("How long to wait for completion in milliseconds; defaults to %d and clamps at %d.", defaultShellWaitTimeoutMS, maxShellWaitTimeoutMS)
+	return fmt.Sprintf("How long to poll the existing task in milliseconds; defaults to %d and clamps at %d. Timeout does not cancel the process.", defaultShellWaitTimeoutMS, maxShellWaitTimeoutMS)
 }
 
 func shellReadOnlyCheck(args map[string]any) bool {

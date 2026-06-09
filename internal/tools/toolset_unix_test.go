@@ -78,7 +78,7 @@ func TestShellExecBoundaryShellPathPrefersExplicitEnv(t *testing.T) {
 	}
 }
 
-func TestShellRunCancelKillsProcessGroup(t *testing.T) {
+func TestShellRunContextCancelYieldsRunningTask(t *testing.T) {
 	dir := t.TempDir()
 	ts, err := NewToolset(dir)
 	if err != nil {
@@ -103,18 +103,21 @@ func TestShellRunCancelKillsProcessGroup(t *testing.T) {
 	pid := waitForPIDFile(t, filepath.Join(dir, "child.pid"))
 	cancel()
 
+	var taskID string
 	select {
 	case got := <-done:
 		if got.err != nil {
 			t.Fatalf("exec shell returned error: %v", got.err)
 		}
-		if !strings.Contains(got.res, `"code":"cancelled"`) {
-			t.Fatalf("expected cancelled result, got: %s", got.res)
+		if !strings.Contains(got.res, `"status":"running"`) || !strings.Contains(got.res, `"reason":"yield_interrupted"`) {
+			t.Fatalf("expected interrupted running task result, got: %s", got.res)
 		}
+		taskID = backgroundTaskID(t, got.res)
 	case <-time.After(3 * time.Second):
 		t.Fatal("exec shell did not return promptly after cancel")
 	}
 
+	_, _ = ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{"task_id": taskID}))
 	waitForProcessExit(t, pid)
 }
 
@@ -783,14 +786,12 @@ func TestShellRunAutoInteractiveAuthUsesPTYAndWriteStdin(t *testing.T) {
 	if err := os.WriteFile(fakeNPM, []byte("#!/bin/sh\nif [ \"$1\" = login ]; then printf 'Press ENTER to open in the browser...'; read _; printf '\\nLogged in on https://registry.npmjs.org/.\\n'; else exit 2; fi\n"), 0o755); err != nil {
 		t.Fatalf("write fake npm: %v", err)
 	}
-	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-
 	ts, err := NewToolset(dir)
 	if err != nil {
 		t.Fatalf("new toolset: %v", err)
 	}
 	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
-		"command":    "npm login",
+		"command":    strconv.Quote(fakeNPM) + " login",
 		"timeout_ms": 50,
 	}))
 	if err != nil || startRes.IsError {
@@ -980,7 +981,7 @@ func TestShellRunBackgroundTimeoutKillsProcessGroup(t *testing.T) {
 	waitForProcessExit(t, pid)
 }
 
-func TestShellRunTimeoutReturnsStructuredResult(t *testing.T) {
+func TestShellRunYieldTimeoutReturnsRunningTask(t *testing.T) {
 	dir := t.TempDir()
 	ts, err := NewToolset(dir)
 	if err != nil {
@@ -994,39 +995,69 @@ func TestShellRunTimeoutReturnsStructuredResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("shell_run returned dispatch error: %v", err)
 	}
-	if !res.IsError {
-		t.Fatalf("expected timeout error result, got %+v", res)
-	}
 	env, ok := core.ParseToolEnvelope(res.Content)
 	if !ok {
 		t.Fatalf("parse tool envelope: %s", res.Content)
 	}
-	if env.Success || env.Code != "timeout" {
-		t.Fatalf("expected timeout envelope, got %+v", env)
+	if !env.Success || env.Code != "ok" {
+		t.Fatalf("expected successful running envelope, got %+v", env)
 	}
 	data := env.Data
-	if data["status"] != "timeout" {
-		t.Fatalf("status = %#v, want timeout", data["status"])
+	if data["status"] != "running" {
+		t.Fatalf("status = %#v, want running", data["status"])
 	}
 	payload := data["payload"].(map[string]any)
 	if payload["command"] != "printf before; printf err-before >&2; sleep 30" || payload["cwd"] != "." {
 		t.Fatalf("unexpected payload: %#v", payload)
 	}
-	if payload["stdout"] != "before" || payload["stderr"] != "err-before" {
-		t.Fatalf("timeout did not keep partial output: %#v", payload)
+	if payload["task_id"] == "" || payload["done"] != false {
+		t.Fatalf("running result missing task state: %#v", payload)
 	}
 	metrics := data["metrics"].(map[string]any)
-	if metrics["timed_out"] != true {
-		t.Fatalf("timed_out = %#v, want true", metrics["timed_out"])
+	if metrics["auto_backgrounded"] != true {
+		t.Fatalf("auto_backgrounded = %#v, want true", metrics["auto_backgrounded"])
 	}
-	if metrics["exit_code"] != nil {
-		t.Fatalf("exit_code = %#v, want nil on timeout", metrics["exit_code"])
+	if metrics["requested_yield_time_ms"].(float64) != 100 || metrics["effective_yield_time_ms"].(float64) != 100 {
+		t.Fatalf("unexpected yield metrics: %#v", metrics)
 	}
-	if metrics["requested_timeout_ms"].(float64) != 100 || metrics["effective_timeout_ms"].(float64) != 100 {
+	if metrics["requested_timeout_ms"].(float64) != defaultBackgroundShellTimeoutMS || metrics["effective_timeout_ms"].(float64) != defaultBackgroundShellTimeoutMS {
+		t.Fatalf("unexpected runtime timeout metrics: %#v", metrics)
+	}
+	_, _ = ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{"task_id": payload["task_id"]}))
+}
+
+func TestShellRunForegroundMaxRuntimeTimeoutUsesForegroundDiagnosis(t *testing.T) {
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+
+	res, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":        "sleep 1",
+		"yield_time_ms":  1000,
+		"max_runtime_ms": 50,
+	}))
+	if err != nil {
+		t.Fatalf("shell_run returned dispatch error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected timeout error result, got %+v", res)
+	}
+	data := shellRunData(t, res)
+	if data["status"] != "timeout" {
+		t.Fatalf("status = %#v, want timeout", data["status"])
+	}
+	metrics := data["metrics"].(map[string]any)
+	if metrics["requested_timeout_ms"].(float64) != 50 || metrics["effective_timeout_ms"].(float64) != 50 {
 		t.Fatalf("unexpected timeout metrics: %#v", metrics)
 	}
-	if _, ok := metrics["stdout_truncation"].(map[string]any); !ok {
-		t.Fatalf("missing stdout truncation metrics: %#v", metrics)
+	diagnosis := data["diagnosis"].(map[string]any)
+	if diagnosis["reason"] == "background_runtime_timeout" {
+		t.Fatalf("foreground max runtime timeout used background diagnosis: %#v", diagnosis)
+	}
+	if diagnosis["reason"] != "foreground_timeout_too_short" {
+		t.Fatalf("unexpected diagnosis: %#v", diagnosis)
 	}
 }
 
@@ -1044,13 +1075,15 @@ func TestShellRunTimeoutDiagnosesInteractivePrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("shell_run returned dispatch error: %v", err)
 	}
-	if !res.IsError {
-		t.Fatalf("expected timeout error result, got %+v", res)
+	if res.IsError {
+		t.Fatalf("expected running task result, got %+v", res)
 	}
 	diagnosis := shellRunData(t, res)["diagnosis"].(map[string]any)
 	if diagnosis["reason"] != "interactive_prompt" || diagnosis["suggested_next_action"] != "rerun_non_interactive" {
 		t.Fatalf("unexpected diagnosis: %#v", diagnosis)
 	}
+	taskID := shellRunData(t, res)["payload"].(map[string]any)["task_id"].(string)
+	_, _ = ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{"task_id": taskID}))
 }
 
 func TestShellRunNonZeroExitReturnsExecFailed(t *testing.T) {
@@ -1174,13 +1207,15 @@ func TestShellRunTimeoutDiagnosesTooShortForegroundWait(t *testing.T) {
 	if err != nil {
 		t.Fatalf("shell_run returned dispatch error: %v", err)
 	}
-	if !res.IsError {
-		t.Fatalf("expected timeout error result, got %+v", res)
+	if res.IsError {
+		t.Fatalf("expected running task result, got %+v", res)
 	}
 	diagnosis := shellRunData(t, res)["diagnosis"].(map[string]any)
-	if diagnosis["reason"] != "foreground_timeout_too_short" || diagnosis["suggested_next_action"] != "rerun_with_longer_timeout" {
+	if diagnosis["reason"] != "complex_shell" || diagnosis["suggested_next_action"] != "shell_wait" {
 		t.Fatalf("unexpected diagnosis: %#v", diagnosis)
 	}
+	taskID := shellRunData(t, res)["payload"].(map[string]any)["task_id"].(string)
+	_, _ = ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{"task_id": taskID}))
 }
 
 func TestShellRunBackgroundTimeoutDiagnosesRuntimeLimit(t *testing.T) {
@@ -1285,6 +1320,54 @@ func TestShellRunAutoBackgroundsLongCommandAfterForegroundWait(t *testing.T) {
 	}
 	if !strings.Contains(waitRes.Content, "beforeafter") {
 		t.Fatalf("expected completed fake go output, got: %s", waitRes.Content)
+	}
+}
+
+func TestShellRunCurlPipeInstallerYieldsManagedTask(t *testing.T) {
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	if err := os.Mkdir(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	fakeCurl := filepath.Join(binDir, "curl")
+	if err := os.WriteFile(fakeCurl, []byte("#!/bin/sh\ncat <<'SCRIPT'\nprintf resolving\nsleep 0.3\nprintf installed\nSCRIPT\n"), 0o755); err != nil {
+		t.Fatalf("write fake curl: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":       strconv.Quote(fakeCurl) + " -fsSL https://example.invalid/install.sh | sh",
+		"yield_time_ms": 50,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run should return running curl pipe task, err=%v res=%+v", err, startRes)
+	}
+	data := shellRunData(t, startRes)
+	if data["status"] != "running" {
+		t.Fatalf("status = %#v, want running: %s", data["status"], startRes.Content)
+	}
+	diagnosis := data["diagnosis"].(map[string]any)
+	if diagnosis["reason"] != "download_long_running" || diagnosis["suggested_next_action"] != "shell_wait" {
+		t.Fatalf("unexpected diagnosis: %#v", diagnosis)
+	}
+	payload := data["payload"].(map[string]any)
+	if payload["transport"] != "pipe" || payload["can_write"] != false {
+		t.Fatalf("unexpected transport payload: %#v", payload)
+	}
+
+	waitRes, err := ts.shellWait(context.Background(), tc("shell_wait", map[string]any{
+		"task_id":    payload["task_id"],
+		"timeout_ms": 5000,
+	}))
+	if err != nil || waitRes.IsError {
+		t.Fatalf("shell_wait failed: err=%v res=%+v", err, waitRes)
+	}
+	if !strings.Contains(waitRes.Content, "resolvinginstalled") {
+		t.Fatalf("expected installer output from same task, got: %s", waitRes.Content)
 	}
 }
 
@@ -1395,8 +1478,8 @@ func TestShellRunExplicitBackgroundReportsEffectiveTimeout(t *testing.T) {
 	}
 	data := shellRunData(t, startRes)
 	metrics := data["metrics"].(map[string]any)
-	if got := metricNumber(t, data, "requested_timeout_ms"); got != 0 {
-		t.Fatalf("requested_timeout_ms = %d, want 0", got)
+	if got := metricNumber(t, data, "requested_timeout_ms"); got != defaultBackgroundShellTimeoutMS {
+		t.Fatalf("requested_timeout_ms = %d, want %d", got, defaultBackgroundShellTimeoutMS)
 	}
 	if got := metricNumber(t, data, "effective_timeout_ms"); got != defaultBackgroundShellTimeoutMS {
 		t.Fatalf("effective_timeout_ms = %d, want %d", got, defaultBackgroundShellTimeoutMS)
@@ -1549,7 +1632,7 @@ func TestShellRunConfiguredForegroundMaxAllowsLongerRequest(t *testing.T) {
 		t.Fatalf("expected shell_run success, got %+v", res)
 	}
 	metrics := shellRunData(t, res)["metrics"].(map[string]any)
-	if metrics["requested_timeout_ms"].(float64) != 180000 || metrics["effective_timeout_ms"].(float64) != 180000 {
+	if metrics["requested_timeout_ms"].(float64) != defaultBackgroundShellTimeoutMS || metrics["effective_timeout_ms"].(float64) != defaultBackgroundShellTimeoutMS {
 		t.Fatalf("unexpected timeout metrics: %#v", metrics)
 	}
 	if metrics["timeout_clamped"] != false {

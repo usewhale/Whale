@@ -396,7 +396,7 @@ func (p *execTimeoutProvider) StreamResponse(_ context.Context, _ []core.Message
 	return out
 }
 
-func TestRuntimeExecTimeoutRetriesThenReturnsTimeout(t *testing.T) {
+func TestRuntimeExecYieldTimeoutReturnsRunningTaskWithoutRetry(t *testing.T) {
 	root := t.TempDir()
 	toolset, err := tools.NewToolset(root)
 	if err != nil {
@@ -415,7 +415,7 @@ func TestRuntimeExecTimeoutRetriesThenReturnsTimeout(t *testing.T) {
 	}
 	var sawScheduled bool
 	var sawAttempt bool
-	var sawTimeout bool
+	var sawRunning bool
 	for ev := range events {
 		if ev.Type == agent.AgentEventTypeToolRecoveryScheduled {
 			sawScheduled = true
@@ -423,15 +423,15 @@ func TestRuntimeExecTimeoutRetriesThenReturnsTimeout(t *testing.T) {
 		if ev.Type == agent.AgentEventTypeToolRecoveryAttempt {
 			sawAttempt = true
 		}
-		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, `"code":"timeout"`) {
-			sawTimeout = true
+		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, `"status":"running"`) && strings.Contains(ev.Result.Content, `"task_id"`) {
+			sawRunning = true
 		}
 	}
-	if !sawScheduled || !sawAttempt {
-		t.Fatalf("expected retry events for timeout, got scheduled=%v attempt=%v", sawScheduled, sawAttempt)
+	if sawScheduled || sawAttempt {
+		t.Fatalf("yield timeout should not trigger recovery, got scheduled=%v attempt=%v", sawScheduled, sawAttempt)
 	}
-	if !sawTimeout {
-		t.Fatal("expected final timeout result")
+	if !sawRunning {
+		t.Fatal("expected running task result")
 	}
 }
 

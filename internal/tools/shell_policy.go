@@ -35,7 +35,7 @@ type shellTimeoutContext struct {
 	RequestedTimeoutMS int
 	EffectiveTimeoutMS int
 	DefaultWaitMS      int
-	BackgroundRuntime  bool
+	BackgroundTask     bool
 }
 
 func (d shellDiagnosis) asMap() map[string]any {
@@ -323,7 +323,7 @@ func shellTimeoutDiagnosis(snap shellTaskSnapshot, timeoutCtx shellTimeoutContex
 	if shellOutputLooksInteractivePrompt(text) {
 		return shellInteractivePromptDiagnosis(snap.Transport)
 	}
-	if timeoutCtx.BackgroundRuntime {
+	if timeoutCtx.BackgroundTask {
 		return shellDiagnosisForReason("background_runtime_timeout")
 	}
 	switch timeoutCtx.Policy.Reason {

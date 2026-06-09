@@ -15,7 +15,7 @@ func TestShellRunDescriptionIncludesPowerShellRuntimeGuidance(t *testing.T) {
 		Spec: shell.Spec{Kind: shell.KindPowerShell, DisplayName: "PowerShell"},
 	}, defaultForegroundShellWaitConfig())
 	for _, want := range []string{
-		"Run a shell command from the current Whale workspace.",
+		"Run a shell command from the current Whale workspace as a managed process session.",
 		"Runtime shell: PowerShell",
 		"Use PowerShell syntax",
 		"Get-ChildItem",
@@ -74,7 +74,7 @@ func TestShellRunDescriptionWarnsAgainstDestructiveGitRestore(t *testing.T) {
 func TestShellRunDescriptionUsesConfiguredForegroundWait(t *testing.T) {
 	waitCfg := foregroundShellWaitConfig{DefaultMS: 45000, MaxMS: 240000}
 	desc := shellRunDescriptionFor(shell.RuntimeDescription{}, waitCfg)
-	if !strings.Contains(desc, "Foreground wait defaults to 45000ms and clamps at 240000ms") {
+	if !strings.Contains(desc, "yield_time_ms defaults to 45000ms and clamps at 240000ms") {
 		t.Fatalf("description missing configured wait values:\n%s", desc)
 	}
 	timeoutDesc := shellRunTimeoutDescription(waitCfg)

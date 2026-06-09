@@ -164,8 +164,15 @@ func TestAppShellForegroundWaitConfigUpdatesToolDescription(t *testing.T) {
 	if !ok {
 		t.Fatal("missing shell_run spec")
 	}
-	if !strings.Contains(spec.Description, "Foreground wait defaults to 45000ms and clamps at 240000ms") {
+	if !strings.Contains(spec.Description, "yield_time_ms defaults to 45000ms and clamps at 240000ms") {
 		t.Fatalf("shell_run description did not use configured waits:\n%s", spec.Description)
+	}
+	yield, ok := spec.Parameters["properties"].(map[string]any)["yield_time_ms"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing yield_time_ms schema: %#v", spec.Parameters)
+	}
+	if yield["maximum"].(int) != 240000 {
+		t.Fatalf("yield_time_ms schema maximum = %#v, want 240000", yield["maximum"])
 	}
 	timeout, ok := spec.Parameters["properties"].(map[string]any)["timeout_ms"].(map[string]any)
 	if !ok {
@@ -181,7 +188,7 @@ func TestAppShellForegroundWaitConfigUpdatesToolDescription(t *testing.T) {
 	if !ok {
 		t.Fatal("missing subagent shell_run spec")
 	}
-	if !strings.Contains(subagentSpec.Description, "Foreground wait defaults to 45000ms and clamps at 240000ms") {
+	if !strings.Contains(subagentSpec.Description, "yield_time_ms defaults to 45000ms and clamps at 240000ms") {
 		t.Fatalf("subagent shell_run description did not use configured waits:\n%s", subagentSpec.Description)
 	}
 }

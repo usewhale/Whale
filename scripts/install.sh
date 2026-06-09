@@ -2,10 +2,22 @@
 
 set -eu
 
+if [ "${VERSION+x}" = "x" ]; then
+  printf '%s\n' "whale install: VERSION is no longer supported." >&2
+  printf '%s\n' "  Use WHALE_VERSION=latest (auto-resolve) or WHALE_VERSION=vX.Y.Z." >&2
+  exit 1
+fi
+
+if [ "${BIN_DIR+x}" = "x" ]; then
+  printf '%s\n' "whale install: BIN_DIR is no longer supported." >&2
+  printf '%s\n' "  Use WHALE_INSTALL_DIR=/path/to/bin instead." >&2
+  exit 1
+fi
+
 WHALE_REPO="${WHALE_REPO:-usewhale/DeepSeek-Code-Whale}"
 REPO_SLUG="$WHALE_REPO"
-WHALE_VERSION="${WHALE_VERSION:-${VERSION:-latest}}"
-WHALE_INSTALL_DIR="${WHALE_INSTALL_DIR:-${BIN_DIR:-}}"
+WHALE_VERSION="${WHALE_VERSION:-latest}"
+WHALE_INSTALL_DIR="${WHALE_INSTALL_DIR:-}"
 VERSION="$WHALE_VERSION"
 BIN_DIR="$WHALE_INSTALL_DIR"
 
@@ -15,7 +27,6 @@ validate_version() {
   if [ "$version" != "latest" ] && ! printf '%s' "$version" | grep -q '^v'; then
     printf '%s\n' "whale install: invalid version '$version'" >&2
     printf '%s\n' "  Use WHALE_VERSION=latest (auto-resolve) or WHALE_VERSION=vX.Y.Z" >&2
-    printf '%s\n' "  Note: bare VERSION is no longer supported; use WHALE_VERSION instead." >&2
     exit 1
   fi
 }
