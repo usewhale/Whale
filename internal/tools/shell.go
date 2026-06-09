@@ -178,11 +178,11 @@ func shellYieldInterruptedDiagnosis(policy shellContinuationPolicy) shellDiagnos
 }
 
 func shellYieldTimeoutDiagnosis(policy shellContinuationPolicy, snap shellTaskSnapshot) shellDiagnosis {
-	if shellOutputLooksInteractivePrompt(strings.TrimSpace(snap.Stderr + "\n" + snap.Stdout)) {
-		return shellInteractivePromptDiagnosis(snap.Transport)
-	}
 	if policy.Reason == "interactive_or_auth" {
 		return shellInteractiveAuthDiagnosis(snap.Transport)
+	}
+	if shellOutputLooksInteractivePrompt(strings.TrimSpace(snap.Stderr + "\n" + snap.Stdout)) {
+		return shellInteractivePromptDiagnosis(snap.Transport)
 	}
 	diagnosis := shellDiagnosisForReason(policy.Reason)
 	if diagnosis.Reason == "" {
