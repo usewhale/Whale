@@ -2,15 +2,24 @@
 
 set -eu
 
-REPO_SLUG="${REPO_SLUG:-usewhale/DeepSeek-Code-Whale}"
-OWNER="${OWNER:-}"
-REPO="${REPO:-}"
-VERSION="${VERSION:-latest}"
-BIN_DIR="${BIN_DIR:-}"
+WHALE_REPO="${WHALE_REPO:-usewhale/DeepSeek-Code-Whale}"
+REPO_SLUG="$WHALE_REPO"
+WHALE_VERSION="${WHALE_VERSION:-${VERSION:-latest}}"
+WHALE_INSTALL_DIR="${WHALE_INSTALL_DIR:-${BIN_DIR:-}}"
+VERSION="$WHALE_VERSION"
+BIN_DIR="$WHALE_INSTALL_DIR"
 
-if [ -n "$OWNER" ] && [ -n "$REPO" ]; then
-  REPO_SLUG="$OWNER/$REPO"
-fi
+# Validate version format: must be "latest" or start with "v"
+validate_version() {
+  version="$1"
+  if [ "$version" != "latest" ] && ! printf '%s' "$version" | grep -q '^v'; then
+    printf '%s\n' "whale install: invalid version '$version'" >&2
+    printf '%s\n' "  Use WHALE_VERSION=latest (auto-resolve) or WHALE_VERSION=vX.Y.Z" >&2
+    printf '%s\n' "  Note: bare VERSION is no longer supported; use WHALE_VERSION instead." >&2
+    exit 1
+  fi
+}
+validate_version "$VERSION"
 
 detect_os() {
   case "$(uname -s)" in
