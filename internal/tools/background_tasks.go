@@ -22,6 +22,14 @@ type BackgroundShellTask struct {
 }
 
 func (b *Toolset) BackgroundShellTasks() []BackgroundShellTask {
+	return b.backgroundShellTasks(false)
+}
+
+func (b *Toolset) RunningBackgroundShellTasks() []BackgroundShellTask {
+	return b.backgroundShellTasks(true)
+}
+
+func (b *Toolset) backgroundShellTasks(runningOnly bool) []BackgroundShellTask {
 	if b == nil || b.tasks == nil {
 		return nil
 	}
@@ -29,29 +37,17 @@ func (b *Toolset) BackgroundShellTasks() []BackgroundShellTask {
 	b.tasks.pruneCompletedLocked(time.Now(), "")
 	tasks := make([]*shellTask, 0, len(b.tasks.tasks))
 	for _, task := range b.tasks.tasks {
-		tasks = append(tasks, task)
+		if !runningOnly || task.snapshot().Status == "running" {
+			tasks = append(tasks, task)
+		}
 	}
 	b.tasks.mu.Unlock()
 
 	out := make([]BackgroundShellTask, 0, len(tasks))
 	for _, task := range tasks {
-		snap := task.snapshot()
-		out = append(out, BackgroundShellTask{
-			ID:         snap.ID,
-			Command:    snap.Command,
-			CWD:        snap.CWD,
-			Status:     snap.Status,
-			Transport:  string(snap.Transport),
-			StartedAt:  snap.StartedAt,
-			FinishedAt: snap.FinishedAt,
-			LastOutput: snap.LastOutput,
-			CanWrite:   snap.CanWrite,
-			ExitCode:   snap.ExitCode,
-		})
+		out = append(out, backgroundShellTaskFromSnapshot(task.snapshot()))
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		return out[i].StartedAt.Before(out[j].StartedAt)
-	})
+	sortBackgroundShellTasks(out)
 	return out
 }
 
@@ -78,6 +74,54 @@ func (b *Toolset) CancelBackgroundShellTask(ctx context.Context, taskID string) 
 	case <-time.After(3 * time.Second):
 	}
 	snap := task.snapshot()
+	return backgroundShellTaskFromSnapshot(snap), nil
+}
+
+func (b *Toolset) CancelAllBackgroundShellTasks(ctx context.Context) ([]BackgroundShellTask, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if b == nil || b.tasks == nil {
+		return nil, nil
+	}
+	b.tasks.mu.Lock()
+	b.tasks.pruneCompletedLocked(time.Now(), "")
+	tasks := make([]*shellTask, 0, len(b.tasks.tasks))
+	for _, task := range b.tasks.tasks {
+		if task.snapshot().Status == "running" {
+			tasks = append(tasks, task)
+		}
+	}
+	b.tasks.mu.Unlock()
+	if len(tasks) == 0 {
+		return nil, nil
+	}
+
+	for _, task := range tasks {
+		task.cancelRun()
+	}
+
+	waitCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	for _, task := range tasks {
+		select {
+		case <-waitCtx.Done():
+			if errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return nil, ctx.Err()
+			}
+		case <-task.done:
+		}
+	}
+
+	out := make([]BackgroundShellTask, 0, len(tasks))
+	for _, task := range tasks {
+		out = append(out, backgroundShellTaskFromSnapshot(task.snapshot()))
+	}
+	sortBackgroundShellTasks(out)
+	return out, nil
+}
+
+func backgroundShellTaskFromSnapshot(snap shellTaskSnapshot) BackgroundShellTask {
 	return BackgroundShellTask{
 		ID:         snap.ID,
 		Command:    snap.Command,
@@ -89,5 +133,11 @@ func (b *Toolset) CancelBackgroundShellTask(ctx context.Context, taskID string) 
 		LastOutput: snap.LastOutput,
 		CanWrite:   snap.CanWrite,
 		ExitCode:   snap.ExitCode,
-	}, nil
+	}
+}
+
+func sortBackgroundShellTasks(tasks []BackgroundShellTask) {
+	sort.SliceStable(tasks, func(i, j int) bool {
+		return tasks[i].StartedAt.Before(tasks[j].StartedAt)
+	})
 }

@@ -37,7 +37,7 @@ func (c SubmitClassification) BusyImmediate() bool {
 		return true
 	}
 	fields := strings.Fields(c.Line)
-	return c.Class == SubmitLocalMutating && len(fields) == 2 && fields[0] == "/stop"
+	return c.Class == SubmitLocalMutating && len(fields) == 1 && fields[0] == "/stop"
 }
 
 func (c SubmitClassification) SubmitBarrier() bool {
@@ -71,7 +71,7 @@ func classifySlashFields(head string, fields []string, line string) SubmitClass 
 		}
 		return SubmitUsageError
 	case "/stop":
-		if len(fields) == 2 {
+		if len(fields) == 1 {
 			return SubmitLocalMutating
 		}
 		return SubmitUsageError

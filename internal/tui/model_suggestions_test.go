@@ -1460,22 +1460,25 @@ func TestBtwSlashSuggestionEnterCompletesWithSpace(t *testing.T) {
 	}
 }
 
-func TestStopSlashSuggestionEnterWaitsForTaskID(t *testing.T) {
+func TestStopSlashSuggestionEnterAutoRuns(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.input.SetValue("/sto")
 	m.updateSlashMatches()
-	selectSlashCommand(t, &m, "/stop ")
+	selectSlashCommand(t, &m, "/stop")
 
 	m, _ = updateTestModel(t, m, tea.KeyMsg{Type: tea.KeyEnter})
 
-	if len(*intents) != 0 {
-		t.Fatalf("/stop suggestion should wait for task id, got intents %+v", *intents)
+	if len(*intents) != 1 {
+		t.Fatalf("expected /stop suggestion to submit one intent, got %+v", *intents)
 	}
-	if got := m.input.Value(); got != "/stop " {
-		t.Fatalf("expected /stop completion with trailing space, got %q", got)
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmitLocal || got.Input != "/stop" {
+		t.Fatalf("unexpected /stop suggestion intent: %+v", got)
+	}
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("expected /stop auto-run to clear input, got %q", got)
 	}
 	if m.hasSlashSuggestions() {
-		t.Fatalf("expected suggestions hidden after required-arg completion, got %+v", m.slash.matches)
+		t.Fatalf("expected suggestions hidden after /stop auto-run, got %+v", m.slash.matches)
 	}
 }
 func TestBtwExactSlashEnterShowsUsage(t *testing.T) {

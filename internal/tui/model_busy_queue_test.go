@@ -1412,11 +1412,11 @@ func TestBtwBusySubmitDispatchesLocalSubmit(t *testing.T) {
 func TestStopTaskBusySubmitDispatchesLocalSubmit(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.busy = true
-	m.submitPromptWhileBusy("/stop task-123")
+	m.submitPromptWhileBusy("/stop")
 	if len(*intents) != 1 {
 		t.Fatalf("expected one intent, got %d", len(*intents))
 	}
-	if got := (*intents)[0]; got.Kind != protocol.IntentSubmitLocal || got.Input != "/stop task-123" {
+	if got := (*intents)[0]; got.Kind != protocol.IntentSubmitLocal || got.Input != "/stop" {
 		t.Fatalf("unexpected intent: %+v", got)
 	}
 	if m.localSubmitPending != 1 {
