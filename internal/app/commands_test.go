@@ -1257,7 +1257,7 @@ func TestBackgroundTaskLocalCommands(t *testing.T) {
 	}
 
 	shellRun := findTestTool(t, toolset.Tools(), "shell_run")
-	startRes, err := shellRun.Call(context.Background(), core.ToolCall{
+	startRes, err := shellRun.Run(context.Background(), core.ToolCall{
 		ID:    "tc-shell",
 		Name:  "shell_run",
 		Input: `{"command":"sleep 30","background":true}`,
