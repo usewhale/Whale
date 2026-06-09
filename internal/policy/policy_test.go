@@ -284,7 +284,7 @@ func TestDefaultToolPolicyRequiresApprovalForMutatingCapability(t *testing.T) {
 	}
 }
 
-func TestDefaultToolPolicyRequiresApprovalForWebTools(t *testing.T) {
+func TestDefaultToolPolicyAllowsWebTools(t *testing.T) {
 	p := DefaultToolPolicy{}
 	cases := []struct {
 		spec core.ToolSpec
@@ -305,7 +305,7 @@ func TestDefaultToolPolicyRequiresApprovalForWebTools(t *testing.T) {
 	}
 	for _, tc := range cases {
 		decision := p.Decide(tc.spec, tc.call)
-		if !decision.Allow || !decision.RequiresApproval || decision.Code != "permission_required" {
+		if !decision.Allow || decision.RequiresApproval || decision.Code != "permission_allow" {
 			t.Fatalf("%s decision: %+v", tc.call.Name, decision)
 		}
 	}

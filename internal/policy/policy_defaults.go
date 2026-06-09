@@ -70,10 +70,10 @@ func DefaultPermissionConfig() PermissionConfig {
 			"mutating": "ask",
 		},
 		WebSearch: map[string]string{
-			"*": "ask",
+			"*": "allow",
 		},
 		WebFetch: map[string]string{
-			"*": "ask",
+			"*": "allow",
 		},
 		MutatingTool: map[string]string{
 			"*": "ask",

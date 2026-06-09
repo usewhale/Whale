@@ -43,6 +43,16 @@ func TestRulePolicyDefaultPosture(t *testing.T) {
 		t.Fatalf("read-only spawn_subagent decision = %+v, want allow without approval", readonlyTask)
 	}
 
+	webSearch := p.Decide(core.ToolSpec{Name: "web_search", ReadOnly: true}, core.ToolCall{Name: "web_search", Input: `{"query":"Node.js permission model"}`})
+	if !webSearch.Allow || webSearch.RequiresApproval || webSearch.Code != "permission_allow" {
+		t.Fatalf("web_search decision = %+v, want default allow without approval", webSearch)
+	}
+
+	webFetch := p.Decide(core.ToolSpec{Name: "web_fetch", ReadOnly: true}, core.ToolCall{Name: "web_fetch", Input: `{"url":"https://nodejs.org/api/permissions.html","prompt":"extract"}`})
+	if !webFetch.Allow || webFetch.RequiresApproval || webFetch.Code != "permission_allow" {
+		t.Fatalf("web_fetch decision = %+v, want default allow without approval", webFetch)
+	}
+
 	deny := p.Decide(core.ToolSpec{Name: "shell_run"}, core.ToolCall{Name: "shell_run", Input: `{"command":"rm -rf /tmp/x"}`})
 	if deny.Allow || deny.Code != "permission_denied" {
 		t.Fatalf("rm -rf decision = %+v, want deny", deny)
@@ -86,6 +96,24 @@ func TestRulePolicyUserEditRuleOverridesDefaultAllow(t *testing.T) {
 	got := p.Decide(spec, call)
 	if !got.Allow || !got.RequiresApproval || got.MatchedRule != "edit:*=ask" {
 		t.Fatalf("user edit ask rule should override default allow: %+v", got)
+	}
+}
+
+func TestRulePolicyUserWebRulesOverrideDefaultAllow(t *testing.T) {
+	rules := append(DefaultRules(),
+		PermissionRule{Permission: "web_search", Pattern: "*", Action: PermissionAsk},
+		PermissionRule{Permission: "web_fetch", Pattern: "host:nodejs.org", Action: PermissionAsk},
+	)
+	p := RulePolicy{Default: PermissionAllow, Rules: rules}
+
+	search := p.Decide(core.ToolSpec{Name: "web_search", ReadOnly: true}, core.ToolCall{Name: "web_search", Input: `{"query":"Node.js permission model"}`})
+	if !search.Allow || !search.RequiresApproval || search.MatchedRule != "web_search:*=ask" {
+		t.Fatalf("user web_search ask rule should override default allow: %+v", search)
+	}
+
+	fetch := p.Decide(core.ToolSpec{Name: "web_fetch", ReadOnly: true}, core.ToolCall{Name: "web_fetch", Input: `{"url":"https://www.nodejs.org/api/permissions.html","prompt":"extract"}`})
+	if !fetch.Allow || !fetch.RequiresApproval || fetch.MatchedRule != "web_fetch:host:nodejs.org=ask" {
+		t.Fatalf("user web_fetch ask rule should override default allow: %+v", fetch)
 	}
 }
 

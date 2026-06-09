@@ -149,6 +149,12 @@ max_tokens = 4096                      # 最大响应 token 数
 [permissions]
 allowed_directories = []               # 限制文件访问目录
 
+[permissions.web_search]
+"*" = "allow"                          # 默认不审批；改为 "ask" 可恢复每次确认
+
+[permissions.web_fetch]
+"*" = "allow"                          # 可用 "host:example.com" 单独配置域名
+
 [permissions.mcp]
 fs = "allow"                           # "allow" | "ask" | "deny" 按 MCP 服务器设置
 

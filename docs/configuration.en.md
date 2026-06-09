@@ -149,6 +149,12 @@ max_tokens = 4096                      # max response tokens
 [permissions]
 allowed_directories = []               # restrict file access to these dirs
 
+[permissions.web_search]
+"*" = "allow"                          # default is no approval; set to "ask" to confirm each search
+
+[permissions.web_fetch]
+"*" = "allow"                          # use "host:example.com" to configure a specific host
+
 [permissions.mcp]
 fs = "allow"                           # "allow" | "ask" | "deny" per MCP server
 
