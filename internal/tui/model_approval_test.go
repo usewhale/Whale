@@ -443,6 +443,40 @@ func TestApprovalViewSeparatesToolNameFromDetail(t *testing.T) {
 		t.Fatalf("expected separated approval tool and detail:\n%s", view)
 	}
 }
+func TestApprovalViewExplainsShellParseFailedRisk(t *testing.T) {
+	m := newModel(nil, "", "", "")
+	m.width = 120
+	m.height = 30
+	m.mode = modeApproval
+	m.approval.toolName = "shell_run"
+	cmd := `for f in internal/a.go internal/b.go; do grep -n '^func ' "$f"; done`
+	m.approval.reason = "shell_run: " + cmd
+	m.approval.metadata = map[string]any{
+		"shell_risk_code":   "parse_failed",
+		"shell_risk_reason": "command is not a simple shell command",
+	}
+
+	view := xansi.Strip(m.View())
+	for _, want := range []string{
+		"Approval required",
+		"shell command",
+		"$ " + cmd,
+		"This command could not be proven read-only because command is not a simple shell command.",
+	} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("expected approval view to contain %q:\n%s", want, view)
+		}
+	}
+	for _, leak := range []string{
+		"external_directory:*=ask",
+		"shell_run|cmd",
+		"parse_failed",
+	} {
+		if strings.Contains(view, leak) {
+			t.Fatalf("approval view should not expose raw approval internals %q:\n%s", leak, view)
+		}
+	}
+}
 func TestApprovalViewShowsExternalDirectoryMetadata(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 100

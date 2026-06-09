@@ -55,6 +55,9 @@ func (m model) renderApprovalPrompt() string {
 	if detail := approvalDisplayBody(m.approval.toolName, m.approval.reason); detail != "" && !approvalWorkflowBodyIncludesDetail(workflowName, m.approval.toolName) {
 		bodyParts = append(bodyParts, renderApprovalDetail(m.approval.toolName, detail))
 	}
+	if risk := approvalShellRiskExplanation(m.approval.toolName, m.approval.metadata); risk != "" {
+		bodyParts = append(bodyParts, risk)
+	}
 	approvalBody := body.Render(indentApprovalBody(strings.Join(bodyParts, "\n")))
 	if diff := renderApprovalDiffMetadata(m.approval.metadata, approvalFileDiffPreviewMaxLines); diff != "" {
 		if isReadableApprovalDiff(diff) {
@@ -183,6 +186,20 @@ func approvalWorkflowName(metadata map[string]any) string {
 
 func approvalSessionScope(metadata map[string]any) string {
 	return strings.TrimSpace(core.AsString(metadata["approval_session_scope"]))
+}
+
+func approvalShellRiskExplanation(toolName string, metadata map[string]any) string {
+	if toolName != "shell_run" {
+		return ""
+	}
+	if strings.TrimSpace(core.AsString(metadata["shell_risk_code"])) != "parse_failed" {
+		return ""
+	}
+	reason := strings.TrimSpace(core.AsString(metadata["shell_risk_reason"]))
+	if reason == "" {
+		reason = "it is not a simple shell command"
+	}
+	return "This command could not be proven read-only because " + reason + "."
 }
 
 func approvalSessionOptionSubject(toolName string, metadata map[string]any, cwd string) string {
