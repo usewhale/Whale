@@ -139,7 +139,7 @@ func (a *Agent) flushPendingParallelSubagents(ctx context.Context, sessionID, as
 		if !outcome.OK {
 			continue
 		}
-		if !a.appendDispatchedToolResult(ctx, sessionID, outcome.Prepared, outcome.Result, outcome.PrimarySucceeded, events, results) {
+		if !a.appendDispatchedToolResult(ctx, sessionID, outcome.Prepared, outcome.Result, outcome.PrimarySucceeded, events, results, true) {
 			return ctx.Err()
 		}
 	}
@@ -155,7 +155,7 @@ func (a *Agent) flushPendingParallelReasoning(ctx context.Context, sessionID, as
 		if !outcome.OK {
 			continue
 		}
-		if !a.appendDispatchedToolResult(ctx, sessionID, outcome.Prepared, outcome.Result, outcome.PrimarySucceeded, events, results) {
+		if !a.appendDispatchedToolResult(ctx, sessionID, outcome.Prepared, outcome.Result, outcome.PrimarySucceeded, events, results, true) {
 			return ctx.Err()
 		}
 	}
@@ -225,13 +225,13 @@ func (a *Agent) dispatchParallelToolCallsWithRecovery(ctx context.Context, sessi
 	return outcomes, nil
 }
 
-func (a *Agent) appendDispatchedToolResult(ctx context.Context, sessionID string, prepared preparedToolDispatch, finalRes core.ToolResult, primarySucceeded bool, events chan<- AgentEvent, results *[]core.ToolResult) bool {
+func (a *Agent) appendDispatchedToolResult(ctx context.Context, sessionID string, prepared preparedToolDispatch, finalRes core.ToolResult, primarySucceeded bool, events chan<- AgentEvent, results *[]core.ToolResult, requireEventDelivery bool) bool {
 	emit := func(ev AgentEvent) bool {
 		return sendAgentEvent(ctx, events, ev)
 	}
 	call := prepared.Call
 	if prepared.GrantOnSuccess && primarySucceeded {
-		if !a.grantApprovals(ctx, sessionID, call, prepared.GrantKey, prepared.GrantKeys, events) {
+		if !a.grantApprovals(ctx, sessionID, call, prepared.GrantKey, prepared.GrantKeys, events) && requireEventDelivery {
 			return false
 		}
 	}
@@ -254,11 +254,11 @@ func (a *Agent) appendDispatchedToolResult(ctx context.Context, sessionID string
 	*results = append(*results, finalRes)
 	r := finalRes
 	if taskEvent, ok := taskCompletedEvent(finalRes); ok {
-		if !emit(taskEvent) {
+		if !emit(taskEvent) && requireEventDelivery {
 			return false
 		}
 	}
-	if !emit(AgentEvent{Type: AgentEventTypeToolResult, Result: &r}) {
+	if !emit(AgentEvent{Type: AgentEventTypeToolResult, Result: &r}) && requireEventDelivery {
 		return false
 	}
 	return true

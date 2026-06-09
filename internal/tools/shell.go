@@ -13,11 +13,13 @@ import (
 
 func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolResult, error) {
 	var in struct {
-		Command    string `json:"command"`
-		TimeoutMS  int    `json:"timeout_ms"`
-		Background bool   `json:"background"`
-		CWD        string `json:"cwd"`
-		Mode       string `json:"mode"`
+		Command      string `json:"command"`
+		TimeoutMS    int    `json:"timeout_ms"`
+		YieldTimeMS  int    `json:"yield_time_ms"`
+		MaxRuntimeMS int    `json:"max_runtime_ms"`
+		Background   bool   `json:"background"`
+		CWD          string `json:"cwd"`
+		Mode         string `json:"mode"`
 	}
 	if err := decodeInput(call.Input, &in); err != nil {
 		return marshalToolError(call, "invalid_args", err.Error()), nil
@@ -34,32 +36,26 @@ func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolRe
 		return marshalToolError(call, "invalid_args", err.Error()), nil
 	}
 	warnings := b.shellRunWarnings(in.Command)
+	requestedYieldMS, effectiveYieldMS := shellRunYieldMS(in.YieldTimeMS, in.TimeoutMS, b.foregroundShellWait)
+	requestedMaxRuntimeMS, effectiveMaxRuntimeMS := shellRunMaxRuntimeMS(in.MaxRuntimeMS, in.TimeoutMS, in.Background)
 	if in.Background {
 		mutationSnapshot := b.captureShellMutationSnapshot(ctx, workdir, in.Command)
-		requestedTimeoutMS := in.TimeoutMS
-		shellPol := shellPolicyWithForegroundWait(in.Command, requestedTimeoutMS, b.foregroundShellWait)
+		shellPol := shellPolicyWithForegroundWait(in.Command, requestedYieldMS, b.foregroundShellWait)
 		transport, err := shellRunTransport(mode, shellPol)
 		if err != nil {
 			return marshalToolError(call, "unsupported_transport", err.Error()), nil
-		}
-		effectiveTimeoutMS := defaultBackgroundShellTimeoutMS
-		if requestedTimeoutMS > 0 {
-			effectiveTimeoutMS = requestedTimeoutMS
-			if effectiveTimeoutMS > maxBackgroundShellTimeoutMS {
-				effectiveTimeoutMS = maxBackgroundShellTimeoutMS
-			}
 		}
 		task := b.tasks.create(in.Command, relCWD, transport)
 		task.setExecBoundaryPolicy(b.execBoundaryPolicy())
 		task.setExecBoundaryApproval(b.execBoundarySessionID(), b.execApproval)
 		task.setTimeoutContext(shellTimeoutContext{
 			Policy:             shellPol,
-			RequestedTimeoutMS: requestedTimeoutMS,
-			EffectiveTimeoutMS: effectiveTimeoutMS,
+			RequestedTimeoutMS: requestedMaxRuntimeMS,
+			EffectiveTimeoutMS: effectiveMaxRuntimeMS,
 			DefaultWaitMS:      b.foregroundShellWait.DefaultMS,
-			BackgroundRuntime:  true,
+			BackgroundTask:     true,
 		})
-		cctx, cancel := context.WithTimeout(context.Background(), time.Duration(effectiveTimeoutMS)*time.Millisecond)
+		cctx, cancel := context.WithTimeout(context.Background(), time.Duration(effectiveMaxRuntimeMS)*time.Millisecond)
 		task.setCancel(cancel)
 		go func() {
 			defer b.tasks.completed(task.ID)
@@ -82,18 +78,20 @@ func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolRe
 				"can_write": snap.CanWrite,
 			},
 			"metrics": map[string]any{
-				"requested_timeout_ms": requestedTimeoutMS,
-				"effective_timeout_ms": effectiveTimeoutMS,
-				"timeout_clamped":      requestedTimeoutMS > 0 && requestedTimeoutMS != effectiveTimeoutMS,
+				"requested_yield_time_ms":  requestedYieldMS,
+				"effective_yield_time_ms":  effectiveYieldMS,
+				"requested_max_runtime_ms": requestedMaxRuntimeMS,
+				"effective_max_runtime_ms": effectiveMaxRuntimeMS,
+				"requested_timeout_ms":     requestedMaxRuntimeMS,
+				"effective_timeout_ms":     effectiveMaxRuntimeMS,
+				"timeout_clamped":          requestedMaxRuntimeMS > 0 && requestedMaxRuntimeMS != effectiveMaxRuntimeMS,
 			},
 			"warnings": warnings,
 			"summary":  "background shell task started",
 		})
 	}
 
-	requestedTimeoutMS := in.TimeoutMS
-	shellPol := shellPolicyWithForegroundWait(in.Command, requestedTimeoutMS, b.foregroundShellWait)
-	effectiveTimeoutMS := shellPol.ForegroundWaitMS
+	shellPol := shellPolicyWithForegroundWait(in.Command, requestedYieldMS, b.foregroundShellWait)
 	mutationSnapshot := b.captureShellMutationSnapshot(ctx, workdir, in.Command)
 	transport, err := shellRunTransport(mode, shellPol)
 	if err != nil {
@@ -104,11 +102,12 @@ func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolRe
 	task.setExecBoundaryApproval(b.execBoundarySessionID(), b.execApproval)
 	task.setTimeoutContext(shellTimeoutContext{
 		Policy:             shellPol,
-		RequestedTimeoutMS: requestedTimeoutMS,
-		EffectiveTimeoutMS: effectiveTimeoutMS,
+		RequestedTimeoutMS: requestedMaxRuntimeMS,
+		EffectiveTimeoutMS: effectiveMaxRuntimeMS,
 		DefaultWaitMS:      b.foregroundShellWait.DefaultMS,
+		BackgroundTask:     false,
 	})
-	cctx, cancel := context.WithTimeout(context.Background(), time.Duration(maxBackgroundShellTimeoutMS)*time.Millisecond)
+	cctx, cancel := context.WithTimeout(context.Background(), time.Duration(effectiveMaxRuntimeMS)*time.Millisecond)
 	task.setCancel(cancel)
 	go func() {
 		defer b.tasks.completed(task.ID)
@@ -118,55 +117,80 @@ func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolRe
 		})
 	}()
 
-	timer := time.NewTimer(time.Duration(effectiveTimeoutMS) * time.Millisecond)
+	timer := time.NewTimer(time.Duration(effectiveYieldMS) * time.Millisecond)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		task.cancelRun()
-		task.waitDone()
-		b.tasks.release(task.ID)
-		return marshalToolError(call, "cancelled", "command canceled"), nil
+		snap := task.snapshot()
+		if snap.Status != "running" {
+			b.tasks.release(task.ID)
+			return shellRunForegroundFinalResult(call, snap, requestedMaxRuntimeMS, effectiveMaxRuntimeMS, warnings)
+		}
+		return marshalToolResult(call, shellRunBackgroundedResult(snap, requestedYieldMS, effectiveYieldMS, requestedMaxRuntimeMS, effectiveMaxRuntimeMS, warnings, shellYieldInterruptedDiagnosis(shellPol)))
 	case <-task.done:
 		snap := task.snapshot()
 		b.tasks.release(task.ID)
-		return shellRunForegroundFinalResult(call, snap, requestedTimeoutMS, effectiveTimeoutMS, warnings)
+		return shellRunForegroundFinalResult(call, snap, requestedMaxRuntimeMS, effectiveMaxRuntimeMS, warnings)
 	case <-timer.C:
 		if snap := task.snapshot(); snap.Status != "running" {
 			b.tasks.release(task.ID)
-			return shellRunForegroundFinalResult(call, snap, requestedTimeoutMS, effectiveTimeoutMS, warnings)
+			return shellRunForegroundFinalResult(call, snap, requestedMaxRuntimeMS, effectiveMaxRuntimeMS, warnings)
 		}
-		if shellPol.AutoBackground || transport == shellTransportPTY {
-			task.setTimeoutContext(shellTimeoutContext{
-				Policy:             shellPol,
-				RequestedTimeoutMS: 0,
-				EffectiveTimeoutMS: maxBackgroundShellTimeoutMS,
-				DefaultWaitMS:      b.foregroundShellWait.DefaultMS,
-				BackgroundRuntime:  true,
-			})
-			snap := task.snapshot()
-			diagnosis := shellDiagnosis{
-				Reason:              shellPol.Reason,
-				Hint:                shellPol.Hint,
-				SuggestedNextAction: shellPol.SuggestedNextAction,
-			}
-			if shellPol.Reason == "interactive_or_auth" {
-				diagnosis = shellInteractiveAuthDiagnosis(snap.Transport)
-			}
-			return marshalToolResult(call, shellRunBackgroundedResult(snap, requestedTimeoutMS, effectiveTimeoutMS, warnings, diagnosis))
-		}
-		task.cancelRun()
-		task.waitDone()
 		snap := task.snapshot()
-		task.setDiagnosis(shellTimeoutDiagnosis(snap, shellTimeoutContext{
-			Policy:             shellPol,
-			RequestedTimeoutMS: requestedTimeoutMS,
-			EffectiveTimeoutMS: effectiveTimeoutMS,
-			DefaultWaitMS:      b.foregroundShellWait.DefaultMS,
-		}))
-		snap = task.snapshot()
-		b.tasks.release(task.ID)
-		return shellRunForegroundTimeoutResult(call, snap, requestedTimeoutMS, effectiveTimeoutMS, warnings)
+		return marshalToolResult(call, shellRunBackgroundedResult(snap, requestedYieldMS, effectiveYieldMS, requestedMaxRuntimeMS, effectiveMaxRuntimeMS, warnings, shellYieldTimeoutDiagnosis(shellPol, snap)))
 	}
+}
+
+func shellRunYieldMS(yieldTimeMS, legacyTimeoutMS int, waitCfg foregroundShellWaitConfig) (int, int) {
+	requested := yieldTimeMS
+	if requested <= 0 {
+		requested = legacyTimeoutMS
+	}
+	return requested, requestedForegroundWaitMS(requested, waitCfg.MaxMS, waitCfg.DefaultMS)
+}
+
+func shellRunMaxRuntimeMS(maxRuntimeMS, legacyTimeoutMS int, legacyTimeoutIsRuntime bool) (int, int) {
+	requested := maxRuntimeMS
+	if requested <= 0 && legacyTimeoutIsRuntime {
+		requested = legacyTimeoutMS
+	}
+	effective := defaultBackgroundShellTimeoutMS
+	if requested > 0 {
+		effective = requested
+		if effective > maxBackgroundShellTimeoutMS {
+			effective = maxBackgroundShellTimeoutMS
+		}
+	} else {
+		requested = effective
+	}
+	return requested, effective
+}
+
+func shellYieldInterruptedDiagnosis(policy shellContinuationPolicy) shellDiagnosis {
+	diagnosis := shellDiagnosisForReason(policy.Reason)
+	if diagnosis.Reason == "" {
+		diagnosis.Reason = "unknown_long_running"
+	}
+	diagnosis.Reason = "yield_interrupted"
+	diagnosis.Hint = "The tool call was interrupted, but the shell process is still running. Continue with shell_wait using the existing task_id."
+	diagnosis.SuggestedNextAction = "shell_wait"
+	return diagnosis
+}
+
+func shellYieldTimeoutDiagnosis(policy shellContinuationPolicy, snap shellTaskSnapshot) shellDiagnosis {
+	if policy.Reason == "interactive_or_auth" {
+		return shellInteractiveAuthDiagnosis(snap.Transport)
+	}
+	if shellOutputLooksInteractivePrompt(strings.TrimSpace(snap.Stderr + "\n" + snap.Stdout)) {
+		return shellInteractivePromptDiagnosis(snap.Transport)
+	}
+	diagnosis := shellDiagnosisForReason(policy.Reason)
+	if diagnosis.Reason == "" {
+		diagnosis.Reason = "unknown_long_running"
+	}
+	diagnosis.Hint = "Command is still running. Continue with shell_wait using the existing task_id instead of rerunning the command."
+	diagnosis.SuggestedNextAction = "shell_wait"
+	return diagnosis
 }
 
 func shellRunMode(raw string) (string, error) {
@@ -362,7 +386,7 @@ func shellRunForegroundTimeoutResult(call core.ToolCall, snap shellTaskSnapshot,
 	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}, nil
 }
 
-func shellRunBackgroundedResult(snap shellTaskSnapshot, requestedTimeoutMS int, effectiveTimeoutMS int, warnings []string, diagnosis shellDiagnosis) map[string]any {
+func shellRunBackgroundedResult(snap shellTaskSnapshot, requestedYieldMS int, effectiveYieldMS int, requestedMaxRuntimeMS int, effectiveMaxRuntimeMS int, warnings []string, diagnosis shellDiagnosis) map[string]any {
 	summaryParts := []string{"command still running in background"}
 	if len(warnings) > 0 {
 		summaryParts = append(summaryParts, "warning: "+strings.Join(warnings, "; "))
@@ -370,11 +394,15 @@ func shellRunBackgroundedResult(snap shellTaskSnapshot, requestedTimeoutMS int, 
 	result := map[string]any{
 		"status": "running",
 		"metrics": map[string]any{
-			"duration_ms":          shellTaskDurationMS(snap),
-			"requested_timeout_ms": requestedTimeoutMS,
-			"effective_timeout_ms": effectiveTimeoutMS,
-			"timeout_clamped":      requestedTimeoutMS > 0 && requestedTimeoutMS != effectiveTimeoutMS,
-			"auto_backgrounded":    true,
+			"duration_ms":              shellTaskDurationMS(snap),
+			"requested_yield_time_ms":  requestedYieldMS,
+			"effective_yield_time_ms":  effectiveYieldMS,
+			"requested_max_runtime_ms": requestedMaxRuntimeMS,
+			"effective_max_runtime_ms": effectiveMaxRuntimeMS,
+			"requested_timeout_ms":     requestedMaxRuntimeMS,
+			"effective_timeout_ms":     effectiveMaxRuntimeMS,
+			"timeout_clamped":          requestedMaxRuntimeMS > 0 && requestedMaxRuntimeMS != effectiveMaxRuntimeMS,
+			"auto_backgrounded":        true,
 		},
 		"payload": map[string]any{
 			"task_id":    snap.ID,

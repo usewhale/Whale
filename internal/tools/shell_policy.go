@@ -35,7 +35,7 @@ type shellTimeoutContext struct {
 	RequestedTimeoutMS int
 	EffectiveTimeoutMS int
 	DefaultWaitMS      int
-	BackgroundRuntime  bool
+	BackgroundTask     bool
 }
 
 func (d shellDiagnosis) asMap() map[string]any {
@@ -320,16 +320,16 @@ func shellTimeoutDiagnosis(snap shellTaskSnapshot, timeoutCtx shellTimeoutContex
 	if shellOutputLooksNetworkBlocked(text) {
 		return shellDiagnosisForReason("network_blocked")
 	}
+	if timeoutCtx.Policy.Reason == "interactive_or_auth" {
+		return shellInteractiveAuthDiagnosis(snap.Transport)
+	}
 	if shellOutputLooksInteractivePrompt(text) {
 		return shellInteractivePromptDiagnosis(snap.Transport)
 	}
-	if timeoutCtx.BackgroundRuntime {
+	if timeoutCtx.BackgroundTask {
 		return shellDiagnosisForReason("background_runtime_timeout")
 	}
-	switch timeoutCtx.Policy.Reason {
-	case "interactive_or_auth":
-		return shellInteractiveAuthDiagnosis(snap.Transport)
-	case "build_test_long_running":
+	if timeoutCtx.Policy.Reason == "build_test_long_running" {
 		return shellDiagnosisForReason("build_or_test_timeout")
 	}
 	if shellOutputLooksLikeProgress(text) || timeoutCtx.RequestedTimeoutMS > 0 && timeoutCtx.RequestedTimeoutMS <= 1000 {

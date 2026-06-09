@@ -214,10 +214,11 @@ func (a *Agent) dispatchToolCalls(ctx context.Context, sc streamDispatchContext,
 			return nil, false, err
 		}
 		if abortTurn {
-			if err := appendAbortSkippedToolResults(ctx, sc, &results); err != nil {
+			requireEventDelivery := ctx.Err() == nil
+			if err := appendAbortSkippedToolResults(ctx, sc, &results, requireEventDelivery); err != nil {
 				return nil, false, err
 			}
-			toolMsg, err := a.createDispatchToolMessage(ctx, sc, results)
+			toolMsg, err := a.createDispatchToolMessage(persistenceContext(ctx), sc, results)
 			if err != nil {
 				return nil, false, err
 			}
@@ -247,7 +248,7 @@ func appendToolResult(ctx context.Context, sc streamDispatchContext, results *[]
 	return emitDispatchEvent(ctx, sc, AgentEvent{Type: AgentEventTypeToolResult, Result: &tr})
 }
 
-func appendAbortSkippedToolResults(ctx context.Context, sc streamDispatchContext, results *[]core.ToolResult) error {
+func appendAbortSkippedToolResults(ctx context.Context, sc streamDispatchContext, results *[]core.ToolResult, requireEventDelivery bool) error {
 	answered := make(map[string]bool, len(*results))
 	for _, result := range *results {
 		if result.ToolCallID != "" {
@@ -258,12 +259,14 @@ func appendAbortSkippedToolResults(ctx context.Context, sc streamDispatchContext
 		if call.ID == "" || answered[call.ID] {
 			continue
 		}
-		if err := appendToolResult(ctx, sc, results, core.ToolResult{
+		tr := core.ToolResult{
 			ToolCallID: call.ID,
 			Name:       call.Name,
 			Content:    `{"success":false,"error":"tool skipped because another tool requested a runtime handoff","code":"turn_aborted"}`,
 			IsError:    true,
-		}); err != nil {
+		}
+		*results = append(*results, tr)
+		if err := emitDispatchEvent(ctx, sc, AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}); err != nil && requireEventDelivery {
 			return err
 		}
 		answered[call.ID] = true
@@ -582,7 +585,7 @@ func (a *Agent) resolveToolApproval(ctx context.Context, sc streamDispatchContex
 	if err := appendToolResult(ctx, sc, results, tr); err != nil {
 		return toolApprovalResult{}, err
 	}
-	if err := appendAbortSkippedToolResults(ctx, sc, results); err != nil {
+	if err := appendAbortSkippedToolResults(ctx, sc, results, true); err != nil {
 		return toolApprovalResult{}, err
 	}
 	toolMsg, err := a.store.Create(ctx, core.Message{SessionID: sc.SessionID, Role: core.RoleTool, ToolResults: *results})
@@ -619,16 +622,34 @@ func (a *Agent) dispatchPostApprovalSpecialTool(ctx context.Context, sc streamDi
 
 func (a *Agent) dispatchStandardTool(ctx context.Context, sc streamDispatchContext, prepared preparedToolDispatch, results *[]core.ToolResult) (bool, error) {
 	finalRes, ok, primarySucceeded := a.dispatchWithRecovery(ctx, sc.SessionID, sc.Assistant.ID, sc.CheckpointMessageID, sc.Model, prepared.Call, prepared.ExternalReadRoots, sc.Events, sc.Tools)
-	if err := ctx.Err(); err != nil {
-		return false, err
+	canceled := ctx.Err() != nil
+	if canceled && !toolResultUsableAfterCancel(finalRes) {
+		return false, ctx.Err()
 	}
 	if !ok {
 		return false, nil
 	}
-	if !a.appendDispatchedToolResult(ctx, sc.SessionID, prepared, finalRes, primarySucceeded, sc.Events, results) {
+	if !a.appendDispatchedToolResult(ctx, sc.SessionID, prepared, finalRes, primarySucceeded, sc.Events, results, !canceled) {
 		return false, ctx.Err()
 	}
-	return toolResultRequestsTurnAbort(finalRes), nil
+	return canceled || toolResultRequestsTurnAbort(finalRes), nil
+}
+
+func persistenceContext(ctx context.Context) context.Context {
+	if ctx != nil && ctx.Err() != nil {
+		return context.Background()
+	}
+	return ctx
+}
+
+func toolResultUsableAfterCancel(res core.ToolResult) bool {
+	if res.ToolCallID == "" && res.Name == "" && res.Content == "" && res.Metadata == nil {
+		return false
+	}
+	if res.IsError {
+		return false
+	}
+	return true
 }
 
 func (a *Agent) createDispatchToolMessage(ctx context.Context, sc streamDispatchContext, results []core.ToolResult) (core.Message, error) {

@@ -111,18 +111,23 @@ func TestWindowsShellRunCancelKillsProcessTree(t *testing.T) {
 	}
 	cancel()
 
+	var taskID string
 	select {
 	case got := <-done:
 		if got.err != nil {
 			t.Fatalf("shell_run returned error: %v", got.err)
 		}
-		if !strings.Contains(got.res, `"code":"cancelled"`) {
-			t.Fatalf("expected cancelled result, got: %s", got.res)
+		if !strings.Contains(got.res, `"status":"running"`) || !strings.Contains(got.res, `"reason":"yield_interrupted"`) {
+			t.Fatalf("expected interrupted running task result, got: %s", got.res)
 		}
+		taskID = shellTaskID(t, got.res)
 	case <-time.After(5 * time.Second):
 		t.Fatal("shell_run did not return promptly after cancel")
 	}
 
+	if res, err := ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{"task_id": taskID})); err != nil || res.IsError {
+		t.Fatalf("shell_cancel failed: err=%v res=%+v", err, res)
+	}
 	time.Sleep(1500 * time.Millisecond)
 	if _, err := os.Stat(markerPath); err == nil {
 		t.Fatalf("descendant process survived cancellation and wrote %s", markerPath)

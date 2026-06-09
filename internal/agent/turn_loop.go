@@ -247,6 +247,10 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 					rt.Log.Append(*toolMsg)
 					history = append(history, assistant, *toolMsg)
 				}
+				if ctx.Err() != nil {
+					a.persistInterruptedTurnMarker(sessionID)
+					return
+				}
 				if turnState.hasPending() {
 					if !emit(AgentEvent{Type: AgentEventTypeResponseReset}) {
 						return
