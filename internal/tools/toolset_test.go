@@ -3527,6 +3527,10 @@ func TestBackgroundShellTasksAndCancel(t *testing.T) {
 	if len(tasks) != 1 || tasks[0].ID != taskID || tasks[0].Status != "running" || !strings.Contains(tasks[0].Command, "sleep 30") {
 		t.Fatalf("unexpected background task snapshot: %+v", tasks)
 	}
+	running := ts.RunningBackgroundShellTasks()
+	if len(running) != 1 || running[0].ID != taskID {
+		t.Fatalf("unexpected running background task snapshot: %+v", running)
+	}
 
 	stopped, err := ts.CancelBackgroundShellTask(context.Background(), taskID)
 	if err != nil {
@@ -3534,6 +3538,91 @@ func TestBackgroundShellTasksAndCancel(t *testing.T) {
 	}
 	if stopped.ID != taskID || stopped.Status == "running" {
 		t.Fatalf("unexpected stopped task: %+v", stopped)
+	}
+	if running := ts.RunningBackgroundShellTasks(); len(running) != 0 {
+		t.Fatalf("canceled task should not be in running snapshot: %+v", running)
+	}
+	if all := ts.BackgroundShellTasks(); len(all) != 1 || all[0].ID != taskID {
+		t.Fatalf("all task snapshot should retain canceled task history: %+v", all)
+	}
+}
+
+func TestCancelAllBackgroundShellTasks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("background shell command fixture uses POSIX sleep")
+	}
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	first, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "sleep 30",
+		"background": true,
+	}))
+	if err != nil || first.IsError {
+		t.Fatalf("first shell_run background failed: err=%v res=%+v", err, first)
+	}
+	second, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "sleep 31",
+		"background": true,
+	}))
+	if err != nil || second.IsError {
+		t.Fatalf("second shell_run background failed: err=%v res=%+v", err, second)
+	}
+
+	stopped, err := ts.CancelAllBackgroundShellTasks(context.Background())
+	if err != nil {
+		t.Fatalf("cancel all background shell tasks: %v", err)
+	}
+	if len(stopped) != 2 {
+		t.Fatalf("expected two stopped tasks, got %+v", stopped)
+	}
+	for _, task := range stopped {
+		if task.Status == "running" {
+			t.Fatalf("expected stopped task, got %+v", task)
+		}
+	}
+	if again, err := ts.CancelAllBackgroundShellTasks(context.Background()); err != nil || len(again) != 0 {
+		t.Fatalf("second cancel should be empty, got tasks=%+v err=%v", again, err)
+	}
+	if running := ts.RunningBackgroundShellTasks(); len(running) != 0 {
+		t.Fatalf("cancel all should leave no running tasks, got %+v", running)
+	}
+}
+
+func TestRunningBackgroundShellTasksExcludesTimedOutTasks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("background shell command fixture uses POSIX sleep")
+	}
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	startRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
+		"command":    "sleep 1",
+		"background": true,
+		"timeout_ms": 1,
+	}))
+	if err != nil || startRes.IsError {
+		t.Fatalf("shell_run background failed: err=%v res=%+v", err, startRes)
+	}
+	taskID := toolsetBackgroundTaskID(t, startRes.Content)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		all := ts.BackgroundShellTasks()
+		if len(all) == 1 && all[0].ID == taskID && all[0].Status == "timeout" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected timed out task %s, got %+v", taskID, all)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if running := ts.RunningBackgroundShellTasks(); len(running) != 0 {
+		t.Fatalf("timed out task should not be in running snapshot: %+v", running)
 	}
 }
 

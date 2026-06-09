@@ -606,14 +606,14 @@ func TestSummarizeToolResultForChat_Timeout(t *testing.T) {
 func TestSummarizeToolResultForChat_ShellRunAutoBackgrounded(t *testing.T) {
 	raw := `{"success":true,"code":"ok","data":{"status":"running","metrics":{"duration_ms":15000,"auto_backgrounded":true},"payload":{"task_id":"task-123","command":"go test ./internal/tui","done":false}}}`
 	role, got := summarizeToolResultForChat("shell_run", raw)
-	if role != "result_running" || got != "running in background · 15s · task-123" {
+	if role != "result_running" || got != "running · 15s" {
 		t.Fatalf("unexpected running summary: role=%q text=%q", role, got)
 	}
 }
 func TestSummarizeToolResultForChat_ShellRunDiagnosis(t *testing.T) {
 	raw := `{"success":true,"code":"ok","data":{"status":"running","metrics":{"duration_ms":15000,"auto_backgrounded":true},"payload":{"task_id":"task-123","command":"go test ./internal/tui","done":false},"diagnosis":{"reason":"build_test_long_running","suggested_next_action":"shell_wait"}}}`
 	role, got := summarizeToolResultForChat("shell_run", raw)
-	if role != "result_running" || got != "build/test running · 15s · task-123" {
+	if role != "result_running" || got != "build/test running · 15s" {
 		t.Fatalf("unexpected diagnostic running summary: role=%q text=%q", role, got)
 	}
 }

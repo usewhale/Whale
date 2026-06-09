@@ -188,7 +188,7 @@ func TestClassifySubmitSlashCommands(t *testing.T) {
 		{line: "/feedback", want: appcommands.SubmitLocalReadOnly},
 		{line: "/help", want: appcommands.SubmitLocalReadOnly},
 		{line: "/ps", want: appcommands.SubmitLocalReadOnly},
-		{line: "/stop task-123", want: appcommands.SubmitLocalMutating},
+		{line: "/stop", want: appcommands.SubmitLocalMutating},
 		{line: "/copy", want: appcommands.SubmitLocalReadOnly},
 		{line: "/copy 2", want: appcommands.SubmitLocalReadOnly},
 		{line: "/attach", want: appcommands.SubmitUsageError},
@@ -248,7 +248,7 @@ func TestClassifySubmitSlashCommands(t *testing.T) {
 		{line: "/feedback now", want: appcommands.SubmitUsageError},
 		{line: "/help now", want: appcommands.SubmitUsageError},
 		{line: "/ps now", want: appcommands.SubmitUsageError},
-		{line: "/stop", want: appcommands.SubmitUsageError},
+		{line: "/stop task-1", want: appcommands.SubmitUsageError},
 		{line: "/stop task-1 extra", want: appcommands.SubmitUsageError},
 		{line: "/copy 0", want: appcommands.SubmitUsageError},
 		{line: "/copy latest", want: appcommands.SubmitUsageError},
@@ -304,12 +304,12 @@ func TestClassifyBtwBusyImmediate(t *testing.T) {
 }
 
 func TestClassifyStopTaskBusyImmediate(t *testing.T) {
-	got := appcommands.ClassifySubmit("/stop task-123", CommandsHelp, "/mcp")
+	got := appcommands.ClassifySubmit("/stop", CommandsHelp, "/mcp")
 	if got.Class != appcommands.SubmitLocalMutating {
-		t.Fatalf("expected /stop task-123 to stay local mutating, got %v", got.Class)
+		t.Fatalf("expected /stop to stay local mutating, got %v", got.Class)
 	}
 	if !got.BusyImmediate() {
-		t.Fatal("expected /stop task-123 to be available while busy")
+		t.Fatal("expected /stop to be available while busy")
 	}
 
 	for _, line := range []string{"/new", "/clear", "/hooks trust all"} {
@@ -1217,7 +1217,7 @@ func TestHandleLocalCommandHelp(t *testing.T) {
 		"/compact",
 		"/review [local|branch|pr|commit|<instructions>]",
 		"/ps",
-		"/stop <task_id>",
+		"/stop",
 		"/status",
 		"/stats [usage|cache|tools|repair|recent|profile|all]",
 		"/plugins",
@@ -1252,8 +1252,11 @@ func TestBackgroundTaskLocalCommands(t *testing.T) {
 	if !handled || err != nil {
 		t.Fatalf("/ps empty handled=%v err=%v", handled, err)
 	}
-	if !strings.Contains(out, "No background shell tasks") {
+	if !strings.Contains(out, "No background shell tasks running") {
 		t.Fatalf("unexpected empty /ps output:\n%s", out)
+	}
+	if exec := app.executePSCommand(); exec.LocalResult == nil || len(exec.LocalResult.Fields) != 1 || exec.LocalResult.Fields[0].Label != "running" || exec.LocalResult.Fields[0].Value != "none" {
+		t.Fatalf("unexpected empty /ps local result: %+v", exec.LocalResult)
 	}
 
 	shellRun := findTestTool(t, toolset.Tools(), "shell_run")
@@ -1266,21 +1269,110 @@ func TestBackgroundTaskLocalCommands(t *testing.T) {
 		t.Fatalf("start background task: err=%v res=%+v", err, startRes)
 	}
 	taskID := backgroundTaskIDFromToolResult(t, startRes.Content)
+	secondRes, err := shellRun.Run(context.Background(), core.ToolCall{
+		ID:    "tc-shell-2",
+		Name:  "shell_run",
+		Input: `{"command":"sleep 31","background":true}`,
+	})
+	if err != nil || secondRes.IsError {
+		t.Fatalf("start second background task: err=%v res=%+v", err, secondRes)
+	}
+	secondTaskID := backgroundTaskIDFromToolResult(t, secondRes.Content)
 
 	handled, out, _, err = app.HandleLocalCommand("/ps")
 	if !handled || err != nil {
 		t.Fatalf("/ps running handled=%v err=%v", handled, err)
 	}
-	if !strings.Contains(out, taskID) || !strings.Contains(out, "sleep 30") {
-		t.Fatalf("/ps should show running task %s:\n%s", taskID, out)
+	if !strings.Contains(out, "sleep 30") || !strings.Contains(out, "sleep 31") {
+		t.Fatalf("/ps should show running task commands:\n%s", out)
+	}
+	if strings.Contains(out, taskID) || strings.Contains(out, secondTaskID) {
+		t.Fatalf("/ps should not show task ids:\n%s", out)
 	}
 
-	handled, out, _, err = app.HandleLocalCommand("/stop " + taskID)
+	handled, _, _, err = app.HandleLocalCommand("/stop " + taskID)
+	if !handled || err == nil || !strings.Contains(err.Error(), "usage: /stop") {
+		t.Fatalf("/stop with task id should be a usage error, handled=%v err=%v", handled, err)
+	}
+
+	handled, out, _, err = app.HandleLocalCommand("/stop")
 	if !handled || err != nil {
 		t.Fatalf("/stop handled=%v err=%v", handled, err)
 	}
-	if !strings.Contains(out, "Stopped background task") || !strings.Contains(out, taskID) {
-		t.Fatalf("/stop should report stopped task:\n%s", out)
+	if !strings.Contains(out, "Stopped 2 background shell tasks") || !strings.Contains(out, "sleep 30") || !strings.Contains(out, "sleep 31") {
+		t.Fatalf("/stop should report stopped tasks:\n%s", out)
+	}
+	if strings.Contains(out, taskID) || strings.Contains(out, secondTaskID) {
+		t.Fatalf("/stop should not show task ids:\n%s", out)
+	}
+	for _, task := range toolset.BackgroundShellTasks() {
+		if task.Status == "running" {
+			t.Fatalf("expected /stop to stop all running tasks, still running: %+v", task)
+		}
+	}
+	handled, out, _, err = app.HandleLocalCommand("/ps")
+	if !handled || err != nil {
+		t.Fatalf("/ps after stop handled=%v err=%v", handled, err)
+	}
+	if strings.Contains(out, "sleep 30") || strings.Contains(out, "sleep 31") {
+		t.Fatalf("/ps should not show canceled tasks:\n%s", out)
+	}
+	if !strings.Contains(out, "No background shell tasks running") {
+		t.Fatalf("/ps should show running-empty state after stop:\n%s", out)
+	}
+	if exec := app.executePSCommand(); exec.LocalResult == nil || len(exec.LocalResult.Fields) != 1 || exec.LocalResult.Fields[0].Label != "running" || exec.LocalResult.Fields[0].Value != "none" {
+		t.Fatalf("unexpected /ps local result after stop: %+v", exec.LocalResult)
+	}
+}
+
+func TestPSHidesTimedOutBackgroundTasks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("background shell command fixture uses POSIX sleep")
+	}
+	toolset, err := whaletools.NewToolset(t.TempDir())
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	app := &App{ctx: context.Background(), toolset: toolset}
+
+	shellRun := findTestTool(t, toolset.Tools(), "shell_run")
+	startRes, err := shellRun.Run(context.Background(), core.ToolCall{
+		ID:    "tc-shell-timeout",
+		Name:  "shell_run",
+		Input: `{"command":"sleep 1","background":true,"timeout_ms":1}`,
+	})
+	if err != nil || startRes.IsError {
+		t.Fatalf("start background task: err=%v res=%+v", err, startRes)
+	}
+	taskID := backgroundTaskIDFromToolResult(t, startRes.Content)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var status string
+		for _, task := range toolset.BackgroundShellTasks() {
+			if task.ID == taskID {
+				status = task.Status
+				break
+			}
+		}
+		if status == "timeout" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected timed out task %s, got status %q", taskID, status)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	handled, out, _, err := app.HandleLocalCommand("/ps")
+	if !handled || err != nil {
+		t.Fatalf("/ps timeout handled=%v err=%v", handled, err)
+	}
+	if strings.Contains(out, "sleep 1") || strings.Contains(out, taskID) {
+		t.Fatalf("/ps should not show timed out tasks:\n%s", out)
+	}
+	if !strings.Contains(out, "No background shell tasks running") {
+		t.Fatalf("/ps should show running-empty state for timeout-only history:\n%s", out)
 	}
 }
 

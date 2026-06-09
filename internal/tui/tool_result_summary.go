@@ -138,19 +138,12 @@ func summarizeShellResult(env toolResultEnvelope, successBySignal bool) (string,
 	hasExitCode := hasInt(env.metrics["exit_code"])
 	duration := formatDurationMS(asInt64(env.metrics["duration_ms"]))
 	if env.status == "running" {
-		taskID := core.AsString(env.payload["task_id"])
 		reason := shellDiagnosisLabel(core.AsString(env.diagnosis["reason"]))
-		if taskID != "" {
-			if reason != "" && duration != "" {
-				return "result_running", reason + " · " + duration + " · " + taskID
-			}
-			if reason != "" {
-				return "result_running", reason + " · " + taskID
-			}
-			if duration != "" {
-				return "result_running", "running in background · " + duration + " · " + taskID
-			}
-			return "result_running", "running in background · " + taskID
+		if reason != "" && duration != "" {
+			return "result_running", reason + " · " + duration
+		}
+		if reason != "" {
+			return "result_running", reason
 		}
 		if duration != "" {
 			return "result_running", "running · " + duration

@@ -11,49 +11,76 @@ import (
 
 func (a *App) executePSCommand() CommandExecution {
 	if a == nil || a.toolset == nil {
-		text := "Background tasks\n\nNo background shell tasks."
+		text := "Background tasks\n\nNo background shell tasks running."
 		return CommandExecution{Handled: true, Text: text, LocalResult: buildBackgroundTasksLocalResult(nil, text)}
 	}
-	tasks := a.toolset.BackgroundShellTasks()
+	tasks := a.toolset.RunningBackgroundShellTasks()
 	text := formatBackgroundTasks(tasks)
 	return CommandExecution{Handled: true, Text: text, LocalResult: buildBackgroundTasksLocalResult(tasks, text)}
 }
 
 func (a *App) executeStopCommand(line string) (CommandExecution, error) {
 	fields := strings.Fields(strings.TrimSpace(line))
-	if len(fields) != 2 {
-		return CommandExecution{Handled: true}, errors.New("usage: /stop <task_id>")
+	if len(fields) != 1 {
+		return CommandExecution{Handled: true}, errors.New("usage: /stop")
 	}
 	if a == nil || a.toolset == nil {
-		return CommandExecution{Handled: true}, errors.New("task not found")
+		text := "No background shell tasks running."
+		return CommandExecution{
+			Handled:     true,
+			Text:        text,
+			LocalResult: buildStoppedBackgroundTasksLocalResult(nil, text),
+			Mutated:     true,
+		}, nil
 	}
-	task, err := a.toolset.CancelBackgroundShellTask(a.ctx, fields[1])
+	tasks, err := a.toolset.CancelAllBackgroundShellTasks(a.ctx)
 	if err != nil {
 		return CommandExecution{Handled: true}, err
 	}
-	text := fmt.Sprintf("Stopped background task\n\ntask:    %s\nstatus:  %s\ncommand: %s", task.ID, task.Status, task.Command)
+	text := formatStoppedBackgroundTasks(tasks)
 	return CommandExecution{
 		Handled:     true,
 		Text:        text,
-		LocalResult: buildBackgroundTasksLocalResult([]tools.BackgroundShellTask{task}, text),
+		LocalResult: buildStoppedBackgroundTasksLocalResult(tasks, text),
 		Mutated:     true,
 	}, nil
+}
+
+func formatStoppedBackgroundTasks(tasks []tools.BackgroundShellTask) string {
+	if len(tasks) == 0 {
+		return "No background shell tasks running."
+	}
+	var b strings.Builder
+	if len(tasks) == 1 {
+		b.WriteString("Stopped 1 background shell task.")
+	} else {
+		b.WriteString(fmt.Sprintf("Stopped %d background shell tasks.", len(tasks)))
+	}
+	for _, task := range tasks {
+		b.WriteString("\n\n")
+		b.WriteString(taskDisplayName(task))
+		b.WriteString("\nstatus:  ")
+		b.WriteString(task.Status)
+		if task.CWD != "" {
+			b.WriteString("\ncwd:     ")
+			b.WriteString(task.CWD)
+		}
+	}
+	return b.String()
 }
 
 func formatBackgroundTasks(tasks []tools.BackgroundShellTask) string {
 	var b strings.Builder
 	b.WriteString("Background tasks")
 	if len(tasks) == 0 {
-		b.WriteString("\n\nNo background shell tasks.")
+		b.WriteString("\n\nNo background shell tasks running.")
 		return b.String()
 	}
 	for _, task := range tasks {
 		b.WriteString("\n\n")
-		b.WriteString(task.ID)
+		b.WriteString(taskDisplayName(task))
 		b.WriteString("\nstatus:  ")
 		b.WriteString(task.Status)
-		b.WriteString("\ncommand: ")
-		b.WriteString(task.Command)
 		if task.CWD != "" {
 			b.WriteString("\ncwd:     ")
 			b.WriteString(task.CWD)
@@ -73,26 +100,39 @@ func formatBackgroundTasks(tasks []tools.BackgroundShellTask) string {
 }
 
 func buildBackgroundTasksLocalResult(tasks []tools.BackgroundShellTask, text string) *LocalResult {
+	return buildBackgroundTasksLocalResultWithTitle("Background tasks", tasks, text)
+}
+
+func buildStoppedBackgroundTasksLocalResult(tasks []tools.BackgroundShellTask, text string) *LocalResult {
+	return buildBackgroundTasksLocalResultWithTitle("Stopped background tasks", tasks, text)
+}
+
+func buildBackgroundTasksLocalResultWithTitle(title string, tasks []tools.BackgroundShellTask, text string) *LocalResult {
 	fields := make([]LocalResultField, 0, len(tasks))
 	for _, task := range tasks {
 		value := task.Status
 		if task.CWD != "" {
 			value += " · " + task.CWD
 		}
-		if task.Command != "" {
-			value += " · " + task.Command
-		}
-		fields = append(fields, LocalResultField{Label: task.ID, Value: value})
+		fields = append(fields, LocalResultField{Label: taskDisplayName(task), Value: value})
 	}
 	if len(fields) == 0 {
-		fields = append(fields, LocalResultField{Label: "tasks", Value: "none"})
+		fields = append(fields, LocalResultField{Label: "running", Value: "none"})
 	}
 	return &LocalResult{
 		Kind:      "background_tasks",
-		Title:     "Background tasks",
+		Title:     title,
 		Fields:    fields,
 		PlainText: text,
 	}
+}
+
+func taskDisplayName(task tools.BackgroundShellTask) string {
+	command := strings.TrimSpace(task.Command)
+	if command == "" {
+		return "background shell task"
+	}
+	return command
 }
 
 func formatTaskAge(t time.Time) string {
