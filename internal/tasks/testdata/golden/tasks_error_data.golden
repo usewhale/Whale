@@ -1,0 +1,1 @@
+{"ok":false,"success":false,"message":"child exited","code":"subagent_failed","data":{"child_session_id":"abc","stderr":"panic: x < y"}}
