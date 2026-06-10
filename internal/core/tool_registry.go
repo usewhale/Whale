@@ -356,7 +356,7 @@ func normalizeRegistryResult(ctx context.Context, call ToolCall, res ToolResult,
 	if maxResultChars <= 0 {
 		maxResultChars = DefaultMaxToolResultChars
 	}
-	content, isErr, archivePath, env := normalizeToolContent(ctx, call.Name, call.ID, res.Content, res.IsError, maxResultChars, durationMS)
+	content, isErr, archivePath, env, truncated := normalizeToolContent(ctx, call.Name, call.ID, res.Content, res.IsError, maxResultChars, durationMS)
 	res.ToolCallID = call.ID
 	res.Name = call.Name
 	res.Content = content
@@ -373,17 +373,22 @@ func normalizeRegistryResult(ctx context.Context, call ToolCall, res ToolResult,
 		res.Outcome = OutcomeSuccess
 	}
 	res.Payload = CanonicalizeToolPayload(env)
-	if archivePath != "" {
+	if truncated {
+		// The rendered text was truncated; keep the structured channel
+		// bounded too so large results are not persisted twice.
+		res.Payload = BoundedTruncationPayload(content, len(content), env.Code, archivePath)
 		if res.Metadata == nil {
 			res.Metadata = map[string]any{}
 		}
-		res.Metadata["full_result_path"] = archivePath
 		res.Metadata["output_truncated"] = true
+		if archivePath != "" {
+			res.Metadata["full_result_path"] = archivePath
+		}
 	}
 	return res
 }
 
-func normalizeToolContent(ctx context.Context, toolName, toolCallID, raw string, fallbackErr bool, maxResultChars int, durationMS int64) (string, bool, string, ToolEnvelope) {
+func normalizeToolContent(ctx context.Context, toolName, toolCallID, raw string, fallbackErr bool, maxResultChars int, durationMS int64) (string, bool, string, ToolEnvelope, bool) {
 	env := ToolEnvelope{
 		OK:        !fallbackErr,
 		Success:   !fallbackErr,
@@ -464,66 +469,20 @@ func normalizeToolContent(ctx context.Context, toolName, toolCallID, raw string,
 		env.Truncated = trunc
 	}
 	env.Success = env.OK
-	// MarshalToolJSON, not json.Marshal: this output is the final
-	// model-visible text, and HTML escaping here would corrupt payload
-	// bytes that survived everything upstream (session 019ead56).
-	b, err := MarshalToolJSON(env)
-	if err != nil {
-		if maxResultChars > 0 && len(raw) > maxResultChars {
-			return raw[:maxResultChars], fallbackErr, "", env
-		}
-		return raw, fallbackErr, "", env
+	// Phase 2: the model-visible text is rendered plain (codex-style)
+	// from the canonical payload instead of re-serializing the envelope.
+	payload := CanonicalizeToolPayload(env)
+	outcome := OutcomeSuccess
+	if !env.OK {
+		outcome = OutcomeForErrorCode(env.Code)
 	}
-	if maxResultChars > 0 && len(b) > maxResultChars {
-		archivePath := archiveToolResult(ctx, toolName, toolCallID, b)
-		errorMsg := env.Error
-		if env.OK {
-			errorMsg = ""
-		}
-		for budget := maxResultChars; budget > 0; budget = budget * 3 / 4 {
-			headBudget, tailBudget := splitToolResultBudget(budget)
-			if headBudget > len(b) {
-				headBudget = len(b)
-			}
-			tailStart := len(b) - tailBudget
-			if tailStart < headBudget {
-				tailStart = headBudget
-			}
-			short := map[string]any{
-				"ok":      env.OK,
-				"success": env.Success,
-				"code":    env.Code,
-				"error":   errorMsg,
-				"summary": fmt.Sprintf("%s (tool output truncated)", env.Summary),
-				"data": map[string]any{
-					"head":       string(b[:headBudget]),
-					"tail":       string(b[tailStart:]),
-					"original":   len(b),
-					"head_bytes": headBudget,
-					"tail_bytes": len(b) - tailStart,
-				},
-				"truncated": true,
-				"metadata": map[string]any{
-					"source_tool":      toolName,
-					"duration_ms":      durationMS,
-					"output_truncated": true,
-					"original_bytes":   len(b),
-				},
-			}
-			if archivePath != "" {
-				short["metadata"].(map[string]any)["full_result_path"] = archivePath
-			}
-			sb, serr := MarshalToolJSON(short)
-			if serr == nil && len(sb) <= maxResultChars {
-				return string(sb), !env.OK, archivePath, env
-			}
-			if budget < 1024 {
-				break
-			}
-		}
-		return string(b[:maxResultChars]), !env.OK, archivePath, env
+	text := RenderToolResultText(toolName, outcome, env.Code, payload)
+	if maxResultChars > 0 && len(text) > maxResultChars {
+		archivePath := archiveToolResult(ctx, toolName, toolCallID, []byte(text))
+		text = RenderTruncatedToolText(text, maxResultChars, archivePath)
+		return text, !env.OK, archivePath, env, true
 	}
-	return string(b), !env.OK, "", env
+	return text, !env.OK, "", env, false
 }
 
 var archivePathSanitizer = regexp.MustCompile(`[^A-Za-z0-9_.-]+`)

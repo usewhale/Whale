@@ -1,1 +1,4 @@
-{"ok":false,"success":false,"error":"command failed","code":"exec_failed","summary":"command failed","data":{"metrics":{"duration_ms":43,"exit_code":1},"payload":{"command":"git add a.txt && git status 2>&1","stderr":"The following paths are ignored by one of your .gitignore files:\nnpm/vendor","stdout":""},"status":"error"},"metadata":{"duration_ms":7,"source_tool":"fixture_tool"}}
+exit 1 (43ms) — command failed
+stderr:
+The following paths are ignored by one of your .gitignore files:
+npm/vendor

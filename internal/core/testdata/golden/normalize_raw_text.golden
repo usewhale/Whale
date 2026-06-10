@@ -1,1 +1,1 @@
-{"ok":true,"success":true,"code":"ok","summary":"tool completed","data":{"text":"plain MCP text with & < > and 中文, not JSON"},"metadata":{"duration_ms":7,"source_tool":"fixture_tool"}}
+plain MCP text with & < > and 中文, not JSON

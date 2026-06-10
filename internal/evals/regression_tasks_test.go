@@ -277,10 +277,10 @@ func TestTaskBackgroundShellRunningThenFailed(t *testing.T) {
 			Verify: func(run *Run) error {
 				running := run.FindStep("wait-running")
 				failed := run.FindStep("wait-failed")
-				if running == nil || !strings.Contains(running.Result.Content, `"status":"running"`) {
+				if running == nil || !strings.Contains(running.Result.Content, `running in background`) {
 					return fmt.Errorf("expected running wait result")
 				}
-				if failed == nil || !strings.Contains(failed.Result.Content, `"status":"failed"`) || !strings.Contains(failed.Result.Content, "nope") {
+				if failed == nil || !strings.Contains(failed.Result.Content, `exit `) || !strings.Contains(failed.Result.Content, "nope") {
 					return fmt.Errorf("expected failed terminal wait result, got %+v", failed)
 				}
 				return nil

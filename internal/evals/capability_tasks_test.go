@@ -430,10 +430,10 @@ func TestTaskBackgroundShellRunningThenExited(t *testing.T) {
 			Verify: func(run *Run) error {
 				running := run.FindStep("wait-running")
 				exited := run.FindStep("wait-exited")
-				if running == nil || !strings.Contains(running.Result.Content, `"status":"running"`) {
+				if running == nil || !strings.Contains(running.Result.Content, `running in background`) {
 					return fmt.Errorf("expected running wait result, got %+v", running)
 				}
-				if exited == nil || !strings.Contains(exited.Result.Content, `"status":"exited"`) || !strings.Contains(exited.Result.Content, "delayed-ok") {
+				if exited == nil || !strings.Contains(exited.Result.Content, `exit 0`) || !strings.Contains(exited.Result.Content, "delayed-ok") {
 					return fmt.Errorf("expected exited wait result with stdout, got %+v", exited)
 				}
 				return nil

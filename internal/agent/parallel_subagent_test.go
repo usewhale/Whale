@@ -1008,15 +1008,15 @@ func TestParallelSpawnSubagentFailureIsIsolatedToOriginalResultSlot(t *testing.T
 	if !toolMsg.ToolResults[1].IsError {
 		t.Fatalf("expected middle subagent result to be marked error: %+v", toolMsg.ToolResults[1])
 	}
-	if !strings.Contains(toolMsg.ToolResults[1].Content, `"code":"spawn_subagent_failed"`) {
-		t.Fatalf("expected existing spawn_subagent_failed envelope, got %q", toolMsg.ToolResults[1].Content)
+	if !strings.Contains(toolMsg.ToolResults[1].Content, `error (spawn_subagent_failed)`) {
+		t.Fatalf("expected existing spawn_subagent_failed error text, got %q", toolMsg.ToolResults[1].Content)
 	}
 	for _, idx := range []int{0, 2} {
 		if toolMsg.ToolResults[idx].IsError {
 			t.Fatalf("expected successful subagent result at index %d, got error %+v", idx, toolMsg.ToolResults[idx])
 		}
-		if !strings.Contains(toolMsg.ToolResults[idx].Content, `"success":true`) {
-			t.Fatalf("expected successful envelope at index %d, got %q", idx, toolMsg.ToolResults[idx].Content)
+		if got := core.ToolResultOutcome(toolMsg.ToolResults[idx]); got != core.OutcomeSuccess {
+			t.Fatalf("expected success outcome at index %d, got %s (%q)", idx, got, toolMsg.ToolResults[idx].Content)
 		}
 	}
 }

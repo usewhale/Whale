@@ -217,10 +217,10 @@ func TestSearchFilesUnknownIncludeReturnsRecoveryHint(t *testing.T) {
 		t.Fatalf("expected invalid input error, got %+v", res)
 	}
 	for _, want := range []string{
-		`"code":"invalid_input"`,
-		`unknown field \"include\"`,
+		`error (invalid_input)`,
+		`unknown field "include"`,
 		"search_files does not support include; retry with grep for content search or remove include.",
-		`"recovery"`,
+		`recovery:`,
 	} {
 		if !strings.Contains(res.Content, want) {
 			t.Fatalf("result missing %q:\n%s", want, res.Content)
@@ -255,10 +255,10 @@ func TestSearchFilesMissingPatternReturnsRecoveryHint(t *testing.T) {
 		t.Fatalf("expected invalid input error, got %+v", res)
 	}
 	for _, want := range []string{
-		`"code":"invalid_input"`,
-		`missing required field \"pattern\"`,
+		`error (invalid_input)`,
+		`missing required field "pattern"`,
 		"search_files requires pattern; provide pattern and path, or use grep for content search.",
-		`"recovery"`,
+		`recovery:`,
 	} {
 		if !strings.Contains(res.Content, want) {
 			t.Fatalf("result missing %q:\n%s", want, res.Content)
@@ -294,10 +294,10 @@ func TestWebFetchMaxResultsReturnsRecoveryHint(t *testing.T) {
 		t.Fatalf("expected invalid input error, got %+v", res)
 	}
 	for _, want := range []string{
-		`"code":"invalid_input"`,
-		`unknown field \"max_results\"`,
+		`error (invalid_input)`,
+		`unknown field "max_results"`,
 		"web_fetch does not support max_results; remove it or use web_search when you need multiple search results.",
-		`"recovery"`,
+		`recovery:`,
 	} {
 		if !strings.Contains(res.Content, want) {
 			t.Fatalf("result missing %q:\n%s", want, res.Content)
@@ -333,10 +333,10 @@ func TestFetchFormatReturnsRecoveryHint(t *testing.T) {
 		t.Fatalf("expected invalid input error, got %+v", res)
 	}
 	for _, want := range []string{
-		`"code":"invalid_input"`,
-		`unknown field \"format\"`,
+		`error (invalid_input)`,
+		`unknown field "format"`,
 		"fetch does not support format; omit it and use prompt to request the output shape.",
-		`"recovery"`,
+		`recovery:`,
 	} {
 		if !strings.Contains(res.Content, want) {
 			t.Fatalf("result missing %q:\n%s", want, res.Content)

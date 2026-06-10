@@ -1,1 +1,2 @@
-{"ok":true,"success":true,"code":"ok","summary":"tool completed","data":{"payload":{"content":"if (elem != null && elem.ValueWithoutLink > 0) HasCondition<ConAnorexia>() // 中文注释","file_path":"Patch.cs"},"status":"ok"},"metadata":{"duration_ms":7,"source_tool":"fixture_tool"}}
+Patch.cs
+if (elem != null && elem.ValueWithoutLink > 0) HasCondition<ConAnorexia>() // 中文注释

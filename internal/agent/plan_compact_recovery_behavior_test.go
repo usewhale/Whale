@@ -807,10 +807,10 @@ func TestDefaultRecoveryPassesThroughCommonToolFailures(t *testing.T) {
 		reg  Tool
 		code string
 	}{
-		{name: "exec failed", tool: "exec_default_fail", reg: failExecDefaultTool{}, code: `"code":"exec_failed"`},
-		{name: "unknown", tool: "unknown_default_fail", reg: unknownDefaultTool{}, code: `"code":"opaque_failure"`},
-		{name: "search not found", tool: "search_not_found_edit", reg: searchNotFoundTool{}, code: `"code":"search_not_found"`},
-		{name: "mcp access denied", tool: "mcp__fs__search_files", reg: mcpDeniedDefaultTool{}, code: `"code":"mcp_tool_error"`},
+		{name: "exec failed", tool: "exec_default_fail", reg: failExecDefaultTool{}, code: `error (exec_failed)`},
+		{name: "unknown", tool: "unknown_default_fail", reg: unknownDefaultTool{}, code: `error (opaque_failure)`},
+		{name: "search not found", tool: "search_not_found_edit", reg: searchNotFoundTool{}, code: `error (search_not_found)`},
+		{name: "mcp access denied", tool: "mcp__fs__search_files", reg: mcpDeniedDefaultTool{}, code: `error (mcp_tool_error)`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -835,7 +835,7 @@ func TestDefaultRecoveryPassesThroughCommonToolFailures(t *testing.T) {
 					t.Fatalf("unexpected recovery event for %s: %s", tt.name, ev.Type)
 				case AgentEventTypeToolResult:
 					if ev.Result != nil {
-						if strings.Contains(ev.Result.Content, `"code":"request_replan"`) {
+						if strings.Contains(ev.Result.Content, `error (request_replan)`) {
 							t.Fatalf("unexpected request_replan: %s", ev.Result.Content)
 						}
 						if strings.Contains(ev.Result.Content, tt.code) {
@@ -876,7 +876,7 @@ func TestRecoveryRequestReplanBuildsStructuredResult(t *testing.T) {
 		if ev.Type == AgentEventTypeToolRecoveryExhausted && ev.Recovery != nil && ev.Recovery.ReplanInjected {
 			sawReplanEvent = true
 		}
-		if ev.Type == AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, `"code":"request_replan"`) {
+		if ev.Type == AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, `error (request_replan)`) {
 			sawReplanResult = true
 		}
 	}
@@ -921,7 +921,7 @@ func TestRecoveryDoesNotWrapExploratoryPathFailures(t *testing.T) {
 				if strings.Contains(ev.Result.Content, "request_replan") {
 					t.Fatalf("unexpected replan result: %s", ev.Result.Content)
 				}
-				if strings.Contains(ev.Result.Content, `"code":"not_found"`) {
+				if strings.Contains(ev.Result.Content, `error (not_found)`) {
 					sawNotFound = true
 				}
 			}

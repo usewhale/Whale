@@ -640,11 +640,7 @@ func TestAgentPreToolHookHandlerCanRewriteInputAndAddContext(t *testing.T) {
 	found := false
 	for _, msg := range msgs {
 		for _, result := range msg.ToolResults {
-			env, ok := core.ParseToolEnvelope(result.Content)
-			if !ok {
-				t.Fatalf("tool envelope corrupted by hook context: %s", result.Content)
-			}
-			if strings.Contains(result.Content, "hook ctx") && env.Metadata["hook_context"] != nil {
+			if strings.Contains(result.Content, "hook ctx") && result.Metadata["hook_context"] != nil {
 				found = true
 			}
 		}

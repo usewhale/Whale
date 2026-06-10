@@ -160,11 +160,12 @@ func shellTaskIDFromHistory(history []core.Message) (string, error) {
 			if tr.Name != "shell_run" {
 				continue
 			}
-			env, ok := core.ParseToolEnvelope(tr.Content)
+			payload, ok := tr.Payload.(map[string]any)
 			if !ok {
 				continue
 			}
-			if taskID, ok := envelopeString(env, "payload", "task_id"); ok && taskID != "" {
+			inner, _ := payload["payload"].(map[string]any)
+			if taskID := strings.TrimSpace(core.AsString(inner["task_id"])); taskID != "" {
 				return taskID, nil
 			}
 		}

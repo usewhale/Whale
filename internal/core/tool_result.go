@@ -93,16 +93,14 @@ func CanonicalizeToolPayload(env ToolEnvelope) map[string]any {
 // swaps the renderer for plain text.
 func NewToolResultFromEnvelope(call ToolCall, env ToolEnvelope, metadata map[string]any) ToolResult {
 	outcome := outcomeForEnvelope(env)
-	text, err := MarshalToolEnvelope(env)
-	if err != nil {
-		text = fallbackEnvelopeJSON(env)
-	}
+	payload := CanonicalizeToolPayload(env)
+	text := RenderToolResultText(call.Name, outcome, env.Code, payload)
 	return ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
 		Outcome:    outcome,
 		Code:       env.Code,
-		Payload:    CanonicalizeToolPayload(env),
+		Payload:    payload,
 		ModelText:  text,
 		Content:    text,
 		Metadata:   metadata,
@@ -125,17 +123,6 @@ func NewToolResultError(call ToolCall, code, msg string, data map[string]any) To
 	return NewToolResultFromEnvelope(call, env, nil)
 }
 
-func fallbackEnvelopeJSON(env ToolEnvelope) string {
-	b, err := json.Marshal(map[string]string{
-		"success": "false",
-		"code":    env.Code,
-		"message": FirstNonEmpty(env.Message, env.Error),
-	})
-	if err != nil {
-		return `{"success":false,"code":"marshal_failed"}`
-	}
-	return string(b)
-}
 
 // ToolResultModelText returns the model-visible text of a result.
 // Transitional: falls back to Content for results deserialized from
@@ -183,6 +170,15 @@ func FinalizeToolResultChannels(res ToolResult) ToolResult {
 			res.Outcome = OutcomeForErrorCode(res.Code)
 		} else {
 			res.Outcome = OutcomeSuccess
+		}
+	}
+	if parsed {
+		// Live bypass producers still build envelope JSON literals; render
+		// the model channel plain like the funnel does and keep Content in
+		// lockstep for single-write persistence.
+		if payload, ok := res.Payload.(map[string]any); ok || res.Payload == nil {
+			res.ModelText = RenderToolResultText(res.Name, res.Outcome, res.Code, payload)
+			res.Content = res.ModelText
 		}
 	}
 	return res
@@ -248,18 +244,36 @@ func (r *ToolResult) UnmarshalJSON(b []byte) error {
 		res.Content = res.ModelText
 	}
 	// Re-derive the canonical payload when it was elided at save time
-	// (phase 1 envelopes), and backfill everything for legacy lines that
-	// predate the channel separation. Must never reject a line — the
-	// JSONL loader drops lines whose unmarshal fails.
-	if res.Payload == nil && res.ModelText != "" {
-		if env, ok := ParseToolEnvelope(res.ModelText); ok {
+	// (phase-1 envelope ModelText), and backfill the structured fields for
+	// legacy lines that predate the channel separation. Historical model
+	// bytes are NEVER re-rendered: old turns must replay byte-identically.
+	// Must never reject a line — the JSONL loader drops lines whose
+	// unmarshal fails.
+	if res.ModelText == "" {
+		res.ModelText = res.Content
+	}
+	if env, ok := ParseToolEnvelope(res.ModelText); ok {
+		if res.Code == "" {
+			res.Code = env.Code
+		}
+		if res.Payload == nil {
 			res.Payload = CanonicalizeToolPayload(env)
 		}
+		if res.Outcome == "" {
+			res.Outcome = outcomeForEnvelope(env)
+			if res.IsError && res.Outcome == OutcomeSuccess {
+				res.Outcome = OutcomeForErrorCode(env.Code)
+			}
+		}
 	}
-	res = FinalizeToolResultChannels(res)
-	if res.Outcome != "" {
-		res.IsError = res.outcomeIsError()
+	if res.Outcome == "" {
+		if res.IsError {
+			res.Outcome = OutcomeForErrorCode(res.Code)
+		} else {
+			res.Outcome = OutcomeSuccess
+		}
 	}
+	res.IsError = res.outcomeIsError()
 	*r = res
 	return nil
 }

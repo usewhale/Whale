@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,7 +32,7 @@ func TestToolRegistrySpecsAndDispatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dispatch err: %v", err)
 	}
-	if res.IsError || !strings.Contains(res.Content, `"ok":true`) || !strings.Contains(res.Content, `"source_tool":"read_file"`) {
+	if res.IsError || res.Content != "ok" || res.Code != "ok" {
 		t.Fatalf("unexpected dispatch result: %+v", res)
 	}
 }
@@ -103,26 +102,24 @@ func TestToolRegistryTruncatesLargeResult(t *testing.T) {
 	if len(res.Content) > 2048 {
 		t.Fatalf("truncated result length = %d, want <= 2048: %s", len(res.Content), res.Content)
 	}
-	var out map[string]any
-	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
-		t.Fatalf("unexpected json: %v", err)
-	}
 	if res.IsError {
 		t.Fatalf("truncated successful result should not be an error: %+v", res)
 	}
-	if out["ok"] != true || out["success"] != true || out["code"] != "ok" {
-		t.Fatalf("truncated result should preserve success envelope, got: %s", res.Content)
+	if !strings.Contains(res.Content, "...[output truncated:") {
+		t.Fatalf("truncated result should carry the omission marker, got: %s", res.Content)
 	}
-	if out["truncated"] != true {
-		t.Fatalf("expected truncated payload, got: %s", res.Content)
+	if res.Outcome != core.OutcomeSuccess || res.Code != "ok" {
+		t.Fatalf("truncated result should preserve success classification, got: %+v", res)
 	}
-	data, ok := out["data"].(map[string]any)
-	if !ok || data["head"] == "" || data["tail"] == "" {
-		t.Fatalf("expected truncated head/tail data, got: %s", res.Content)
+	payload, ok := res.Payload.(map[string]any)
+	if !ok || payload["truncated"] != true {
+		t.Fatalf("expected bounded truncation payload, got: %#v", res.Payload)
 	}
-	metadata, ok := out["metadata"].(map[string]any)
-	if !ok || metadata["output_truncated"] != true {
-		t.Fatalf("expected output_truncated metadata, got: %s", res.Content)
+	if payload["head"] == "" || payload["tail"] == "" {
+		t.Fatalf("expected truncated head/tail in payload, got: %#v", res.Payload)
+	}
+	if res.Metadata["output_truncated"] != true {
+		t.Fatalf("expected output_truncated metadata, got: %#v", res.Metadata)
 	}
 }
 
@@ -136,17 +133,9 @@ func TestToolRegistryArchivesLargeResultBeforeTruncation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dispatch err: %v", err)
 	}
-	var out map[string]any
-	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
-		t.Fatalf("unexpected json: %v", err)
-	}
-	metadata, ok := out["metadata"].(map[string]any)
-	if !ok {
-		t.Fatalf("missing metadata: %s", res.Content)
-	}
-	path, _ := metadata["full_result_path"].(string)
+	path, _ := res.Metadata["full_result_path"].(string)
 	if path == "" {
-		t.Fatalf("missing full_result_path metadata: %s", res.Content)
+		t.Fatalf("missing full_result_path metadata: %#v", res.Metadata)
 	}
 	if !strings.HasPrefix(path, filepath.Join(archiveDir, "sess_1")) {
 		t.Fatalf("archive path not scoped to sanitized session dir: %q", path)

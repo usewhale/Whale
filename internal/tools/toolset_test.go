@@ -1771,14 +1771,13 @@ func TestReadFileDefaultNearRegistryCapDoesNotAdvertiseFull(t *testing.T) {
 	if len(res.Content) > core.DefaultMaxToolResultChars {
 		t.Fatalf("registry result len = %d, want <= %d", len(res.Content), core.DefaultMaxToolResultChars)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	data, ok := res.Payload.(map[string]any)
 	if !ok {
-		t.Fatalf("parse read_file envelope: %s", res.Content)
+		t.Fatalf("missing structured payload: %s", res.Content)
 	}
-	if outputTruncated, _ := env.Metadata["output_truncated"].(bool); outputTruncated {
-		t.Fatalf("registry should not truncate read_file result: %+v", env.Metadata)
+	if outputTruncated, _ := res.Metadata["output_truncated"].(bool); outputTruncated {
+		t.Fatalf("registry should not truncate read_file result: %+v", res.Metadata)
 	}
-	data := env.Data
 	if got := metricString(t, data, "mode"); got != "outline" {
 		t.Fatalf("mode = %q, want outline", got)
 	}
@@ -1827,14 +1826,13 @@ func TestReadFileOutlineShrinksToFitRegistryCap(t *testing.T) {
 	if len(res.Content) > core.DefaultMaxToolResultChars {
 		t.Fatalf("registry result len = %d, want <= %d", len(res.Content), core.DefaultMaxToolResultChars)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	data, ok := res.Payload.(map[string]any)
 	if !ok {
-		t.Fatalf("parse read_file envelope: %s", res.Content)
+		t.Fatalf("missing structured payload: %s", res.Content)
 	}
-	if outputTruncated, _ := env.Metadata["output_truncated"].(bool); outputTruncated {
-		t.Fatalf("registry should not truncate read_file result: %+v", env.Metadata)
+	if outputTruncated, _ := res.Metadata["output_truncated"].(bool); outputTruncated {
+		t.Fatalf("registry should not truncate read_file result: %+v", res.Metadata)
 	}
-	data := env.Data
 	if got := metricString(t, data, "mode"); got != "outline" {
 		t.Fatalf("mode = %q, want outline", got)
 	}
@@ -3819,6 +3817,11 @@ func toolRecoveryData(t *testing.T, res core.ToolResult) map[string]any {
 
 func readFileData(t *testing.T, res core.ToolResult) map[string]any {
 	t.Helper()
+	// Registry-dispatched results carry the structured payload; direct
+	// toolset results still serialize the envelope.
+	if payload, ok := res.Payload.(map[string]any); ok {
+		return payload
+	}
 	env, ok := core.ParseToolEnvelope(res.Content)
 	if !ok {
 		t.Fatalf("parse read_file envelope: %s", res.Content)

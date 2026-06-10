@@ -128,12 +128,16 @@ func TestNewSchemaPersistsModelTextOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read session file: %v", err)
 	}
-	// The persistence layer HTML-escapes JSON strings (harmless: decoded
-	// on load); count the escaped form. Exactly one copy: Content is
-	// omitted when it mirrors ModelText, and the canonical Payload is
-	// re-derived on load instead of being stored twice.
-	if n := strings.Count(string(raw), `hello \u0026\u0026 bye`); n != 1 {
-		t.Fatalf("model text must be persisted exactly once, found %d copies in: %s", n, raw)
+	// Phase 2: ModelText is plain text, so the canonical Payload is
+	// persisted explicitly — the data appears once in each channel
+	// (escaped form: the persistence layer HTML-escapes JSON strings,
+	// harmless because it decodes on load). Content stays omitted because
+	// it mirrors ModelText.
+	if n := strings.Count(string(raw), `hello \u0026\u0026 bye`); n != 2 {
+		t.Fatalf("expected model text once per channel (payload + model text), found %d copies in: %s", n, raw)
+	}
+	if strings.Contains(string(raw), `"Content"`) {
+		t.Fatalf("Content must stay elided when it mirrors ModelText: %s", raw)
 	}
 	msgs, err := st.List(context.Background(), "s1")
 	if err != nil || len(msgs) != 1 || len(msgs[0].ToolResults) != 1 {

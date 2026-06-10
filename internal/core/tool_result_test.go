@@ -4,25 +4,31 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
-func TestNewToolResultFromEnvelopeModelTextMatchesEnvelope(t *testing.T) {
+func TestNewToolResultFromEnvelopeRendersPlainText(t *testing.T) {
 	env := ToolEnvelope{
 		OK: false, Success: false,
 		Error: "command failed", Code: "exec_failed", Summary: "command failed",
-		Data: map[string]any{"payload": map[string]any{"stderr": "a && b < c"}},
-	}
-	want, err := MarshalToolEnvelope(env)
-	if err != nil {
-		t.Fatalf("marshal envelope: %v", err)
+		Data: map[string]any{
+			"metrics": map[string]any{"exit_code": 1, "duration_ms": 43},
+			"payload": map[string]any{"stderr": "a && b < c"},
+		},
 	}
 	res := NewToolResultFromEnvelope(ToolCall{ID: "c1", Name: "shell_run"}, env, nil)
-	if res.ModelText != want {
-		t.Fatalf("ModelText must equal the envelope serialization:\nwant: %s\ngot:  %s", want, res.ModelText)
+	if !strings.HasPrefix(res.ModelText, "exit 1 (43ms)") {
+		t.Fatalf("expected plain-text shell header, got:\n%s", res.ModelText)
 	}
-	if res.Content != want {
-		t.Fatalf("phase-1 invariant: Content mirrors ModelText, got %s", res.Content)
+	if !strings.Contains(res.ModelText, "a && b < c") {
+		t.Fatalf("stderr must appear verbatim, got:\n%s", res.ModelText)
+	}
+	if strings.Contains(res.ModelText, `"success"`) || strings.Contains(res.ModelText, `\u0026`) {
+		t.Fatalf("model text must not contain envelope scaffolding or escapes:\n%s", res.ModelText)
+	}
+	if res.Content != res.ModelText {
+		t.Fatalf("Content mirrors ModelText, got %s", res.Content)
 	}
 	if res.Outcome != OutcomeFailure || res.Code != "exec_failed" || !res.IsError {
 		t.Fatalf("unexpected classification: %+v", res)

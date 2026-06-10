@@ -367,10 +367,10 @@ func TestRuntimeExecFailurePassesThroughWithoutReplan(t *testing.T) {
 	}
 	var sawExecFailed bool
 	for ev := range events {
-		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, `"code":"request_replan"`) {
+		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, `error (request_replan)`) {
 			t.Fatalf("unexpected request_replan for exec failure: %s", ev.Result.Content)
 		}
-		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, `"code":"exec_failed"`) {
+		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, `exit 7`) {
 			sawExecFailed = true
 		}
 	}
@@ -423,7 +423,7 @@ func TestRuntimeExecYieldTimeoutReturnsRunningTaskWithoutRetry(t *testing.T) {
 		if ev.Type == agent.AgentEventTypeToolRecoveryAttempt {
 			sawAttempt = true
 		}
-		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, `"status":"running"`) && strings.Contains(ev.Result.Content, `"task_id"`) {
+		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, `running in background (task_id=`) {
 			sawRunning = true
 		}
 	}
@@ -511,7 +511,7 @@ func TestRuntimeShellWaitReturnsRunningOnShortTimeout(t *testing.T) {
 	for ev := range events {
 		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil {
 			toolResults = append(toolResults, ev.Result.Content)
-			if strings.Contains(ev.Result.Content, `"status":"running"`) {
+			if strings.Contains(ev.Result.Content, `running in background`) {
 				sawRunning = true
 			}
 		}
@@ -558,7 +558,7 @@ func TestRuntimeShellWaitUnknownTaskReturnsNotFound(t *testing.T) {
 	}
 	var sawNotFound bool
 	for ev := range events {
-		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, `"code":"not_found"`) {
+		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, `error (not_found)`) {
 			sawNotFound = true
 		}
 	}
@@ -635,15 +635,17 @@ func TestRuntimeShellWaitReturnsExitedResult(t *testing.T) {
 		t.Fatalf("wait run failed: %v", err)
 	}
 	var sawExited bool
+	var collected []string
 	for ev := range events {
-		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil &&
-			strings.Contains(ev.Result.Content, `"status":"exited"`) &&
-			strings.Contains(ev.Result.Content, "done") {
-			sawExited = true
+		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil {
+			collected = append(collected, ev.Result.Content)
+			if strings.Contains(ev.Result.Content, `exit 0`) && strings.Contains(ev.Result.Content, "done") {
+				sawExited = true
+			}
 		}
 	}
 	if !sawExited {
-		t.Fatal("expected shell_wait exited result with stdout")
+		t.Fatalf("expected shell_wait exited result with stdout, got %q", collected)
 	}
 }
 
@@ -717,8 +719,7 @@ func TestRuntimeShellWaitReturnsFailedResult(t *testing.T) {
 	var sawFailed bool
 	for ev := range events {
 		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil &&
-			strings.Contains(ev.Result.Content, `"status":"failed"`) &&
-			strings.Contains(ev.Result.Content, `"exit_code":7`) {
+			strings.Contains(ev.Result.Content, `exit 7`) {
 			sawFailed = true
 		}
 	}
@@ -1626,7 +1627,7 @@ func TestRuntimeRepairsTruncatedToolArgs(t *testing.T) {
 		if ev.Type == agent.AgentEventTypeToolArgsRepaired && ev.ToolArgsRepair != nil && ev.ToolArgsRepair.ToolName == "write" {
 			sawRepair = true
 		}
-		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && ev.Result.Name == "write" && strings.Contains(ev.Result.Content, `"code":"ok"`) {
+		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && ev.Result.Name == "write" && core.ToolResultOutcome(*ev.Result) == core.OutcomeSuccess {
 			sawWriteResult = true
 		}
 	}

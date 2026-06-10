@@ -72,20 +72,21 @@ func TestNormalizeToolContentGolden(t *testing.T) {
 	}))
 	cases := []struct {
 		name        string
+		tool        string
 		raw         string
 		fallbackErr bool
 		maxChars    int
 	}{
-		{"normalize_shell_error", shellEnvelope, true, DefaultMaxToolResultChars},
-		{"normalize_read_success", readEnvelope, false, DefaultMaxToolResultChars},
-		{"normalize_raw_text", "plain MCP text with & < > and 中文, not JSON", false, DefaultMaxToolResultChars},
-		{"normalize_empty", "", false, DefaultMaxToolResultChars},
-		{"normalize_truncated", mustEnvelope(t, NewToolSuccessEnvelope(map[string]any{
+		{"normalize_shell_error", "shell_run", shellEnvelope, true, DefaultMaxToolResultChars},
+		{"normalize_read_success", "read_file", readEnvelope, false, DefaultMaxToolResultChars},
+		{"normalize_raw_text", "mcp_tool", "plain MCP text with & < > and 中文, not JSON", false, DefaultMaxToolResultChars},
+		{"normalize_empty", "noop_tool", "", false, DefaultMaxToolResultChars},
+		{"normalize_truncated", "fixture_tool", mustEnvelope(t, NewToolSuccessEnvelope(map[string]any{
 			"payload": map[string]any{"content": strings.Repeat("x && y < z\n", 200)},
 		})), false, 600},
 	}
 	for _, tc := range cases {
-		content, isErr, archive, _ := normalizeToolContent(ctx, "fixture_tool", "call-1", tc.raw, tc.fallbackErr, tc.maxChars, goldenDurationMS)
+		content, isErr, archive, _, _ := normalizeToolContent(ctx, tc.tool, "call-1", tc.raw, tc.fallbackErr, tc.maxChars, goldenDurationMS)
 		if archive != "" {
 			t.Fatalf("%s: expected no archive path without archive config, got %q", tc.name, archive)
 		}

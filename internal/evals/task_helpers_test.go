@@ -1,7 +1,6 @@
 package evals
 
 import (
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -24,17 +23,21 @@ func todoIDFromHistory(history []core.Message) (string, error) {
 			if !strings.HasPrefix(tr.Name, "todo_") {
 				continue
 			}
-			var payload struct {
-				Success bool `json:"success"`
-				Data    struct {
-					Items []session.TodoItem `json:"items"`
-				} `json:"data"`
-			}
-			if err := json.Unmarshal([]byte(tr.Content), &payload); err != nil {
+			payload, ok := tr.Payload.(map[string]any)
+			if !ok {
 				continue
 			}
-			if len(payload.Data.Items) > 0 && payload.Data.Items[0].ID != "" {
-				return payload.Data.Items[0].ID, nil
+			items := core.AsAnySlice(payload["items"])
+			if len(items) == 0 {
+				items = core.AsAnySlice(payload["data"])
+			}
+			if len(items) == 0 {
+				continue
+			}
+			if item, ok := items[0].(map[string]any); ok {
+				if id := strings.TrimSpace(core.AsString(item["id"])); id != "" {
+					return id, nil
+				}
 			}
 		}
 	}
