@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+
+	"github.com/usewhale/whale/internal/core"
 )
 
 type RunDiff struct {
@@ -52,17 +54,20 @@ func RecordEntriesFromRun(run *Run) []RecordEntry {
 			Tool:         step.Call.Name,
 			Input:        step.Spec.Input,
 			IsError:      step.Result.IsError,
-			Result:       step.Result.Content,
-			ResultDigest: summarizeResult(step.Result.Content),
+			Result:       core.ToolResultModelText(step.Result),
+			ResultDigest: summarizeResult(core.ToolResultModelText(step.Result)),
 		}
-		if step.HasEnvelope {
-			entry.EnvelopeCode = step.Envelope.Code
+		if outcome := core.ToolResultOutcome(step.Result); outcome != "" {
+			succeeded := outcome == core.OutcomeSuccess || outcome == core.OutcomeNoResult
+			entry.EnvelopeCode = step.Result.Code
 			entry.Envelope = map[string]any{
-				"ok":      step.Envelope.OK,
-				"success": step.Envelope.Success,
-				"code":    step.Envelope.Code,
-				"message": step.Envelope.Message,
-				"data":    step.Envelope.Data,
+				"ok":      succeeded,
+				"success": succeeded,
+				"code":    step.Result.Code,
+				"outcome": string(outcome),
+			}
+			if payload, ok := step.Result.Payload.(map[string]any); ok {
+				entry.Envelope["data"] = payload
 			}
 		}
 		entries = append(entries, entry.normalized())

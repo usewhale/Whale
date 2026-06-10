@@ -209,12 +209,13 @@ func validateScenario(spec ScenarioSpec, run *Run) error {
 		if !step.Spec.ExpectError && step.Result.IsError {
 			return fmt.Errorf("scenario %q step %q returned unexpected tool error: %s", spec.Name, step.Spec.ID, step.Result.Content)
 		}
-		if step.HasEnvelope {
-			if step.Spec.ExpectError && step.Envelope.OK {
-				return fmt.Errorf("scenario %q step %q expected error envelope", spec.Name, step.Spec.ID)
+		if outcome := core.ToolResultOutcome(step.Result); outcome != "" {
+			succeeded := outcome == core.OutcomeSuccess || outcome == core.OutcomeNoResult
+			if step.Spec.ExpectError && succeeded {
+				return fmt.Errorf("scenario %q step %q expected error outcome", spec.Name, step.Spec.ID)
 			}
-			if !step.Spec.ExpectError && !step.Envelope.OK && !isLegacySuccessEnvelope(step.Envelope) {
-				return fmt.Errorf("scenario %q step %q returned non-ok envelope: %s", spec.Name, step.Spec.ID, step.Result.Content)
+			if !step.Spec.ExpectError && !succeeded {
+				return fmt.Errorf("scenario %q step %q returned %s outcome (code %s): %s", spec.Name, step.Spec.ID, outcome, step.Result.Code, core.ToolResultModelText(step.Result))
 			}
 		}
 	}
@@ -273,10 +274,6 @@ func expectedStepCount(turns []TurnSpec) int {
 	return total
 }
 
-func isLegacySuccessEnvelope(env core.ToolEnvelope) bool {
-	return env.Code == "" && env.Success
-}
-
 type RecordEntry struct {
 	Suite        Suite          `json:"suite,omitempty"`
 	Scenario     string         `json:"scenario"`
@@ -316,17 +313,20 @@ func writeRecord(path string, run *Run) error {
 			Tool:         step.Call.Name,
 			Input:        step.Spec.Input,
 			IsError:      step.Result.IsError,
-			Result:       step.Result.Content,
-			ResultDigest: summarizeResult(step.Result.Content),
+			Result:       core.ToolResultModelText(step.Result),
+			ResultDigest: summarizeResult(core.ToolResultModelText(step.Result)),
 		}
-		if step.HasEnvelope {
-			entry.EnvelopeCode = step.Envelope.Code
+		if outcome := core.ToolResultOutcome(step.Result); outcome != "" {
+			succeeded := outcome == core.OutcomeSuccess || outcome == core.OutcomeNoResult
+			entry.EnvelopeCode = step.Result.Code
 			entry.Envelope = map[string]any{
-				"ok":      step.Envelope.OK,
-				"success": step.Envelope.Success,
-				"code":    step.Envelope.Code,
-				"message": step.Envelope.Message,
-				"data":    step.Envelope.Data,
+				"ok":      succeeded,
+				"success": succeeded,
+				"code":    step.Result.Code,
+				"outcome": string(outcome),
+			}
+			if payload, ok := step.Result.Payload.(map[string]any); ok {
+				entry.Envelope["data"] = payload
 			}
 		}
 		b, err := json.Marshal(entry)
