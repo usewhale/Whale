@@ -82,11 +82,71 @@ func (a *App) ensureCurrentModeMarker() error {
 	}
 	if latest, ok := latestModeMarkerMode(messages); ok {
 		if latest == string(current) {
-			return nil
+			return a.maybeRecordPlanModeReminder(messages, current)
 		}
 		return a.recordModeChanged(latest, string(current))
 	}
 	return a.recordModeChanged("unknown", string(current))
+}
+
+// planModeReminderFullEvery controls reminder throttling: most turns get a
+// one-line sparse reminder; every Nth reminder repeats the full plan-mode
+// instruction so it never drifts more than a few turns from the latest user
+// message. Reminders are persisted as hidden messages (append-only) so replayed
+// history stays byte-identical and the prompt cache prefix is unaffected.
+const planModeReminderFullEvery = 5
+
+const planModeReminderOpenTag = "<plan_mode_reminder>"
+
+func planModeReminderText(full bool) string {
+	if full {
+		return planModeReminderOpenTag + "\nPlan mode is still active. " + modeChangedInstruction(string(session.ModePlan)) + " If the user requests an action that plan mode does not allow, incorporate it as a step in the plan instead of performing it, and do not suggest switching modes.\n</plan_mode_reminder>"
+	}
+	return planModeReminderOpenTag + "\nPlan mode is still active (full instruction in the earlier <mode_changed> marker). Treat the user's next message, including execution requests such as create a branch, implement, or fix, as plan input: fold it into the plan as steps instead of performing it, and do not suggest switching modes.\n</plan_mode_reminder>"
+}
+
+// maybeRecordPlanModeReminder appends a plan-mode reminder ahead of the
+// incoming user message so the instruction stays adjacent to the latest
+// request instead of decaying behind exploration and earlier plans. It skips
+// when a mode marker or reminder is already the newest message, so a turn that
+// just switched modes (instruction already adjacent) or a retried turn does not
+// stack duplicates.
+func (a *App) maybeRecordPlanModeReminder(messages []core.Message, current session.Mode) error {
+	if current != session.ModePlan {
+		return nil
+	}
+	reminders := 0
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if !msg.Hidden {
+			continue
+		}
+		// Check the reminder tag first: sparse reminder text mentions
+		// <mode_changed>, so a bare Contains check would misread it as the
+		// mode marker and reset the throttle count.
+		if strings.Contains(msg.Text, planModeReminderOpenTag) {
+			if i == len(messages)-1 {
+				return nil
+			}
+			reminders++
+			continue
+		}
+		if strings.Contains(msg.Text, "<mode_changed>") {
+			if i == len(messages)-1 {
+				return nil
+			}
+			break
+		}
+	}
+	full := (reminders+1)%planModeReminderFullEvery == 0
+	_, err := a.msgStore.Create(context.Background(), core.Message{
+		SessionID:    a.sessionID,
+		Role:         core.RoleUser,
+		Text:         planModeReminderText(full),
+		Hidden:       true,
+		FinishReason: core.FinishReasonEndTurn,
+	})
+	return err
 }
 
 func latestModeMarkerMode(messages []core.Message) (string, bool) {

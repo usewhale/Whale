@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/session"
 	"github.com/usewhale/whale/internal/store"
 )
@@ -58,5 +59,90 @@ func TestEnsureCurrentModeMarkerRecordsInitialModeAndDeduplicates(t *testing.T) 
 	}
 	if got := msgs[1]; !got.Hidden || !strings.Contains(got.Text, "active session mode is now plan") || !strings.Contains(got.Text, "changed from agent") || !strings.Contains(got.Text, "<proposed_plan>") {
 		t.Fatalf("unexpected plan mode marker: %+v", got)
+	}
+}
+
+func TestEnsureCurrentModeMarkerAppendsPlanReminderPerTurn(t *testing.T) {
+	msgStore, err := store.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	app := &App{
+		msgStore:    msgStore,
+		sessionID:   "s-plan-reminder",
+		currentMode: session.ModePlan,
+	}
+	ctx := context.Background()
+
+	// First ensure records the mode marker; no reminder needed because the
+	// full instruction is already the newest message.
+	if err := app.ensureCurrentModeMarker(); err != nil {
+		t.Fatalf("ensureCurrentModeMarker initial: %v", err)
+	}
+	msgs, err := msgStore.List(ctx, app.sessionID)
+	if err != nil {
+		t.Fatalf("List initial: %v", err)
+	}
+	if len(msgs) != 1 || !strings.Contains(msgs[0].Text, "<mode_changed>") {
+		t.Fatalf("messages after initial ensure = %+v, want single mode marker", msgs)
+	}
+
+	// A retried ensure with the marker still newest must not stack a reminder.
+	if err := app.ensureCurrentModeMarker(); err != nil {
+		t.Fatalf("ensureCurrentModeMarker retry: %v", err)
+	}
+	if msgs, _ = msgStore.List(ctx, app.sessionID); len(msgs) != 1 {
+		t.Fatalf("retry should not append, got %d messages", len(msgs))
+	}
+
+	appendUserTurn := func(text string) {
+		t.Helper()
+		if _, err := msgStore.Create(ctx, core.Message{SessionID: app.sessionID, Role: core.RoleUser, Text: text}); err != nil {
+			t.Fatalf("Create user message: %v", err)
+		}
+	}
+
+	// Later turns each get one reminder; the first four are sparse, the fifth full.
+	for i := 1; i <= planModeReminderFullEvery; i++ {
+		appendUserTurn("turn input")
+		if err := app.ensureCurrentModeMarker(); err != nil {
+			t.Fatalf("ensureCurrentModeMarker turn %d: %v", i, err)
+		}
+		msgs, err = msgStore.List(ctx, app.sessionID)
+		if err != nil {
+			t.Fatalf("List turn %d: %v", i, err)
+		}
+		got := msgs[len(msgs)-1]
+		if !got.Hidden || got.Role != "user" || !strings.Contains(got.Text, planModeReminderOpenTag) {
+			t.Fatalf("turn %d: newest message is not a plan reminder: %+v", i, got)
+		}
+		wantFull := i%planModeReminderFullEvery == 0
+		isFull := strings.Contains(got.Text, "Plan mode instruction:")
+		if isFull != wantFull {
+			t.Fatalf("turn %d: reminder full = %v, want %v: %q", i, isFull, wantFull, got.Text)
+		}
+		// A retried ensure with the reminder still newest must not stack another.
+		if err := app.ensureCurrentModeMarker(); err != nil {
+			t.Fatalf("ensureCurrentModeMarker retry turn %d: %v", i, err)
+		}
+		after, _ := msgStore.List(ctx, app.sessionID)
+		if len(after) != len(msgs) {
+			t.Fatalf("turn %d: retry appended a duplicate reminder", i)
+		}
+	}
+
+	// Reminders stop once the session leaves plan mode.
+	app.currentMode = session.ModeAgent
+	if err := app.ensureCurrentModeMarker(); err != nil {
+		t.Fatalf("ensureCurrentModeMarker back to agent: %v", err)
+	}
+	appendUserTurn("agent turn")
+	if err := app.ensureCurrentModeMarker(); err != nil {
+		t.Fatalf("ensureCurrentModeMarker agent turn: %v", err)
+	}
+	msgs, _ = msgStore.List(ctx, app.sessionID)
+	got := msgs[len(msgs)-1]
+	if strings.Contains(got.Text, planModeReminderOpenTag) {
+		t.Fatalf("agent mode turn appended a plan reminder: %+v", got)
 	}
 }

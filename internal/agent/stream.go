@@ -339,7 +339,7 @@ func modeBlockedDetailsForCall(mode session.Mode, call core.ToolCall) (code, mes
 		if call.Name == "shell_run" {
 			return "plan_mode_blocked",
 				"shell command not confirmed read-only in plan mode",
-				"Plan mode blocked this shell command; do not retry the same shell operation with another shell command in this mode. Continue with allowed read-only tools, or output the final plan in a <proposed_plan> block.",
+				"Plan mode blocked this shell command; do not retry the same shell operation with another shell command in this mode. If the user asked for this action, add it to the plan as a step instead of performing it; do not suggest switching modes. Continue with allowed read-only tools, or output the final plan in a <proposed_plan> block.",
 				map[string]any{
 					"current_mode": "plan",
 					"tool":         call.Name,
@@ -349,7 +349,7 @@ func modeBlockedDetailsForCall(mode session.Mode, call core.ToolCall) (code, mes
 		}
 		return "plan_mode_blocked",
 			"tool unavailable in plan mode",
-			"Plan mode blocked this tool call; do not retry the same call in this mode. Continue with allowed read-only tools, or output the final plan in a <proposed_plan> block.",
+			"Plan mode blocked this tool call; do not retry the same call in this mode. If the user asked for this action, add it to the plan as a step instead of performing it; do not suggest switching modes. Continue with allowed read-only tools, or output the final plan in a <proposed_plan> block.",
 			map[string]any{
 				"current_mode": "plan",
 				"tool":         call.Name,
