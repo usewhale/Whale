@@ -157,6 +157,8 @@ type HookPayload struct {
 	ToolName          string         `json:"tool_name,omitempty"`
 	ToolArgs          any            `json:"tool_args,omitempty"`
 	ToolResult        string         `json:"tool_result,omitempty"`
+	ToolOutcome       string         `json:"tool_outcome,omitempty"`
+	ToolErrorCode     string         `json:"tool_error_code,omitempty"`
 	Prompt            string         `json:"prompt,omitempty"`
 	LastAssistantText string         `json:"last_assistant_text,omitempty"`
 	Turn              int            `json:"turn,omitempty"`
@@ -200,14 +202,16 @@ func NewPreToolUsePayload(sessionID string, call core.ToolCall, toolArgs any) Ho
 	}
 }
 
-func NewPostToolUsePayload(sessionID string, call core.ToolCall, toolArgs any, toolResult string) HookPayload {
+func NewPostToolUsePayload(sessionID string, call core.ToolCall, toolArgs any, res core.ToolResult) HookPayload {
 	return HookPayload{
-		Event:      HookEventPostToolUse,
-		SessionID:  sessionID,
-		ToolName:   call.Name,
-		ToolArgs:   toolArgs,
-		ToolResult: toolResult,
-		ToolCall:   &call,
+		Event:         HookEventPostToolUse,
+		SessionID:     sessionID,
+		ToolName:      call.Name,
+		ToolArgs:      toolArgs,
+		ToolResult:    core.ToolResultModelText(res),
+		ToolOutcome:   string(core.ToolResultOutcome(res)),
+		ToolErrorCode: res.Code,
+		ToolCall:      &call,
 	}
 }
 

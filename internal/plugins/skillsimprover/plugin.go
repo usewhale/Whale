@@ -178,11 +178,24 @@ func toolFailureEvidence(payload agent.HookPayload) (Evidence, bool) {
 	if result == "" {
 		return Evidence{}, false
 	}
-	env, ok := core.ParseToolEnvelope(result)
-	if !ok || env.Success || env.OK {
-		return Evidence{}, false
+	msg := ""
+	code := payload.ToolErrorCode
+	if strings.TrimSpace(payload.ToolOutcome) != "" {
+		// Structured channel (phase 2): the outcome decides failure; the
+		// first line of the rendered text is the human-readable cause.
+		switch core.ToolOutcome(payload.ToolOutcome) {
+		case core.OutcomeSuccess, core.OutcomeNoResult:
+			return Evidence{}, false
+		}
+		msg = core.FirstNonEmpty(payload.ToolErrorCode, firstLine(result))
+	} else {
+		env, ok := core.ParseToolEnvelope(result)
+		if !ok || env.Success || env.OK {
+			return Evidence{}, false
+		}
+		msg = core.FirstNonEmpty(env.Error, env.Message, env.Code)
+		code = env.Code
 	}
-	msg := core.FirstNonEmpty(env.Error, env.Message, env.Code)
 	return Evidence{
 		Kind:              "tool-failure",
 		SessionID:         payload.SessionID,
@@ -191,7 +204,7 @@ func toolFailureEvidence(payload agent.HookPayload) (Evidence, bool) {
 		ToolArgsSummary:   summarizeJSON(payload.ToolArgs),
 		ToolResultSummary: core.FirstNonEmpty(msg, result),
 		Metadata: map[string]any{
-			"code": env.Code,
+			"code": code,
 		},
 	}, true
 }
@@ -252,4 +265,11 @@ func toolError(call core.ToolCall, code, msg string) core.ToolResult {
 
 func SortEvidence(evs []Evidence) {
 	sort.SliceStable(evs, func(i, j int) bool { return evs[i].CreatedAt.After(evs[j].CreatedAt) })
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }

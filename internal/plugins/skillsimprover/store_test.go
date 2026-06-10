@@ -208,15 +208,15 @@ func TestHooksCaptureFeedbackAndFailuresOnly(t *testing.T) {
 		t.Fatalf("expected feedback evidence, got %+v err=%v", evs, err)
 	}
 
-	okContent, _ := core.MarshalToolEnvelope(core.NewToolSuccessEnvelope(map[string]any{"status": "ok"}))
-	_ = runner.RunHook(t.Context(), agent.NewPostToolUsePayload("s1", core.ToolCall{Name: "shell_run", Input: `{"command":"go test"}`}, nil, okContent))
+	okRes := core.NewToolResultSuccess(core.ToolCall{ID: "c1", Name: "shell_run"}, map[string]any{"status": "ok"}, nil)
+	_ = runner.RunHook(t.Context(), agent.NewPostToolUsePayload("s1", core.ToolCall{Name: "shell_run", Input: `{"command":"go test"}`}, nil, okRes))
 	evs, _ = store.ListEvidence("", 10)
 	if len(evs) != 1 {
 		t.Fatalf("successful tool should not add evidence: %+v", evs)
 	}
 
-	failContent, _ := core.MarshalToolEnvelope(core.NewToolErrorEnvelope("exec_failed", "tests failed"))
-	_ = runner.RunHook(t.Context(), agent.NewPostToolUsePayload("s1", core.ToolCall{Name: "shell_run", Input: `{"command":"go test"}`}, map[string]any{"command": "go test"}, failContent))
+	failRes := core.NewToolResultError(core.ToolCall{ID: "c2", Name: "shell_run"}, "exec_failed", "tests failed", nil)
+	_ = runner.RunHook(t.Context(), agent.NewPostToolUsePayload("s1", core.ToolCall{Name: "shell_run", Input: `{"command":"go test"}`}, map[string]any{"command": "go test"}, failRes))
 	evs, _ = store.ListEvidence("", 10)
 	if len(evs) != 2 || evs[0].Kind == "" {
 		t.Fatalf("expected tool failure evidence: %+v", evs)
