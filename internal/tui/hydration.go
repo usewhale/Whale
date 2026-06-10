@@ -42,27 +42,15 @@ func (m *model) hydrateSessionMessages(msgs []protocol.Message) {
 			if hasVisibleHydratedAssistantText(msg) {
 				flushLifecycle()
 			}
-			hasVisibleText := strings.TrimSpace(msg.Text) != "" && !isEnvironmentInventoryBlock(msg.Text)
 			if strings.TrimSpace(msg.Reasoning) != "" {
 				m.append("think", msg.Reasoning)
 			}
-			if hasVisibleText {
-				if plan, ok := core.ExtractProposedPlanText(msg.Text); ok {
-					normal := strings.TrimSpace(core.StripProposedPlanBlocks(msg.Text))
-					if normal != "" {
-						m.append("assistant", normal)
-					}
-					m.assembler.AddPlan(plan)
-				} else {
-					m.append("assistant", msg.Text)
-				}
+			if len(msg.Parts) > 0 {
+				m.hydrateAssistantParts(msg.Parts)
+			} else if strings.TrimSpace(msg.Text) != "" && !isEnvironmentInventoryBlock(msg.Text) {
+				m.hydrateLegacyAssistantText(msg.Text)
 			} else if isEnvironmentInventoryBlock(msg.Text) {
-				m.addLog(logEntry{
-					Kind:    "env_summary",
-					Source:  "assistant",
-					Summary: "environment summary captured",
-					Raw:     msg.Text,
-				})
+				m.addEnvironmentSummaryLog("assistant", msg.Text)
 			}
 			for _, tc := range msg.ToolCalls {
 				if tc.Name == "update_plan" {
@@ -99,6 +87,54 @@ func (m *model) hydrateSessionMessages(msgs []protocol.Message) {
 			}
 		}
 	}
+}
+
+func (m *model) hydrateAssistantParts(parts []protocol.MessagePart) {
+	for _, part := range parts {
+		text := strings.TrimSpace(part.Text)
+		if text == "" {
+			continue
+		}
+		switch part.Type {
+		case string(core.MessagePartText):
+			if isEnvironmentInventoryBlock(part.Text) {
+				m.addEnvironmentSummaryLog("assistant", part.Text)
+			} else if _, ok := core.ExtractProposedPlanText(part.Text); ok {
+				m.hydrateLegacyAssistantText(part.Text)
+			} else {
+				m.append("assistant", part.Text)
+			}
+		case string(core.MessagePartPlan):
+			if m.assembler == nil {
+				m.assembler = tuirender.NewAssembler()
+			}
+			m.assembler.AddPlan(part.Text)
+		}
+	}
+}
+
+func (m *model) hydrateLegacyAssistantText(text string) {
+	if plan, ok := core.ExtractProposedPlanText(text); ok {
+		normal := strings.TrimSpace(core.StripProposedPlanBlocks(text))
+		if normal != "" {
+			m.append("assistant", normal)
+		}
+		if m.assembler == nil {
+			m.assembler = tuirender.NewAssembler()
+		}
+		m.assembler.AddPlan(plan)
+		return
+	}
+	m.append("assistant", text)
+}
+
+func (m *model) addEnvironmentSummaryLog(source, raw string) {
+	m.addLog(logEntry{
+		Kind:    "env_summary",
+		Source:  source,
+		Summary: "environment summary captured",
+		Raw:     raw,
+	})
 }
 
 func hiddenWorkflowResultMarker(msg protocol.Message) (string, string, bool) {
@@ -186,8 +222,15 @@ func (m *model) hasHydratedVisibleModelOutput() bool {
 }
 
 func hasVisibleHydratedAssistantText(msg protocol.Message) bool {
-	return strings.TrimSpace(msg.Reasoning) != "" ||
-		(strings.TrimSpace(msg.Text) != "" && !isEnvironmentInventoryBlock(msg.Text))
+	if strings.TrimSpace(msg.Reasoning) != "" {
+		return true
+	}
+	for _, part := range msg.Parts {
+		if strings.TrimSpace(part.Text) != "" && part.Type != "" {
+			return true
+		}
+	}
+	return strings.TrimSpace(msg.Text) != "" && !isEnvironmentInventoryBlock(msg.Text)
 }
 
 func hydratedPlanUpdateText(body string) (string, bool) {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/session"
 )
 
@@ -174,6 +175,25 @@ func (p *finalPlanOnlyProvider) StreamResponse(_ context.Context, _ []Message, _
 	return out
 }
 
+type streamedPlanNoCompleteProvider struct{}
+
+func (p *streamedPlanNoCompleteProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	return eventStream(
+		ProviderEvent{Type: EventContentDelta, Content: "drafting...\n<proposed_plan>\n# Plan\n"},
+		ProviderEvent{Type: EventContentDelta, Content: "- Preserve EOF streamed plan\n</proposed_plan>"},
+	)
+}
+
+type pendingPlanTerminalNoContentProvider struct{}
+
+func (p *pendingPlanTerminalNoContentProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	return eventStream(
+		ProviderEvent{Type: EventContentDelta, Content: "drafting...\n<proposed_plan>\n# Plan\n"},
+		ProviderEvent{Type: EventContentDelta, Content: "- Finish after terminal event"},
+		ProviderEvent{Type: EventComplete, Response: &ProviderResponse{FinishReason: FinishReasonEndTurn}},
+	)
+}
+
 type quotedPlanTagProvider struct{}
 
 func (p *quotedPlanTagProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
@@ -210,6 +230,127 @@ func TestPlanModeEmitsPlanCompletedFromFinalContentFallback(t *testing.T) {
 	}
 	if !strings.Contains(completed, "Implement final-content fallback") {
 		t.Fatalf("expected final proposed plan, got %q", completed)
+	}
+	msgs, err := store.List(context.Background(), "s-final-plan")
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	var assistant Message
+	for _, msg := range msgs {
+		if msg.Role == RoleAssistant {
+			assistant = msg
+		}
+	}
+	if strings.Contains(assistant.Text, "<proposed_plan>") || strings.Contains(assistant.Text, "</proposed_plan>") {
+		t.Fatalf("assistant text should not persist proposed_plan tags: %q", assistant.Text)
+	}
+	if strings.TrimSpace(assistant.Text) != "drafting..." {
+		t.Fatalf("assistant visible text = %q, want drafting...", assistant.Text)
+	}
+	var plan string
+	for _, part := range assistant.Parts {
+		if part.Type == core.MessagePartPlan {
+			plan = part.Text
+		}
+	}
+	if !strings.Contains(plan, "Implement final-content fallback") {
+		t.Fatalf("expected structured plan part, parts=%+v", assistant.Parts)
+	}
+}
+
+func TestPlanModePersistsCompletedStreamedPlanWithoutEventComplete(t *testing.T) {
+	store := NewInMemoryStore()
+	a := NewAgentWithRegistry(
+		&streamedPlanNoCompleteProvider{},
+		store,
+		NewToolRegistry(nil),
+		WithSessionMode(session.ModePlan),
+	)
+	events, err := a.RunStream(context.Background(), "s-streamed-plan-eof", "plan")
+	if err != nil {
+		t.Fatalf("run stream failed: %v", err)
+	}
+	var completed string
+	for ev := range events {
+		if ev.Type == AgentEventTypePlanCompleted {
+			completed = ev.Content
+		}
+	}
+	if !strings.Contains(completed, "Preserve EOF streamed plan") {
+		t.Fatalf("expected streamed proposed plan completion, got %q", completed)
+	}
+	msgs, err := store.List(context.Background(), "s-streamed-plan-eof")
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	var assistant Message
+	for _, msg := range msgs {
+		if msg.Role == RoleAssistant {
+			assistant = msg
+		}
+	}
+	if strings.Contains(assistant.Text, "<proposed_plan>") || strings.Contains(assistant.Text, "</proposed_plan>") {
+		t.Fatalf("assistant text should not persist proposed_plan tags: %q", assistant.Text)
+	}
+	if strings.TrimSpace(assistant.Text) != "drafting..." {
+		t.Fatalf("assistant visible text = %q, want drafting...", assistant.Text)
+	}
+	var plan string
+	for _, part := range assistant.Parts {
+		if part.Type == core.MessagePartPlan {
+			plan = part.Text
+		}
+	}
+	if !strings.Contains(plan, "Preserve EOF streamed plan") {
+		t.Fatalf("expected structured plan part on EOF, parts=%+v", assistant.Parts)
+	}
+	if got := core.MessagePlainText(assistant); !strings.Contains(got, "Preserve EOF streamed plan") {
+		t.Fatalf("provider plain text should include EOF plan, got %q", got)
+	}
+}
+
+func TestPlanModeFinishesPendingPlanAfterTerminalCompleteWithoutContent(t *testing.T) {
+	store := NewInMemoryStore()
+	a := NewAgentWithRegistry(
+		&pendingPlanTerminalNoContentProvider{},
+		store,
+		NewToolRegistry(nil),
+		WithSessionMode(session.ModePlan),
+	)
+	events, err := a.RunStream(context.Background(), "s-pending-plan-terminal", "plan")
+	if err != nil {
+		t.Fatalf("run stream failed: %v", err)
+	}
+	var completed string
+	for ev := range events {
+		if ev.Type == AgentEventTypePlanCompleted {
+			completed = ev.Content
+		}
+	}
+	if !strings.Contains(completed, "Finish after terminal event") {
+		t.Fatalf("expected pending plan to complete after terminal event, got %q", completed)
+	}
+	msgs, err := store.List(context.Background(), "s-pending-plan-terminal")
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	var assistant Message
+	for _, msg := range msgs {
+		if msg.Role == RoleAssistant {
+			assistant = msg
+		}
+	}
+	var plan string
+	for _, part := range assistant.Parts {
+		if part.Type == core.MessagePartPlan {
+			plan = part.Text
+		}
+	}
+	if !strings.Contains(plan, "Finish after terminal event") {
+		t.Fatalf("expected structured plan after terminal complete, parts=%+v", assistant.Parts)
+	}
+	if got := core.MessagePlainText(assistant); !strings.Contains(got, "Finish after terminal event") {
+		t.Fatalf("provider plain text should include terminal-completed plan, got %q", got)
 	}
 }
 

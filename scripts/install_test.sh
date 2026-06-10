@@ -109,13 +109,14 @@ if LEGACY_VERSION_OUTPUT="$(VERSION="v9.9.9" "$ROOT_DIR/scripts/install.sh" 2>&1
 fi
 printf '%s\n' "$LEGACY_VERSION_OUTPUT" | grep -F "VERSION is no longer supported" >/dev/null
 
-if LEGACY_BIN_DIR_OUTPUT="$(BIN_DIR="$INSTALL_DIR" "$ROOT_DIR/scripts/install.sh" 2>&1)"; then
+if LEGACY_BIN_DIR_OUTPUT="$(unset VERSION; BIN_DIR="$INSTALL_DIR" "$ROOT_DIR/scripts/install.sh" 2>&1)"; then
   printf '%s\n' "install accepted legacy BIN_DIR unexpectedly" >&2
   exit 1
 fi
 printf '%s\n' "$LEGACY_BIN_DIR_OUTPUT" | grep -F "BIN_DIR is no longer supported" >/dev/null
 
 OUTPUT="$(
+  unset VERSION BIN_DIR
   PATH="$SHADOW_DIR:$STUB_DIR:/usr/bin:/bin" \
   WHALE_INSTALL_DIR="$INSTALL_DIR" \
   WHALE_TEST_ASSET="$TMPDIR/$ASSET_NAME" \

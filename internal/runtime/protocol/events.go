@@ -194,17 +194,23 @@ type UserInputQuestion struct {
 }
 
 type Message struct {
-	ID           string       `json:"id,omitempty"`
-	SessionID    string       `json:"session_id,omitempty"`
-	Role         string       `json:"role,omitempty"`
-	Text         string       `json:"text,omitempty"`
-	Hidden       bool         `json:"hidden,omitempty"`
-	Reasoning    string       `json:"reasoning,omitempty"`
-	ToolCalls    []ToolCall   `json:"tool_calls,omitempty"`
-	ToolResults  []ToolResult `json:"tool_results,omitempty"`
-	FinishReason string       `json:"finish_reason,omitempty"`
-	CreatedAt    time.Time    `json:"created_at,omitempty"`
-	UpdatedAt    time.Time    `json:"updated_at,omitempty"`
+	ID           string        `json:"id,omitempty"`
+	SessionID    string        `json:"session_id,omitempty"`
+	Role         string        `json:"role,omitempty"`
+	Text         string        `json:"text,omitempty"`
+	Parts        []MessagePart `json:"parts,omitempty"`
+	Hidden       bool          `json:"hidden,omitempty"`
+	Reasoning    string        `json:"reasoning,omitempty"`
+	ToolCalls    []ToolCall    `json:"tool_calls,omitempty"`
+	ToolResults  []ToolResult  `json:"tool_results,omitempty"`
+	FinishReason string        `json:"finish_reason,omitempty"`
+	CreatedAt    time.Time     `json:"created_at,omitempty"`
+	UpdatedAt    time.Time     `json:"updated_at,omitempty"`
+}
+
+type MessagePart struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
 }
 
 type ToolCall struct {

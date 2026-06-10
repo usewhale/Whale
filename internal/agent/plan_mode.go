@@ -13,26 +13,28 @@ import (
 type planState struct {
 	parser    core.ProposedPlanParser
 	text      strings.Builder
+	visible   strings.Builder
 	started   bool
 	completed bool
 }
 
-func (a *Agent) emitAssistantContentDelta(ctx context.Context, delta string, ps *planState, events chan<- AgentEvent) bool {
+func (a *Agent) emitAssistantContentDelta(ctx context.Context, delta string, ps *planState, events chan<- AgentEvent) (string, bool) {
 	if a.mode != session.ModePlan {
-		return sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypeAssistantDelta, Content: delta})
+		return delta, sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypeAssistantDelta, Content: delta})
 	}
 	for _, seg := range ps.parser.Parse(delta) {
 		if !a.emitProposedPlanSegment(ctx, seg, ps, events) {
-			return false
+			return "", false
 		}
 	}
-	return true
+	return ps.visible.String(), true
 }
 
 func (a *Agent) emitProposedPlanSegment(ctx context.Context, seg core.ProposedPlanSegment, ps *planState, events chan<- AgentEvent) bool {
 	switch seg.Kind {
 	case core.ProposedPlanSegmentNormal:
 		if seg.Text != "" {
+			ps.visible.WriteString(seg.Text)
 			return sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypeAssistantDelta, Content: seg.Text})
 		}
 	case core.ProposedPlanSegmentStart:
@@ -53,10 +55,11 @@ func (a *Agent) emitProposedPlanSegment(ctx context.Context, seg core.ProposedPl
 	return true
 }
 
-func (a *Agent) emitFinalProposedPlan(ctx context.Context, text string, ps *planState, events chan<- AgentEvent) bool {
+func (a *Agent) emitFinalProposedPlan(ctx context.Context, text string, ps *planState, events chan<- AgentEvent) (string, bool) {
+	visible := core.StripProposedPlanBlocks(text)
 	plan, ok := core.ExtractProposedPlanText(text)
 	if !ok {
-		return true
+		return visible, true
 	}
 	ps.started = true
 	ps.completed = true
@@ -64,8 +67,32 @@ func (a *Agent) emitFinalProposedPlan(ctx context.Context, text string, ps *plan
 	ps.text.WriteString(plan)
 	if plan != "" {
 		if !sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypePlanDelta, Content: plan}) {
-			return false
+			return "", false
 		}
 	}
-	return sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypePlanCompleted, Content: plan})
+	return visible, sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypePlanCompleted, Content: plan})
+}
+
+func finalizeAssistantPlanParts(msg *core.Message, ps *planState) {
+	if msg == nil || strings.TrimSpace(ps.text.String()) == "" {
+		return
+	}
+	msg.Parts = removeAssistantTextPlanParts(msg.Parts)
+	if strings.TrimSpace(msg.Text) != "" {
+		msg.Parts = append([]core.MessagePart{{Type: core.MessagePartText, Text: msg.Text}}, msg.Parts...)
+	}
+	msg.Parts = append(msg.Parts, core.MessagePart{Type: core.MessagePartPlan, Text: ps.text.String()})
+}
+
+func removeAssistantTextPlanParts(parts []core.MessagePart) []core.MessagePart {
+	if len(parts) == 0 {
+		return nil
+	}
+	out := parts[:0]
+	for _, part := range parts {
+		if part.Type != core.MessagePartText && part.Type != core.MessagePartPlan {
+			out = append(out, part)
+		}
+	}
+	return out
 }

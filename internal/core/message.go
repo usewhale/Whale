@@ -43,6 +43,7 @@ type MessagePartType string
 const (
 	MessagePartText       MessagePartType = "text"
 	MessagePartAttachment MessagePartType = "attachment"
+	MessagePartPlan       MessagePartType = "plan"
 )
 
 type AttachmentKind string
@@ -110,6 +111,10 @@ func MessagePartsPlainText(parts []MessagePart) string {
 	for _, part := range parts {
 		switch part.Type {
 		case MessagePartText:
+			if part.Text != "" {
+				fragments = append(fragments, part.Text)
+			}
+		case MessagePartPlan:
 			if part.Text != "" {
 				fragments = append(fragments, part.Text)
 			}

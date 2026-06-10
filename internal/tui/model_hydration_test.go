@@ -26,6 +26,7 @@ func protocolMessagesForTest(messages []core.Message) []protocol.Message {
 			SessionID:    message.SessionID,
 			Role:         string(message.Role),
 			Text:         message.Text,
+			Parts:        protocolPartsForTest(message.Parts),
 			Hidden:       message.Hidden,
 			Reasoning:    message.Reasoning,
 			ToolCalls:    toolCalls,
@@ -34,6 +35,17 @@ func protocolMessagesForTest(messages []core.Message) []protocol.Message {
 			CreatedAt:    message.CreatedAt,
 			UpdatedAt:    message.UpdatedAt,
 		})
+	}
+	return out
+}
+
+func protocolPartsForTest(parts []core.MessagePart) []protocol.MessagePart {
+	if len(parts) == 0 {
+		return nil
+	}
+	out := make([]protocol.MessagePart, 0, len(parts))
+	for _, part := range parts {
+		out = append(out, protocol.MessagePart{Type: string(part.Type), Text: part.Text})
 	}
 	return out
 }
@@ -65,6 +77,30 @@ func TestHydrateSessionMessages_SuppressesEnvironmentInventoryAssistantBlock(t *
 	hydrateSessionMessagesForTest(m, msgs)
 	if got := len(m.assembler.Snapshot()); got != 0 {
 		t.Fatalf("expected no chat entries for environment inventory block, got %d", got)
+	}
+	if len(m.logs) != 1 || m.logs[0].Kind != "env_summary" || m.logs[0].Source != "assistant" {
+		t.Fatalf("expected env_summary log for environment inventory block, got %+v", m.logs)
+	}
+}
+
+func TestHydrateSessionMessages_LogsEnvironmentInventoryAssistantPart(t *testing.T) {
+	m := &model{assembler: tuirender.NewAssembler()}
+	env := "- 系统： macOS\n- 版本： 26.0\n- 构建号： 25A354"
+	msgs := []core.Message{
+		{
+			Role: core.RoleAssistant,
+			Text: env,
+			Parts: []core.MessagePart{
+				{Type: core.MessagePartText, Text: env},
+			},
+		},
+	}
+	hydrateSessionMessagesForTest(m, msgs)
+	if got := len(m.assembler.Snapshot()); got != 0 {
+		t.Fatalf("expected no chat entries for environment inventory part, got %d", got)
+	}
+	if len(m.logs) != 1 || m.logs[0].Kind != "env_summary" || m.logs[0].Source != "assistant" || m.logs[0].Raw != env {
+		t.Fatalf("expected env_summary log for environment inventory part, got %+v", m.logs)
 	}
 }
 func TestHydrateSessionMessages_KeptForNormalAssistantText(t *testing.T) {
@@ -389,6 +425,64 @@ func TestHydrateSessionMessages_RestoresProposedPlanStyle(t *testing.T) {
 		}
 	}
 }
+
+func TestHydrateSessionMessages_RestoresStructuredPlanPart(t *testing.T) {
+	m := &model{assembler: tuirender.NewAssembler()}
+	msgs := []core.Message{
+		{
+			Role: core.RoleAssistant,
+			Text: "drafting...\n# Plan\n- Patch renderer",
+			Parts: []core.MessagePart{
+				{Type: core.MessagePartText, Text: "drafting..."},
+				{Type: core.MessagePartPlan, Text: "# Plan\n- Patch renderer"},
+			},
+		},
+	}
+	hydrateSessionMessagesForTest(m, msgs)
+	snap := m.assembler.Snapshot()
+	if len(snap) != 2 || snap[0].Kind != tuirender.KindText || snap[1].Kind != tuirender.KindPlan {
+		t.Fatalf("expected assistant text and structured proposed plan, got %+v", snap)
+	}
+	rendered := strings.Join(tuirender.ChatLines(snap, 80), "\n")
+	for _, want := range []string{"drafting", "Proposed Plan", "Patch renderer"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected %q in hydrated proposed plan:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "<proposed_plan>") {
+		t.Fatalf("structured hydration should not render proposed_plan tags:\n%s", rendered)
+	}
+	if strings.Count(rendered, "Patch renderer") != 1 {
+		t.Fatalf("structured hydration should render plan once, got:\n%s", rendered)
+	}
+}
+
+func TestHydrateSessionMessages_RestoresLegacyProposedPlanFromTextPart(t *testing.T) {
+	m := &model{assembler: tuirender.NewAssembler()}
+	legacy := "drafting...\n<proposed_plan>\n# Plan\n- Patch renderer\n</proposed_plan>"
+	msgs := []core.Message{
+		{
+			Role: core.RoleAssistant,
+			Text: legacy,
+			Parts: []core.MessagePart{
+				{Type: core.MessagePartText, Text: legacy},
+			},
+		},
+	}
+	hydrateSessionMessagesForTest(m, msgs)
+	snap := m.assembler.Snapshot()
+	if len(snap) != 2 || snap[0].Kind != tuirender.KindText || snap[1].Kind != tuirender.KindPlan {
+		t.Fatalf("expected assistant text and legacy proposed plan from text part, got %+v", snap)
+	}
+	rendered := strings.Join(tuirender.ChatLines(snap, 80), "\n")
+	if strings.Contains(rendered, "<proposed_plan>") || strings.Contains(rendered, "</proposed_plan>") {
+		t.Fatalf("legacy text part should not render proposed_plan tags:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "Patch renderer") {
+		t.Fatalf("expected legacy proposed plan text:\n%s", rendered)
+	}
+}
+
 func TestSessionHydrationCommitsTranscriptAndClearsLiveAssembler(t *testing.T) {
 	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 80, height: 24}
 	next, cmd := m.Update(svcMsg(protocol.Event{

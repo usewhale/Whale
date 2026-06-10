@@ -42,10 +42,15 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 	for ev := range ch {
 		switch ev.Type {
 		case llm.EventContentDelta:
-			assistant.Text += ev.Content
 			assistantDeltaSeen = true
-			if !a.emitAssistantContentDelta(ctx, ev.Content, &ps, events) {
+			visible, ok := a.emitAssistantContentDelta(ctx, ev.Content, &ps, events)
+			if !ok {
 				return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
+			}
+			if a.mode == session.ModePlan {
+				assistant.Text = visible
+			} else {
+				assistant.Text += visible
 			}
 			// Intentionally do not persist on every delta: rewriting the full
 			// session JSONL per token produced O(n·m) disk I/O and caused TUI
@@ -84,6 +89,7 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 				info := *ev.Retry
 				if info.StreamReset {
 					assistant.Text = ""
+					assistant.Parts = nil
 					assistant.Reasoning = ""
 					assistant.ToolCalls = nil
 					assistant.FinishReason = ""
@@ -125,17 +131,25 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 					}
 				}
 				if ev.Response.Content != "" {
-					assistant.Text = ev.Response.Content
 					if !assistantDeltaSeen {
-						if !a.emitAssistantContentDelta(ctx, ev.Response.Content, &ps, events) {
+						visible, ok := a.emitAssistantContentDelta(ctx, ev.Response.Content, &ps, events)
+						if !ok {
 							return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
 						}
+						assistant.Text = visible
 					} else if a.mode == session.ModePlan && !ps.completed {
-						if !a.emitFinalProposedPlan(ctx, ev.Response.Content, &ps, events) {
+						visible, ok := a.emitFinalProposedPlan(ctx, ev.Response.Content, &ps, events)
+						if !ok {
 							return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
 						}
+						assistant.Text = visible
+					} else if a.mode == session.ModePlan {
+						assistant.Text = core.StripProposedPlanBlocks(ev.Response.Content)
+					} else {
+						assistant.Text = ev.Response.Content
 					}
 				}
+				finalizeAssistantPlanParts(&assistant, &ps)
 				if err := a.store.Update(ctx, assistant); err != nil {
 					return core.Message{}, llm.Usage{}, "", nil, err
 				}
@@ -154,14 +168,27 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 	// (e.g. SSE EOF before [DONE], or EventComplete with nil Response). Since
 	// deltas no longer persist, flush any accumulated assistant state so
 	// resume/history doesn't see an empty assistant message.
-	if !streamPersisted && (assistant.Text != "" || assistant.Reasoning != "" || len(assistant.ToolCalls) > 0) {
-		a.bestEffortUpdateAssistant(assistant)
-	}
 	if a.mode == session.ModePlan && !ps.completed {
 		for _, seg := range ps.parser.Finish() {
 			if !a.emitProposedPlanSegment(ctx, seg, &ps, events) {
 				return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
 			}
+		}
+		assistant.Text = ps.visible.String()
+		finalizeAssistantPlanParts(&assistant, &ps)
+		if streamPersisted {
+			if err := a.store.Update(ctx, assistant); err != nil {
+				return core.Message{}, llm.Usage{}, "", nil, err
+			}
+		}
+	}
+	if !streamPersisted {
+		if a.mode == session.ModePlan {
+			assistant.Text = ps.visible.String()
+			finalizeAssistantPlanParts(&assistant, &ps)
+		}
+		if assistant.Text != "" || assistant.Reasoning != "" || len(assistant.ToolCalls) > 0 || len(assistant.Parts) > 0 {
+			a.bestEffortUpdateAssistant(assistant)
 		}
 	}
 	assistantPrefix := ""

@@ -376,6 +376,7 @@ func protocolMessages(messages []core.Message) []protocol.Message {
 			SessionID:    message.SessionID,
 			Role:         string(message.Role),
 			Text:         core.MessagePlainText(message),
+			Parts:        protocolMessageParts(message.Parts),
 			Hidden:       message.Hidden,
 			Reasoning:    message.Reasoning,
 			ToolCalls:    protocolToolCalls(message.ToolCalls),
@@ -384,6 +385,20 @@ func protocolMessages(messages []core.Message) []protocol.Message {
 			CreatedAt:    message.CreatedAt,
 			UpdatedAt:    message.UpdatedAt,
 		})
+	}
+	return out
+}
+
+func protocolMessageParts(parts []core.MessagePart) []protocol.MessagePart {
+	if len(parts) == 0 {
+		return nil
+	}
+	out := make([]protocol.MessagePart, 0, len(parts))
+	for _, part := range parts {
+		switch part.Type {
+		case core.MessagePartText, core.MessagePartPlan:
+			out = append(out, protocol.MessagePart{Type: string(part.Type), Text: part.Text})
+		}
 	}
 	return out
 }

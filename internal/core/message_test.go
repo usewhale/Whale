@@ -34,6 +34,22 @@ func TestUserMessageFromPartsBuildsPlainTextMirror(t *testing.T) {
 	}
 }
 
+func TestMessagePlainTextIncludesStructuredPlanPart(t *testing.T) {
+	msg := NormalizeMessageContent(Message{
+		Role: RoleAssistant,
+		Text: "visible",
+		Parts: []MessagePart{
+			{Type: MessagePartText, Text: "visible"},
+			{Type: MessagePartPlan, Text: "# Plan\n- step"},
+		},
+	})
+
+	want := "visible\n# Plan\n- step"
+	if got := MessagePlainText(msg); got != want {
+		t.Fatalf("plain text = %q, want %q", got, want)
+	}
+}
+
 func TestUserMessageFromPartsClonesAttachmentRef(t *testing.T) {
 	att := &AttachmentRef{Kind: AttachmentKindPDF, DisplayName: "paper.pdf"}
 	msg := UserMessageFromParts("s1", []MessagePart{{Type: MessagePartAttachment, Attachment: att}}, false)
