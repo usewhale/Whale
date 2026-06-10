@@ -188,6 +188,82 @@ func FinalizeToolResultChannels(res ToolResult) ToolResult {
 	return res
 }
 
+// toolResultWire is the persistence schema. Content is omitted when it
+// mirrors ModelText (the normal case) so the text is stored once; legacy
+// lines carry only Content/IsError and are backfilled on decode.
+type toolResultWire struct {
+	ToolCallID string         `json:"ToolCallID"`
+	Name       string         `json:"Name"`
+	Content    string         `json:"Content,omitempty"`
+	Metadata   map[string]any `json:"metadata,omitempty"`
+	IsError    bool           `json:"IsError,omitempty"`
+	Outcome    ToolOutcome    `json:"Outcome,omitempty"`
+	Code       string         `json:"Code,omitempty"`
+	Payload    any            `json:"Payload,omitempty"`
+	ModelText  string         `json:"ModelText,omitempty"`
+}
+
+func (r ToolResult) MarshalJSON() ([]byte, error) {
+	w := toolResultWire{
+		ToolCallID: r.ToolCallID,
+		Name:       r.Name,
+		Metadata:   r.Metadata,
+		IsError:    r.IsError,
+		Outcome:    r.Outcome,
+		Code:       r.Code,
+		Payload:    r.Payload,
+		ModelText:  r.ModelText,
+	}
+	if r.Content != r.ModelText {
+		w.Content = r.Content
+	}
+	// Phase 1: ModelText still carries the envelope, so the canonical
+	// payload is fully derivable on load — don't store the data twice.
+	// (Phase 2's plain-text ModelText will persist Payload explicitly.)
+	if w.Content == "" && r.ModelText != "" {
+		if _, ok := ParseToolEnvelope(r.ModelText); ok {
+			w.Payload = nil
+		}
+	}
+	return json.Marshal(w)
+}
+
+func (r *ToolResult) UnmarshalJSON(b []byte) error {
+	var w toolResultWire
+	if err := json.Unmarshal(b, &w); err != nil {
+		return err
+	}
+	res := ToolResult{
+		ToolCallID: w.ToolCallID,
+		Name:       w.Name,
+		Content:    w.Content,
+		Metadata:   w.Metadata,
+		IsError:    w.IsError,
+		Outcome:    w.Outcome,
+		Code:       w.Code,
+		Payload:    w.Payload,
+		ModelText:  w.ModelText,
+	}
+	if res.Content == "" && res.ModelText != "" {
+		res.Content = res.ModelText
+	}
+	// Re-derive the canonical payload when it was elided at save time
+	// (phase 1 envelopes), and backfill everything for legacy lines that
+	// predate the channel separation. Must never reject a line — the
+	// JSONL loader drops lines whose unmarshal fails.
+	if res.Payload == nil && res.ModelText != "" {
+		if env, ok := ParseToolEnvelope(res.ModelText); ok {
+			res.Payload = CanonicalizeToolPayload(env)
+		}
+	}
+	res = FinalizeToolResultChannels(res)
+	if res.Outcome != "" {
+		res.IsError = res.outcomeIsError()
+	}
+	*r = res
+	return nil
+}
+
 func (r ToolResult) outcomeIsError() bool {
 	switch r.Outcome {
 	case OutcomeSuccess, OutcomeNoResult:
