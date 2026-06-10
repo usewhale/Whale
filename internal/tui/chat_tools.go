@@ -196,6 +196,15 @@ func subagentProgressRole(status, text string) string {
 	}
 }
 
+// subagentCompletedTextStructured prefers the structured fields on the
+// event and falls back to parsing the text for events that predate them.
+func subagentCompletedTextStructured(text, outcome, code string, payload map[string]any, previous string) string {
+	if env, ok := toolEnvelopeFromStructured(outcome, code, payload); ok {
+		return subagentCompletedTextFromEnvelope(env, previous)
+	}
+	return subagentCompletedText(text, previous)
+}
+
 func subagentCompletedText(raw, previous string) string {
 	env, ok := parseToolEnvelopeOK(raw)
 	if !ok {
@@ -209,6 +218,10 @@ func subagentCompletedText(raw, previous string) string {
 			"malformed tool result",
 		)
 	}
+	return subagentCompletedTextFromEnvelope(env, previous)
+}
+
+func subagentCompletedTextFromEnvelope(env toolResultEnvelope, previous string) string {
 	role := core.FirstNonEmpty(core.AsString(env.data["role"]), previousSubagentField(previous, "role"), "explore")
 	status := "completed"
 	if !toolEnvelopeSucceeded(env) {

@@ -86,6 +86,9 @@ type Event struct {
 	ToolName         string               `json:"tool_name,omitempty"`
 	Metadata         map[string]any       `json:"metadata,omitempty"`
 	Status           string               `json:"status,omitempty"`
+	ToolOutcome      string               `json:"tool_outcome,omitempty"`
+	ToolCode         string               `json:"tool_code,omitempty"`
+	ToolPayload      map[string]any       `json:"tool_payload,omitempty"`
 	Count            int                  `json:"count,omitempty"`
 	DurationMS       int64                `json:"duration_ms,omitempty"`
 	ProgressMessages []ProgressStep       `json:"progress_messages,omitempty"`
@@ -225,6 +228,11 @@ type ToolResult struct {
 	Content    string         `json:"content,omitempty"`
 	Metadata   map[string]any `json:"metadata,omitempty"`
 	IsError    bool           `json:"is_error,omitempty"`
+	// Channel-separated fields mirrored from core.ToolResult so clients
+	// can render structurally instead of parsing Content.
+	Outcome string         `json:"outcome,omitempty"`
+	Code    string         `json:"code,omitempty"`
+	Payload map[string]any `json:"payload,omitempty"`
 }
 
 type LocalResult struct {

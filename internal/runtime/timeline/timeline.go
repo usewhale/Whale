@@ -47,6 +47,9 @@ type TimelineEvent struct {
 	StartedAt        time.Time
 	ProgressMessages []protocol.ProgressStep
 	Questions        []protocol.UserInputQuestion
+	ToolOutcome      string
+	ToolCode         string
+	ToolPayload      map[string]any
 }
 
 type Item struct {
@@ -119,13 +122,16 @@ func HydrationEventsFromMessage(msg protocol.Message) []protocol.Event {
 			status = "failed"
 		}
 		events = append(events, protocol.Event{
-			Kind:       protocol.EventToolResult,
-			ToolCallID: tr.ToolCallID,
-			ToolName:   tr.Name,
-			Text:       tr.Content,
-			Metadata:   cloneMetadata(tr.Metadata),
-			Status:     status,
-			StartedAt:  msg.CreatedAt,
+			Kind:        protocol.EventToolResult,
+			ToolCallID:  tr.ToolCallID,
+			ToolName:    tr.Name,
+			Text:        tr.Content,
+			Metadata:    cloneMetadata(tr.Metadata),
+			Status:      status,
+			ToolOutcome: tr.Outcome,
+			ToolCode:    tr.Code,
+			ToolPayload: tr.Payload,
+			StartedAt:   msg.CreatedAt,
 		})
 	}
 	return events
@@ -196,6 +202,9 @@ func (b *TurnTimelineBuilder) HandleEvent(ev protocol.Event) {
 		StartedAt:        ev.StartedAt,
 		ProgressMessages: append([]protocol.ProgressStep(nil), ev.ProgressMessages...),
 		Questions:        append([]protocol.UserInputQuestion(nil), ev.Questions...),
+		ToolOutcome:      ev.ToolOutcome,
+		ToolCode:         ev.ToolCode,
+		ToolPayload:      ev.ToolPayload,
 	})
 }
 

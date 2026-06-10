@@ -24,7 +24,20 @@ func summarizeToolResultForChat(toolName, raw string) (string, string) {
 	if !ok {
 		return "result_error", "ERROR · malformed tool result"
 	}
+	return summarizeToolResultEnvelope(toolName, env)
+}
 
+// summarizeToolResultStructured prefers the structured fields carried on
+// tool-result events and falls back to parsing the text for events that
+// predate them.
+func summarizeToolResultStructured(toolName, text, outcome, code string, payload map[string]any) (string, string) {
+	if env, ok := toolEnvelopeFromStructured(outcome, code, payload); ok {
+		return summarizeToolResultEnvelope(toolName, env)
+	}
+	return summarizeToolResultForChat(toolName, text)
+}
+
+func summarizeToolResultEnvelope(toolName string, env toolResultEnvelope) (string, string) {
 	successBySignal := env.success
 	if !env.hasSuccess {
 		switch {

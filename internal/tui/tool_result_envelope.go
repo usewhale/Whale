@@ -11,6 +11,43 @@ func parseToolEnvelope(raw string) toolResultEnvelope {
 	return env
 }
 
+// toolEnvelopeFromStructured builds the TUI's envelope view from the
+// channel-separated fields carried on protocol events. The payload map is
+// the canonical core payload: envelope data plus the reserved keys
+// message/summary/truncated/metadata. Returns false when the event predates
+// the structured fields (callers fall back to parsing the text).
+func toolEnvelopeFromStructured(outcome, code string, payload map[string]any) (toolResultEnvelope, bool) {
+	if strings.TrimSpace(outcome) == "" || payload == nil {
+		return toolResultEnvelope{}, false
+	}
+	success := outcome == string(core.OutcomeSuccess) || outcome == string(core.OutcomeNoResult)
+	metrics, _ := payload["metrics"].(map[string]any)
+	innerPayload, _ := payload["payload"].(map[string]any)
+	diagnosis, _ := payload["diagnosis"].(map[string]any)
+	metadata, _ := payload["metadata"].(map[string]any)
+	status := strings.TrimSpace(core.AsString(payload["status"]))
+	if status == "" {
+		status = "ok"
+	}
+	message, _ := payload["message"].(string)
+	summary, _ := payload["summary"].(string)
+	return toolResultEnvelope{
+		success:    success,
+		hasSuccess: true,
+		ok:         success,
+		hasOK:      true,
+		code:       strings.TrimSpace(code),
+		message:    message,
+		summary:    strings.TrimSpace(summary),
+		status:     status,
+		data:       payload,
+		metrics:    metrics,
+		payload:    innerPayload,
+		diagnosis:  diagnosis,
+		metadata:   metadata,
+	}, true
+}
+
 func parseToolEnvelopeOK(raw string) (toolResultEnvelope, bool) {
 	body, ok := core.ParseToolEnvelope(raw)
 	if !ok {

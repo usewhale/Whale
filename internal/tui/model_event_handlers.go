@@ -264,7 +264,7 @@ func (m *model) handleToolCallEvent(ev protocol.Event) {
 func (m *model) handleToolResultEvent(ev protocol.Event) tea.Cmd {
 	m.clearProviderRetryStatus()
 	if auditOnlyToolResultEvent(ev) {
-		role, _ := summarizeToolResultForChat(ev.ToolName, ev.Text)
+		role, _ := summarizeToolResultStructured(ev.ToolName, ev.Text, ev.ToolOutcome, ev.ToolCode, ev.ToolPayload)
 		if ev.ToolName == "workflow" || suppressesNoFinalAnswer(role) {
 			m.sawTerminalToolOutcomeThisTurn = true
 			m.removeNoFinalAnswerStatusMessages()
@@ -277,7 +277,7 @@ func (m *model) handleToolResultEvent(ev protocol.Event) tea.Cmd {
 		m.refreshLiveViewportContent()
 		return nil
 	}
-	role, _ := summarizeToolResultForChat(ev.ToolName, ev.Text)
+	role, _ := summarizeToolResultStructured(ev.ToolName, ev.Text, ev.ToolOutcome, ev.ToolCode, ev.ToolPayload)
 	if ev.ToolName == "workflow" || suppressesNoFinalAnswer(role) {
 		m.sawTerminalToolOutcomeThisTurn = true
 	}

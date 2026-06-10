@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/runtime/protocol"
 	"github.com/usewhale/whale/internal/runtime/timeline"
 	tuirender "github.com/usewhale/whale/internal/tui/render"
@@ -143,7 +144,7 @@ func (m model) timelineToolMessage(item timeline.Item) *tuirender.UIMessage {
 		case protocol.EventTaskProgress:
 			progressText = ev.Text
 		case protocol.EventToolResult:
-			resultRole, resultText = summarizeToolResultForChat(toolName, ev.Text)
+			resultRole, resultText = summarizeToolResultStructured(toolName, ev.Text, ev.ToolOutcome, ev.ToolCode, ev.ToolPayload)
 		}
 	}
 	if resultText != "" {
@@ -230,9 +231,9 @@ func (m model) timelineSubagentMessage(item timeline.Item) *tuirender.UIMessage 
 				steps = ev.ProgressMessages
 			}
 		case protocol.EventToolResult:
-			previous = subagentCompletedText(ev.Text, previous)
+			previous = subagentCompletedTextStructured(ev.Text, ev.ToolOutcome, ev.ToolCode, ev.ToolPayload, previous)
 			role = "result_ok"
-			if !toolResultSucceeded(ev.Text) {
+			if !toolResultSucceededStructured(ev.Text, ev.ToolOutcome) {
 				role = "result_failed"
 			}
 		}
@@ -257,6 +258,15 @@ func decisionStopsExecution(decision string) bool {
 	default:
 		return false
 	}
+}
+
+// toolResultSucceededStructured prefers the structured outcome, falling
+// back to text parsing for events that predate it.
+func toolResultSucceededStructured(text, outcome string) bool {
+	if strings.TrimSpace(outcome) != "" {
+		return outcome == string(core.OutcomeSuccess) || outcome == string(core.OutcomeNoResult)
+	}
+	return toolResultSucceeded(text)
 }
 
 func toolResultSucceeded(raw string) bool {

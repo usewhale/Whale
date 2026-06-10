@@ -420,12 +420,16 @@ func protocolToolResults(results []core.ToolResult) []protocol.ToolResult {
 	}
 	out := make([]protocol.ToolResult, 0, len(results))
 	for _, result := range results {
+		payload, _ := result.Payload.(map[string]any)
 		out = append(out, protocol.ToolResult{
 			ToolCallID: result.ToolCallID,
 			Name:       result.Name,
-			Content:    result.Content,
+			Content:    core.ToolResultModelText(result),
 			Metadata:   cloneAnyMap(result.Metadata),
 			IsError:    result.IsError,
+			Outcome:    string(core.ToolResultOutcome(result)),
+			Code:       result.Code,
+			Payload:    payload,
 		})
 	}
 	return out
