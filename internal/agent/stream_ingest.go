@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -157,7 +158,15 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 			}
 		case llm.EventError:
 			if ev.Err != nil {
-				assistant.FinishReason = core.FinishReasonError
+				// A user interrupt surfaces here as context.Canceled from
+				// the provider goroutine; label the turn canceled so the
+				// session history doesn't record a clean interrupt as a
+				// provider error (session 019ead56 had six such turns).
+				if errors.Is(ev.Err, context.Canceled) {
+					assistant.FinishReason = core.FinishReasonCanceled
+				} else {
+					assistant.FinishReason = core.FinishReasonError
+				}
 				assistant.ToolCalls = nil
 				a.bestEffortUpdateAssistant(assistant)
 				return core.Message{}, llm.Usage{}, "", nil, ev.Err

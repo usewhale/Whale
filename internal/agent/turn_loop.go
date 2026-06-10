@@ -220,11 +220,14 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 			}
 			assistant, toolMsg, usage, modelName, cacheShape, abortTurn, attemptedToolCalls, sErr := a.streamAndHandle(ctx, sessionID, checkpointMessageID, history, rt, out, turnPolicy, toolSnapshot, remainingToolCalls, autoDenyCounts, opts)
 			if sErr != nil {
-				if errors.Is(sErr, context.Canceled) || errors.Is(sErr, context.DeadlineExceeded) {
+				if errors.Is(sErr, context.Canceled) {
 					a.persistInterruptedTurnMarker(sessionID)
 					emit(AgentEvent{Type: AgentEventTypeTurnCancelled, Content: "turn cancelled"})
 					return
 				}
+				// A deadline is a timeout, not a user act — telling the
+				// model "the user interrupted on purpose" would misstate
+				// intent on every slow request.
 				emit(AgentEvent{Type: AgentEventTypeError, Err: sErr})
 				return
 			}
@@ -248,7 +251,13 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 					history = append(history, assistant, *toolMsg)
 				}
 				if ctx.Err() != nil {
-					a.persistInterruptedTurnMarker(sessionID)
+					if errors.Is(ctx.Err(), context.Canceled) {
+						a.persistInterruptedTurnMarker(sessionID)
+						return
+					}
+					// Deadline expiry is a timeout, not a user interrupt:
+					// surface it instead of closing the stream silently.
+					emit(AgentEvent{Type: AgentEventTypeError, Err: ctx.Err()})
 					return
 				}
 				if turnState.hasPending() {
