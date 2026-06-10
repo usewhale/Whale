@@ -273,18 +273,72 @@ func computePatchReplacements(path string, lines []string, hunks []patchHunk) ([
 	replacements := make([]patchReplacement, 0, len(hunks))
 	lineIndex := 0
 	for _, h := range hunks {
+		newLines := h.newLines
 		idx := findSubsliceFrom(lines, h.oldLines, lineIndex)
+		if idx < 0 {
+			relaxed, ambiguous := findSubsliceRelaxedFrom(lines, h.oldLines, lineIndex)
+			if ambiguous {
+				return nil, fmt.Errorf("hunk context matched multiple locations after whitespace normalization in %s; include more context lines to disambiguate", path)
+			}
+			if relaxed >= 0 {
+				// The hunk matched with whitespace drift: keep the file's
+				// actual text for context lines so the patch only changes
+				// what its -/+ lines describe.
+				idx = relaxed
+				newLines = relaxedPatchNewLines(lines, relaxed, h)
+			}
+		}
 		if idx < 0 {
 			return nil, fmt.Errorf("hunk context not found in %s", path)
 		}
 		replacements = append(replacements, patchReplacement{
 			start:    idx,
 			oldLen:   len(h.oldLines),
-			newLines: h.newLines,
+			newLines: newLines,
 		})
 		lineIndex = idx + len(h.oldLines)
 	}
 	return replacements, nil
+}
+
+// findSubsliceRelaxedFrom retries a failed exact hunk match with decreasing
+// strictness, mirroring codex's seek_sequence: ignore trailing whitespace
+// first, then whitespace on both edges. Like the edit fallback, a relaxation
+// level that matches more than one location is ambiguous and reported rather
+// than guessed at; stricter levels are not shadowed by looser ones.
+func findSubsliceRelaxedFrom(haystack, needle []string, start int) (int, bool) {
+	for _, equal := range []func(a, b string) bool{rstripLineEqual, trimLineEqual} {
+		idx := findSubsliceFuncFrom(haystack, needle, start, equal)
+		if idx < 0 {
+			continue
+		}
+		if findSubsliceFuncFrom(haystack, needle, idx+1, equal) >= 0 {
+			return idx, true
+		}
+		return idx, false
+	}
+	return -1, false
+}
+
+func relaxedPatchNewLines(fileLines []string, start int, h patchHunk) []string {
+	out := make([]string, 0, len(h.newLines))
+	oldIndex := 0
+	for _, line := range h.lines {
+		switch line.kind {
+		case patchHunkContext:
+			if start+oldIndex < len(fileLines) {
+				out = append(out, fileLines[start+oldIndex])
+			} else {
+				out = append(out, line.text)
+			}
+			oldIndex++
+		case patchHunkRemove:
+			oldIndex++
+		case patchHunkAdd:
+			out = append(out, line.text)
+		}
+	}
+	return out
 }
 
 func applyPatchReplacements(lines []string, replacements []patchReplacement) []string {
@@ -304,6 +358,13 @@ func applyPatchLineEndingHunks(path string, lines []lineEndingLine, hunks []patc
 	lineIndex := 0
 	for _, h := range hunks {
 		idx := findLineEndingSubsliceFrom(lines, h.oldLines, lineIndex)
+		if idx < 0 {
+			relaxed, ambiguous := findLineEndingSubsliceRelaxedFrom(lines, h.oldLines, lineIndex)
+			if ambiguous {
+				return nil, fmt.Errorf("hunk context matched multiple locations after whitespace normalization in %s; include more context lines to disambiguate", path)
+			}
+			idx = relaxed
+		}
 		if idx < 0 {
 			return nil, fmt.Errorf("hunk context not found in %s", path)
 		}
@@ -340,7 +401,10 @@ func patchReplacementLineEndings(old []lineEndingLine, h patchHunk) []lineEnding
 		case patchHunkContext:
 			removedSeps = removedSeps[:0]
 			if oldIndex < len(old) {
-				out = append(out, lineEndingLine{text: line.text, sep: old[oldIndex].sep})
+				// Use the file's actual text: identical to line.text on an
+				// exact match, and the unmodified original on a relaxed
+				// whitespace-drift match.
+				out = append(out, lineEndingLine{text: old[oldIndex].text, sep: old[oldIndex].sep})
 				oldIndex++
 			}
 		case patchHunkRemove:
@@ -411,6 +475,13 @@ func parseBeginPatch(patch string) ([]patchOp, error) {
 							oldLines = append(oldLines, v)
 							newLines = append(newLines, v)
 							hunkLines = append(hunkLines, patchHunkLine{kind: patchHunkContext, text: v})
+						} else if l == "" {
+							// Models routinely drop the leading space on blank
+							// context lines; treat a fully empty line as empty
+							// context rather than failing the whole patch.
+							oldLines = append(oldLines, "")
+							newLines = append(newLines, "")
+							hunkLines = append(hunkLines, patchHunkLine{kind: patchHunkContext, text: ""})
 						} else if l == `\ No newline at end of file` {
 							// ignore marker
 						} else {
@@ -512,6 +583,10 @@ func findSubslice(haystack, needle []string) int {
 }
 
 func findSubsliceFrom(haystack, needle []string, start int) int {
+	return findSubsliceFuncFrom(haystack, needle, start, func(a, b string) bool { return a == b })
+}
+
+func findSubsliceFuncFrom(haystack, needle []string, start int, equal func(a, b string) bool) int {
 	if len(needle) == 0 {
 		if start <= len(haystack) {
 			return start
@@ -527,7 +602,7 @@ func findSubsliceFrom(haystack, needle []string, start int) int {
 outer:
 	for i := start; i <= len(haystack)-len(needle); i++ {
 		for j := 0; j < len(needle); j++ {
-			if haystack[i+j] != needle[j] {
+			if !equal(haystack[i+j], needle[j]) {
 				continue outer
 			}
 		}
@@ -541,6 +616,24 @@ func findLineEndingSubslice(haystack []lineEndingLine, needle []string) int {
 }
 
 func findLineEndingSubsliceFrom(haystack []lineEndingLine, needle []string, start int) int {
+	return findLineEndingSubsliceFuncFrom(haystack, needle, start, func(a, b string) bool { return a == b })
+}
+
+func findLineEndingSubsliceRelaxedFrom(haystack []lineEndingLine, needle []string, start int) (int, bool) {
+	for _, equal := range []func(a, b string) bool{rstripLineEqual, trimLineEqual} {
+		idx := findLineEndingSubsliceFuncFrom(haystack, needle, start, equal)
+		if idx < 0 {
+			continue
+		}
+		if findLineEndingSubsliceFuncFrom(haystack, needle, idx+1, equal) >= 0 {
+			return idx, true
+		}
+		return idx, false
+	}
+	return -1, false
+}
+
+func findLineEndingSubsliceFuncFrom(haystack []lineEndingLine, needle []string, start int, equal func(a, b string) bool) int {
 	if len(needle) == 0 {
 		if start <= len(haystack) {
 			return start
@@ -556,7 +649,7 @@ func findLineEndingSubsliceFrom(haystack []lineEndingLine, needle []string, star
 outer:
 	for i := start; i <= len(haystack)-len(needle); i++ {
 		for j := 0; j < len(needle); j++ {
-			if haystack[i+j].text != needle[j] {
+			if !equal(haystack[i+j].text, needle[j]) {
 				continue outer
 			}
 		}
