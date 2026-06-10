@@ -51,6 +51,8 @@ curl -fsSL https://raw.githubusercontent.com/usewhale/DeepSeek-Code-Whale/main/s
 
 Windows PowerShell:
 
+Requires Windows 10 or Windows Server 2016 or later.
+
 ```powershell
 irm https://raw.githubusercontent.com/usewhale/DeepSeek-Code-Whale/main/scripts/install.ps1 | iex
 ```

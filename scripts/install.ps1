@@ -12,6 +12,13 @@ function Fail($Message) {
   exit 1
 }
 
+function Assert-SupportedWindowsVersion {
+  $version = [Environment]::OSVersion.Version
+  if ($version.Major -lt 10) {
+    Fail "Windows 10 or Windows Server 2016 or later is required"
+  }
+}
+
 function Resolve-RepoSlug {
   if (-not [string]::IsNullOrWhiteSpace($script:RepoSlug)) {
     return $script:RepoSlug.Trim()
@@ -168,6 +175,8 @@ function Ensure-UserPath($Directory) {
 if ($env:OS -ne "Windows_NT") {
   Fail "scripts/install.ps1 supports native Windows only"
 }
+
+Assert-SupportedWindowsVersion
 
 $resolvedRepoSlug = Resolve-RepoSlug
 $resolvedVersion = Resolve-Version $resolvedRepoSlug
