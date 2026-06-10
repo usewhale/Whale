@@ -282,7 +282,7 @@ func flattenContent(content []sdk.Content) (string, []map[string]any) {
 		case *sdk.AudioContent:
 			media = append(media, map[string]any{"type": "audio", "mime_type": v.MIMEType, "bytes": len(v.Data)})
 		default:
-			b, err := json.Marshal(v)
+			b, err := core.MarshalToolJSON(v)
 			if err != nil {
 				textParts = append(textParts, fmt.Sprintf("%v", v))
 			} else {

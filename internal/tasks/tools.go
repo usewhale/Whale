@@ -353,7 +353,7 @@ func (t cancelSubagentTool) Run(_ context.Context, call core.ToolCall) (core.Too
 }
 
 func encodeInput(v any) string {
-	b, _ := json.Marshal(v)
+	b, _ := core.MarshalToolJSON(v)
 	return string(b)
 }
 

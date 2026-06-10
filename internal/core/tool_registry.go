@@ -452,7 +452,10 @@ func normalizeToolContent(ctx context.Context, toolName, toolCallID, raw string,
 		env.Truncated = trunc
 	}
 	env.Success = env.OK
-	b, err := json.Marshal(env)
+	// MarshalToolJSON, not json.Marshal: this output is the final
+	// model-visible text, and HTML escaping here would corrupt payload
+	// bytes that survived everything upstream (session 019ead56).
+	b, err := MarshalToolJSON(env)
 	if err != nil {
 		if maxResultChars > 0 && len(raw) > maxResultChars {
 			return raw[:maxResultChars], fallbackErr, ""
@@ -498,7 +501,7 @@ func normalizeToolContent(ctx context.Context, toolName, toolCallID, raw string,
 			if archivePath != "" {
 				short["metadata"].(map[string]any)["full_result_path"] = archivePath
 			}
-			sb, serr := json.Marshal(short)
+			sb, serr := MarshalToolJSON(short)
 			if serr == nil && len(sb) <= maxResultChars {
 				return string(sb), !env.OK, archivePath
 			}

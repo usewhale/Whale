@@ -533,7 +533,7 @@ func workflowToolArgsActionString(args any) string {
 	case string:
 		return strings.TrimSpace(v)
 	default:
-		b, err := json.Marshal(v)
+		b, err := core.MarshalToolJSON(v)
 		if err != nil {
 			return ""
 		}
