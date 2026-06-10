@@ -28,7 +28,7 @@ func (a *Agent) handleUpdatePlan(ctx context.Context, call core.ToolCall, events
 	if !sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypePlanUpdate, PlanUpdate: &update}) {
 		return core.ToolResult{}, ctx.Err()
 	}
-	payload, _ := json.Marshal(map[string]any{
+	payload, _ := core.MarshalToolJSON(map[string]any{
 		"success": true,
 		"data":    update,
 	})

@@ -78,23 +78,3 @@ func TestSummarizeToolResultForChatIgnoresANSIOnlyShellOutput(t *testing.T) {
 		t.Fatalf("expected success marker, got: %q", text)
 	}
 }
-
-func TestShellCommandUsesSearchExitOneUsesLastCommandOutsideQuotes(t *testing.T) {
-	cases := []struct {
-		command string
-		want    bool
-	}{
-		{`grep -rn "^func firstLine\b" internal/ --include='*.go' | grep -v "core/"`, true},
-		{`grep -E "foo|bar" internal/file.go`, true},
-		{`cd internal && rg "missing"`, true},
-		{`git grep "missing" -- '*.go'`, true},
-		{`grep missing internal/file.go && false`, false},
-		{`grep missing internal/file.go; false`, false},
-		{`printf setup && false`, false},
-	}
-	for _, tc := range cases {
-		if got := shellCommandUsesSearchExitOne(tc.command); got != tc.want {
-			t.Fatalf("shellCommandUsesSearchExitOne(%q) = %v, want %v", tc.command, got, tc.want)
-		}
-	}
-}

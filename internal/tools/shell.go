@@ -301,6 +301,14 @@ func shellRunForegroundFinalResult(call core.ToolCall, snap shellTaskSnapshot, r
 	timedOut := false
 	switch snap.Status {
 	case "failed":
+		if snap.ExitCode != nil && core.ShellExitMeansNoMatches(snap.Command, *snap.ExitCode, snap.Stdout, snap.Stderr) {
+			// Search commands answer "found nothing" via exit 1; that is a
+			// result, not a failure — don't push the model into retries or
+			// count it as a tool error.
+			status = "exited"
+			summaryParts = []string{"no matches (exit 1)"}
+			break
+		}
 		status = "error"
 		summaryParts = []string{"command failed"}
 		if hint := summarizeText(snap.Stderr, 220); hint != "" {

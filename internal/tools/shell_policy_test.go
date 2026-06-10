@@ -127,7 +127,10 @@ func TestShellTimeoutDiagnosisMissingPolicyStaysGeneric(t *testing.T) {
 		status:    "timeout",
 	}
 	diagnosis := task.timeoutDiagnosisLocked()
-	if diagnosis.Reason != "ordinary_timeout" {
-		t.Fatalf("diagnosis = %#v, want generic ordinary timeout", diagnosis)
+	// No policy and zero output: the generic answer is silent_timeout, which
+	// hedges between "never exits in a shell" and "slow but quiet" instead
+	// of asserting the timeout was too short.
+	if diagnosis.Reason != "silent_timeout" {
+		t.Fatalf("diagnosis = %#v, want silent_timeout", diagnosis)
 	}
 }

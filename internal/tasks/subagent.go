@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -486,7 +485,7 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 			}
 			structuredResult = value
 			if strings.TrimSpace(summary) == "" {
-				if b, err := json.Marshal(value); err == nil {
+				if b, err := core.MarshalToolJSON(value); err == nil {
 					summary, truncated = truncateString(string(b), r.summaryMaxChars)
 				}
 			}

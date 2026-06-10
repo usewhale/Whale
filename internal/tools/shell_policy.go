@@ -335,6 +335,12 @@ func shellTimeoutDiagnosis(snap shellTaskSnapshot, timeoutCtx shellTimeoutContex
 	if shellOutputLooksLikeProgress(text) || timeoutCtx.RequestedTimeoutMS > 0 && timeoutCtx.RequestedTimeoutMS <= 1000 {
 		return shellDiagnosisForReason("foreground_timeout_too_short")
 	}
+	if strings.TrimSpace(text) == "" {
+		// Zero output before a non-trivial timeout: "rerun with a longer
+		// timeout" is wrong advice for GUI/interactive binaries that never
+		// exit in a shell (session 019ead56 m-13: ILSpy.exe --help).
+		return shellDiagnosisForReason("silent_timeout")
+	}
 	defaultWaitMS := timeoutCtx.DefaultWaitMS
 	if defaultWaitMS <= 0 {
 		defaultWaitMS = defaultForegroundShellWaitMS
@@ -367,6 +373,8 @@ func shellDiagnosisForReason(reason string) shellDiagnosis {
 		return shellDiagnosis{Reason: reason, Hint: "Output looks like a network or sandbox restriction. Check network access before retrying.", SuggestedNextAction: "check_network"}
 	case "foreground_timeout_too_short":
 		return shellDiagnosis{Reason: reason, Hint: "The foreground timeout was too short for this command. Rerun with a longer timeout instead of changing the command.", SuggestedNextAction: "rerun_with_longer_timeout"}
+	case "silent_timeout":
+		return shellDiagnosis{Reason: reason, Hint: "Command produced no output before the timeout. It may be a GUI or interactive program that never exits in a shell; verify it can run non-interactively before retrying, or run it in the background if it is expected to be slow and silent.", SuggestedNextAction: "verify_noninteractive_or_background"}
 	case "build_or_test_timeout":
 		return shellDiagnosis{Reason: reason, Hint: "Build or test command was stopped by timeout. Rerun with a longer timeout or let it continue in the background.", SuggestedNextAction: "rerun_with_longer_timeout"}
 	case "background_runtime_timeout":

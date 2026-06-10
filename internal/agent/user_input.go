@@ -109,7 +109,7 @@ func (a *Agent) handleRequestUserInput(ctx context.Context, call core.ToolCall, 
 	}) {
 		return core.ToolResult{}, ctx.Err()
 	}
-	b, err := json.Marshal(map[string]any{
+	b, err := core.MarshalToolJSON(map[string]any{
 		"success": true,
 		"data":    resp,
 	})

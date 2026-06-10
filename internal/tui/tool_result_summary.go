@@ -245,10 +245,12 @@ func shellExitIsNoMatches(env toolResultEnvelope) bool {
 }
 
 func shellExitOneIsNoMatches(env toolResultEnvelope) bool {
-	if strings.TrimSpace(core.AsString(env.payload["stderr"])) != "" {
-		return false
-	}
-	return shellCommandUsesSearchExitOne(core.AsString(env.payload["command"]))
+	return core.ShellExitMeansNoMatches(
+		core.AsString(env.payload["command"]),
+		1,
+		core.AsString(env.payload["stdout"]),
+		core.AsString(env.payload["stderr"]),
+	)
 }
 
 func summarizeNoMatchShellResult(env toolResultEnvelope) (string, string) {
@@ -264,74 +266,6 @@ func summarizeNoMatchShellResult(env toolResultEnvelope) (string, string) {
 		return "result_neutral", "No matches\n" + output
 	}
 	return "result_neutral", "No matches"
-}
-
-func shellCommandUsesSearchExitOne(command string) bool {
-	base := shellSegmentBaseCommand(lastShellCommandSegment(command))
-	return base == "grep" || base == "rg" || base == "git grep"
-}
-
-func lastShellCommandSegment(command string) string {
-	command = strings.TrimSpace(command)
-	start := 0
-	last := command
-	var quote rune
-	escaped := false
-	runes := []rune(command)
-	for i := 0; i < len(runes); i++ {
-		r := runes[i]
-		if escaped {
-			escaped = false
-			continue
-		}
-		if r == '\\' && quote != '\'' {
-			escaped = true
-			continue
-		}
-		if quote != 0 {
-			if r == quote {
-				quote = 0
-			}
-			continue
-		}
-		if r == '\'' || r == '"' {
-			quote = r
-			continue
-		}
-		switch runes[i] {
-		case '|', ';':
-			if segment := strings.TrimSpace(string(runes[start:i])); segment != "" {
-				last = segment
-			}
-			if runes[i] == '|' && i+1 < len(runes) && runes[i+1] == '|' {
-				i++
-			}
-			start = i + 1
-		case '&':
-			if i+1 < len(runes) && runes[i+1] == '&' {
-				if segment := strings.TrimSpace(string(runes[start:i])); segment != "" {
-					last = segment
-				}
-				i++
-				start = i + 1
-			}
-		}
-	}
-	if segment := strings.TrimSpace(string(runes[start:])); segment != "" {
-		last = segment
-	}
-	return last
-}
-
-func shellSegmentBaseCommand(segment string) string {
-	fields := strings.Fields(strings.TrimSpace(segment))
-	if len(fields) == 0 {
-		return ""
-	}
-	if fields[0] == "git" && len(fields) > 1 && fields[1] == "grep" {
-		return "git grep"
-	}
-	return fields[0]
 }
 
 func shellFailureUsesGenericSummary(env toolResultEnvelope) bool {
@@ -642,6 +576,8 @@ func shellDiagnosisLabel(reason string) string {
 		return "network blocked"
 	case "foreground_timeout_too_short":
 		return "timeout too short"
+	case "silent_timeout":
+		return "no output before timeout"
 	case "build_or_test_timeout":
 		return "build/test timeout"
 	case "background_runtime_timeout":

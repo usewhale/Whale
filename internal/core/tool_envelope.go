@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 )
@@ -36,12 +37,30 @@ func NewToolErrorEnvelope(code, message string) ToolEnvelope {
 	}
 }
 
+// MarshalToolEnvelope serializes the model-facing tool result. HTML escaping
+// must stay off: the model reads this text and copies payload fragments
+// (file content, shell commands) back into edit/write inputs, so & < > have
+// to survive byte-for-byte. Session 019ead56 documents the failure mode.
 func MarshalToolEnvelope(env ToolEnvelope) (string, error) {
-	b, err := json.Marshal(env)
+	b, err := MarshalToolJSON(env)
 	if err != nil {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// MarshalToolJSON serializes any model-visible tool JSON without HTML
+// escaping. Use this instead of json.Marshal whenever the output becomes
+// ToolResult.Content: the model reads that text raw, so json.Marshal's
+// HTML escaping would corrupt every payload containing & < >.
+func MarshalToolJSON(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 
 func ParseToolEnvelope(raw string) (ToolEnvelope, bool) {

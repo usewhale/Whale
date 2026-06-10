@@ -220,7 +220,7 @@ func (a *Agent) executeFallbackReadonly(ctx context.Context, tools *core.ToolReg
 	if err != nil {
 		return core.ToolResult{}, false
 	}
-	wrapped, err := json.Marshal(map[string]any{
+	wrapped, err := core.MarshalToolJSON(map[string]any{
 		"success": true,
 		"data": map[string]any{
 			"status":  "recovered_with_fallback",
@@ -248,7 +248,7 @@ func (a *Agent) executeFallbackReadonly(ctx context.Context, tools *core.ToolReg
 }
 
 func buildRequestReplanResult(call core.ToolCall, class FailureClass, attempt int, reason string) core.ToolResult {
-	b, err := json.Marshal(map[string]any{
+	b, err := core.MarshalToolJSON(map[string]any{
 		"success": false,
 		"error":   "recovery exhausted, replan required",
 		"code":    "request_replan",

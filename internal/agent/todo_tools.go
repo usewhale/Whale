@@ -109,6 +109,6 @@ func (a *Agent) handleTodo(call core.ToolCall, sessionID string) (core.ToolResul
 		}
 		items = filtered
 	}
-	payload, _ := json.Marshal(map[string]any{"success": true, "data": map[string]any{"items": items, "count": len(items)}})
+	payload, _ := core.MarshalToolJSON(map[string]any{"success": true, "data": map[string]any{"items": items, "count": len(items)}})
 	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: string(payload)}, nil
 }

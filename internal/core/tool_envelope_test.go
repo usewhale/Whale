@@ -25,7 +25,12 @@ func TestToolEnvelopeRoundTrip(t *testing.T) {
 	}
 }
 
-func TestToolEnvelopeKeepsDefaultEscapingForPromptTags(t *testing.T) {
+// HTML escaping in the envelope used to be asserted here to keep
+// <proposed_plan> out of result text, but it corrupted every payload
+// containing & < > on its way to the model (session 019ead56). The TUI
+// strips proposed_plan tags from visible content itself (ebc13d6), so the
+// envelope now stays verbatim; see tool_envelope_escaping_repro_test.go.
+func TestToolEnvelopeKeepsPromptTagsVerbatim(t *testing.T) {
 	content, err := MarshalToolEnvelope(ToolEnvelope{
 		OK:      false,
 		Success: false,
@@ -35,11 +40,8 @@ func TestToolEnvelopeKeepsDefaultEscapingForPromptTags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal envelope: %v", err)
 	}
-	if strings.Contains(content, "<proposed_plan>") {
-		t.Fatalf("generic envelope should keep default JSON escaping, got %s", content)
-	}
-	if !strings.Contains(content, `\u003cproposed_plan\u003e`) {
-		t.Fatalf("expected prompt tag to be escaped in generic envelope, got %s", content)
+	if !strings.Contains(content, "<proposed_plan>") {
+		t.Fatalf("expected prompt tag verbatim in envelope, got %s", content)
 	}
 }
 
