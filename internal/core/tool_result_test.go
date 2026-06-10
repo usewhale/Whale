@@ -82,6 +82,42 @@ func TestCanonicalizeToolPayloadIsJSONTyped(t *testing.T) {
 	}
 }
 
+func TestFinalizeToolResultChannels(t *testing.T) {
+	// The hand-written literals agent code emits for blocked/skipped calls
+	// must classify the same way live and after a legacy reload.
+	denied := FinalizeToolResultChannels(ToolResult{
+		ToolCallID: "c1", Name: "shell_run",
+		Content: `{"success":false,"error":"tool approval denied","code":"approval_denied"}`,
+		IsError: true,
+	})
+	if denied.Outcome != OutcomeBlocked || denied.Code != "approval_denied" {
+		t.Fatalf("approval denied misclassified: %+v", denied)
+	}
+	if denied.ModelText != denied.Content {
+		t.Fatal("ModelText must take Content bytes verbatim")
+	}
+
+	skipped := FinalizeToolResultChannels(ToolResult{
+		ToolCallID: "c2", Name: "edit",
+		Content: `{"success":false,"error":"tool skipped because another tool requested a runtime handoff","code":"turn_aborted"}`,
+		IsError: true,
+	})
+	if skipped.Outcome != OutcomeFailure || skipped.Code != "turn_aborted" {
+		t.Fatalf("turn_aborted misclassified: %+v", skipped)
+	}
+
+	raw := FinalizeToolResultChannels(ToolResult{ToolCallID: "c3", Name: "mcp", Content: "plain text & <tags>"})
+	if raw.Outcome != OutcomeSuccess || raw.Payload != nil || raw.ModelText != "plain text & <tags>" {
+		t.Fatalf("raw text result misclassified: %+v", raw)
+	}
+
+	// Idempotence: a funnel-produced result passes through untouched.
+	already := ToolResult{ToolCallID: "c4", Outcome: OutcomeSuccess, Code: "ok", ModelText: "x", Content: "x"}
+	if got := FinalizeToolResultChannels(already); got.Outcome != OutcomeSuccess || got.ModelText != "x" {
+		t.Fatalf("finalize must be idempotent: %+v", got)
+	}
+}
+
 func TestDispatchPopulatesChannelSeparatedFields(t *testing.T) {
 	inner, err := MarshalToolEnvelope(NewToolSuccessEnvelope(map[string]any{
 		"payload": map[string]any{"stdout": "hello"},

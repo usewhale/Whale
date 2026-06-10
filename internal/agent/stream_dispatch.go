@@ -244,6 +244,10 @@ func emitDispatchEvent(ctx context.Context, sc streamDispatchContext, ev AgentEv
 }
 
 func appendToolResult(ctx context.Context, sc streamDispatchContext, results *[]core.ToolResult, tr core.ToolResult) error {
+	// Results produced outside the dispatch funnel (special tools, blocked
+	// markers, recovery wrappers) get their channel-separated fields here,
+	// before the event is emitted and the result is persisted.
+	tr = core.FinalizeToolResultChannels(tr)
 	*results = append(*results, tr)
 	return emitDispatchEvent(ctx, sc, AgentEvent{Type: AgentEventTypeToolResult, Result: &tr})
 }
@@ -259,12 +263,12 @@ func appendAbortSkippedToolResults(ctx context.Context, sc streamDispatchContext
 		if call.ID == "" || answered[call.ID] {
 			continue
 		}
-		tr := core.ToolResult{
+		tr := core.FinalizeToolResultChannels(core.ToolResult{
 			ToolCallID: call.ID,
 			Name:       call.Name,
 			Content:    `{"success":false,"error":"tool skipped because another tool requested a runtime handoff","code":"turn_aborted"}`,
 			IsError:    true,
-		}
+		})
 		*results = append(*results, tr)
 		if err := emitDispatchEvent(ctx, sc, AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}); err != nil && requireEventDelivery {
 			return err
@@ -588,6 +592,9 @@ func (a *Agent) resolveToolApproval(ctx context.Context, sc streamDispatchContex
 	if err := appendAbortSkippedToolResults(ctx, sc, results, true); err != nil {
 		return toolApprovalResult{}, err
 	}
+	for i := range *results {
+		(*results)[i] = core.FinalizeToolResultChannels((*results)[i])
+	}
 	toolMsg, err := a.store.Create(ctx, core.Message{SessionID: sc.SessionID, Role: core.RoleTool, ToolResults: *results})
 	if err != nil {
 		return toolApprovalResult{}, fmt.Errorf("create tool message: %w", err)
@@ -653,6 +660,9 @@ func toolResultUsableAfterCancel(res core.ToolResult) bool {
 }
 
 func (a *Agent) createDispatchToolMessage(ctx context.Context, sc streamDispatchContext, results []core.ToolResult) (core.Message, error) {
+	for i := range results {
+		results[i] = core.FinalizeToolResultChannels(results[i])
+	}
 	toolMsg, err := a.store.Create(ctx, core.Message{SessionID: sc.SessionID, Role: core.RoleTool, ToolResults: results})
 	if err != nil {
 		return core.Message{}, fmt.Errorf("create tool message: %w", err)

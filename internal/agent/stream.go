@@ -251,6 +251,14 @@ func (a *Agent) appendDispatchedToolResult(ctx context.Context, sessionID string
 			finalRes.Content = addHookContextToToolContent(finalRes.Content, report.AdditionalContext)
 		}
 	}
+	// Hook injection (and recovery wrappers that bypass the dispatch
+	// funnel) leave Content ahead of ModelText; re-derive the structured
+	// channel so both stay in lockstep before the result is persisted.
+	if finalRes.Content != finalRes.ModelText {
+		finalRes.ModelText = ""
+		finalRes.Payload = nil
+		finalRes = core.FinalizeToolResultChannels(finalRes)
+	}
 	*results = append(*results, finalRes)
 	r := finalRes
 	if taskEvent, ok := taskCompletedEvent(finalRes); ok {

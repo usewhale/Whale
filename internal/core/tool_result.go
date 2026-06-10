@@ -128,6 +128,37 @@ func fallbackEnvelopeJSON(env ToolEnvelope) string {
 	return string(b)
 }
 
+// FinalizeToolResultChannels backfills the channel-separated fields on a
+// result produced outside the dispatch funnel (agent special tools, blocked
+// markers, recovery wrappers, abort-skip placeholders). ModelText takes the
+// Content bytes verbatim; Outcome/Code/Payload are derived exactly the way
+// the legacy session decoder derives them, so a result finalized live and
+// the same result reloaded from an old session file classify identically.
+// Idempotent: results that already carry ModelText pass through unchanged.
+func FinalizeToolResultChannels(res ToolResult) ToolResult {
+	if res.ModelText != "" {
+		return res
+	}
+	res.ModelText = res.Content
+	env, parsed := ParseToolEnvelope(res.Content)
+	if parsed {
+		if res.Code == "" {
+			res.Code = env.Code
+		}
+		if res.Payload == nil {
+			res.Payload = CanonicalizeToolPayload(env)
+		}
+	}
+	if res.Outcome == "" {
+		if res.IsError {
+			res.Outcome = OutcomeForErrorCode(res.Code)
+		} else {
+			res.Outcome = OutcomeSuccess
+		}
+	}
+	return res
+}
+
 func (r ToolResult) outcomeIsError() bool {
 	switch r.Outcome {
 	case OutcomeSuccess, OutcomeNoResult:
