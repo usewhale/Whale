@@ -167,7 +167,7 @@ func toOpenAICompatibleMessages(history []core.Message) ([]map[string]any, error
 				out = append(out, map[string]any{
 					"role":         "tool",
 					"tool_call_id": tr.ToolCallID,
-					"content":      compact.ToolResultReplayContent(tr.Content),
+					"content":      compact.ToolResultReplayContent(core.ToolResultModelText(tr)),
 				})
 				delete(pendingToolCalls, tr.ToolCallID)
 			}

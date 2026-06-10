@@ -73,49 +73,68 @@ func classifyToolFailure(res core.ToolResult, dispatchErr error) FailureClass {
 		return FailureClassUnknown
 	}
 	if !res.IsError {
-		if strings.TrimSpace(res.Content) == "" {
+		if strings.TrimSpace(core.ToolResultModelText(res)) == "" {
 			return FailureClassEmptyOutput
 		}
 		return ""
 	}
-	var env struct {
-		Code  string `json:"code"`
-		Error string `json:"error"`
-	}
-	if err := json.Unmarshal([]byte(res.Content), &env); err == nil {
-		switch strings.TrimSpace(env.Code) {
-		case "cancelled", "canceled":
-			return ""
-		case "timeout":
-			return FailureClassTimeout
-		case "exec_failed":
-			return FailureClassExecFailed
-		case "mcp_call_failed":
-			return FailureClassToolUnavailable
-		case "mcp_tool_error":
-			if isAccessDeniedText(env.Error) {
-				return FailureClassPermissionDenied
-			}
-			return FailureClassMCPToolError
-		case "invalid_input", "invalid_args", "invalid_pattern":
-			return ""
-		case "parse_failed", "invalid_plan_update":
-			return FailureClassParseFailed
-		case "not_found", "read_failed", "permission_denied", "read_required", "snapshot_mismatch", "stale_read", "search_not_found":
-			return ""
-		case "policy_denied", "read_only_turn_denied":
-			return FailureClassPolicyDenied
-		case "approval_denied":
-			return FailureClassApprovalDenied
-		case "plan_required":
-			return FailureClassPlanRequired
+	code := strings.TrimSpace(res.Code)
+	errText := toolResultPayloadMessage(res)
+	if code == "" {
+		// Legacy result without channel-separated fields: fall back to
+		// parsing the envelope text.
+		var env struct {
+			Code  string `json:"code"`
+			Error string `json:"error"`
+		}
+		if err := json.Unmarshal([]byte(core.ToolResultModelText(res)), &env); err == nil {
+			code = strings.TrimSpace(env.Code)
+			errText = env.Error
 		}
 	}
-	lc := strings.ToLower(res.Content)
+	switch code {
+	case "cancelled", "canceled":
+		return ""
+	case "timeout":
+		return FailureClassTimeout
+	case "exec_failed":
+		return FailureClassExecFailed
+	case "mcp_call_failed":
+		return FailureClassToolUnavailable
+	case "mcp_tool_error":
+		if isAccessDeniedText(errText) {
+			return FailureClassPermissionDenied
+		}
+		return FailureClassMCPToolError
+	case "invalid_input", "invalid_args", "invalid_pattern":
+		return ""
+	case "parse_failed", "invalid_plan_update":
+		return FailureClassParseFailed
+	case "not_found", "read_failed", "permission_denied", "read_required", "snapshot_mismatch", "stale_read", "search_not_found":
+		return ""
+	case "policy_denied", "read_only_turn_denied":
+		return FailureClassPolicyDenied
+	case "approval_denied":
+		return FailureClassApprovalDenied
+	case "plan_required":
+		return FailureClassPlanRequired
+	}
+	lc := strings.ToLower(core.ToolResultModelText(res))
 	if strings.Contains(lc, "timeout") {
 		return FailureClassTimeout
 	}
 	return FailureClassUnknown
+}
+
+// toolResultPayloadMessage reads the reserved "message" key from the
+// canonical payload.
+func toolResultPayloadMessage(res core.ToolResult) string {
+	payload, ok := res.Payload.(map[string]any)
+	if !ok {
+		return ""
+	}
+	msg, _ := payload["message"].(string)
+	return msg
 }
 
 func isAccessDeniedText(s string) bool {

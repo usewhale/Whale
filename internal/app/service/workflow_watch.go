@@ -141,20 +141,35 @@ func workflowConfirmationFromToolResult(result *core.ToolResult) (name, args, re
 	if result == nil || strings.TrimSpace(result.Name) != "workflow" {
 		return "", "", "", "", "", "", false
 	}
-	env, parsed := core.ParseToolEnvelope(result.Content)
-	if !parsed || strings.TrimSpace(env.Code) != "workflow_confirmation_required" {
+	data, code := workflowResultData(result)
+	if strings.TrimSpace(code) != "workflow_confirmation_required" {
 		return "", "", "", "", "", "", false
 	}
-	name = strings.TrimSpace(asWorkflowString(env.Data["workflowName"]))
+	name = strings.TrimSpace(asWorkflowString(data["workflowName"]))
 	if name == "" {
 		return "", "", "", "", "", "", false
 	}
-	args = strings.TrimSpace(asWorkflowString(env.Data["workflowArgs"]))
-	resume = strings.TrimSpace(asWorkflowString(env.Data["workflowResume"]))
-	script = asWorkflowString(env.Data["workflowScript"])
-	saveAs = strings.TrimSpace(asWorkflowString(env.Data["workflowSaveAs"]))
-	scriptPath = strings.TrimSpace(asWorkflowString(env.Data["workflowScriptPath"]))
+	args = strings.TrimSpace(asWorkflowString(data["workflowArgs"]))
+	resume = strings.TrimSpace(asWorkflowString(data["workflowResume"]))
+	script = asWorkflowString(data["workflowScript"])
+	saveAs = strings.TrimSpace(asWorkflowString(data["workflowSaveAs"]))
+	scriptPath = strings.TrimSpace(asWorkflowString(data["workflowScriptPath"]))
 	return name, args, resume, script, saveAs, scriptPath, true
+}
+
+// workflowResultData returns the structured payload and code of a workflow
+// tool result, parsing the model text only for legacy results that predate
+// the channel separation.
+func workflowResultData(result *core.ToolResult) (map[string]any, string) {
+	if result.Outcome != "" {
+		payload, _ := result.Payload.(map[string]any)
+		return payload, result.Code
+	}
+	env, parsed := core.ParseToolEnvelope(core.ToolResultModelText(*result))
+	if !parsed {
+		return nil, ""
+	}
+	return env.Data, env.Code
 }
 
 func workflowRunIDFromToolResult(result *core.ToolResult) string {

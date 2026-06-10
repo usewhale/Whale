@@ -886,10 +886,10 @@ func rawToolResultReplayDiagnosticsWithContent(history []core.Message) (deepSeek
 				if _, ok := pendingToolCalls[tr.ToolCallID]; !ok {
 					continue
 				}
-				rawTokens := compact.EstimateTokens(tr.Content)
-				diag.rawChars += len(tr.Content)
+				rawTokens := compact.EstimateTokens(core.ToolResultModelText(tr))
+				diag.rawChars += len(core.ToolResultModelText(tr))
 				diag.rawTokens += rawTokens
-				rawByCallID[tr.ToolCallID] = tr.Content
+				rawByCallID[tr.ToolCallID] = core.ToolResultModelText(tr)
 				delete(pendingToolCalls, tr.ToolCallID)
 			}
 		}
@@ -982,7 +982,7 @@ func toDeepSeekMessages(history []core.Message) []map[string]any {
 				out = append(out, map[string]any{
 					"role":         "tool",
 					"tool_call_id": tr.ToolCallID,
-					"content":      compact.ToolResultReplayContent(tr.Content),
+					"content":      compact.ToolResultReplayContent(core.ToolResultModelText(tr)),
 				})
 				delete(pendingToolCalls, tr.ToolCallID)
 			}

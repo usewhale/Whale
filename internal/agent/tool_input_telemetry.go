@@ -60,13 +60,17 @@ func toolInputInvalidCode(res core.ToolResult) string {
 	if !res.IsError {
 		return ""
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
-	if !ok {
-		return ""
+	code := strings.TrimSpace(res.Code)
+	if code == "" {
+		env, ok := core.ParseToolEnvelope(core.ToolResultModelText(res))
+		if !ok {
+			return ""
+		}
+		code = strings.TrimSpace(env.Code)
 	}
-	switch strings.TrimSpace(env.Code) {
+	switch code {
 	case "invalid_input", "invalid_args":
-		return strings.TrimSpace(env.Code)
+		return code
 	default:
 		return ""
 	}

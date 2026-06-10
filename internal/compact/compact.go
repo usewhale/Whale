@@ -22,7 +22,7 @@ func EstimateMessagesTokens(msgs []core.Message) int {
 			total += EstimateTokens(tc.Name) + EstimateTokens(tc.Input)
 		}
 		for _, tr := range m.ToolResults {
-			total += EstimateTokens(tr.Name) + EstimateTokens(tr.Content)
+			total += EstimateTokens(tr.Name) + EstimateTokens(core.ToolResultModelText(tr))
 		}
 	}
 	return total

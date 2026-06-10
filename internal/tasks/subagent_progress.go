@@ -192,12 +192,21 @@ func summarizeChildToolResult(res core.ToolResult, action childToolAction) strin
 }
 
 func childResultMetricSuffix(res core.ToolResult) string {
-	env, ok := core.ParseToolEnvelope(res.Content)
-	if !ok || !env.OK || !env.Success {
-		return ""
+	var data map[string]any
+	if payload, ok := res.Payload.(map[string]any); ok && res.Outcome != "" {
+		if res.Outcome != core.OutcomeSuccess && res.Outcome != core.OutcomeNoResult {
+			return ""
+		}
+		data = payload
+	} else {
+		env, ok := core.ParseToolEnvelope(core.ToolResultModelText(res))
+		if !ok || !env.OK || !env.Success {
+			return ""
+		}
+		data = env.Data
 	}
-	metrics := asMap(env.Data["metrics"])
-	payload := asMap(env.Data["payload"])
+	metrics := asMap(data["metrics"])
+	payload := asMap(data["payload"])
 	switch res.Name {
 	case "read_file":
 		total := asInt(metrics["total_lines"])
@@ -208,7 +217,7 @@ func childResultMetricSuffix(res core.ToolResult) string {
 	case "list_dir":
 		items := core.AsAnySlice(payload["items"])
 		if len(items) == 0 {
-			items = core.AsAnySlice(env.Data["items"])
+			items = core.AsAnySlice(data["items"])
 		}
 		if len(items) > 0 {
 			return fmt.Sprintf("%d items", len(items))
@@ -232,12 +241,12 @@ func childResultMetricSuffix(res core.ToolResult) string {
 			return fmt.Sprintf("%d matches", len(items))
 		}
 	case "web_search":
-		count := asInt(env.Data["count"])
+		count := asInt(data["count"])
 		if count > 0 {
 			return fmt.Sprintf("%d results", count)
 		}
 	case "fetch", "web_fetch":
-		status := asInt(env.Data["status_code"])
+		status := asInt(data["status_code"])
 		if status > 0 {
 			return fmt.Sprintf("HTTP %d", status)
 		}

@@ -44,7 +44,7 @@ func taskCompletedEvent(res core.ToolResult) (AgentEvent, bool) {
 	if res.IsError {
 		info.Status = "failed"
 	}
-	if env, ok := core.ParseToolEnvelope(res.Content); ok {
+	if env, ok := core.ParseToolEnvelope(core.ToolResultModelText(res)); ok {
 		if !env.OK || !env.Success {
 			info.Status = "failed"
 		}

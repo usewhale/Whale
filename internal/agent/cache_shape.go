@@ -348,7 +348,7 @@ func shapeToolResults(results []core.ToolResult, pendingToolCalls *[]pendingCach
 		out = append(out, cacheShapeMessage{
 			Role:       core.RoleTool,
 			ToolCallID: id,
-			Text:       compact.ToolResultReplayContent(result.Content),
+			Text:       compact.ToolResultReplayContent(core.ToolResultModelText(result)),
 		})
 		*pendingToolCalls = (*pendingToolCalls)[match+1:]
 	}

@@ -250,7 +250,7 @@ func collectStepRuns(turns []TurnSpec, msgs []core.Message) ([]StepRun, error) {
 				Name:  res.Name,
 				Input: step.Input,
 			}
-			env, ok := core.ParseToolEnvelope(res.Content)
+			env, ok := core.ParseToolEnvelope(core.ToolResultModelText(res))
 			out = append(out, StepRun{
 				Turn:        turnIdx + 1,
 				Index:       stepIdx,

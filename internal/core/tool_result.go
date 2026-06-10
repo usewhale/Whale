@@ -64,6 +64,15 @@ func CanonicalizeToolPayload(env ToolEnvelope) map[string]any {
 	if env.Truncated {
 		out["truncated"] = true
 	}
+	if _, exists := out["metadata"]; !exists {
+		meta := env.Metadata
+		if meta == nil {
+			meta = env.Meta
+		}
+		if len(meta) > 0 {
+			out["metadata"] = meta
+		}
+	}
 	if len(out) == 0 {
 		return nil
 	}
@@ -126,6 +135,26 @@ func fallbackEnvelopeJSON(env ToolEnvelope) string {
 		return `{"success":false,"code":"marshal_failed"}`
 	}
 	return string(b)
+}
+
+// ToolResultModelText returns the model-visible text of a result.
+// Transitional: falls back to Content for results deserialized from
+// legacy session files; once the legacy decoder populates ModelText on
+// load, this collapses to the field read.
+func ToolResultModelText(r ToolResult) string {
+	if r.ModelText != "" {
+		return r.ModelText
+	}
+	return r.Content
+}
+
+// ToolResultOutcome returns the protocol outcome, deriving it from legacy
+// fields when the result predates the channel separation.
+func ToolResultOutcome(r ToolResult) ToolOutcome {
+	if r.Outcome != "" {
+		return r.Outcome
+	}
+	return FinalizeToolResultChannels(r).Outcome
 }
 
 // FinalizeToolResultChannels backfills the channel-separated fields on a
