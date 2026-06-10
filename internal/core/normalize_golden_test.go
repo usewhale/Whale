@@ -85,7 +85,7 @@ func TestNormalizeToolContentGolden(t *testing.T) {
 		})), false, 600},
 	}
 	for _, tc := range cases {
-		content, isErr, archive := normalizeToolContent(ctx, "fixture_tool", "call-1", tc.raw, tc.fallbackErr, tc.maxChars, goldenDurationMS)
+		content, isErr, archive, _ := normalizeToolContent(ctx, "fixture_tool", "call-1", tc.raw, tc.fallbackErr, tc.maxChars, goldenDurationMS)
 		if archive != "" {
 			t.Fatalf("%s: expected no archive path without archive config, got %q", tc.name, archive)
 		}

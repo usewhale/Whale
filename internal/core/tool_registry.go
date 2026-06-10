@@ -356,11 +356,23 @@ func normalizeRegistryResult(ctx context.Context, call ToolCall, res ToolResult,
 	if maxResultChars <= 0 {
 		maxResultChars = DefaultMaxToolResultChars
 	}
-	content, isErr, archivePath := normalizeToolContent(ctx, call.Name, call.ID, res.Content, res.IsError, maxResultChars, durationMS)
+	content, isErr, archivePath, env := normalizeToolContent(ctx, call.Name, call.ID, res.Content, res.IsError, maxResultChars, durationMS)
 	res.ToolCallID = call.ID
 	res.Name = call.Name
 	res.Content = content
 	res.IsError = isErr
+	// The normalize step is the single funnel every dispatched result
+	// passes through, so the channel-separated fields are assigned here:
+	// ModelText carries the exact bytes the model sees today, and
+	// Outcome/Code/Payload expose the same information structurally.
+	res.ModelText = content
+	res.Code = env.Code
+	if isErr {
+		res.Outcome = OutcomeForErrorCode(env.Code)
+	} else {
+		res.Outcome = OutcomeSuccess
+	}
+	res.Payload = CanonicalizeToolPayload(env)
 	if archivePath != "" {
 		if res.Metadata == nil {
 			res.Metadata = map[string]any{}
@@ -371,7 +383,7 @@ func normalizeRegistryResult(ctx context.Context, call ToolCall, res ToolResult,
 	return res
 }
 
-func normalizeToolContent(ctx context.Context, toolName, toolCallID, raw string, fallbackErr bool, maxResultChars int, durationMS int64) (string, bool, string) {
+func normalizeToolContent(ctx context.Context, toolName, toolCallID, raw string, fallbackErr bool, maxResultChars int, durationMS int64) (string, bool, string, ToolEnvelope) {
 	env := ToolEnvelope{
 		OK:        !fallbackErr,
 		Success:   !fallbackErr,
@@ -458,9 +470,9 @@ func normalizeToolContent(ctx context.Context, toolName, toolCallID, raw string,
 	b, err := MarshalToolJSON(env)
 	if err != nil {
 		if maxResultChars > 0 && len(raw) > maxResultChars {
-			return raw[:maxResultChars], fallbackErr, ""
+			return raw[:maxResultChars], fallbackErr, "", env
 		}
-		return raw, fallbackErr, ""
+		return raw, fallbackErr, "", env
 	}
 	if maxResultChars > 0 && len(b) > maxResultChars {
 		archivePath := archiveToolResult(ctx, toolName, toolCallID, b)
@@ -503,15 +515,15 @@ func normalizeToolContent(ctx context.Context, toolName, toolCallID, raw string,
 			}
 			sb, serr := MarshalToolJSON(short)
 			if serr == nil && len(sb) <= maxResultChars {
-				return string(sb), !env.OK, archivePath
+				return string(sb), !env.OK, archivePath, env
 			}
 			if budget < 1024 {
 				break
 			}
 		}
-		return string(b[:maxResultChars]), !env.OK, archivePath
+		return string(b[:maxResultChars]), !env.OK, archivePath, env
 	}
-	return string(b), !env.OK, ""
+	return string(b), !env.OK, "", env
 }
 
 var archivePathSanitizer = regexp.MustCompile(`[^A-Za-z0-9_.-]+`)

@@ -175,4 +175,13 @@ type ToolResult struct {
 	Content    string
 	Metadata   map[string]any `json:"metadata,omitempty"`
 	IsError    bool
+	// Channel-separated fields (phase 1): Outcome/Code/Payload are the
+	// structured channel for the TUI, recovery, and evals; ModelText is
+	// the only text the model sees, rendered once at creation and never
+	// re-rendered. Content/IsError remain during the migration and are
+	// removed in the final step.
+	Outcome   ToolOutcome `json:"Outcome,omitempty"`
+	Code      string      `json:"Code,omitempty"`
+	Payload   any         `json:"Payload,omitempty"`
+	ModelText string      `json:"ModelText,omitempty"`
 }
