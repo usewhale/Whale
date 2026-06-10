@@ -236,7 +236,7 @@ func (a *Agent) appendDispatchedToolResult(ctx context.Context, sessionID string
 		}
 	}
 	if prepared.PreHookContext != "" {
-		finalRes.Content = addHookContextToToolContent(finalRes.Content, prepared.PreHookContext)
+		addHookContextToToolResult(&finalRes, prepared.PreHookContext)
 	}
 	// Parallel spawn_subagent batches run post hooks only after the whole batch
 	// returns, in original tool-call order, so stored tool results and events
@@ -244,11 +244,11 @@ func (a *Agent) appendDispatchedToolResult(ctx context.Context, sessionID string
 	if !a.hooks.Empty() {
 		var toolArgs any
 		_ = json.Unmarshal([]byte(call.Input), &toolArgs)
-		payload := NewPostToolUsePayload(sessionID, call, toolArgs, finalRes.Content)
+		payload := NewPostToolUsePayload(sessionID, call, toolArgs, core.ToolResultModelText(finalRes))
 		payload.CWD = a.workspaceRoot
 		report := a.hooks.RunHookWithObserver(ctx, payload, a.hookRunObserver(ctx, events))
 		if strings.TrimSpace(report.AdditionalContext) != "" {
-			finalRes.Content = addHookContextToToolContent(finalRes.Content, report.AdditionalContext)
+			addHookContextToToolResult(&finalRes, report.AdditionalContext)
 		}
 	}
 	// Hook injection (and recovery wrappers that bypass the dispatch
@@ -277,6 +277,23 @@ func (a *Agent) bestEffortUpdateAssistant(msg core.Message) {
 	// was canceled. This is diagnostic persistence; failure must not mask the
 	// original provider error.
 	_ = a.store.Update(context.Background(), msg)
+}
+
+// addHookContextToToolResult injects hook context into both channels of a
+// result: the structured Metadata (which phase 2's plain-text renderer will
+// read) and the model-visible text via addHookContextToToolContent (the
+// sanctioned pre-persistence ModelText mutation; the resync in
+// appendDispatchedToolResult re-derives ModelText/Payload afterwards).
+func addHookContextToToolResult(res *core.ToolResult, hookContext string) {
+	hookContext = strings.TrimSpace(hookContext)
+	if hookContext == "" {
+		return
+	}
+	if res.Metadata == nil {
+		res.Metadata = map[string]any{}
+	}
+	res.Metadata["hook_context"] = appendHookContextValue(res.Metadata["hook_context"], hookContext)
+	res.Content = addHookContextToToolContent(res.Content, hookContext)
 }
 
 func addHookContextToToolContent(content, hookContext string) string {
