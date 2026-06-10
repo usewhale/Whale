@@ -36,6 +36,21 @@ type Message struct {
 	FinishReason FinishReason
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
+	// Usage carries the provider-reported token accounting for assistant
+	// turns; ErrorDetail preserves the failure reason for turns that end
+	// with FinishReasonError (session analysis was previously impossible:
+	// error turns persisted with empty text and no cause).
+	Usage       *MessageUsage `json:"Usage,omitempty"`
+	ErrorDetail string        `json:"ErrorDetail,omitempty"`
+}
+
+// MessageUsage is the per-turn token accounting persisted with assistant
+// messages, sourced from the provider's usage response.
+type MessageUsage struct {
+	PromptTokens          int `json:"prompt_tokens,omitempty"`
+	CompletionTokens      int `json:"completion_tokens,omitempty"`
+	PromptCacheHitTokens  int `json:"prompt_cache_hit_tokens,omitempty"`
+	PromptCacheMissTokens int `json:"prompt_cache_miss_tokens,omitempty"`
 }
 
 type MessagePartType string

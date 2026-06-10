@@ -109,6 +109,7 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 		case llm.EventComplete:
 			if ev.Response != nil {
 				lastUsage = ev.Response.Usage
+				assistant.Usage = messageUsageFrom(ev.Response.Usage)
 				lastModel = ev.Response.Model
 				assistant.FinishReason = ev.Response.FinishReason
 				if ev.Response.Reasoning != "" {
@@ -167,6 +168,7 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 				} else {
 					assistant.FinishReason = core.FinishReasonError
 				}
+				assistant.ErrorDetail = ev.Err.Error()
 				assistant.ToolCalls = nil
 				a.bestEffortUpdateAssistant(assistant)
 				return core.Message{}, llm.Usage{}, "", nil, ev.Err
@@ -206,4 +208,18 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 	}
 	cacheShape := buildCacheShapeForRequestWithRuntime(cacheShapeRequestAgent, history, toolList, assistantPrefix, rt.Prefix.SystemBlocks(), rt.RuntimeBlocks())
 	return assistant, lastUsage, lastModel, cacheShape, nil
+}
+
+// messageUsageFrom converts provider usage into the persisted form,
+// returning nil when the provider reported nothing.
+func messageUsageFrom(u llm.Usage) *core.MessageUsage {
+	if u.PromptTokens == 0 && u.CompletionTokens == 0 && u.PromptCacheHitTokens == 0 && u.PromptCacheMissTokens == 0 {
+		return nil
+	}
+	return &core.MessageUsage{
+		PromptTokens:          u.PromptTokens,
+		CompletionTokens:      u.CompletionTokens,
+		PromptCacheHitTokens:  u.PromptCacheHitTokens,
+		PromptCacheMissTokens: u.PromptCacheMissTokens,
+	}
 }
