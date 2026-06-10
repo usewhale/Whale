@@ -123,7 +123,6 @@ func NewToolResultError(call ToolCall, code, msg string, data map[string]any) To
 	return NewToolResultFromEnvelope(call, env, nil)
 }
 
-
 // ToolResultModelText returns the model-visible text of a result.
 // Transitional: falls back to Content for results deserialized from
 // legacy session files; once the legacy decoder populates ModelText on
