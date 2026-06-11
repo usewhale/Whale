@@ -282,27 +282,16 @@ func (t Tool) workflowDisabled(call core.ToolCall) (core.ToolResult, error) {
 	return res, nil
 }
 
+// workflowStatusData stays a plain status snapshot: tool results persist in the
+// session history, so any behavioral instructions embedded here would keep
+// steering the model after the configuration changes. Behavioral guidance
+// lives in the per-turn workflow runtime system block instead.
 func (t Tool) workflowStatusData() map[string]any {
-	data := map[string]any{
-		"enabled":          t.enabled,
-		"enableHint":       "Tell the user to enable Dynamic workflows in Whale /config, then stop.",
-		"canList":          t.enabled,
-		"canResolve":       t.enabled,
-		"canRun":           t.enabled,
-		"canCreate":        t.enabled,
-		"autoEnable":       false,
-		"fallbackAllowed":  false,
-		"disabledAction":   "When disabled, report workflow_disabled and stop for this tool result. On a later user request to list or run workflows, call workflow again because /config may have changed. Do not ask what to do next, present choices, read or edit Whale configuration, retry within the same turn, offer shell/manual substitutes, or say you can help after workflows are enabled.",
-		"brandName":        "Whale",
-		"forbiddenBrand":   "Whisper",
-		"modelGuidance":    "Use the product name Whale. Do not say Whisper. This disabled result applies only to the current tool result. On a later user request to list or run workflows, call workflow again because /config may have changed. Do not ask what to do next, present choices, inspect workflow directories, read configuration, edit configuration, retry within the same turn, auto-enable workflows, or offer shell/manual substitutes.",
-		"responseContract": "Reply only with: Dynamic workflows are disabled in Whale. Enable them in /config before using workflows.",
-		"directoryProbing": "Do not inspect .whale/workflows with file or shell tools for workflow discovery.",
-	}
+	data := map[string]any{"enabled": t.enabled}
 	if t.enabled {
 		data["roots"] = workflowRootData(t.library)
 	} else {
-		data["workflowDirectoriesHidden"] = true
+		data["enableHint"] = "The user can enable Dynamic workflows in Whale /config."
 	}
 	return data
 }

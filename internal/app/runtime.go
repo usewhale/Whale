@@ -230,6 +230,7 @@ Workflow runtime.
 Workflow runtime.
 
 - Dynamic workflows are enabled in Whale.
+- Treat any earlier workflow_disabled tool results in this conversation as stale; the configuration has changed since then.
 - For workflow discovery or launch, use the workflow tool instead of inspecting workflow directories with file or shell tools.
 - Use the full workflow authoring rules only when the user asks to create, generate, write, or save a new workflow.
 `)}

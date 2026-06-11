@@ -1,9 +1,12 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/usewhale/whale/internal/core"
 )
 
 const (
@@ -87,6 +90,7 @@ func (a *App) ApplyConfigSettings(updates []ConfigSettingUpdate) (ConfigSettings
 	if err != nil {
 		return ConfigSettingsApplyResult{}, err
 	}
+	workflowsEnabledChanged := a.cfg.WorkflowsEnabled != loaded.WorkflowsEnabled
 	a.cfg.WorkflowsEnabled = loaded.WorkflowsEnabled
 	a.cfg.WorkflowKeywordTrigger = loaded.WorkflowKeywordTrigger
 	a.cfg.TrustedWorkflows = append([]string(nil), loaded.TrustedWorkflows...)
@@ -100,6 +104,9 @@ func (a *App) ApplyConfigSettings(updates []ConfigSettingUpdate) (ConfigSettings
 		return ConfigSettingsApplyResult{}, err
 	}
 	a.a = nil
+	if workflowsEnabledChanged {
+		a.recordWorkflowsEnabledChanged(a.cfg.WorkflowsEnabled)
+	}
 	state, err := a.ConfigSettings()
 	if err != nil {
 		return ConfigSettingsApplyResult{}, err
@@ -114,6 +121,27 @@ func (a *App) ApplyConfigSettings(updates []ConfigSettingUpdate) (ConfigSettings
 		}
 	}
 	return ConfigSettingsApplyResult{Updated: updated, Path: path}, nil
+}
+
+// recordWorkflowsEnabledChanged appends a hidden marker so the model stops
+// trusting workflow tool results that predate the configuration change. The
+// marker is append-only, so the cached history prefix is unaffected.
+func (a *App) recordWorkflowsEnabledChanged(enabled bool) {
+	if a == nil || a.msgStore == nil {
+		return
+	}
+	state, stale := "disabled", "enabled"
+	if enabled {
+		state, stale = "enabled", "disabled"
+	}
+	text := fmt.Sprintf("<config_changed>\nDynamic workflows are now %s in Whale. Treat earlier statements or workflow tool results claiming they are %s as stale.\n</config_changed>", state, stale)
+	_, _ = a.msgStore.Create(context.Background(), core.Message{
+		SessionID:    a.sessionID,
+		Role:         core.RoleUser,
+		Text:         text,
+		Hidden:       true,
+		FinishReason: core.FinishReasonEndTurn,
+	})
 }
 
 func configSettingsState(cfg Config, loaded LoadedConfig) ConfigSettingsState {

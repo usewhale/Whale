@@ -96,26 +96,17 @@ func TestWorkflowToolStatusWorksWhenDisabled(t *testing.T) {
 	if env.Summary != workflowDisabledUserMessage {
 		t.Fatalf("disabled status should expose a short user-facing summary, got %q", env.Summary)
 	}
-	if env.Data["enabled"] != false || env.Data["canRun"] != false {
+	if env.Data["enabled"] != false {
 		t.Fatalf("unexpected status data: %+v", env.Data)
 	}
 	if _, hasRoots := env.Data["roots"]; hasRoots {
 		t.Fatalf("disabled status should not expose workflow roots: %+v", env.Data)
 	}
-	if env.Data["workflowDirectoriesHidden"] != true {
-		t.Fatalf("disabled status should hide workflow directories: %+v", env.Data)
-	}
-	if env.Data["brandName"] != "Whale" || env.Data["forbiddenBrand"] != "Whisper" {
-		t.Fatalf("disabled status should pin the Whale brand: %+v", env.Data)
-	}
-	if env.Data["autoEnable"] != false {
-		t.Fatalf("disabled status should disallow auto-enable: %+v", env.Data)
+	if hint := core.AsString(env.Data["enableHint"]); !strings.Contains(hint, "/config") {
+		t.Fatalf("disabled status should point the user at /config: %+v", env.Data)
 	}
 	if strings.Contains(res.ModelText, ".whale/config.local.toml") || strings.Contains(res.ModelText, "set [workflows]") {
 		t.Fatalf("disabled status should not instruct config-file edits: %s", res.ModelText)
-	}
-	if !strings.Contains(res.ModelText, "read or edit Whale configuration") {
-		t.Fatalf("disabled status should tell the model not to mutate config: %s", res.ModelText)
 	}
 }
 
@@ -156,9 +147,6 @@ log('disabled')
 	if strings.Contains(res.ModelText, ".whale/config.local.toml") || strings.Contains(res.ModelText, "set [workflows]") {
 		t.Fatalf("disabled list should not instruct config-file edits: %s", res.ModelText)
 	}
-	if !strings.Contains(res.ModelText, "edit configuration") {
-		t.Fatalf("disabled list should tell the model not to mutate config: %s", res.ModelText)
-	}
 }
 
 func TestWorkflowToolRunReturnsDisabledWithoutConfigMutationGuidance(t *testing.T) {
@@ -185,27 +173,16 @@ func TestWorkflowToolRunReturnsDisabledWithoutConfigMutationGuidance(t *testing.
 	if env.Error != workflowDisabledUserMessage {
 		t.Fatalf("disabled run should expose a short user-facing error, got %q", env.Error)
 	}
-	if env.Data["autoEnable"] != false {
-		t.Fatalf("disabled run should disallow auto-enable: %+v", env.Data)
+	if env.Data["enabled"] != false {
+		t.Fatalf("disabled run should report enabled=false: %+v", env.Data)
 	}
-	if env.Data["fallbackAllowed"] != false {
-		t.Fatalf("disabled run should disallow fallback suggestions: %+v", env.Data)
-	}
-	if env.Data["brandName"] != "Whale" || env.Data["forbiddenBrand"] != "Whisper" {
-		t.Fatalf("disabled run should pin the Whale brand: %+v", env.Data)
-	}
-	if guidance := core.AsString(env.Data["modelGuidance"]); !strings.Contains(guidance, "Do not say Whisper") || !strings.Contains(guidance, "Do not ask what to do next") || !strings.Contains(guidance, "later user request") || !strings.Contains(guidance, "call workflow again") {
-		t.Fatalf("disabled run should keep model-only guidance in data: %+v", env.Data)
-	}
-	for _, unexpected := range []string{".whale/config.local.toml", "set [workflows]", "enabled = true", "unless the user explicitly asks", "tell me", "I can help after"} {
+	for _, unexpected := range []string{".whale/config.local.toml", "set [workflows]", "enabled = true", "unless the user explicitly asks", "tell me", "I can help after", "responseContract", "modelGuidance", "disabledAction"} {
 		if strings.Contains(res.ModelText, unexpected) {
-			t.Fatalf("disabled run should not instruct config mutation via %q: %s", unexpected, res.ModelText)
+			t.Fatalf("disabled run should not contain %q: %s", unexpected, res.ModelText)
 		}
 	}
-	for _, want := range []string{"Reply only", "Dynamic workflows are disabled in Whale", "Do not say Whisper", "Do not ask what to do next", "present choices", "inspect workflow directories", "edit configuration", "retry within the same turn", "shell/manual substitutes", "later user request", "call workflow again"} {
-		if !strings.Contains(res.ModelText, want) {
-			t.Fatalf("disabled run missing %q: %s", want, res.ModelText)
-		}
+	if !strings.Contains(res.ModelText, "Dynamic workflows are disabled in Whale") {
+		t.Fatalf("disabled run missing user-facing message: %s", res.ModelText)
 	}
 }
 

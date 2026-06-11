@@ -164,6 +164,7 @@ func (a *App) reloadWorkflowConfigForTurn() error {
 	if !changed {
 		return nil
 	}
+	workflowsEnabledChanged := a.cfg.WorkflowsEnabled != loaded.WorkflowsEnabled
 	a.cfg.WorkflowsEnabled = loaded.WorkflowsEnabled
 	a.cfg.WorkflowKeywordTrigger = loaded.WorkflowKeywordTrigger
 	a.cfg.TrustedWorkflows = append([]string(nil), loaded.TrustedWorkflows...)
@@ -177,6 +178,9 @@ func (a *App) reloadWorkflowConfigForTurn() error {
 		return err
 	}
 	a.a = nil
+	if workflowsEnabledChanged {
+		a.recordWorkflowsEnabledChanged(a.cfg.WorkflowsEnabled)
+	}
 	return nil
 }
 
