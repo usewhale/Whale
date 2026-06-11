@@ -187,7 +187,7 @@ func toolFailureEvidence(payload agent.HookPayload) (Evidence, bool) {
 		case core.OutcomeSuccess, core.OutcomeNoResult:
 			return Evidence{}, false
 		}
-		msg = core.FirstNonEmpty(payload.ToolErrorCode, firstLine(result))
+		msg = core.FirstNonEmpty(firstLine(result), payload.ToolErrorCode)
 	} else {
 		env, ok := core.ParseToolEnvelope(result)
 		if !ok || env.Success || env.OK {
