@@ -313,7 +313,18 @@ func RenderTruncatedToolText(text string, maxChars int, archivePath string) stri
 			return out
 		}
 	}
-	return truncateOnRuneBoundary(text[:maxChars], false)
+	// Budgets too small for the head/tail split still must signal the cut
+	// in-band: a head slice plus a compact marker, never a bare prefix.
+	smallMarker := fmt.Sprintf("\n...[truncated, %d chars total]...", len(text))
+	if archivePath != "" {
+		smallMarker = fmt.Sprintf("\n...[truncated, %d chars total; full result: %s]...", len(text), archivePath)
+	}
+	headBudget := maxChars - len(smallMarker)
+	if headBudget <= 0 {
+		// Degenerate limit: the marker itself dominates; keep what fits.
+		return truncateOnRuneBoundary(smallMarker[1:min(maxChars+1, len(smallMarker))], false)
+	}
+	return truncateOnRuneBoundary(text[:min(headBudget, len(text))], false) + smallMarker
 }
 
 // BoundedTruncationPayload replaces the full canonical payload when the

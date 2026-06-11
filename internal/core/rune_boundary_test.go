@@ -45,3 +45,23 @@ func TestRenderTruncatedToolTextValidUTF8AtCJKBoundary(t *testing.T) {
 		t.Fatalf("bounded payload tail is not valid UTF-8")
 	}
 }
+
+func TestRenderTruncatedToolTextSmallBudgetKeepsMarker(t *testing.T) {
+	text := strings.Repeat("output line\n", 300)
+	for _, maxChars := range []int{600, 200, 64} {
+		out := RenderTruncatedToolText(text, maxChars, "")
+		if len(out) > maxChars {
+			t.Fatalf("maxChars=%d: result too long: %d", maxChars, len(out))
+		}
+		if !strings.Contains(out, "...[truncated") && !strings.Contains(out, "...[output truncated") {
+			t.Fatalf("maxChars=%d: truncation must never be silent, got %q", maxChars, out)
+		}
+		if !utf8.ValidString(out) {
+			t.Fatalf("maxChars=%d: invalid UTF-8", maxChars)
+		}
+	}
+	// Untruncated input passes through whole.
+	if got := RenderTruncatedToolText("short", 600, ""); got != "short" {
+		t.Fatalf("short input must pass through, got %q", got)
+	}
+}
