@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 // RenderToolResultText renders the model-visible text of a tool result from
@@ -350,24 +351,31 @@ func BoundedTruncationPayload(text string, originalChars int, code, archivePath 
 	return out
 }
 
+// truncateOnRuneBoundary trims a byte-sliced string so it never starts or
+// ends with a partial UTF-8 rune. fromStart drops leading continuation
+// bytes; otherwise a trailing incomplete rune (start byte without all its
+// continuation bytes) is removed entirely.
 func truncateOnRuneBoundary(s string, fromStart bool) string {
 	if fromStart {
-		for i := 0; i < 4 && i < len(s); i++ {
-			if r := s[i:]; len(r) == 0 || (r[0]&0xC0) != 0x80 {
-				return r
-			}
+		i := 0
+		for i < len(s) && i < utf8.UTFMax && (s[i]&0xC0) == 0x80 {
+			i++
 		}
-		return s
+		return s[i:]
 	}
-	for i := len(s); i > 0 && i > len(s)-4; i-- {
-		if (s[i-1] & 0xC0) != 0x80 {
+	i := len(s)
+	for i > 0 && len(s)-i < utf8.UTFMax {
+		if r, size := utf8.DecodeLastRuneInString(s[:i]); !(r == utf8.RuneError && size <= 1) {
 			return s[:i]
 		}
-		if i == len(s)-3 {
-			break
-		}
+		i--
 	}
-	return s
+	if len(s)-i >= utf8.UTFMax {
+		// More trailing garbage than a partial rune: the input was not
+		// valid UTF-8 to begin with (binary output); pass it through.
+		return s
+	}
+	return s[:i]
 }
 
 func appendRecoveryLine(b *strings.Builder, recovery any) {
