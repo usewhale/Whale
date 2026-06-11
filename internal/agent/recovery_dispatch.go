@@ -175,7 +175,13 @@ func waitRecoveryBackoff(ctx context.Context, call core.ToolCall, rule RecoveryR
 	select {
 	case <-ctx.Done():
 		timer.Stop()
-		return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: ctx.Err().Error()}, true
+		return core.ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			ModelText:  ctx.Err().Error(),
+			Outcome:    core.OutcomeCancelled,
+			Code:       "cancelled",
+		}, true
 	case <-timer.C:
 		return core.ToolResult{}, false
 	}

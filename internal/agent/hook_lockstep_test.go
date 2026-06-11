@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -50,5 +51,22 @@ func TestBypassResultFinalizedBeforePostHook(t *testing.T) {
 	}
 	if !strings.HasPrefix(payload.ToolResult, "error (not_found)") {
 		t.Fatalf("hook payload should carry rendered text, got %q", payload.ToolResult)
+	}
+}
+
+func TestCanceledRecoveryBackoffResultIsError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	res, ok := waitRecoveryBackoff(ctx, core.ToolCall{ID: "c1", Name: "shell_run"}, RecoveryRule{
+		Action: RecoveryActionRetryWithBackoff, BackoffMS: 50,
+	})
+	if !ok {
+		t.Fatal("expected backoff wait to report cancellation")
+	}
+	if !res.IsError() || res.Outcome != core.OutcomeCancelled {
+		t.Fatalf("canceled backoff result must be error-class, got %+v", res)
+	}
+	if toolResultUsableAfterCancel(res) {
+		t.Fatal("canceled backoff result must not be treated as usable")
 	}
 }
