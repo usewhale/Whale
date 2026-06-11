@@ -150,9 +150,6 @@ func (a *App) RunTurnWithContentOptions(ctx context.Context, parts []core.Messag
 	if !opts.WorkflowAuthoring {
 		opts.WorkflowAuthoring = workflowAuthoringRequested(input)
 	}
-	if workflowShortcutRequested(input, opts.WorkflowAuthoring, a.cfg.WorkflowsEnabled) {
-		opts.WorkflowShortcutInput = input
-	}
 	if err := a.ensureCurrentModeMarker(); err != nil {
 		a.pendingGoalTurn = false
 		return nil, err
@@ -184,9 +181,6 @@ func (a *App) RunTurnWithInjectedContentOptions(ctx context.Context, visiblePart
 	opts = a.applyRunOptionsDefaults(opts)
 	if !opts.WorkflowAuthoring {
 		opts.WorkflowAuthoring = workflowAuthoringRequested(visibleInput + "\n" + hiddenInput)
-	}
-	if workflowShortcutRequested(visibleInput+"\n"+hiddenInput, opts.WorkflowAuthoring, a.cfg.WorkflowsEnabled) {
-		opts.WorkflowShortcutInput = visibleInput
 	}
 	if err := a.ensureCurrentModeMarker(); err != nil {
 		return nil, err
@@ -278,24 +272,6 @@ func workflowAuthoringRequested(input string) bool {
 		}
 	}
 	return false
-}
-
-func workflowRequestRequested(input string) bool {
-	text := strings.ToLower(strings.TrimSpace(input))
-	if text == "" {
-		return false
-	}
-	return strings.Contains(text, "workflow") || strings.Contains(text, "workflows") || strings.Contains(text, "工作流")
-}
-
-func workflowShortcutRequested(input string, authoring bool, enabled bool) bool {
-	if !workflowRequestRequested(input) {
-		return false
-	}
-	if !enabled {
-		return true
-	}
-	return !authoring
 }
 
 func (a *App) FinalizeTurn(lastAssistantText string, completed bool) error {

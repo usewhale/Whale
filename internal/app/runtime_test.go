@@ -459,38 +459,6 @@ func TestWorkflowAuthoringIntentDetection(t *testing.T) {
 	}
 }
 
-func TestWorkflowRequestDetection(t *testing.T) {
-	for _, input := range []string{
-		"有哪些 workflow",
-		"run dead-code-scan workflow",
-		"创建一个工作流",
-	} {
-		if !workflowRequestRequested(input) {
-			t.Fatalf("expected workflow request detection for %q", input)
-		}
-	}
-	for _, input := range []string{
-		"list files",
-		"检查 TODO 注释",
-	} {
-		if workflowRequestRequested(input) {
-			t.Fatalf("unexpected workflow request detection for %q", input)
-		}
-	}
-}
-
-func TestWorkflowShortcutDetection(t *testing.T) {
-	if !workflowShortcutRequested("run dead-code-scan workflow", false, true) {
-		t.Fatal("enabled run/list workflow requests should use shortcut")
-	}
-	if workflowShortcutRequested("create a workflow", true, true) {
-		t.Fatal("enabled authoring workflow requests should stay with model generation")
-	}
-	if !workflowShortcutRequested("create a workflow", true, false) {
-		t.Fatal("disabled workflow authoring requests should still short-circuit disabled status")
-	}
-}
-
 func TestNewSessionStoresWorktreeMeta(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "sk-test")
 	workspace := t.TempDir()

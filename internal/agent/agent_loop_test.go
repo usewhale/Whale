@@ -108,43 +108,6 @@ func TestWorkflowAuthoringTurnOnlyExposesWorkflowTool(t *testing.T) {
 	}
 }
 
-func TestWorkflowShortcutBypassesProviderAndPersistsToolResult(t *testing.T) {
-	store := NewInMemoryStore()
-	provider := &captureToolsProvider{}
-	a := NewAgent(provider, store, []Tool{namedTestTool{name: "workflow"}})
-
-	events, err := a.RunStreamWithTurnOptions(context.Background(), "s-workflow-shortcut", "run dead-code-scan workflow", RunOptions{WorkflowShortcutInput: "run dead-code-scan workflow"})
-	if err != nil {
-		t.Fatalf("RunStreamWithTurnOptions: %v", err)
-	}
-	var sawCall, sawResult, sawDone bool
-	for ev := range events {
-		switch ev.Type {
-		case AgentEventTypeToolCall:
-			sawCall = ev.ToolCall != nil && ev.ToolCall.Name == "workflow" && strings.Contains(ev.ToolCall.Input, "dead-code-scan")
-		case AgentEventTypeToolResult:
-			sawResult = ev.Result != nil && ev.Result.Name == "workflow"
-		case AgentEventTypeDone:
-			sawDone = true
-		case AgentEventTypeError:
-			t.Fatalf("unexpected error: %v", ev.Err)
-		}
-	}
-	if len(provider.toolNames) != 0 {
-		t.Fatalf("shortcut should bypass provider, got tools captured: %+v", provider.toolNames)
-	}
-	if !sawCall || !sawResult || !sawDone {
-		t.Fatalf("expected workflow call/result/done events, saw call=%v result=%v done=%v", sawCall, sawResult, sawDone)
-	}
-	msgs, err := store.List(context.Background(), "s-workflow-shortcut")
-	if err != nil {
-		t.Fatalf("list messages: %v", err)
-	}
-	if len(msgs) != 3 || msgs[1].Role != RoleAssistant || len(msgs[1].ToolCalls) != 1 || msgs[2].Role != RoleTool || len(msgs[2].ToolResults) != 1 {
-		t.Fatalf("expected user, assistant tool call, tool result messages, got: %+v", msgs)
-	}
-}
-
 func TestNonWorkflowAuthoringTurnExposesFullToolSnapshot(t *testing.T) {
 	store := NewInMemoryStore()
 	provider := &captureToolsProvider{}
