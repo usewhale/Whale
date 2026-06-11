@@ -319,7 +319,7 @@ func toolOK(call core.ToolCall, data map[string]any) (core.ToolResult, error) {
 	if err != nil {
 		return core.ToolResult{}, err
 	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content, Outcome: core.OutcomeSuccess, Code: "ok"}, nil
 }
 
 func toolError(call core.ToolCall, code, msg string) core.ToolResult {
@@ -327,7 +327,7 @@ func toolError(call core.ToolCall, code, msg string) core.ToolResult {
 	if err != nil {
 		content = fmt.Sprintf(`{"ok":false,"success":false,"code":%q,"error":%q}`, code, msg)
 	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content}
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content, Outcome: core.OutcomeForErrorCode(code), Code: code}
 }
 
 func previewText(raw string, max int) string {
