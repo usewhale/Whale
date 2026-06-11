@@ -400,24 +400,7 @@ func (p *scriptedProvider) StreamResponse(_ context.Context, history []core.Mess
 }
 
 // envelopeViewForResult builds the legacy envelope view from the structured
-// channel so task verifications keep reading step.Envelope.Code; text
-// parsing remains only for results that predate the channel separation.
+// channel so task verifications keep reading step.Envelope.Code.
 func envelopeViewForResult(res core.ToolResult) (core.ToolEnvelope, bool) {
-	outcome := core.ToolResultOutcome(res)
-	if outcome == "" {
-		return core.ParseToolEnvelope(core.ToolResultModelText(res))
-	}
-	succeeded := outcome == core.OutcomeSuccess || outcome == core.OutcomeNoResult
-	env := core.ToolEnvelope{OK: succeeded, Success: succeeded, Code: res.Code}
-	if payload, ok := res.Payload.(map[string]any); ok {
-		env.Data = payload
-		if msg, ok := payload["message"].(string); ok {
-			env.Message = msg
-			env.Error = msg
-		}
-		if summary, ok := payload["summary"].(string); ok {
-			env.Summary = summary
-		}
-	}
-	return env, true
+	return core.ToolEnvelopeView(res)
 }

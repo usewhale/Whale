@@ -356,7 +356,7 @@ func normalizeRegistryResult(ctx context.Context, call ToolCall, res ToolResult,
 	if maxResultChars <= 0 {
 		maxResultChars = DefaultMaxToolResultChars
 	}
-	content, isErr, archivePath, env, truncated := normalizeToolContent(ctx, call.Name, call.ID, res.Content, res.IsError, maxResultChars, durationMS)
+	content, isErr, archivePath, env, boundedPayload := normalizeToolContent(ctx, call.Name, call.ID, res.Content, res.IsError, maxResultChars, durationMS)
 	res.ToolCallID = call.ID
 	res.Name = call.Name
 	res.Content = content
@@ -373,10 +373,10 @@ func normalizeRegistryResult(ctx context.Context, call ToolCall, res ToolResult,
 		res.Outcome = OutcomeSuccess
 	}
 	res.Payload = CanonicalizeToolPayload(env)
-	if truncated {
+	if boundedPayload != nil {
 		// The rendered text was truncated; keep the structured channel
 		// bounded too so large results are not persisted twice.
-		res.Payload = BoundedTruncationPayload(content, len(content), env.Code, archivePath)
+		res.Payload = boundedPayload
 		if res.Metadata == nil {
 			res.Metadata = map[string]any{}
 		}
@@ -388,7 +388,7 @@ func normalizeRegistryResult(ctx context.Context, call ToolCall, res ToolResult,
 	return res
 }
 
-func normalizeToolContent(ctx context.Context, toolName, toolCallID, raw string, fallbackErr bool, maxResultChars int, durationMS int64) (string, bool, string, ToolEnvelope, bool) {
+func normalizeToolContent(ctx context.Context, toolName, toolCallID, raw string, fallbackErr bool, maxResultChars int, durationMS int64) (string, bool, string, ToolEnvelope, map[string]any) {
 	env := ToolEnvelope{
 		OK:        !fallbackErr,
 		Success:   !fallbackErr,
@@ -479,10 +479,13 @@ func normalizeToolContent(ctx context.Context, toolName, toolCallID, raw string,
 	text := RenderToolResultText(toolName, outcome, env.Code, payload)
 	if maxResultChars > 0 && len(text) > maxResultChars {
 		archivePath := archiveToolResult(ctx, toolName, toolCallID, []byte(text))
+		// The bounded payload must capture the FULL rendered text (head/
+		// tail and original size) before the model text is truncated.
+		bounded := BoundedTruncationPayload(text, len(text), env.Code, archivePath)
 		text = RenderTruncatedToolText(text, maxResultChars, archivePath)
-		return text, !env.OK, archivePath, env, true
+		return text, !env.OK, archivePath, env, bounded
 	}
-	return text, !env.OK, "", env, false
+	return text, !env.OK, "", env, nil
 }
 
 var archivePathSanitizer = regexp.MustCompile(`[^A-Za-z0-9_.-]+`)

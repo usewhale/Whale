@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -337,6 +338,14 @@ func BoundedTruncationPayload(text string, originalChars int, code, archivePath 
 	}
 	if archivePath != "" {
 		out["full_result_path"] = archivePath
+	}
+	// Canonicalize so the live value and the persistence round trip agree
+	// (ints become float64 either way).
+	if b, err := MarshalToolJSON(out); err == nil {
+		var canonical map[string]any
+		if json.Unmarshal(b, &canonical) == nil {
+			return canonical
+		}
 	}
 	return out
 }

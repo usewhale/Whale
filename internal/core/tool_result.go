@@ -143,6 +143,36 @@ func ToolResultOutcome(r ToolResult) ToolOutcome {
 	return FinalizeToolResultChannels(r).Outcome
 }
 
+// ToolEnvelopeView rebuilds the legacy envelope view from the structured
+// channel so existing envelope-shaped consumers keep working; text parsing
+// remains only for results that predate the channel separation.
+func ToolEnvelopeView(res ToolResult) (ToolEnvelope, bool) {
+	if res.Outcome == "" {
+		// Legacy result: the text still carries the full envelope.
+		return ParseToolEnvelope(ToolResultModelText(res))
+	}
+	outcome := res.Outcome
+	succeeded := outcome == OutcomeSuccess || outcome == OutcomeNoResult
+	env := ToolEnvelope{OK: succeeded, Success: succeeded, Code: res.Code}
+	if payload, ok := res.Payload.(map[string]any); ok {
+		env.Data = payload
+		if msg, ok := payload["message"].(string); ok {
+			env.Message = msg
+			env.Error = msg
+		}
+		if summary, ok := payload["summary"].(string); ok {
+			env.Summary = summary
+		}
+		if meta, ok := payload["metadata"].(map[string]any); ok {
+			env.Metadata = meta
+		}
+	}
+	if env.Data == nil {
+		env.Data = map[string]any{}
+	}
+	return env, true
+}
+
 // FinalizeToolResultChannels backfills the channel-separated fields on a
 // result produced outside the dispatch funnel (agent special tools, blocked
 // markers, recovery wrappers, abort-skip placeholders). ModelText takes the
