@@ -14,7 +14,7 @@ func TestTaskActivityEventsForParallelReason(t *testing.T) {
 	done, ok := taskCompletedEvent(core.ToolResult{
 		ToolCallID: "tc-1",
 		Name:       "parallel_reason",
-		Content:    `{"ok":true,"success":true,"data":{"model":"deepseek-v4-flash","results":[{"index":0},{"index":1}]},"metadata":{"duration_ms":25}}`,
+		ModelText:  `{"ok":true,"success":true,"data":{"model":"deepseek-v4-flash","results":[{"index":0},{"index":1}]},"metadata":{"duration_ms":25}}`,
 	})
 	if !ok || done.Type != AgentEventTypeParallelReasonDone || done.Task == nil || done.Task.Count != 2 || done.Task.DurationMS != 25 {
 		t.Fatalf("unexpected done event: %+v ok=%v", done, ok)
@@ -29,7 +29,7 @@ func TestTaskActivityEventsForSpawnSubagent(t *testing.T) {
 	done, ok := taskCompletedEvent(core.ToolResult{
 		ToolCallID: "tc-2",
 		Name:       "spawn_subagent",
-		Content:    `{"ok":true,"success":true,"data":{"role":"review","summary":"looks fine"},"metadata":{"duration_ms":120}}`,
+		ModelText:  `{"ok":true,"success":true,"data":{"role":"review","summary":"looks fine"},"metadata":{"duration_ms":120}}`,
 	})
 	if !ok || done.Type != AgentEventTypeSubagentDone || done.Task == nil || done.Task.Role != "review" || done.Task.Summary != "looks fine" {
 		t.Fatalf("unexpected done event: %+v ok=%v", done, ok)

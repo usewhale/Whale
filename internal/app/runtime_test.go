@@ -224,8 +224,8 @@ func TestRuntimeRespectsWorkflowToggles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("disabled workflow tool Run: %v", err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, "workflow_disabled") {
-		t.Fatalf("disabled workflow tool should return workflow_disabled, got error=%v content=%s", res.IsError, res.Content)
+	if !res.IsError() || !strings.Contains(res.ModelText, "workflow_disabled") {
+		t.Fatalf("disabled workflow tool should return workflow_disabled, got error=%v content=%s", res.IsError(), res.ModelText)
 	}
 
 	cfg = DefaultConfig()
@@ -287,8 +287,8 @@ func TestTurnReloadsWorkflowConfigChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("disabled workflow Run: %v", err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, "workflow_disabled") {
-		t.Fatalf("expected disabled workflow result, got error=%v content=%s", res.IsError, res.Content)
+	if !res.IsError() || !strings.Contains(res.ModelText, "workflow_disabled") {
+		t.Fatalf("expected disabled workflow result, got error=%v content=%s", res.IsError(), res.ModelText)
 	}
 
 	enabled := true
@@ -309,8 +309,8 @@ func TestTurnReloadsWorkflowConfigChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("enabled workflow Run: %v", err)
 	}
-	if res.IsError || strings.Contains(res.Content, "workflow_disabled") {
-		t.Fatalf("expected enabled workflow list result, got error=%v content=%s", res.IsError, res.Content)
+	if res.IsError() || strings.Contains(res.ModelText, "workflow_disabled") {
+		t.Fatalf("expected enabled workflow list result, got error=%v content=%s", res.IsError(), res.ModelText)
 	}
 }
 

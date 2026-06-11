@@ -42,16 +42,16 @@ func (a *Agent) handleRequestUserInput(ctx context.Context, call core.ToolCall, 
 		return core.ToolResult{
 			ToolCallID: call.ID,
 			Name:       call.Name,
-			Content:    `{"success":false,"error":"invalid request_user_input input","code":"invalid_request_user_input"}`,
-			IsError:    true,
+			ModelText:  `{"success":false,"error":"invalid request_user_input input","code":"invalid_request_user_input"}`,
+			Code:       "invalid_request_user_input",
 		}, nil
 	}
 	if err := validateUserInputRequest(in); err != nil {
 		return core.ToolResult{
 			ToolCallID: call.ID,
 			Name:       call.Name,
-			Content:    fmt.Sprintf(`{"success":false,"error":%q,"code":"invalid_request_user_input"}`, err.Error()),
-			IsError:    true,
+			ModelText:  fmt.Sprintf(`{"success":false,"error":%q,"code":"invalid_request_user_input"}`, err.Error()),
+			Code:       "invalid_request_user_input",
 		}, nil
 	}
 	if a.sessionRuntime != nil && a.sessionRuntime.Enabled() {
@@ -79,8 +79,8 @@ func (a *Agent) handleRequestUserInput(ctx context.Context, call core.ToolCall, 
 		return core.ToolResult{
 			ToolCallID: call.ID,
 			Name:       call.Name,
-			Content:    `{"success":false,"error":"no user input handler configured","code":"user_input_unavailable"}`,
-			IsError:    true,
+			ModelText:  `{"success":false,"error":"no user input handler configured","code":"user_input_unavailable"}`,
+			Code:       "user_input_unavailable",
 		}, nil
 	}
 	resp, ok := a.userInput(UserInputRequest{
@@ -98,8 +98,8 @@ func (a *Agent) handleRequestUserInput(ctx context.Context, call core.ToolCall, 
 		return core.ToolResult{
 			ToolCallID: call.ID,
 			Name:       call.Name,
-			Content:    `{"success":false,"error":"user input cancelled","code":"user_input_cancelled"}`,
-			IsError:    true,
+			ModelText:  `{"success":false,"error":"user input cancelled","code":"user_input_cancelled"}`,
+			Code:       "user_input_cancelled",
 		}, nil
 	}
 	if !sendAgentEvent(ctx, events, AgentEvent{
@@ -114,7 +114,7 @@ func (a *Agent) handleRequestUserInput(ctx context.Context, call core.ToolCall, 
 		"data":    resp,
 	})
 	if err != nil {
-		return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"success":false,"error":"failed to encode user input response","code":"user_input_encode_failed"}`, IsError: true}, nil
+		return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: `{"success":false,"error":"failed to encode user input response","code":"user_input_encode_failed"}`, Code: "user_input_encode_failed"}, nil
 	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: string(b)}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: string(b)}, nil
 }

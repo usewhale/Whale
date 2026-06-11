@@ -99,7 +99,7 @@ func marshalSuccess(call core.ToolCall, data map[string]any) (core.ToolResult, e
 	if err != nil {
 		return core.ToolResult{}, err
 	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content, Outcome: core.OutcomeSuccess, Code: "ok"}, nil
 }
 
 func marshalError(call core.ToolCall, code, msg string) (core.ToolResult, error) {
@@ -107,7 +107,7 @@ func marshalError(call core.ToolCall, code, msg string) (core.ToolResult, error)
 	if err != nil {
 		return core.ToolResult{}, err
 	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content}, nil
 }
 
 func marshalErrorWithData(call core.ToolCall, code, msg string, data map[string]any) (core.ToolResult, error) {
@@ -117,7 +117,7 @@ func marshalErrorWithData(call core.ToolCall, code, msg string, data map[string]
 	if err != nil {
 		return core.ToolResult{}, err
 	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content}, nil
 }
 
 func decodeInput[T any](call core.ToolCall) (T, error) {

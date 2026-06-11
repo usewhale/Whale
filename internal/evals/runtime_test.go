@@ -120,7 +120,7 @@ func TestRuntimeRequestUserInputCancelPath(t *testing.T) {
 		if ev.Type == agent.AgentEventTypeUserInputCancelled {
 			sawCancelled = true
 		}
-		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, "user_input_cancelled") {
+		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.ModelText, "user_input_cancelled") {
 			sawResult = true
 		}
 	}
@@ -174,7 +174,7 @@ func TestRuntimeRequestUserInputInvalidPayload(t *testing.T) {
 		if ev.Type == agent.AgentEventTypeUserInputRequired {
 			sawRequired = true
 		}
-		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, "invalid_request_user_input") {
+		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.ModelText, "invalid_request_user_input") {
 			sawInvalid = true
 		}
 	}
@@ -204,7 +204,7 @@ func TestRuntimeRequestUserInputWithoutHandlerReturnsUnavailable(t *testing.T) {
 		if ev.Type == agent.AgentEventTypeUserInputCancelled {
 			sawCancelled = true
 		}
-		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, "user_input_unavailable") {
+		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.ModelText, "user_input_unavailable") {
 			sawUnavailable = true
 		}
 	}
@@ -262,7 +262,7 @@ func TestRuntimeApprovalDeniedStopsToolExecution(t *testing.T) {
 		if ev.Type == agent.AgentEventTypeToolApprovalRequired {
 			sawApproval = true
 		}
-		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, "approval_denied") {
+		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.ModelText, "approval_denied") {
 			sawDenied = true
 		}
 	}
@@ -305,7 +305,7 @@ type countingTool struct {
 func (c *countingTool) Name() string { return "counting" }
 func (c *countingTool) Run(_ context.Context, call core.ToolCall) (core.ToolResult, error) {
 	c.calls++
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok"}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "ok"}, nil
 }
 
 func TestRuntimeApprovalDeniedSkipsRemainingToolCalls(t *testing.T) {
@@ -367,10 +367,10 @@ func TestRuntimeExecFailurePassesThroughWithoutReplan(t *testing.T) {
 	}
 	var sawExecFailed bool
 	for ev := range events {
-		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, `error (request_replan)`) {
-			t.Fatalf("unexpected request_replan for exec failure: %s", ev.Result.Content)
+		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.ModelText, `error (request_replan)`) {
+			t.Fatalf("unexpected request_replan for exec failure: %s", ev.Result.ModelText)
 		}
-		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, `exit 7`) {
+		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.ModelText, `exit 7`) {
 			sawExecFailed = true
 		}
 	}
@@ -423,7 +423,7 @@ func TestRuntimeExecYieldTimeoutReturnsRunningTaskWithoutRetry(t *testing.T) {
 		if ev.Type == agent.AgentEventTypeToolRecoveryAttempt {
 			sawAttempt = true
 		}
-		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, `running in background (task_id=`) {
+		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.ModelText, `running in background (task_id=`) {
 			sawRunning = true
 		}
 	}
@@ -510,8 +510,8 @@ func TestRuntimeShellWaitReturnsRunningOnShortTimeout(t *testing.T) {
 	var toolResults []string
 	for ev := range events {
 		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil {
-			toolResults = append(toolResults, ev.Result.Content)
-			if strings.Contains(ev.Result.Content, `running in background`) {
+			toolResults = append(toolResults, ev.Result.ModelText)
+			if strings.Contains(ev.Result.ModelText, `running in background`) {
 				sawRunning = true
 			}
 		}
@@ -558,7 +558,7 @@ func TestRuntimeShellWaitUnknownTaskReturnsNotFound(t *testing.T) {
 	}
 	var sawNotFound bool
 	for ev := range events {
-		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, `error (not_found)`) {
+		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.ModelText, `error (not_found)`) {
 			sawNotFound = true
 		}
 	}
@@ -638,8 +638,8 @@ func TestRuntimeShellWaitReturnsExitedResult(t *testing.T) {
 	var collected []string
 	for ev := range events {
 		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil {
-			collected = append(collected, ev.Result.Content)
-			if strings.Contains(ev.Result.Content, `exit 0`) && strings.Contains(ev.Result.Content, "done") {
+			collected = append(collected, ev.Result.ModelText)
+			if strings.Contains(ev.Result.ModelText, `exit 0`) && strings.Contains(ev.Result.ModelText, "done") {
 				sawExited = true
 			}
 		}
@@ -719,7 +719,7 @@ func TestRuntimeShellWaitReturnsFailedResult(t *testing.T) {
 	var sawFailed bool
 	for ev := range events {
 		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil &&
-			strings.Contains(ev.Result.Content, `exit 7`) {
+			strings.Contains(ev.Result.ModelText, `exit 7`) {
 			sawFailed = true
 		}
 	}
@@ -732,7 +732,7 @@ type writeEchoTool struct{}
 
 func (w writeEchoTool) Name() string { return "write" }
 func (w writeEchoTool) Run(_ context.Context, call core.ToolCall) (core.ToolResult, error) {
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok:" + call.Input}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "ok:" + call.Input}, nil
 }
 
 type approvalCacheProvider struct {
@@ -937,8 +937,8 @@ func (f failWriteTool) Run(_ context.Context, call core.ToolCall) (core.ToolResu
 	return core.ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
-		Content:    `{"success":false,"error":"command failed","code":"exec_failed"}`,
-		IsError:    true,
+		ModelText:  `{"success":false,"error":"command failed","code":"exec_failed"}`,
+		Outcome:    core.OutcomeFailure,
 	}, nil
 }
 
@@ -980,8 +980,8 @@ func TestRuntimeRecoveryFallbackReadonly(t *testing.T) {
 	var sawRecovery bool
 	for ev := range events {
 		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil &&
-			strings.Contains(ev.Result.Content, "recovered_with_fallback") &&
-			strings.Contains(ev.Result.Content, `"tool":"read_file"`) {
+			strings.Contains(ev.Result.ModelText, "recovered_with_fallback") &&
+			strings.Contains(ev.Result.ModelText, `"tool":"read_file"`) {
 			sawFallback = true
 		}
 		if ev.Type == agent.AgentEventTypeToolRecoveryExhausted && ev.Recovery != nil &&
@@ -1000,7 +1000,7 @@ type readOnlyViewTool struct{}
 func (r readOnlyViewTool) Name() string   { return "read_file" }
 func (r readOnlyViewTool) ReadOnly() bool { return true }
 func (r readOnlyViewTool) Run(_ context.Context, call core.ToolCall) (core.ToolResult, error) {
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok"}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "ok"}, nil
 }
 
 type planReadOnlyProvider struct {
@@ -1049,10 +1049,10 @@ func TestRuntimePlanModeAllowsReadOnlyToolsWithoutPlanRequired(t *testing.T) {
 	var sawReadResult bool
 	var sawPlanRequired bool
 	for ev := range events {
-		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && ev.Result.Name == "read_file" && strings.Contains(ev.Result.Content, "ok") {
+		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && ev.Result.Name == "read_file" && strings.Contains(ev.Result.ModelText, "ok") {
 			sawReadResult = true
 		}
-		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, "plan_required") {
+		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.ModelText, "plan_required") {
 			sawPlanRequired = true
 		}
 	}
@@ -1102,7 +1102,7 @@ type writeLikeTool struct{}
 
 func (w writeLikeTool) Name() string { return "write" }
 func (w writeLikeTool) Run(_ context.Context, call core.ToolCall) (core.ToolResult, error) {
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok:" + call.Input}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "ok:" + call.Input}, nil
 }
 
 func TestRuntimePlanModeBlocksNonReadOnlyTools(t *testing.T) {
@@ -1124,7 +1124,7 @@ func TestRuntimePlanModeBlocksNonReadOnlyTools(t *testing.T) {
 		if ev.Type == agent.AgentEventTypeToolModeBlocked && ev.ToolBlocked != nil && ev.ToolBlocked.ReasonCode == "plan_mode_blocked" {
 			sawModeBlocked = true
 		}
-		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, "plan_mode_blocked") {
+		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.ModelText, "plan_mode_blocked") {
 			sawBlockedResult = true
 		}
 	}
@@ -1152,7 +1152,7 @@ func TestRuntimeAskModeBlocksNonReadOnlyTools(t *testing.T) {
 		if ev.Type == agent.AgentEventTypeToolModeBlocked && ev.ToolBlocked != nil && ev.ToolBlocked.ReasonCode == "ask_mode_blocked" {
 			sawModeBlocked = true
 		}
-		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, "ask_mode_blocked") {
+		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.ModelText, "ask_mode_blocked") {
 			sawBlockedResult = true
 		}
 	}
@@ -1184,7 +1184,7 @@ func TestRuntimeAskModeBlocksQuotedUnsafeShellReadCommand(t *testing.T) {
 		if ev.Type == agent.AgentEventTypeToolModeBlocked && ev.ToolBlocked != nil && ev.ToolBlocked.ReasonCode == "ask_mode_blocked" {
 			sawModeBlocked = true
 		}
-		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && ev.Result.Name == "shell_run" && strings.Contains(ev.Result.Content, "ask_mode_blocked") {
+		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && ev.Result.Name == "shell_run" && strings.Contains(ev.Result.ModelText, "ask_mode_blocked") {
 			sawBlockedResult = true
 		}
 	}
@@ -1318,7 +1318,7 @@ func TestRuntimeAutoCompactEmitsEventAndRewritesHistory(t *testing.T) {
 func TestRuntimeCompactSessionNoopsWithSummaryTailAndEarlierToolHistory(t *testing.T) {
 	msgStore := store.NewInMemoryStore()
 	_, _ = msgStore.Create(context.Background(), core.Message{SessionID: "eval-compact-rich-noop", Role: core.RoleUser, Text: "first prompt"})
-	_, _ = msgStore.Create(context.Background(), core.Message{SessionID: "eval-compact-rich-noop", Role: core.RoleTool, ToolResults: []core.ToolResult{{ToolCallID: "t1", Name: "read_file", Content: `{"success":true}`}}})
+	_, _ = msgStore.Create(context.Background(), core.Message{SessionID: "eval-compact-rich-noop", Role: core.RoleTool, ToolResults: []core.ToolResult{{ToolCallID: "t1", Name: "read_file", ModelText: `{"success":true}`}}})
 	_, _ = msgStore.Create(context.Background(), core.Message{SessionID: "eval-compact-rich-noop", Role: core.RoleAssistant, Text: "old answer"})
 	_, _ = msgStore.Create(context.Background(), core.Message{SessionID: "eval-compact-rich-noop", Role: core.RoleUser, Text: "compact summary", FinishReason: core.FinishReasonEndTurn})
 	a := agent.NewAgentWithRegistry(&autoCompactProvider{}, msgStore, core.NewToolRegistry(nil))
@@ -1358,7 +1358,7 @@ func TestRuntimeAutoCompactRewritesLongHistoryWithToolMessages(t *testing.T) {
 			ToolResults: []core.ToolResult{{
 				ToolCallID: "tool",
 				Name:       "read_file",
-				Content:    strings.Repeat("tool payload ", 80),
+				ModelText:  strings.Repeat("tool payload ", 80),
 			}},
 		})
 	}
@@ -1450,7 +1450,7 @@ func TestRuntimePreToolHookBlockSkipsDispatch(t *testing.T) {
 		if ev.Type == agent.AgentEventTypeHookBlocked && ev.Hook != nil {
 			sawHookBlocked = true
 		}
-		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, "hook_blocked") {
+		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.ModelText, "hook_blocked") {
 			sawToolBlocked = true
 		}
 	}
@@ -1527,7 +1527,7 @@ func TestRuntimeScavengesToolCallFromAssistantContent(t *testing.T) {
 		if ev.Type == agent.AgentEventTypeToolCallScavenged && ev.Scavenged != nil && ev.Scavenged.Count > 0 {
 			sawScavenged = true
 		}
-		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && ev.Result.Name == "read_file" && strings.Contains(ev.Result.Content, "ok") {
+		if ev.Type == agent.AgentEventTypeToolResult && ev.Result != nil && ev.Result.Name == "read_file" && strings.Contains(ev.Result.ModelText, "ok") {
 			sawToolResult = true
 		}
 	}

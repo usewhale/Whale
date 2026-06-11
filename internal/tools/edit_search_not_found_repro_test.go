@@ -73,21 +73,21 @@ func TestEditSearchBlockOmittingCommentLinesReportsDivergence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("editFile returned transport error: %v", err)
 	}
-	if !res.IsError {
-		t.Fatalf("expected search_not_found error, got success: %s", res.Content)
+	if !res.IsError() {
+		t.Fatalf("expected search_not_found error, got success: %s", res.ModelText)
 	}
-	if !strings.Contains(res.Content, "search_not_found") {
-		t.Fatalf("expected search_not_found code, got: %s", res.Content)
+	if !strings.Contains(res.ModelText, "search_not_found") {
+		t.Fatalf("expected search_not_found code, got: %s", res.ModelText)
 	}
 	// The diagnostics anchor on the search's first line, find the closest
 	// candidate block, and quote the first divergent line from the file —
 	// here the comment the model omitted — so it can fix the search without
 	// re-reading the file.
-	if !strings.Contains(res.Content, "capability-restricted") {
-		t.Fatalf("expected divergence diagnostics quoting the omitted comment line, got: %s", res.Content)
+	if !strings.Contains(res.ModelText, "capability-restricted") {
+		t.Fatalf("expected divergence diagnostics quoting the omitted comment line, got: %s", res.ModelText)
 	}
-	if !strings.Contains(res.Content, "diverging at line 4") {
-		t.Fatalf("expected divergence at line 4, got: %s", res.Content)
+	if !strings.Contains(res.ModelText, "diverging at line 4") {
+		t.Fatalf("expected divergence at line 4, got: %s", res.ModelText)
 	}
 }
 
@@ -102,11 +102,11 @@ func TestEditSearchDivergenceSilentForUnanchoredSearch(t *testing.T) {
 		"search":    "no such anchor line\nno such second line\n",
 		"replace":   "x",
 	}))
-	if err != nil || !res.IsError {
+	if err != nil || !res.IsError() {
 		t.Fatalf("expected error result: err=%v res=%+v", err, res)
 	}
-	if strings.Contains(res.Content, "closest match") {
-		t.Fatalf("expected no divergence diagnostics without an anchor, got: %s", res.Content)
+	if strings.Contains(res.ModelText, "closest match") {
+		t.Fatalf("expected no divergence diagnostics without an anchor, got: %s", res.ModelText)
 	}
 }
 
@@ -131,14 +131,14 @@ func TestApplyPatchRejectsUnprefixedHunkBodyLines(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applyPatch returned transport error: %v", err)
 	}
-	if !res.IsError {
-		t.Fatalf("expected patch_parse_failed, got success: %s", res.Content)
+	if !res.IsError() {
+		t.Fatalf("expected patch_parse_failed, got success: %s", res.ModelText)
 	}
-	if !strings.Contains(res.Content, "patch_parse_failed") {
-		t.Fatalf("expected patch_parse_failed code, got: %s", res.Content)
+	if !strings.Contains(res.ModelText, "patch_parse_failed") {
+		t.Fatalf("expected patch_parse_failed code, got: %s", res.ModelText)
 	}
-	if !strings.Contains(res.Content, "invalid hunk line") {
-		t.Fatalf("expected invalid hunk line message, got: %s", res.Content)
+	if !strings.Contains(res.ModelText, "invalid hunk line") {
+		t.Fatalf("expected invalid hunk line message, got: %s", res.ModelText)
 	}
 }
 
@@ -161,7 +161,7 @@ func TestApplyPatchAcceptsBlankContextLineInsideHunk(t *testing.T) {
 	}, "\n")
 
 	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("apply patch failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "a.go"))
@@ -183,11 +183,11 @@ func TestEditWhitespaceRelaxedMatchesTrailingSpaceDrift(t *testing.T) {
 		"search":    "func f() {\n\tcall()\n}\n",
 		"replace":   "func f() {\n\tother()\n}\n",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("edit failed: err=%v res=%+v", err, res)
 	}
-	if !strings.Contains(res.Content, "whitespace_normalized") {
-		t.Fatalf("expected whitespace_normalized repair tag, got: %s", res.Content)
+	if !strings.Contains(res.ModelText, "whitespace_normalized") {
+		t.Fatalf("expected whitespace_normalized repair tag, got: %s", res.ModelText)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "a.go"))
 	if err != nil {
@@ -208,7 +208,7 @@ func TestEditWhitespaceRelaxedMatchesIndentationDrift(t *testing.T) {
 		"search":    "if ok {\n    call()\n}\n",
 		"replace":   "if ok {\n\tother()\n}\n",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("edit failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "a.go"))
@@ -233,8 +233,8 @@ func TestEditWhitespaceRelaxedRejectsAmbiguousMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("editFile returned transport error: %v", err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, "search_not_found") {
-		t.Fatalf("expected search_not_found for ambiguous relaxed match, got: %s", res.Content)
+	if !res.IsError() || !strings.Contains(res.ModelText, "search_not_found") {
+		t.Fatalf("expected search_not_found for ambiguous relaxed match, got: %s", res.ModelText)
 	}
 }
 
@@ -257,7 +257,7 @@ func TestApplyPatchRelaxedHunkPreservesFileContextWhitespace(t *testing.T) {
 	}, "\n")
 
 	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("apply patch failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "a.go"))
@@ -289,11 +289,11 @@ func TestApplyPatchRelaxedHunkRejectsAmbiguousMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applyPatch returned transport error: %v", err)
 	}
-	if !res.IsError {
-		t.Fatalf("expected ambiguous relaxed match to fail, got success: %s", res.Content)
+	if !res.IsError() {
+		t.Fatalf("expected ambiguous relaxed match to fail, got success: %s", res.ModelText)
 	}
-	if !strings.Contains(res.Content, "multiple locations") {
-		t.Fatalf("expected ambiguity message, got: %s", res.Content)
+	if !strings.Contains(res.ModelText, "multiple locations") {
+		t.Fatalf("expected ambiguity message, got: %s", res.ModelText)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "a.go"))
 	if err != nil {
@@ -317,11 +317,11 @@ func TestEditNotFoundRecoverySuggestsSplittingLargeSearchBlocks(t *testing.T) {
 		"search":    large,
 		"replace":   "x",
 	}))
-	if err != nil || !res.IsError {
+	if err != nil || !res.IsError() {
 		t.Fatalf("expected error result: err=%v res=%+v", err, res)
 	}
-	if !strings.Contains(res.Content, "apply_patch") {
-		t.Fatalf("expected large-search guidance mentioning apply_patch, got: %s", res.Content)
+	if !strings.Contains(res.ModelText, "apply_patch") {
+		t.Fatalf("expected large-search guidance mentioning apply_patch, got: %s", res.ModelText)
 	}
 
 	// Small failed searches keep the focused message without the guidance.
@@ -330,10 +330,10 @@ func TestEditNotFoundRecoverySuggestsSplittingLargeSearchBlocks(t *testing.T) {
 		"search":    "does not exist",
 		"replace":   "x",
 	}))
-	if err != nil || !res.IsError {
+	if err != nil || !res.IsError() {
 		t.Fatalf("expected error result: err=%v res=%+v", err, res)
 	}
-	if strings.Contains(res.Content, "apply_patch") {
-		t.Fatalf("small search should not trigger large-block guidance, got: %s", res.Content)
+	if strings.Contains(res.ModelText, "apply_patch") {
+		t.Fatalf("small search should not trigger large-block guidance, got: %s", res.ModelText)
 	}
 }

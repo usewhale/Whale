@@ -60,16 +60,16 @@ func replayFixtureHistory(t *testing.T) []core.Message {
 			{ID: "tc-1", Name: "read_file", Input: `{"file_path":"a&b.cs"}`},
 		}},
 		{Role: core.RoleTool, ToolResults: []core.ToolResult{
-			{ToolCallID: "tc-1", Name: "read_file", Content: smallEnvelope},
+			{ToolCallID: "tc-1", Name: "read_file", ModelText: smallEnvelope},
 		}},
 		{Role: core.RoleAssistant, Text: "now the big one", ToolCalls: []core.ToolCall{
 			{ID: "tc-2", Name: "shell_run", Input: `{"command":"cat big.log 2>&1"}`},
 		}},
 		{Role: core.RoleTool, ToolResults: []core.ToolResult{
-			{ToolCallID: "tc-2", Name: "shell_run", Content: bigEnvelope},
+			{ToolCallID: "tc-2", Name: "shell_run", ModelText: bigEnvelope},
 		}},
 		{Role: core.RoleTool, ToolResults: []core.ToolResult{
-			{ToolCallID: "tc-raw", Name: "mcp_tool", Content: "raw non-envelope text & <tags>"},
+			{ToolCallID: "tc-raw", Name: "mcp_tool", ModelText: "raw non-envelope text & <tags>"},
 		}},
 	}
 }

@@ -426,7 +426,7 @@ func protocolToolResults(results []core.ToolResult) []protocol.ToolResult {
 			Name:       result.Name,
 			Content:    core.ToolResultModelText(result),
 			Metadata:   cloneAnyMap(result.Metadata),
-			IsError:    result.IsError,
+			IsError:    result.IsError(),
 			Outcome:    string(core.ToolResultOutcome(result)),
 			Code:       result.Code,
 			Payload:    payload,

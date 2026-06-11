@@ -57,7 +57,7 @@ func (a *Agent) recordToolInputEvent(rec telemetry.ToolInputEvent) {
 }
 
 func toolInputInvalidCode(res core.ToolResult) string {
-	if !res.IsError {
+	if !res.IsError() {
 		return ""
 	}
 	code := strings.TrimSpace(res.Code)

@@ -47,7 +47,7 @@ func (p *e2eNewToolsProvider) setWaitInputFromToolMessage(msgs []agent.Message) 
 			if tr.Name != "shell_run" {
 				continue
 			}
-			s := tr.Content
+			s := tr.ModelText
 			i := strings.Index(s, `"task_id":"`)
 			if i < 0 {
 				continue
@@ -114,7 +114,7 @@ func TestAgentE2ENewToolsFlow(t *testing.T) {
 	joined := ""
 	for _, m := range all {
 		for _, tr := range m.ToolResults {
-			joined += tr.Content + "\n"
+			joined += tr.ModelText + "\n"
 		}
 	}
 	if !strings.Contains(joined, "target.txt") {

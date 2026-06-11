@@ -41,7 +41,7 @@ func taskCompletedEvent(res core.ToolResult) (AgentEvent, bool) {
 		ToolName:   res.Name,
 		Status:     "completed",
 	}
-	if res.IsError {
+	if res.IsError() {
 		info.Status = "failed"
 	}
 	if env, ok := core.ToolEnvelopeView(res); ok {

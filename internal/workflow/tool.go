@@ -161,7 +161,7 @@ func (t Tool) Run(ctx context.Context, call core.ToolCall) (core.ToolResult, err
 		if err != nil {
 			return core.ToolResult{}, err
 		}
-		return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, Metadata: workflowConfirmationMetadata(data)}, nil
+		return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content, Metadata: workflowConfirmationMetadata(data)}, nil
 	}
 	if strings.TrimSpace(input.Script) != "" {
 		if err := validateWorkflowScriptForConfirmation(input.Script); err != nil {
@@ -189,7 +189,7 @@ func (t Tool) Run(ctx context.Context, call core.ToolCall) (core.ToolResult, err
 		if err != nil {
 			return core.ToolResult{}, err
 		}
-		return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, Metadata: workflowConfirmationMetadata(data)}, nil
+		return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content, Metadata: workflowConfirmationMetadata(data)}, nil
 	}
 	name := strings.TrimSpace(input.Name)
 	if name == "" {
@@ -210,7 +210,7 @@ func (t Tool) Run(ctx context.Context, call core.ToolCall) (core.ToolResult, err
 	if err != nil {
 		return core.ToolResult{}, err
 	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, Metadata: workflowConfirmationMetadata(data)}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content, Metadata: workflowConfirmationMetadata(data)}, nil
 }
 
 func (t Tool) prepareGenerated(ctx context.Context, input WorkflowInput) (ResolvedScript, error) {
@@ -270,7 +270,7 @@ func (t Tool) statusWorkflows(call core.ToolCall) (core.ToolResult, error) {
 	if err != nil {
 		return core.ToolResult{}, err
 	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content}, nil
 }
 
 func (t Tool) workflowDisabled(call core.ToolCall) (core.ToolResult, error) {
@@ -326,7 +326,7 @@ func (t Tool) listWorkflows(ctx context.Context, call core.ToolCall) (core.ToolR
 	if err != nil {
 		return core.ToolResult{}, err
 	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content}, nil
 }
 
 func (t Tool) resolveWorkflow(ctx context.Context, call core.ToolCall, input WorkflowInput) (core.ToolResult, error) {
@@ -362,7 +362,7 @@ func (t Tool) resolveWorkflow(ctx context.Context, call core.ToolCall, input Wor
 		if err != nil {
 			return core.ToolResult{}, err
 		}
-		return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content}, nil
+		return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content}, nil
 	}
 	return workflowToolErrorWithData(call, "workflow_not_found", workflowNotFoundMessage(name, defs), data)
 }
@@ -614,5 +614,5 @@ func workflowToolErrorWithData(call core.ToolCall, code, msg string, data map[st
 	if err != nil {
 		return core.ToolResult{}, err
 	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content}, nil
 }

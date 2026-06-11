@@ -196,12 +196,12 @@ func runSpawnSubagentToolForBudget(t *testing.T, tool spawnSubagentTool, callID 
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.IsError {
-		t.Fatalf("unexpected tool error: %s", res.Content)
+	if res.IsError() {
+		t.Fatalf("unexpected tool error: %s", res.ModelText)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok {
-		t.Fatalf("parse envelope failed: %s", res.Content)
+		t.Fatalf("parse envelope failed: %s", res.ModelText)
 	}
 	return env.Data
 }
@@ -299,12 +299,12 @@ func TestSpawnSubagentToolRejectsInlineAgentDefinitionInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatalf("expected inline agent definition error: %+v", res)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok {
-		t.Fatalf("parse envelope failed: %s", res.Content)
+		t.Fatalf("parse envelope failed: %s", res.ModelText)
 	}
 	if env.Code != "invalid_input" || !strings.Contains(env.Message, "inline agent definitions") {
 		t.Fatalf("unexpected envelope: %+v", env)
@@ -321,12 +321,12 @@ func TestSpawnSubagentToolRejectsDeprecatedCapabilitiesInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatalf("expected deprecated capabilities error: %+v", res)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok {
-		t.Fatalf("parse envelope failed: %s", res.Content)
+		t.Fatalf("parse envelope failed: %s", res.ModelText)
 	}
 	if env.Code != "invalid_input" || !strings.Contains(env.Message, "use tools instead") {
 		t.Fatalf("unexpected envelope: %+v", env)
@@ -353,14 +353,14 @@ func TestSpawnSubagentToolRejectsWildcardToolsSelector(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatalf("expected wildcard selector error: %+v", res)
 	}
 	if factoryCalled {
 		t.Fatal("provider should not run after wildcard selector rejection")
 	}
-	if !strings.Contains(res.Content, "only supported by fork/trusted child agents") {
-		t.Fatalf("unexpected wildcard error: %s", res.Content)
+	if !strings.Contains(res.ModelText, "only supported by fork/trusted child agents") {
+		t.Fatalf("unexpected wildcard error: %s", res.ModelText)
 	}
 }
 
@@ -513,7 +513,7 @@ func TestReadOnlyRegistryPreservesProgressRunner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DispatchWithProgress: %v", err)
 	}
-	if res.IsError {
+	if res.IsError() {
 		t.Fatalf("unexpected result error: %+v", res)
 	}
 	if len(progress) != 1 {
@@ -610,14 +610,14 @@ func TestAgentRegistryShellReadGuardsMutatingCommands(t *testing.T) {
 		t.Fatal("expected shell_run")
 	}
 	allowed, err := tool.Run(context.Background(), core.ToolCall{ID: "safe", Name: "shell_run", Input: `{"command":"git status --short"}`})
-	if err != nil || allowed.IsError {
+	if err != nil || allowed.IsError() {
 		t.Fatalf("expected safe read-only shell to run, res=%+v err=%v", allowed, err)
 	}
 	blocked, err := tool.Run(context.Background(), core.ToolCall{ID: "write", Name: "shell_run", Input: `{"command":"go test ./..."}`})
 	if err != nil {
 		t.Fatalf("mutating shell returned dispatch error: %v", err)
 	}
-	if !blocked.IsError || !strings.Contains(blocked.Content, "read_only_required") {
+	if !blocked.IsError() || !strings.Contains(blocked.ModelText, "read_only_required") {
 		t.Fatalf("expected read-only guard, got %+v", blocked)
 	}
 	if ran != 1 {
@@ -2137,12 +2137,12 @@ func TestSpawnSubagentToolFailureIncludesChildSessionID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatalf("expected tool error: %+v", res)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok {
-		t.Fatalf("parse envelope failed: %s", res.Content)
+		t.Fatalf("parse envelope failed: %s", res.ModelText)
 	}
 	if env.Data["child_session_id"] != "parent-session--subagent-tc-fail" {
 		t.Fatalf("child session id missing: %+v", env.Data)
@@ -2219,7 +2219,7 @@ func TestChildToolProgressSummariesIncludeTargetsAndResultMetrics(t *testing.T) 
 	result := core.ToolResult{
 		ToolCallID: "grep-1",
 		Name:       "grep",
-		Content:    `{"ok":true,"success":true,"data":{"metrics":{"total_matches":7,"files_matched":3},"payload":{"matches":[]}}}`,
+		ModelText:  `{"ok":true,"success":true,"data":{"metrics":{"total_matches":7,"files_matched":3},"payload":{"matches":[]}}}`,
 	}
 	if got := summarizeChildToolResult(result, action); got != `Searched "TaskProgress" in internal/tui (*.go) · 7 matches in 3 files` {
 		t.Fatalf("result summary = %q", got)
@@ -2232,7 +2232,7 @@ func TestChildToolProgressSummariesIncludeTargetsAndResultMetrics(t *testing.T) 
 	webResult := core.ToolResult{
 		ToolCallID: "web-1",
 		Name:       "web_search",
-		Content:    `{"ok":true,"success":true,"data":{"count":4,"results":[]}}`,
+		ModelText:  `{"ok":true,"success":true,"data":{"count":4,"results":[]}}`,
 	}
 	if got := summarizeChildToolResult(webResult, web); got != `Searched web "codex subagent ps" · 4 results` {
 		t.Fatalf("web result summary = %q", got)
@@ -2245,7 +2245,7 @@ func TestChildToolProgressSummariesIncludeTargetsAndResultMetrics(t *testing.T) 
 	fetchResult := core.ToolResult{
 		ToolCallID: "fetch-1",
 		Name:       "fetch",
-		Content:    `{"ok":true,"success":true,"data":{"status_code":200}}`,
+		ModelText:  `{"ok":true,"success":true,"data":{"status_code":200}}`,
 	}
 	if got := summarizeChildToolResult(fetchResult, fetch); got != "Fetched docs.example.com/path/to/page · HTTP 200" {
 		t.Fatalf("fetch result summary = %q", got)
@@ -2363,7 +2363,7 @@ func (t testTool) ReadOnlyCheck(args map[string]any) bool {
 	return t.readOnlyCheck(args)
 }
 func (t testTool) Run(_ context.Context, call core.ToolCall) (core.ToolResult, error) {
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"ok":true}`}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: `{"ok":true}`}, nil
 }
 
 type plainTestTool struct {
@@ -2380,7 +2380,7 @@ func (t plainTestTool) Capabilities() []string {
 	return append([]string(nil), t.capabilities...)
 }
 func (t plainTestTool) Run(_ context.Context, call core.ToolCall) (core.ToolResult, error) {
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"ok":true}`}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: `{"ok":true}`}, nil
 }
 
 // recordingTool wraps testTool to count how many times it actually executes,

@@ -43,13 +43,13 @@ func TestTasksMarshalHelpersGolden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshalSuccess: %v", err)
 	}
-	assertTasksGolden(t, "tasks_success", res.Content)
+	assertTasksGolden(t, "tasks_success", res.ModelText)
 
 	res, err = marshalError(call, "subagent_failed", "child exited: signal & detail")
 	if err != nil {
 		t.Fatalf("marshalError: %v", err)
 	}
-	assertTasksGolden(t, "tasks_error", res.Content)
+	assertTasksGolden(t, "tasks_error", res.ModelText)
 
 	res, err = marshalErrorWithData(call, "subagent_failed", "child exited", map[string]any{
 		"child_session_id": "abc",
@@ -58,5 +58,5 @@ func TestTasksMarshalHelpersGolden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshalErrorWithData: %v", err)
 	}
-	assertTasksGolden(t, "tasks_error_data", res.Content)
+	assertTasksGolden(t, "tasks_error_data", res.ModelText)
 }

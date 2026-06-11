@@ -97,7 +97,7 @@ func TestShellRunContextCancelYieldsRunningTask(t *testing.T) {
 			"command":    "sleep 30 & echo $! > child.pid; wait",
 			"timeout_ms": 120000,
 		}))
-		done <- execResult{res: res.Content, err: err}
+		done <- execResult{res: res.ModelText, err: err}
 	}()
 
 	pid := waitForPIDFile(t, filepath.Join(dir, "child.pid"))
@@ -134,7 +134,7 @@ func TestShellRunPTYModeAcceptsWriteStdin(t *testing.T) {
 		"mode":       "pty",
 		"timeout_ms": 50,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run should return running PTY task, err=%v res=%+v", err, startRes)
 	}
 	data := shellRunData(t, startRes)
@@ -149,12 +149,12 @@ func TestShellRunPTYModeAcceptsWriteStdin(t *testing.T) {
 		"keys":       []string{"enter"},
 		"timeout_ms": 3000,
 	}))
-	if err != nil || writeRes.IsError {
+	if err != nil || writeRes.IsError() {
 		t.Fatalf("write_stdin failed: err=%v res=%+v", err, writeRes)
 	}
 	writeData := shellRunData(t, writeRes)
 	if writeData["status"] != "exited" {
-		t.Fatalf("expected completed task, got %#v: %s", writeData["status"], writeRes.Content)
+		t.Fatalf("expected completed task, got %#v: %s", writeData["status"], writeRes.ModelText)
 	}
 	writePayload := writeData["payload"].(map[string]any)
 	if !strings.Contains(writePayload["stdout"].(string), "got:hello") {
@@ -178,7 +178,7 @@ func TestWriteStdinEmptyInputPollsWithoutWriting(t *testing.T) {
 		"mode":       "pty",
 		"timeout_ms": 50,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run should return running PTY task, err=%v res=%+v", err, startRes)
 	}
 	payload := shellRunData(t, startRes)["payload"].(map[string]any)
@@ -188,12 +188,12 @@ func TestWriteStdinEmptyInputPollsWithoutWriting(t *testing.T) {
 		"chars":      "",
 		"timeout_ms": 50,
 	}))
-	if err != nil || pollRes.IsError {
+	if err != nil || pollRes.IsError() {
 		t.Fatalf("empty write_stdin poll failed: err=%v res=%+v", err, pollRes)
 	}
 	pollData := shellRunData(t, pollRes)
 	if pollData["status"] != "running" {
-		t.Fatalf("poll should leave task running, got %#v: %s", pollData["status"], pollRes.Content)
+		t.Fatalf("poll should leave task running, got %#v: %s", pollData["status"], pollRes.ModelText)
 	}
 	metrics := pollData["metrics"].(map[string]any)
 	if metrics["stdin_written"] != false || metrics["chars_written"] != float64(0) || metrics["keys_written"] != float64(0) {
@@ -222,7 +222,7 @@ func TestShellRunRejectsManagedPTYMode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("shell_run returned dispatch error: %v", err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, `"code":"invalid_args"`) || !strings.Contains(res.Content, "mode must be auto, pipe, or pty") {
+	if !res.IsError() || !strings.Contains(res.ModelText, `"code":"invalid_args"`) || !strings.Contains(res.ModelText, "mode must be auto, pipe, or pty") {
 		t.Fatalf("managed_pty should be rejected as invalid args, got %+v", res)
 	}
 }
@@ -242,7 +242,7 @@ func TestShellRunPTYModeRequiresExecBoundaryShell(t *testing.T) {
 	if err != nil {
 		t.Fatalf("shell_run returned dispatch error: %v", err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, `"code":"unsupported_transport"`) || !strings.Contains(res.Content, "exec-boundary shell") {
+	if !res.IsError() || !strings.Contains(res.ModelText, `"code":"unsupported_transport"`) || !strings.Contains(res.ModelText, "exec-boundary shell") {
 		t.Fatalf("pty without exec-boundary shell should be rejected, got %+v", res)
 	}
 }
@@ -263,7 +263,7 @@ func TestShellRunPTYModeRejectsShellWithoutExecWrapperSupport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("shell_run returned dispatch error: %v", err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, `"code":"unsupported_transport"`) {
+	if !res.IsError() || !strings.Contains(res.ModelText, `"code":"unsupported_transport"`) {
 		t.Fatalf("pty with ordinary shell should be rejected, got %+v", res)
 	}
 	if shellExecBoundaryEnabled() {
@@ -313,7 +313,7 @@ done
 		"mode":       "pty",
 		"background": true,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run exec-boundary PTY failed: err=%v res=%+v", err, startRes)
 	}
 	payload := shellRunData(t, startRes)["payload"].(map[string]any)
@@ -336,7 +336,7 @@ done
 		"keys":       []string{"enter"},
 		"timeout_ms": 3000,
 	}))
-	if err != nil || writeRes.IsError {
+	if err != nil || writeRes.IsError() {
 		t.Fatalf("second split write_stdin failed: err=%v res=%+v", err, writeRes)
 	}
 	stdout := shellRunData(t, writeRes)["payload"].(map[string]any)["stdout"].(string)
@@ -395,7 +395,7 @@ done
 		"mode":       "pty",
 		"background": true,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run exec-boundary PTY failed: err=%v res=%+v", err, startRes)
 	}
 	payload := shellRunData(t, startRes)["payload"].(map[string]any)
@@ -407,7 +407,7 @@ done
 		"keys":       []string{"enter"},
 		"timeout_ms": 3000,
 	}))
-	if err != nil || writeRes.IsError {
+	if err != nil || writeRes.IsError() {
 		t.Fatalf("write_stdin failed: err=%v res=%+v", err, writeRes)
 	}
 	stdout := shellRunData(t, writeRes)["payload"].(map[string]any)["stdout"].(string)
@@ -468,7 +468,7 @@ done
 		"mode":       "pty",
 		"background": true,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run exec-boundary PTY failed: err=%v res=%+v", err, startRes)
 	}
 	taskID := shellRunData(t, startRes)["payload"].(map[string]any)["task_id"].(string)
@@ -479,7 +479,7 @@ done
 		"keys":       []string{"enter"},
 		"timeout_ms": 3000,
 	}))
-	if err != nil || writeRes.IsError {
+	if err != nil || writeRes.IsError() {
 		t.Fatalf("write_stdin failed: err=%v res=%+v", err, writeRes)
 	}
 	stdout := shellRunData(t, writeRes)["payload"].(map[string]any)["stdout"].(string)
@@ -544,7 +544,7 @@ done
 		"mode":       "pty",
 		"background": true,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run exec-boundary PTY failed: err=%v res=%+v", err, startRes)
 	}
 	taskID := shellRunData(t, startRes)["payload"].(map[string]any)["task_id"].(string)
@@ -555,7 +555,7 @@ done
 		"keys":       []string{"enter"},
 		"timeout_ms": 3000,
 	}))
-	if err != nil || writeRes.IsError {
+	if err != nil || writeRes.IsError() {
 		t.Fatalf("write_stdin failed: err=%v res=%+v", err, writeRes)
 	}
 	stdout := shellRunData(t, writeRes)["payload"].(map[string]any)["stdout"].(string)
@@ -587,7 +587,7 @@ func TestShellRunBackgroundPTYReportsActualWritableState(t *testing.T) {
 		"mode":       "pty",
 		"background": true,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run background PTY failed: err=%v res=%+v", err, startRes)
 	}
 	payload := shellRunData(t, startRes)["payload"].(map[string]any)
@@ -619,7 +619,7 @@ func TestWriteStdinImmediatelyAfterBackgroundPTY(t *testing.T) {
 		"mode":       "pty",
 		"background": true,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run background PTY failed: err=%v res=%+v", err, startRes)
 	}
 	payload := shellRunData(t, startRes)["payload"].(map[string]any)
@@ -629,7 +629,7 @@ func TestWriteStdinImmediatelyAfterBackgroundPTY(t *testing.T) {
 		"keys":       []string{"enter"},
 		"timeout_ms": 3000,
 	}))
-	if err != nil || writeRes.IsError {
+	if err != nil || writeRes.IsError() {
 		t.Fatalf("immediate write_stdin failed: err=%v res=%+v", err, writeRes)
 	}
 	writePayload := shellRunData(t, writeRes)["payload"].(map[string]any)
@@ -651,7 +651,7 @@ func TestWriteStdinRejectsOversizedInput(t *testing.T) {
 		"mode":       "pty",
 		"timeout_ms": 50,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run should return running PTY task, err=%v res=%+v", err, startRes)
 	}
 	taskID := shellRunData(t, startRes)["payload"].(map[string]any)["task_id"].(string)
@@ -664,7 +664,7 @@ func TestWriteStdinRejectsOversizedInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write_stdin dispatch failed: %v", err)
 	}
-	if !writeRes.IsError || !strings.Contains(writeRes.Content, `"code":"stdin_too_large"`) {
+	if !writeRes.IsError() || !strings.Contains(writeRes.ModelText, `"code":"stdin_too_large"`) {
 		t.Fatalf("expected stdin_too_large, got %+v", writeRes)
 	}
 	_, _ = ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{"task_id": taskID}))
@@ -709,7 +709,7 @@ func TestWriteStdinRejectsUnsupportedKey(t *testing.T) {
 		"mode":       "pty",
 		"timeout_ms": 50,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run should return running PTY task, err=%v res=%+v", err, startRes)
 	}
 	taskID := shellRunData(t, startRes)["payload"].(map[string]any)["task_id"].(string)
@@ -721,7 +721,7 @@ func TestWriteStdinRejectsUnsupportedKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write_stdin dispatch failed: %v", err)
 	}
-	if !writeRes.IsError || !strings.Contains(writeRes.Content, `unsupported key \"return\"`) {
+	if !writeRes.IsError() || !strings.Contains(writeRes.ModelText, `unsupported key \"return\"`) {
 		t.Fatalf("expected unsupported key error, got %+v", writeRes)
 	}
 	_, _ = ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{"task_id": taskID}))
@@ -750,7 +750,7 @@ func TestShellRunPTYModeStartsNewSession(t *testing.T) {
 		"mode":       "pty",
 		"timeout_ms": 3000,
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("shell_run failed: err=%v res=%+v", err, res)
 	}
 	payload := shellRunData(t, res)["payload"].(map[string]any)
@@ -794,7 +794,7 @@ func TestShellRunAutoInteractiveAuthUsesPTYAndWriteStdin(t *testing.T) {
 		"command":    strconv.Quote(fakeNPM) + " login",
 		"timeout_ms": 50,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run should background npm login as PTY, err=%v res=%+v", err, startRes)
 	}
 	data := shellRunData(t, startRes)
@@ -818,7 +818,7 @@ func TestShellRunAutoInteractiveAuthUsesPTYAndWriteStdin(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if !sawPrompt {
-		t.Fatalf("npm login prompt did not appear before write_stdin: %s", startRes.Content)
+		t.Fatalf("npm login prompt did not appear before write_stdin: %s", startRes.ModelText)
 	}
 
 	writeRes, err := ts.writeStdin(context.Background(), tc("write_stdin", map[string]any{
@@ -826,7 +826,7 @@ func TestShellRunAutoInteractiveAuthUsesPTYAndWriteStdin(t *testing.T) {
 		"keys":       []string{"enter"},
 		"timeout_ms": 3000,
 	}))
-	if err != nil || writeRes.IsError {
+	if err != nil || writeRes.IsError() {
 		t.Fatalf("write_stdin failed: err=%v res=%+v", err, writeRes)
 	}
 	writePayload := shellRunData(t, writeRes)["payload"].(map[string]any)
@@ -856,7 +856,7 @@ func TestShellRunAutoInteractiveAuthUsesPipeWithoutExecBoundaryShell(t *testing.
 		"command":    "npm login",
 		"timeout_ms": 50,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run should background npm login as pipe without boundary shell, err=%v res=%+v", err, startRes)
 	}
 	data := shellRunData(t, startRes)
@@ -893,7 +893,7 @@ func TestShellRunPipeInteractiveAuthDoesNotSuggestWriteStdin(t *testing.T) {
 		"timeout_ms": 50,
 		"mode":       "pipe",
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run should background pipe npm login, err=%v res=%+v", err, startRes)
 	}
 	data := shellRunData(t, startRes)
@@ -907,7 +907,7 @@ func TestShellRunPipeInteractiveAuthDoesNotSuggestWriteStdin(t *testing.T) {
 	}
 	taskID := payload["task_id"].(string)
 	cancelRes, cancelErr := ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{"task_id": taskID}))
-	if cancelErr != nil || cancelRes.IsError {
+	if cancelErr != nil || cancelRes.IsError() {
 		t.Fatalf("cleanup shell_cancel failed: err=%v res=%+v", cancelErr, cancelRes)
 	}
 }
@@ -923,10 +923,10 @@ func TestWriteStdinRejectsPipeTask(t *testing.T) {
 		"background": true,
 		"mode":       "pipe",
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run background failed: err=%v res=%+v", err, startRes)
 	}
-	taskID := backgroundTaskID(t, startRes.Content)
+	taskID := backgroundTaskID(t, startRes.ModelText)
 	writeRes, err := ts.writeStdin(context.Background(), tc("write_stdin", map[string]any{
 		"task_id": taskID,
 		"chars":   "x",
@@ -934,7 +934,7 @@ func TestWriteStdinRejectsPipeTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write_stdin dispatch failed: %v", err)
 	}
-	if !writeRes.IsError || !strings.Contains(writeRes.Content, `"code":"stdin_not_available"`) {
+	if !writeRes.IsError() || !strings.Contains(writeRes.ModelText, `"code":"stdin_not_available"`) {
 		t.Fatalf("expected stdin_not_available, got %+v", writeRes)
 	}
 	_, _ = ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{"task_id": taskID}))
@@ -952,10 +952,10 @@ func TestShellRunBackgroundTimeoutKillsProcessGroup(t *testing.T) {
 		"background": true,
 		"timeout_ms": 100,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run background failed: err=%v res=%+v", err, startRes)
 	}
-	taskID := backgroundTaskID(t, startRes.Content)
+	taskID := backgroundTaskID(t, startRes.ModelText)
 	pid := waitForPIDFile(t, filepath.Join(dir, "child.pid"))
 
 	waitRes, err := ts.shellWait(context.Background(), tc("shell_wait", map[string]any{
@@ -965,15 +965,15 @@ func TestShellRunBackgroundTimeoutKillsProcessGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("shell_wait dispatch failed: %v", err)
 	}
-	if waitRes.IsError {
+	if waitRes.IsError() {
 		t.Fatalf("shell_wait should return structured timeout result, got %+v", waitRes)
 	}
-	if !strings.Contains(waitRes.Content, `"status":"timeout"`) {
-		t.Fatalf("expected timeout status, got: %s", waitRes.Content)
+	if !strings.Contains(waitRes.ModelText, `"status":"timeout"`) {
+		t.Fatalf("expected timeout status, got: %s", waitRes.ModelText)
 	}
-	env, ok := core.ParseToolEnvelope(waitRes.Content)
+	env, ok := core.ParseToolEnvelope(waitRes.ModelText)
 	if !ok {
-		t.Fatalf("parse timeout envelope: %s", waitRes.Content)
+		t.Fatalf("parse timeout envelope: %s", waitRes.ModelText)
 	}
 	if !env.Success || env.Code != "ok" {
 		t.Fatalf("expected successful wait envelope, got %+v", env)
@@ -995,9 +995,9 @@ func TestShellRunYieldTimeoutReturnsRunningTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("shell_run returned dispatch error: %v", err)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok {
-		t.Fatalf("parse tool envelope: %s", res.Content)
+		t.Fatalf("parse tool envelope: %s", res.ModelText)
 	}
 	if !env.Success || env.Code != "ok" {
 		t.Fatalf("expected successful running envelope, got %+v", env)
@@ -1041,7 +1041,7 @@ func TestShellRunForegroundMaxRuntimeTimeoutUsesForegroundDiagnosis(t *testing.T
 	if err != nil {
 		t.Fatalf("shell_run returned dispatch error: %v", err)
 	}
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatalf("expected timeout error result, got %+v", res)
 	}
 	data := shellRunData(t, res)
@@ -1075,7 +1075,7 @@ func TestShellRunTimeoutDiagnosesInteractivePrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("shell_run returned dispatch error: %v", err)
 	}
-	if res.IsError {
+	if res.IsError() {
 		t.Fatalf("expected running task result, got %+v", res)
 	}
 	diagnosis := shellRunData(t, res)["diagnosis"].(map[string]any)
@@ -1099,12 +1099,12 @@ func TestShellRunNonZeroExitReturnsExecFailed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("shell_run returned dispatch error: %v", err)
 	}
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatalf("expected non-zero command exit to remain exec_failed, got %+v", res)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok {
-		t.Fatalf("parse tool envelope: %s", res.Content)
+		t.Fatalf("parse tool envelope: %s", res.ModelText)
 	}
 	if env.Success || env.Code != "exec_failed" {
 		t.Fatalf("expected exec_failed tool envelope, got %+v", env)
@@ -1135,12 +1135,12 @@ func TestShellRunExecFailedKeepsNetworkDiagnosis(t *testing.T) {
 	if err != nil {
 		t.Fatalf("shell_run returned dispatch error: %v", err)
 	}
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatalf("expected failed result, got %+v", res)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok {
-		t.Fatalf("parse tool envelope: %s", res.Content)
+		t.Fatalf("parse tool envelope: %s", res.ModelText)
 	}
 	if env.Success || env.Code != "exec_failed" || env.Data["status"] != "error" {
 		t.Fatalf("expected exec_failed envelope, got %+v", env)
@@ -1162,10 +1162,10 @@ func TestShellWaitNonZeroExitReturnsFailedResult(t *testing.T) {
 		"command":    "printf nope; exit 7",
 		"background": true,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run background failed: err=%v res=%+v", err, startRes)
 	}
-	taskID := backgroundTaskID(t, startRes.Content)
+	taskID := backgroundTaskID(t, startRes.ModelText)
 	waitRes, err := ts.shellWait(context.Background(), tc("shell_wait", map[string]any{
 		"task_id":    taskID,
 		"timeout_ms": 3000,
@@ -1173,12 +1173,12 @@ func TestShellWaitNonZeroExitReturnsFailedResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("shell_wait dispatch failed: %v", err)
 	}
-	if waitRes.IsError {
+	if waitRes.IsError() {
 		t.Fatalf("non-zero background exit should not be a tool error: %+v", waitRes)
 	}
-	env, ok := core.ParseToolEnvelope(waitRes.Content)
+	env, ok := core.ParseToolEnvelope(waitRes.ModelText)
 	if !ok {
-		t.Fatalf("parse wait envelope: %s", waitRes.Content)
+		t.Fatalf("parse wait envelope: %s", waitRes.ModelText)
 	}
 	if !env.Success || env.Code != "ok" || env.Data["status"] != "failed" {
 		t.Fatalf("expected failed wait envelope, got %+v", env)
@@ -1207,7 +1207,7 @@ func TestShellRunTimeoutDiagnosesTooShortForegroundWait(t *testing.T) {
 	if err != nil {
 		t.Fatalf("shell_run returned dispatch error: %v", err)
 	}
-	if res.IsError {
+	if res.IsError() {
 		t.Fatalf("expected running task result, got %+v", res)
 	}
 	diagnosis := shellRunData(t, res)["diagnosis"].(map[string]any)
@@ -1239,22 +1239,22 @@ func TestShellRunBackgroundTimeoutDiagnosesRuntimeLimit(t *testing.T) {
 		"background": true,
 		"timeout_ms": 50,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run background failed: err=%v res=%+v", err, startRes)
 	}
 	waitRes, err := ts.shellWait(context.Background(), tc("shell_wait", map[string]any{
-		"task_id":    backgroundTaskID(t, startRes.Content),
+		"task_id":    backgroundTaskID(t, startRes.ModelText),
 		"timeout_ms": 5000,
 	}))
 	if err != nil {
 		t.Fatalf("shell_wait dispatch failed: %v", err)
 	}
-	if waitRes.IsError {
+	if waitRes.IsError() {
 		t.Fatalf("shell_wait should return structured timeout result, got %+v", waitRes)
 	}
-	env, ok := core.ParseToolEnvelope(waitRes.Content)
+	env, ok := core.ParseToolEnvelope(waitRes.ModelText)
 	if !ok {
-		t.Fatalf("parse timeout envelope: %s", waitRes.Content)
+		t.Fatalf("parse timeout envelope: %s", waitRes.ModelText)
 	}
 	if !env.Success || env.Code != "ok" {
 		t.Fatalf("expected successful wait envelope, got %+v", env)
@@ -1291,7 +1291,7 @@ func TestShellRunAutoBackgroundsLongCommandAfterForegroundWait(t *testing.T) {
 		"command":    strconv.Quote(fakeGo) + " test ./internal/tui",
 		"timeout_ms": 50,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run should return running task, err=%v res=%+v", err, startRes)
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
@@ -1299,7 +1299,7 @@ func TestShellRunAutoBackgroundsLongCommandAfterForegroundWait(t *testing.T) {
 	}
 	data := shellRunData(t, startRes)
 	if data["status"] != "running" {
-		t.Fatalf("status = %#v, want running: %s", data["status"], startRes.Content)
+		t.Fatalf("status = %#v, want running: %s", data["status"], startRes.ModelText)
 	}
 	metrics := data["metrics"].(map[string]any)
 	if metrics["auto_backgrounded"] != true {
@@ -1315,11 +1315,11 @@ func TestShellRunAutoBackgroundsLongCommandAfterForegroundWait(t *testing.T) {
 		"task_id":    taskID,
 		"timeout_ms": 5000,
 	}))
-	if err != nil || waitRes.IsError {
+	if err != nil || waitRes.IsError() {
 		t.Fatalf("shell_wait failed: err=%v res=%+v", err, waitRes)
 	}
-	if !strings.Contains(waitRes.Content, "beforeafter") {
-		t.Fatalf("expected completed fake go output, got: %s", waitRes.Content)
+	if !strings.Contains(waitRes.ModelText, "beforeafter") {
+		t.Fatalf("expected completed fake go output, got: %s", waitRes.ModelText)
 	}
 }
 
@@ -1343,12 +1343,12 @@ func TestShellRunCurlPipeInstallerYieldsManagedTask(t *testing.T) {
 		"command":       strconv.Quote(fakeCurl) + " -fsSL https://example.invalid/install.sh | sh",
 		"yield_time_ms": 50,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run should return running curl pipe task, err=%v res=%+v", err, startRes)
 	}
 	data := shellRunData(t, startRes)
 	if data["status"] != "running" {
-		t.Fatalf("status = %#v, want running: %s", data["status"], startRes.Content)
+		t.Fatalf("status = %#v, want running: %s", data["status"], startRes.ModelText)
 	}
 	diagnosis := data["diagnosis"].(map[string]any)
 	if diagnosis["reason"] != "download_long_running" || diagnosis["suggested_next_action"] != "shell_wait" {
@@ -1363,11 +1363,11 @@ func TestShellRunCurlPipeInstallerYieldsManagedTask(t *testing.T) {
 		"task_id":    payload["task_id"],
 		"timeout_ms": 5000,
 	}))
-	if err != nil || waitRes.IsError {
+	if err != nil || waitRes.IsError() {
 		t.Fatalf("shell_wait failed: err=%v res=%+v", err, waitRes)
 	}
-	if !strings.Contains(waitRes.Content, "resolvinginstalled") {
-		t.Fatalf("expected installer output from same task, got: %s", waitRes.Content)
+	if !strings.Contains(waitRes.ModelText, "resolvinginstalled") {
+		t.Fatalf("expected installer output from same task, got: %s", waitRes.ModelText)
 	}
 }
 
@@ -1391,7 +1391,7 @@ func TestShellRunAutoBackgroundsUnknownNonInteractiveCommand(t *testing.T) {
 		"command":    "slowcmd",
 		"timeout_ms": 50,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run should return running task, err=%v res=%+v", err, startRes)
 	}
 	data := shellRunData(t, startRes)
@@ -1404,11 +1404,11 @@ func TestShellRunAutoBackgroundsUnknownNonInteractiveCommand(t *testing.T) {
 		"task_id":    taskID,
 		"timeout_ms": 5000,
 	}))
-	if err != nil || waitRes.IsError {
+	if err != nil || waitRes.IsError() {
 		t.Fatalf("shell_wait failed: err=%v res=%+v", err, waitRes)
 	}
-	if !strings.Contains(waitRes.Content, "beforeafter") {
-		t.Fatalf("expected completed fake command output, got: %s", waitRes.Content)
+	if !strings.Contains(waitRes.ModelText, "beforeafter") {
+		t.Fatalf("expected completed fake command output, got: %s", waitRes.ModelText)
 	}
 }
 
@@ -1432,22 +1432,22 @@ func TestShellWaitAutoBackgroundedFailureReturnsStructuredResult(t *testing.T) {
 		"command":    strconv.Quote(fakeGo) + " test ./internal/tui",
 		"timeout_ms": 50,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run should return running task, err=%v res=%+v", err, startRes)
 	}
 	waitRes, err := ts.shellWait(context.Background(), tc("shell_wait", map[string]any{
-		"task_id":    backgroundTaskID(t, startRes.Content),
+		"task_id":    backgroundTaskID(t, startRes.ModelText),
 		"timeout_ms": 5000,
 	}))
 	if err != nil {
 		t.Fatalf("shell_wait dispatch failed: %v", err)
 	}
-	if waitRes.IsError {
+	if waitRes.IsError() {
 		t.Fatalf("shell_wait should return structured failed result, got %+v", waitRes)
 	}
-	env, ok := core.ParseToolEnvelope(waitRes.Content)
+	env, ok := core.ParseToolEnvelope(waitRes.ModelText)
 	if !ok {
-		t.Fatalf("parse failure envelope: %s", waitRes.Content)
+		t.Fatalf("parse failure envelope: %s", waitRes.ModelText)
 	}
 	if !env.Success || env.Code != "ok" {
 		t.Fatalf("expected successful wait envelope, got %+v", env)
@@ -1473,7 +1473,7 @@ func TestShellRunExplicitBackgroundReportsEffectiveTimeout(t *testing.T) {
 		"command":    "sleep 5",
 		"background": true,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run background failed: err=%v res=%+v", err, startRes)
 	}
 	data := shellRunData(t, startRes)
@@ -1503,7 +1503,7 @@ func TestShellRunExplicitBackgroundClampsTimeout(t *testing.T) {
 		"background": true,
 		"timeout_ms": maxBackgroundShellTimeoutMS + 1,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run background failed: err=%v res=%+v", err, startRes)
 	}
 	data := shellRunData(t, startRes)
@@ -1545,7 +1545,7 @@ func TestShellWaitRunningReturnsPartialOutputAndPromptDiagnosis(t *testing.T) {
 		"command":    "promptcmd",
 		"timeout_ms": 50,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run should return running task, err=%v res=%+v", err, startRes)
 	}
 	taskID := shellRunData(t, startRes)["payload"].(map[string]any)["task_id"].(string)
@@ -1560,18 +1560,18 @@ func TestShellWaitRunningReturnsPartialOutputAndPromptDiagnosis(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if !sawPrompt {
-		t.Fatalf("promptcmd stderr did not appear before shell_wait: %s", startRes.Content)
+		t.Fatalf("promptcmd stderr did not appear before shell_wait: %s", startRes.ModelText)
 	}
 	waitRes, err := ts.shellWait(context.Background(), tc("shell_wait", map[string]any{
 		"task_id":    taskID,
 		"timeout_ms": 50,
 	}))
-	if err != nil || waitRes.IsError {
+	if err != nil || waitRes.IsError() {
 		t.Fatalf("shell_wait running failed: err=%v res=%+v", err, waitRes)
 	}
 	data := shellRunData(t, waitRes)
 	if data["status"] != "running" {
-		t.Fatalf("status = %#v, want running: %s", data["status"], waitRes.Content)
+		t.Fatalf("status = %#v, want running: %s", data["status"], waitRes.ModelText)
 	}
 	payload := data["payload"].(map[string]any)
 	if payload["stderr"] != "Password:" {
@@ -1595,20 +1595,20 @@ func TestShellCancelStopsBackgroundTask(t *testing.T) {
 		"background": true,
 		"timeout_ms": 30000,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run background failed: err=%v res=%+v", err, startRes)
 	}
-	taskID := backgroundTaskID(t, startRes.Content)
+	taskID := backgroundTaskID(t, startRes.ModelText)
 	pid := waitForPIDFile(t, filepath.Join(dir, "child.pid"))
 
 	cancelRes, err := ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{
 		"task_id": taskID,
 	}))
-	if err != nil || cancelRes.IsError {
+	if err != nil || cancelRes.IsError() {
 		t.Fatalf("shell_cancel failed: err=%v res=%+v", err, cancelRes)
 	}
-	if !strings.Contains(cancelRes.Content, `"status":"cancelled"`) {
-		t.Fatalf("expected cancelled status, got: %s", cancelRes.Content)
+	if !strings.Contains(cancelRes.ModelText, `"status":"cancelled"`) {
+		t.Fatalf("expected cancelled status, got: %s", cancelRes.ModelText)
 	}
 	waitForProcessExit(t, pid)
 }
@@ -1628,7 +1628,7 @@ func TestShellRunConfiguredForegroundMaxAllowsLongerRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("shell_run returned dispatch error: %v", err)
 	}
-	if res.IsError {
+	if res.IsError() {
 		t.Fatalf("expected shell_run success, got %+v", res)
 	}
 	metrics := shellRunData(t, res)["metrics"].(map[string]any)
@@ -1659,7 +1659,7 @@ func TestShellRunWarnsWhenCommandTargetsOriginalWorkspace(t *testing.T) {
 	res, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
 		"command": "cd " + original + " && pwd",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("shell_run failed: err=%v res=%+v", err, res)
 	}
 	data := shellRunData(t, res)
@@ -1679,7 +1679,7 @@ func TestShellRunWarnsWhenCommandTargetsOriginalWorkspace(t *testing.T) {
 	plainRes, err := plain.shellRun(context.Background(), tc("shell_run", map[string]any{
 		"command": "cd " + original + " && pwd",
 	}))
-	if err != nil || plainRes.IsError {
+	if err != nil || plainRes.IsError() {
 		t.Fatalf("plain shell_run failed: err=%v res=%+v", err, plainRes)
 	}
 	plainData := shellRunData(t, plainRes)
@@ -1719,9 +1719,9 @@ func TestShellRunWarnsForGitDashCOriginalWorkspace(t *testing.T) {
 
 func shellRunData(t *testing.T, res core.ToolResult) map[string]any {
 	t.Helper()
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok {
-		t.Fatalf("parse tool envelope: %s", res.Content)
+		t.Fatalf("parse tool envelope: %s", res.ModelText)
 	}
 	return env.Data
 }

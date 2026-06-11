@@ -16,7 +16,7 @@ type namedContentTool struct {
 
 func (t namedContentTool) Name() string { return t.name }
 func (t namedContentTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: t.content}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: t.content}, nil
 }
 
 type toolCaptureProvider struct {
@@ -122,7 +122,7 @@ func TestToolDispatchUsesProviderRequestSnapshot(t *testing.T) {
 		t.Fatalf("expected one tool result in third message, got %+v", all)
 	}
 	res := all[2].ToolResults[0]
-	if res.IsError || res.Name != "old" || !strings.Contains(res.Content, "old-ok") {
+	if res.IsError() || res.Name != "old" || !strings.Contains(res.ModelText, "old-ok") {
 		t.Fatalf("expected old tool to dispatch from snapshot, got %+v", res)
 	}
 }

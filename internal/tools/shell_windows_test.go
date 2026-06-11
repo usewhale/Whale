@@ -95,7 +95,7 @@ func TestWindowsShellRunCancelKillsProcessTree(t *testing.T) {
 			"command":    command,
 			"timeout_ms": 120000,
 		}))
-		done <- execResult{res: res.Content, err: err}
+		done <- execResult{res: res.ModelText, err: err}
 	}()
 
 	select {
@@ -125,7 +125,7 @@ func TestWindowsShellRunCancelKillsProcessTree(t *testing.T) {
 		t.Fatal("shell_run did not return promptly after cancel")
 	}
 
-	if res, err := ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{"task_id": taskID})); err != nil || res.IsError {
+	if res, err := ts.shellCancel(context.Background(), tc("shell_cancel", map[string]any{"task_id": taskID})); err != nil || res.IsError() {
 		t.Fatalf("shell_cancel failed: err=%v res=%+v", err, res)
 	}
 	time.Sleep(1500 * time.Millisecond)
@@ -151,7 +151,7 @@ func TestWindowsShellRunKeepsLaunchedChildOnSuccess(t *testing.T) {
 		"command":    currentTestBinaryCommand(t),
 		"timeout_ms": 120000,
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("shell_run failed: err=%v res=%+v", err, res)
 	}
 
@@ -173,10 +173,10 @@ func TestWindowsShellRunDecodesGBKStdout(t *testing.T) {
 	res, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
 		"command": windowsGBKOutputHelperCommand(t, "stdout", 0),
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("shell_run failed: err=%v res=%+v", err, res)
 	}
-	stdout := shellPayloadString(t, res.Content, "stdout")
+	stdout := shellPayloadString(t, res.ModelText, "stdout")
 	if stdout != "拒绝访问 - \\" {
 		t.Fatalf("stdout = %q, want decoded GBK text", stdout)
 	}
@@ -195,10 +195,10 @@ func TestWindowsShellRunPreservesAmbiguousValidUTF8Stdout(t *testing.T) {
 	res, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
 		"command": windowsGBKOutputHelperCommandForSample(t, "stdout", 0, "ambiguous"),
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("shell_run failed: err=%v res=%+v", err, res)
 	}
-	stdout := shellPayloadString(t, res.Content, "stdout")
+	stdout := shellPayloadString(t, res.ModelText, "stdout")
 	if stdout != "һ" {
 		t.Fatalf("stdout = %q, want ambiguous valid UTF-8 bytes preserved", stdout)
 	}
@@ -233,12 +233,12 @@ func TestWindowsShellRunDecodesGBKStderrOnFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("shell_run dispatch error: %v", err)
 	}
-	if !res.IsError {
-		t.Fatalf("expected failing command result, got: %s", res.Content)
+	if !res.IsError() {
+		t.Fatalf("expected failing command result, got: %s", res.ModelText)
 	}
-	stderr := shellPayloadString(t, res.Content, "stderr")
+	stderr := shellPayloadString(t, res.ModelText, "stderr")
 	if stderr != "拒绝访问 - \\" {
-		t.Fatalf("stderr = %q, want decoded GBK text; full result: %s", stderr, res.Content)
+		t.Fatalf("stderr = %q, want decoded GBK text; full result: %s", stderr, res.ModelText)
 	}
 	if strings.Contains(stderr, "\uFFFD") {
 		t.Fatalf("stderr contains replacement rune: %q", stderr)

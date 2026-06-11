@@ -99,8 +99,8 @@ func toolCallCapBlockedResult(call core.ToolCall) core.ToolResult {
 	return core.ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
-		Content:    content,
-		IsError:    true,
+		ModelText:  content,
+		Code:       "tool_call_cap_reached",
 		Metadata: map[string]any{
 			"blocked_reason_code": "tool_call_cap_reached",
 		},
@@ -235,12 +235,10 @@ func (a *Agent) appendDispatchedToolResult(ctx context.Context, sessionID string
 			return false
 		}
 	}
-	// Recovery wrappers and other bypass producers arrive without the
-	// channel-separated fields; finalize before hooks so PostToolUse
-	// payloads see the same result shape that is persisted and emitted.
-	if finalRes.ModelText == "" {
-		finalRes = core.FinalizeToolResultChannels(finalRes)
-	}
+	// Recovery wrappers and other bypass producers arrive unclassified
+	// (raw envelope in ModelText, no Outcome); finalize before hooks so
+	// PostToolUse payloads see the same result shape that is persisted.
+	finalRes = core.FinalizeToolResultChannels(finalRes)
 	if prepared.PreHookContext != "" {
 		addHookContextToToolResult(&finalRes, prepared.PreHookContext)
 	}
@@ -256,11 +254,6 @@ func (a *Agent) appendDispatchedToolResult(ctx context.Context, sessionID string
 		if strings.TrimSpace(report.AdditionalContext) != "" {
 			addHookContextToToolResult(&finalRes, report.AdditionalContext)
 		}
-	}
-	// Defensive: hook injection keeps the channels in lockstep itself;
-	// any remaining drift follows the mutated text.
-	if finalRes.Content != finalRes.ModelText {
-		finalRes.ModelText = finalRes.Content
 	}
 	*results = append(*results, finalRes)
 	r := finalRes
@@ -285,27 +278,22 @@ func (a *Agent) bestEffortUpdateAssistant(msg core.Message) {
 // addHookContextToToolResult injects hook context into both channels of a
 // result: the structured Metadata (which phase 2's plain-text renderer will
 // read) and the model-visible text via addHookContextToToolContent (the
-// sanctioned pre-persistence ModelText mutation; the resync in
-// appendDispatchedToolResult re-derives ModelText/Payload afterwards).
+// sanctioned pre-persistence ModelText mutation).
 func addHookContextToToolResult(res *core.ToolResult, hookContext string) {
 	hookContext = strings.TrimSpace(hookContext)
 	if hookContext == "" {
 		return
 	}
-	// Bypass producers arrive without a model channel: derive it first so
-	// the injection lands on the rendered text, not the raw envelope.
-	if res.ModelText == "" {
+	// Unclassified bypass producers carry a raw envelope: derive the
+	// channels first so the injection lands on the rendered text.
+	if res.Outcome == "" {
 		*res = core.FinalizeToolResultChannels(*res)
 	}
 	if res.Metadata == nil {
 		res.Metadata = map[string]any{}
 	}
 	res.Metadata["hook_context"] = appendHookContextValue(res.Metadata["hook_context"], hookContext)
-	res.Content = addHookContextToToolContent(res.Content, hookContext)
-	// Keep the model channel in lockstep immediately: the PostToolUse
-	// payload is built from ToolResultModelText right after a pre-hook
-	// injection and must see the added context.
-	res.ModelText = res.Content
+	res.ModelText = addHookContextToToolContent(res.ModelText, hookContext)
 }
 
 func addHookContextToToolContent(content, hookContext string) string {

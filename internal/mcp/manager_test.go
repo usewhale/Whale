@@ -95,12 +95,12 @@ func TestManagerInitializesAndCallsStdioTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.IsError {
+	if res.IsError() {
 		t.Fatalf("unexpected tool error: %+v", res)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok {
-		t.Fatalf("invalid envelope: %s", res.Content)
+		t.Fatalf("invalid envelope: %s", res.ModelText)
 	}
 	if text, _ := env.Data["text"].(string); !strings.Contains(text, "echo:hi") {
 		t.Fatalf("text = %q, envelope = %+v", text, env)
@@ -450,11 +450,11 @@ func TestManagerInitializesAndCallsStreamableHTTPToolWithHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.IsError {
+	if res.IsError() {
 		t.Fatalf("unexpected tool error: %+v", res)
 	}
-	if !strings.Contains(res.Content, "echo:remote") {
-		t.Fatalf("content = %s", res.Content)
+	if !strings.Contains(res.ModelText, "echo:remote") {
+		t.Fatalf("content = %s", res.ModelText)
 	}
 	mu.Lock()
 	defer mu.Unlock()

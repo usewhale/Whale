@@ -115,22 +115,22 @@ func TestMemoryToolsRememberAndRecall(t *testing.T) {
 	}
 	input := `{"scope":"global","type":"user","name":"style","description":"concise Chinese","content":"Answer in concise Chinese."}`
 	res, err := remember.Run(context.Background(), core.ToolCall{ID: "c1", Name: "remember", Input: input})
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("remember res=%+v err=%v", res, err)
 	}
-	if !strings.Contains(res.Content, "Treat this as established fact") {
-		t.Fatalf("remember result missing session hint: %s", res.Content)
+	if !strings.Contains(res.ModelText, "Treat this as established fact") {
+		t.Fatalf("remember result missing session hint: %s", res.ModelText)
 	}
-	if !strings.Contains(res.Content, `"write_status":"created"`) {
-		t.Fatalf("remember result should report created: %s", res.Content)
+	if !strings.Contains(res.ModelText, `"write_status":"created"`) {
+		t.Fatalf("remember result should report created: %s", res.ModelText)
 	}
 
 	res, err = remember.Run(context.Background(), core.ToolCall{ID: "c1b", Name: "remember", Input: `{"scope":"global","type":"user","name":"style","description":"updated concise Chinese","content":"Answer in very concise Chinese."}`})
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("remember update res=%+v err=%v", res, err)
 	}
-	if !strings.Contains(res.Content, `"write_status":"updated"`) {
-		t.Fatalf("remember update should report updated: %s", res.Content)
+	if !strings.Contains(res.ModelText, `"write_status":"updated"`) {
+		t.Fatalf("remember update should report updated: %s", res.ModelText)
 	}
 
 	recall := recallTool{store: store}
@@ -139,14 +139,14 @@ func TestMemoryToolsRememberAndRecall(t *testing.T) {
 		t.Fatalf("recall_memory should be read-only: %+v", recallSpec)
 	}
 	res, err = recall.Run(context.Background(), core.ToolCall{ID: "c2", Name: "recall_memory", Input: `{"scope":"global","name":"style"}`})
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("recall res=%+v err=%v", res, err)
 	}
 	var env struct {
 		Data map[string]any `json:"data"`
 	}
-	if err := json.Unmarshal([]byte(res.Content), &env); err != nil {
-		t.Fatalf("parse recall envelope: %v\n%s", err, res.Content)
+	if err := json.Unmarshal([]byte(res.ModelText), &env); err != nil {
+		t.Fatalf("parse recall envelope: %v\n%s", err, res.ModelText)
 	}
 	if env.Data["content"] != "Answer in very concise Chinese." {
 		t.Fatalf("unexpected recall content: %+v", env.Data)
@@ -236,9 +236,9 @@ func TestForgetToolReturnsSessionHintToIgnoreDeletedMemory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok {
-		t.Fatalf("result is not a tool envelope: %s", res.Content)
+		t.Fatalf("result is not a tool envelope: %s", res.ModelText)
 	}
 	hint, _ := env.Data["session_hint"].(string)
 	if !strings.Contains(hint, "Immediately stop using memory project/roadmap") || !strings.Contains(hint, "revoked") {

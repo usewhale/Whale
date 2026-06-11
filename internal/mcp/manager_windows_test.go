@@ -140,7 +140,7 @@ func runWindowsMCPProcessTreeServer() int {
 			return nil, spawnChildOutput{}, err
 		}
 		return &sdk.CallToolResult{
-			Content: []sdk.Content{&sdk.TextContent{Text: "spawned"}},
+			ModelText: []sdk.Content{&sdk.TextContent{Text: "spawned"}},
 		}, spawnChildOutput{Spawned: true}, nil
 	})
 	if err := server.Run(context.Background(), &sdk.StdioTransport{}); err != nil {

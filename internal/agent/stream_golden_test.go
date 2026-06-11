@@ -36,10 +36,10 @@ func assertAgentGolden(t *testing.T, name, got string) {
 
 func TestToolCallCapBlockedResultGolden(t *testing.T) {
 	res := toolCallCapBlockedResult(core.ToolCall{ID: "cap-1", Name: "shell_run"})
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatal("expected error result")
 	}
-	assertAgentGolden(t, "cap_blocked", res.Content)
+	assertAgentGolden(t, "cap_blocked", res.ModelText)
 }
 
 func TestAddHookContextToToolContentGolden(t *testing.T) {

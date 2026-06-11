@@ -208,7 +208,7 @@ func (t *recordingWorkflowTool) Parameters() map[string]any {
 }
 func (t *recordingWorkflowTool) Run(_ context.Context, call core.ToolCall) (core.ToolResult, error) {
 	t.input = call.Input
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok"}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "ok"}, nil
 }
 
 func TestRuntimeEnvironmentBlockIncludesWorktreeContext(t *testing.T) {

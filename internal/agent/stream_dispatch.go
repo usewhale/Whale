@@ -266,8 +266,8 @@ func appendAbortSkippedToolResults(ctx context.Context, sc streamDispatchContext
 		tr := core.FinalizeToolResultChannels(core.ToolResult{
 			ToolCallID: call.ID,
 			Name:       call.Name,
-			Content:    `{"success":false,"error":"tool skipped because another tool requested a runtime handoff","code":"turn_aborted"}`,
-			IsError:    true,
+			ModelText:  `{"success":false,"error":"tool skipped because another tool requested a runtime handoff","code":"turn_aborted"}`,
+			Code:       "turn_aborted",
 		})
 		*results = append(*results, tr)
 		if err := emitDispatchEvent(ctx, sc, AgentEvent{Type: AgentEventTypeToolResult, Result: &tr}); err != nil && requireEventDelivery {
@@ -387,8 +387,7 @@ func (a *Agent) appendPolicyDeniedResult(ctx context.Context, sc streamDispatchC
 	return appendToolResult(ctx, sc, results, core.ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
-		Content:    policyDenialEnvelope(decision),
-		IsError:    true,
+		ModelText:  policyDenialEnvelope(decision),
 		Metadata:   autoDenyMetadata(sc.AutoDenyCounts, decision.Code, call.Name),
 	})
 }
@@ -421,8 +420,8 @@ func (a *Agent) runPreToolUseHook(ctx context.Context, sc streamDispatchContext,
 		tr := core.ToolResult{
 			ToolCallID: call.ID,
 			Name:       call.Name,
-			Content:    fmt.Sprintf(`{"success":false,"error":%q,"code":%q}`, msg, code),
-			IsError:    true,
+			ModelText:  fmt.Sprintf(`{"success":false,"error":%q,"code":%q}`, msg, code),
+			Code:       code,
 		}
 		if err := appendToolResult(ctx, sc, results, tr); err != nil {
 			return core.ToolCall{}, "", false, err
@@ -479,8 +478,7 @@ func (a *Agent) appendModeBlockedResult(ctx context.Context, sc streamDispatchCo
 	return true, appendToolResult(ctx, sc, results, core.ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
-		Content:    content,
-		IsError:    true,
+		ModelText:  content,
 		Metadata:   autoDenyMetadata(sc.AutoDenyCounts, blockedCode, call.Name),
 	})
 }
@@ -501,7 +499,7 @@ func (a *Agent) dispatchPreApprovalSpecialTool(ctx context.Context, sc streamDis
 	}
 	res, err := a.handleUpdatePlan(ctx, call, sc.Events)
 	if err != nil {
-		tr := core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: err.Error(), IsError: true}
+		tr := core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: err.Error()}
 		return true, appendToolResult(ctx, sc, results, tr)
 	}
 	return true, appendToolResult(ctx, sc, results, res)
@@ -583,8 +581,8 @@ func (a *Agent) resolveToolApproval(ctx context.Context, sc streamDispatchContex
 	tr := core.ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
-		Content:    `{"success":false,"error":"tool approval denied","code":"approval_denied"}`,
-		IsError:    true,
+		ModelText:  `{"success":false,"error":"tool approval denied","code":"approval_denied"}`,
+		Code:       "approval_denied",
 	}
 	if err := appendToolResult(ctx, sc, results, tr); err != nil {
 		return toolApprovalResult{}, err
@@ -609,7 +607,7 @@ func (a *Agent) dispatchPostApprovalSpecialTool(ctx context.Context, sc streamDi
 	if call.Name == "request_user_input" {
 		res, err := a.handleRequestUserInput(ctx, call, sc.SessionID, sc.Events)
 		if err != nil {
-			tr := core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: err.Error(), IsError: true}
+			tr := core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: err.Error()}
 			return true, appendToolResult(ctx, sc, results, tr)
 		}
 		return true, appendToolResult(ctx, sc, results, res)
@@ -618,7 +616,7 @@ func (a *Agent) dispatchPostApprovalSpecialTool(ctx context.Context, sc streamDi
 	case "todo_add", "todo_list", "todo_update", "todo_remove", "todo_clear_done":
 		res, err := a.handleTodo(call, sc.SessionID)
 		if err != nil {
-			tr := core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: err.Error(), IsError: true}
+			tr := core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: err.Error()}
 			return true, appendToolResult(ctx, sc, results, tr)
 		}
 		return true, appendToolResult(ctx, sc, results, res)
@@ -650,13 +648,10 @@ func persistenceContext(ctx context.Context) context.Context {
 }
 
 func toolResultUsableAfterCancel(res core.ToolResult) bool {
-	if res.ToolCallID == "" && res.Name == "" && res.Content == "" && res.Metadata == nil {
+	if res.ToolCallID == "" && res.Name == "" && res.ModelText == "" && res.Metadata == nil {
 		return false
 	}
-	if res.IsError {
-		return false
-	}
-	return true
+	return !res.IsError()
 }
 
 func (a *Agent) createDispatchToolMessage(ctx context.Context, sc streamDispatchContext, results []core.ToolResult) (core.Message, error) {

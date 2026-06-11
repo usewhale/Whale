@@ -376,7 +376,7 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 						}
 						progressCount++
 						status := "running"
-						if ev.Result.IsError {
+						if ev.Result.IsError() {
 							status = "tool_failed"
 						}
 						action := childActions[ev.Result.ToolCallID]

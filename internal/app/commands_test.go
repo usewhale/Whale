@@ -529,7 +529,7 @@ func TestHandleLocalCommandStats(t *testing.T) {
 	writeSessionMessages(t, sessionsDir, "s1", []core.Message{
 		{ID: "m-1", SessionID: "s1", Role: core.RoleUser, Text: "please inspect the workspace"},
 		{ID: "m-2", SessionID: "s1", Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "c1", Name: "read_file", Input: `{"path":"big.go"}`}}},
-		{ID: "m-3", SessionID: "s1", Role: core.RoleTool, ToolResults: []core.ToolResult{{ToolCallID: "c1", Name: "read_file", Content: strings.Repeat("x", 13000)}}},
+		{ID: "m-3", SessionID: "s1", Role: core.RoleTool, ToolResults: []core.ToolResult{{ToolCallID: "c1", Name: "read_file", ModelText: strings.Repeat("x", 13000)}}},
 		{ID: "m-4", SessionID: "s1", Role: core.RoleAssistant, Text: "done", Reasoning: "thinking"},
 	})
 	writeSessionMessages(t, sessionsDir, "s2", []core.Message{
@@ -1265,19 +1265,19 @@ func TestBackgroundTaskLocalCommands(t *testing.T) {
 		Name:  "shell_run",
 		Input: `{"command":"sleep 30","background":true}`,
 	})
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("start background task: err=%v res=%+v", err, startRes)
 	}
-	taskID := backgroundTaskIDFromToolResult(t, startRes.Content)
+	taskID := backgroundTaskIDFromToolResult(t, startRes.ModelText)
 	secondRes, err := shellRun.Run(context.Background(), core.ToolCall{
 		ID:    "tc-shell-2",
 		Name:  "shell_run",
 		Input: `{"command":"sleep 31","background":true}`,
 	})
-	if err != nil || secondRes.IsError {
+	if err != nil || secondRes.IsError() {
 		t.Fatalf("start second background task: err=%v res=%+v", err, secondRes)
 	}
-	secondTaskID := backgroundTaskIDFromToolResult(t, secondRes.Content)
+	secondTaskID := backgroundTaskIDFromToolResult(t, secondRes.ModelText)
 
 	handled, out, _, err = app.HandleLocalCommand("/ps")
 	if !handled || err != nil {
@@ -1341,10 +1341,10 @@ func TestPSHidesTimedOutBackgroundTasks(t *testing.T) {
 		Name:  "shell_run",
 		Input: `{"command":"sleep 1","background":true,"timeout_ms":1}`,
 	})
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("start background task: err=%v res=%+v", err, startRes)
 	}
-	taskID := backgroundTaskIDFromToolResult(t, startRes.Content)
+	taskID := backgroundTaskIDFromToolResult(t, startRes.ModelText)
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {

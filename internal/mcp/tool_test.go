@@ -86,11 +86,11 @@ func TestMCPResultWrapsTextAndMedia(t *testing.T) {
 			&sdk.ImageContent{MIMEType: "image/png", Data: []byte("abc")},
 		},
 	})
-	if res.IsError {
+	if res.IsError() {
 		t.Fatalf("unexpected error: %+v", res)
 	}
-	if !strings.Contains(res.Content, "hello") || !strings.Contains(res.Content, "image/png") {
-		t.Fatalf("content: %s", res.Content)
+	if !strings.Contains(res.ModelText, "hello") || !strings.Contains(res.ModelText, "image/png") {
+		t.Fatalf("content: %s", res.ModelText)
 	}
 }
 
@@ -99,7 +99,7 @@ func TestMCPResultMarksToolError(t *testing.T) {
 		Content: []sdk.Content{&sdk.TextContent{Text: "failed"}},
 		IsError: true,
 	})
-	if !res.IsError || !strings.Contains(res.Content, "mcp_tool_error") {
+	if !res.IsError() || !strings.Contains(res.ModelText, "mcp_tool_error") {
 		t.Fatalf("result: %+v", res)
 	}
 }
@@ -110,7 +110,7 @@ func TestToolRunRejectsInvalidJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, "invalid_mcp_input") {
+	if !res.IsError() || !strings.Contains(res.ModelText, "invalid_mcp_input") {
 		t.Fatalf("result: %+v", res)
 	}
 }
@@ -147,7 +147,7 @@ func TestToolRunPreflightsFilesystemAllowedDirs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, `"code":"mcp_allowed_dirs_denied"`) || !strings.Contains(res.Content, "Whale built-in file tools") {
+	if !res.IsError() || !strings.Contains(res.ModelText, `"code":"mcp_allowed_dirs_denied"`) || !strings.Contains(res.ModelText, "Whale built-in file tools") {
 		t.Fatalf("expected allowed-dirs denial before manager call, got %+v", res)
 	}
 }
@@ -169,7 +169,7 @@ func TestToolRunAllowsPathsInsideFilesystemAllowedDirs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, `"code":"mcp_call_failed"`) {
+	if !res.IsError() || !strings.Contains(res.ModelText, `"code":"mcp_call_failed"`) {
 		t.Fatalf("expected path to reach manager and fail there, got %+v", res)
 	}
 }
@@ -199,10 +199,10 @@ func TestToolRunPreflightCanonicalizesFilesystemAllowedDirs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(res.Content, `"code":"mcp_allowed_dirs_denied"`) {
+	if strings.Contains(res.ModelText, `"code":"mcp_allowed_dirs_denied"`) {
 		t.Fatalf("expected symlink-equivalent path to reach manager, got %+v", res)
 	}
-	if !res.IsError || !strings.Contains(res.Content, `"code":"mcp_call_failed"`) {
+	if !res.IsError() || !strings.Contains(res.ModelText, `"code":"mcp_call_failed"`) {
 		t.Fatalf("expected path to reach manager and fail there, got %+v", res)
 	}
 }

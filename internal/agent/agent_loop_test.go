@@ -207,10 +207,10 @@ func TestAgentMaxToolCallsDropsExcessAndForcesSummary(t *testing.T) {
 	var capped int
 	for _, msg := range all {
 		for _, res := range msg.ToolResults {
-			if res.Name == "echo" && !res.IsError {
+			if res.Name == "echo" && !res.IsError() {
 				executed++
 			}
-			if res.Name == "echo" && res.IsError && res.ToolCallID == "tc-3" {
+			if res.Name == "echo" && res.IsError() && res.ToolCallID == "tc-3" {
 				capped++
 			}
 		}
@@ -381,7 +381,7 @@ func (t abortAfterToolResultTool) Run(_ context.Context, call ToolCall) (ToolRes
 	return ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
-		Content:    `{"success":true,"code":"confirmation_required"}`,
+		ModelText:  `{"success":true,"code":"confirmation_required"}`,
 		Metadata: map[string]any{
 			"abort_turn_after_tool_result": true,
 		},
@@ -524,10 +524,10 @@ func TestAgentLoopAbortAddsResultsForUnprocessedToolCalls(t *testing.T) {
 	if all[2].Role != RoleTool || len(all[2].ToolResults) != 2 {
 		t.Fatalf("expected aligned terminal tool message, got %+v", all[2])
 	}
-	if got := all[2].ToolResults[0]; got.ToolCallID != "tc-confirm" || got.IsError {
+	if got := all[2].ToolResults[0]; got.ToolCallID != "tc-confirm" || got.IsError() {
 		t.Fatalf("first result = %+v", got)
 	}
-	if got := all[2].ToolResults[1]; got.ToolCallID != "tc-echo" || !got.IsError || !strings.Contains(got.Content, "turn_aborted") {
+	if got := all[2].ToolResults[1]; got.ToolCallID != "tc-echo" || !got.IsError() || !strings.Contains(got.ModelText, "turn_aborted") {
 		t.Fatalf("second result = %+v", got)
 	}
 }

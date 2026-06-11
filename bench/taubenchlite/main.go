@@ -295,9 +295,9 @@ func runTask(parent context.Context, args cliArgs, task taskSpec, mode string, r
 			case agent.AgentEventTypeToolResult:
 				result.ToolCalls++
 				if ev.Result != nil {
-					transcript = append(transcript, turn{Role: "tool", ToolName: ev.Result.Name, Content: ev.Result.Content})
+					transcript = append(transcript, turn{Role: "tool", ToolName: ev.Result.Name, Content: ev.Result.ModelText})
 					if args.verbose {
-						fmt.Printf("  [%s] TOOL %s: %s\n", runID, ev.Result.Name, truncate(ev.Result.Content, 140))
+						fmt.Printf("  [%s] TOOL %s: %s\n", runID, ev.Result.Name, truncate(ev.Result.ModelText, 140))
 					}
 				}
 			case agent.AgentEventTypeDone:
@@ -417,11 +417,11 @@ func recordAgentEvent(turn int, ev agent.AgentEvent) (transcriptRecord, bool) {
 		if ev.Result == nil {
 			return transcriptRecord{}, false
 		}
-		success := !ev.Result.IsError
+		success := !ev.Result.IsError()
 		rec.Role = "tool"
 		rec.Tool = ev.Result.Name
 		rec.Success = &success
-		rec.Content = ev.Result.Content
+		rec.Content = ev.Result.ModelText
 	case agent.AgentEventTypePrefixCacheMetrics:
 		if ev.CacheMetrics == nil {
 			return transcriptRecord{}, false

@@ -24,8 +24,7 @@ func TestHookInjectionKeepsModelChannelInLockstep(t *testing.T) {
 	// injection must derive the channel first, then land on it.
 	bypass := core.ToolResult{
 		ToolCallID: "c2", Name: "read_file",
-		Content: `{"success":false,"error":"missing file","code":"not_found"}`,
-		IsError: true,
+		ModelText: `{"success":false,"error":"missing file","code":"not_found"}`,
 	}
 	addHookContextToToolResult(&bypass, "hook note")
 	got := core.ToolResultModelText(bypass)
@@ -42,8 +41,7 @@ func TestBypassResultFinalizedBeforePostHook(t *testing.T) {
 	// finalized structured fields and rendered text, not raw legacy JSON.
 	res := core.ToolResult{
 		ToolCallID: "c1", Name: "read_file",
-		Content: `{"success":false,"error":"missing file","code":"not_found"}`,
-		IsError: true,
+		ModelText: `{"success":false,"error":"missing file","code":"not_found"}`,
 	}
 	finalized := core.FinalizeToolResultChannels(res)
 	payload := NewPostToolUsePayload("s1", core.ToolCall{ID: "c1", Name: "read_file"}, nil, finalized)

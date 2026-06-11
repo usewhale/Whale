@@ -165,7 +165,7 @@ func goalToolSuccess(call core.ToolCall, data map[string]any) (core.ToolResult, 
 	return core.ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
-		Content:    content,
+		ModelText:  content,
 	}, nil
 }
 
@@ -177,7 +177,6 @@ func goalToolError(call core.ToolCall, code, message string) (core.ToolResult, e
 	return core.ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
-		Content:    content,
-		IsError:    true,
+		ModelText:  content,
 	}, nil
 }

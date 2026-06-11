@@ -51,7 +51,7 @@ func TestTaskSearchReadEditFlow(t *testing.T) {
 					return fmt.Errorf("unexpected search items: %+v", items)
 				}
 				read := run.FindStep("read")
-				if read == nil || !strings.Contains(read.Result.Content, "old-value") {
+				if read == nil || !strings.Contains(read.Result.ModelText, "old-value") {
 					return fmt.Errorf("read step missing original content")
 				}
 				b, err := os.ReadFile(filepath.Join(run.Root, "cmd", "app", "main.go"))
@@ -105,7 +105,7 @@ func TestTaskBackgroundShellWaitFlow(t *testing.T) {
 				if wait == nil {
 					return fmt.Errorf("missing wait step")
 				}
-				if !strings.Contains(wait.Result.Content, "bg-eval") {
+				if !strings.Contains(wait.Result.ModelText, "bg-eval") {
 					return fmt.Errorf("wait result missing stdout")
 				}
 				return nil
@@ -116,7 +116,7 @@ func TestTaskBackgroundShellWaitFlow(t *testing.T) {
 		t.Fatalf("run task: %v", err)
 	}
 	start := run.FindStep("start")
-	if start == nil || !strings.Contains(start.Result.Content, "task_id") {
+	if start == nil || !strings.Contains(start.Result.ModelText, "task_id") {
 		t.Fatal("expected task_id from background shell start")
 	}
 }

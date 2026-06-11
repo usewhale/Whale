@@ -45,8 +45,8 @@ func TestWorkflowConfirmationFromToolResult(t *testing.T) {
 		t.Fatalf("MarshalToolEnvelope: %v", err)
 	}
 	name, args, resume, script, saveAs, scriptPath, ok := workflowConfirmationFromToolResult(&core.ToolResult{
-		Name:    "workflow",
-		Content: content,
+		Name:      "workflow",
+		ModelText: content,
 	})
 	if !ok || name != "review-spa" || args != `{"topic":"ok"}` || resume != "run-source" || script != "" || saveAs != "" || scriptPath != "" {
 		t.Fatalf("confirmation = %q %q %q %q %q %q %v", name, args, resume, script, saveAs, scriptPath, ok)

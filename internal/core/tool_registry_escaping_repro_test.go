@@ -22,7 +22,7 @@ type fixedContentTool struct {
 func (t fixedContentTool) Name() string               { return t.name }
 func (t fixedContentTool) Parameters() map[string]any { return nil }
 func (t fixedContentTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: t.content}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: t.content}, nil
 }
 
 func TestDispatchedResultKeepsOperatorsVerbatim(t *testing.T) {
@@ -42,15 +42,15 @@ func TestDispatchedResultKeepsOperatorsVerbatim(t *testing.T) {
 		t.Fatalf("dispatch: %v", err)
 	}
 	for _, esc := range []string{`\u0026`, `\u003c`, `\u003e`} {
-		if strings.Contains(res.Content, esc) {
+		if strings.Contains(res.ModelText, esc) {
 			t.Errorf("dispatched content contains literal %s; the normalize layer must not re-escape payload text", esc)
 		}
 	}
-	if !strings.Contains(res.Content, "elem != null && elem.ValueWithoutLink > 0") {
-		t.Errorf("expected C# operators verbatim after dispatch, got:\n%s", res.Content)
+	if !strings.Contains(res.ModelText, "elem != null && elem.ValueWithoutLink > 0") {
+		t.Errorf("expected C# operators verbatim after dispatch, got:\n%s", res.ModelText)
 	}
-	if !strings.Contains(res.Content, `2>&1`) {
-		t.Errorf("expected shell redirection verbatim after dispatch, got:\n%s", res.Content)
+	if !strings.Contains(res.ModelText, `2>&1`) {
+		t.Errorf("expected shell redirection verbatim after dispatch, got:\n%s", res.ModelText)
 	}
 }
 
@@ -71,7 +71,7 @@ func TestDispatchedOversizedResultKeepsOperatorsVerbatim(t *testing.T) {
 		t.Fatalf("dispatch: %v", err)
 	}
 	for _, esc := range []string{`\u0026`, `\u003c`, `\u003e`} {
-		if strings.Contains(res.Content, esc) {
+		if strings.Contains(res.ModelText, esc) {
 			t.Errorf("truncated dispatched content contains literal %s", esc)
 		}
 	}

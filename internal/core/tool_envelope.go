@@ -51,7 +51,7 @@ func MarshalToolEnvelope(env ToolEnvelope) (string, error) {
 
 // MarshalToolJSON serializes any model-visible tool JSON without HTML
 // escaping. Use this instead of json.Marshal whenever the output becomes
-// ToolResult.Content: the model reads that text raw, so json.Marshal's
+// ToolResult.ModelText: the model reads that text raw, so json.Marshal's
 // HTML escaping would corrupt every payload containing & < >.
 func MarshalToolJSON(v any) ([]byte, error) {
 	var buf bytes.Buffer

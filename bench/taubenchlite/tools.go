@@ -39,8 +39,8 @@ func (t retailTool) Run(_ context.Context, call core.ToolCall) (core.ToolResult,
 		return core.ToolResult{
 			ToolCallID: call.ID,
 			Name:       t.name,
-			Content:    fmt.Sprintf(`{"error":"invalid json args: %s"}`, err.Error()),
-			IsError:    true,
+			ModelText:  fmt.Sprintf(`{"error":"invalid json args: %s"}`, err.Error()),
+			Outcome:    core.OutcomeFailure,
 		}, nil
 	}
 	out, isErr := t.fn(args)
@@ -49,15 +49,15 @@ func (t retailTool) Run(_ context.Context, call core.ToolCall) (core.ToolResult,
 		return core.ToolResult{
 			ToolCallID: call.ID,
 			Name:       t.name,
-			Content:    fmt.Sprintf(`{"error":"marshal tool result: %s"}`, err.Error()),
-			IsError:    true,
+			ModelText:  fmt.Sprintf(`{"error":"marshal tool result: %s"}`, err.Error()),
+			Outcome:    core.OutcomeFailure,
 		}, nil
 	}
 	return core.ToolResult{
 		ToolCallID: call.ID,
 		Name:       t.name,
-		Content:    string(b),
-		IsError:    isErr,
+		ModelText:  string(b),
+		Outcome:    benchOutcome(isErr),
 	}, nil
 }
 
@@ -258,4 +258,11 @@ func stubArgs(t core.Tool) string {
 	}
 	b, _ := json.Marshal(out)
 	return string(b)
+}
+
+func benchOutcome(isErr bool) core.ToolOutcome {
+	if isErr {
+		return core.OutcomeFailure
+	}
+	return core.OutcomeSuccess
 }

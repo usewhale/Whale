@@ -49,21 +49,21 @@ func TestMarshalToolResultGolden(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshalToolResult: %v", err)
 	}
-	assertToolsGolden(t, "funnel_success_map", res.Content)
+	assertToolsGolden(t, "funnel_success_map", res.ModelText)
 
 	res, err = marshalToolResult(goldenCall(), []string{"non", "map", "payload"})
 	if err != nil {
 		t.Fatalf("marshalToolResult non-map: %v", err)
 	}
-	assertToolsGolden(t, "funnel_success_nonmap", res.Content)
+	assertToolsGolden(t, "funnel_success_nonmap", res.ModelText)
 }
 
 func TestMarshalToolErrorGolden(t *testing.T) {
 	res := marshalToolError(goldenCall(), "exec_failed", "command failed: foo && bar")
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatal("expected error result")
 	}
-	assertToolsGolden(t, "funnel_error_plain", res.Content)
+	assertToolsGolden(t, "funnel_error_plain", res.ModelText)
 }
 
 func TestMarshalToolErrorWithRecoveryGolden(t *testing.T) {
@@ -73,8 +73,8 @@ func TestMarshalToolErrorWithRecoveryGolden(t *testing.T) {
 		Retryable:           false,
 		Reason:              "read the file again before retrying",
 	})
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatal("expected error result")
 	}
-	assertToolsGolden(t, "funnel_error_recovery", res.Content)
+	assertToolsGolden(t, "funnel_error_recovery", res.ModelText)
 }

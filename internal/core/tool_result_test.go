@@ -27,10 +27,10 @@ func TestNewToolResultFromEnvelopeRendersPlainText(t *testing.T) {
 	if strings.Contains(res.ModelText, `"success"`) || strings.Contains(res.ModelText, `\u0026`) {
 		t.Fatalf("model text must not contain envelope scaffolding or escapes:\n%s", res.ModelText)
 	}
-	if res.Content != res.ModelText {
-		t.Fatalf("Content mirrors ModelText, got %s", res.Content)
+	if res.ModelText != res.ModelText {
+		t.Fatalf("Content mirrors ModelText, got %s", res.ModelText)
 	}
-	if res.Outcome != OutcomeFailure || res.Code != "exec_failed" || !res.IsError {
+	if res.Outcome != OutcomeFailure || res.Code != "exec_failed" || !res.IsError() {
 		t.Fatalf("unexpected classification: %+v", res)
 	}
 }
@@ -93,32 +93,30 @@ func TestFinalizeToolResultChannels(t *testing.T) {
 	// must classify the same way live and after a legacy reload.
 	denied := FinalizeToolResultChannels(ToolResult{
 		ToolCallID: "c1", Name: "shell_run",
-		Content: `{"success":false,"error":"tool approval denied","code":"approval_denied"}`,
-		IsError: true,
+		ModelText: `{"success":false,"error":"tool approval denied","code":"approval_denied"}`,
 	})
 	if denied.Outcome != OutcomeBlocked || denied.Code != "approval_denied" {
 		t.Fatalf("approval denied misclassified: %+v", denied)
 	}
-	if denied.ModelText != denied.Content {
+	if denied.ModelText != denied.ModelText {
 		t.Fatal("ModelText must take Content bytes verbatim")
 	}
 
 	skipped := FinalizeToolResultChannels(ToolResult{
 		ToolCallID: "c2", Name: "edit",
-		Content: `{"success":false,"error":"tool skipped because another tool requested a runtime handoff","code":"turn_aborted"}`,
-		IsError: true,
+		ModelText: `{"success":false,"error":"tool skipped because another tool requested a runtime handoff","code":"turn_aborted"}`,
 	})
 	if skipped.Outcome != OutcomeFailure || skipped.Code != "turn_aborted" {
 		t.Fatalf("turn_aborted misclassified: %+v", skipped)
 	}
 
-	raw := FinalizeToolResultChannels(ToolResult{ToolCallID: "c3", Name: "mcp", Content: "plain text & <tags>"})
+	raw := FinalizeToolResultChannels(ToolResult{ToolCallID: "c3", Name: "mcp", ModelText: "plain text & <tags>"})
 	if raw.Outcome != OutcomeSuccess || raw.Payload != nil || raw.ModelText != "plain text & <tags>" {
 		t.Fatalf("raw text result misclassified: %+v", raw)
 	}
 
 	// Idempotence: a funnel-produced result passes through untouched.
-	already := ToolResult{ToolCallID: "c4", Outcome: OutcomeSuccess, Code: "ok", ModelText: "x", Content: "x"}
+	already := ToolResult{ToolCallID: "c4", Outcome: OutcomeSuccess, Code: "ok", ModelText: "x"}
 	if got := FinalizeToolResultChannels(already); got.Outcome != OutcomeSuccess || got.ModelText != "x" {
 		t.Fatalf("finalize must be idempotent: %+v", got)
 	}
@@ -136,8 +134,8 @@ func TestDispatchPopulatesChannelSeparatedFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
-	if res.ModelText != res.Content {
-		t.Fatalf("ModelText must mirror Content in phase 1:\nModelText: %s\nContent:   %s", res.ModelText, res.Content)
+	if res.ModelText != res.ModelText {
+		t.Fatalf("ModelText must mirror Content in phase 1:\nModelText: %s\nContent:   %s", res.ModelText, res.ModelText)
 	}
 	if res.Outcome != OutcomeSuccess || res.Code != "ok" {
 		t.Fatalf("unexpected classification: outcome=%s code=%s", res.Outcome, res.Code)
@@ -156,10 +154,10 @@ func TestDispatchPopulatesChannelSeparatedFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dispatch missing: %v", err)
 	}
-	if res.Outcome != OutcomeFailure || res.Code != "not_found" || !res.IsError {
-		t.Fatalf("unexpected not-found classification: outcome=%s code=%s isError=%v", res.Outcome, res.Code, res.IsError)
+	if res.Outcome != OutcomeFailure || res.Code != "not_found" || !res.IsError() {
+		t.Fatalf("unexpected not-found classification: outcome=%s code=%s isError=%v", res.Outcome, res.Code, res.IsError())
 	}
-	if res.ModelText == "" || res.ModelText != res.Content {
+	if res.ModelText == "" || res.ModelText != res.ModelText {
 		t.Fatalf("not-found result must carry mirrored ModelText, got %q", res.ModelText)
 	}
 }

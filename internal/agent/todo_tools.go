@@ -12,11 +12,11 @@ import (
 
 func (a *Agent) handleTodo(call core.ToolCall, sessionID string) (core.ToolResult, error) {
 	if a.sessionRuntime == nil || !a.sessionRuntime.Enabled() {
-		return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"success":false,"error":"todo storage unavailable","code":"todo_storage_unavailable"}`, IsError: true}, nil
+		return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: `{"success":false,"error":"todo storage unavailable","code":"todo_storage_unavailable"}`, Code: "todo_storage_unavailable"}, nil
 	}
 	st, err := a.sessionRuntime.LoadTodo(sessionID)
 	if err != nil {
-		return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: fmt.Sprintf(`{"success":false,"error":%q,"code":"todo_load_failed"}`, err.Error()), IsError: true}, nil
+		return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: fmt.Sprintf(`{"success":false,"error":%q,"code":"todo_load_failed"}`, err.Error()), Code: "todo_load_failed"}, nil
 	}
 	switch call.Name {
 	case "todo_add":
@@ -25,7 +25,7 @@ func (a *Agent) handleTodo(call core.ToolCall, sessionID string) (core.ToolResul
 			Priority int    `json:"priority"`
 		}
 		if err := json.Unmarshal([]byte(call.Input), &in); err != nil || strings.TrimSpace(in.Text) == "" {
-			return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"success":false,"error":"invalid todo_add input","code":"invalid_todo_add"}`, IsError: true}, nil
+			return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: `{"success":false,"error":"invalid todo_add input","code":"invalid_todo_add"}`, Code: "invalid_todo_add"}, nil
 		}
 		now := time.Now()
 		id := fmt.Sprintf("td-%d", now.UnixNano())
@@ -39,7 +39,7 @@ func (a *Agent) handleTodo(call core.ToolCall, sessionID string) (core.ToolResul
 			Priority *int   `json:"priority"`
 		}
 		if err := json.Unmarshal([]byte(call.Input), &in); err != nil || strings.TrimSpace(in.ID) == "" {
-			return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"success":false,"error":"invalid todo_update input","code":"invalid_todo_update"}`, IsError: true}, nil
+			return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: `{"success":false,"error":"invalid todo_update input","code":"invalid_todo_update"}`, Code: "invalid_todo_update"}, nil
 		}
 		found := false
 		for i := range st.Items {
@@ -65,14 +65,14 @@ func (a *Agent) handleTodo(call core.ToolCall, sessionID string) (core.ToolResul
 			break
 		}
 		if !found {
-			return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"success":false,"error":"todo id not found","code":"todo_not_found"}`, IsError: true}, nil
+			return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: `{"success":false,"error":"todo id not found","code":"todo_not_found"}`, Code: "todo_not_found"}, nil
 		}
 	case "todo_remove":
 		var in struct {
 			ID string `json:"id"`
 		}
 		if err := json.Unmarshal([]byte(call.Input), &in); err != nil || strings.TrimSpace(in.ID) == "" {
-			return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"success":false,"error":"invalid todo_remove input","code":"invalid_todo_remove"}`, IsError: true}, nil
+			return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: `{"success":false,"error":"invalid todo_remove input","code":"invalid_todo_remove"}`, Code: "invalid_todo_remove"}, nil
 		}
 		filtered := st.Items[:0]
 		for _, item := range st.Items {
@@ -93,7 +93,7 @@ func (a *Agent) handleTodo(call core.ToolCall, sessionID string) (core.ToolResul
 		// read-only
 	}
 	if err := a.sessionRuntime.SaveTodo(sessionID, st); err != nil {
-		return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: fmt.Sprintf(`{"success":false,"error":%q,"code":"todo_save_failed"}`, err.Error()), IsError: true}, nil
+		return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: fmt.Sprintf(`{"success":false,"error":%q,"code":"todo_save_failed"}`, err.Error()), Code: "todo_save_failed"}, nil
 	}
 	var inList struct {
 		IncludeDone bool `json:"include_done"`
@@ -110,5 +110,5 @@ func (a *Agent) handleTodo(call core.ToolCall, sessionID string) (core.ToolResul
 		items = filtered
 	}
 	payload, _ := core.MarshalToolJSON(map[string]any{"success": true, "data": map[string]any{"items": items, "count": len(items)}})
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: string(payload)}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: string(payload)}, nil
 }

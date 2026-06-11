@@ -141,9 +141,9 @@ func mcpResult(call core.ToolCall, serverName, toolName string, result *sdk.Call
 	}
 	content, err := core.MarshalToolEnvelope(env)
 	if err != nil {
-		return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: fmt.Sprintf(`{"ok":false,"error":%q,"code":"mcp_result_encode_failed"}`, err.Error()), IsError: true}
+		return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: fmt.Sprintf(`{"ok":false,"error":%q,"code":"mcp_result_encode_failed"}`, err.Error()), Code: "mcp_result_encode_failed"}
 	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: result.IsError}
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content, Outcome: outcomeForMCPFlag(result.IsError)}
 }
 
 func mcpError(call core.ToolCall, code, message string) core.ToolResult {
@@ -151,7 +151,7 @@ func mcpError(call core.ToolCall, code, message string) core.ToolResult {
 	if err != nil {
 		content = fmt.Sprintf(`{"ok":false,"error":%q,"code":%q}`, message, code)
 	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content, Outcome: core.OutcomeForErrorCode(code), Code: code}
 }
 
 func mcpAllowedDirsDenied(call core.ToolCall, path string, allowedDirs []string) core.ToolResult {
@@ -165,7 +165,7 @@ func mcpAllowedDirsDenied(call core.ToolCall, path string, allowedDirs []string)
 	if err != nil {
 		content = fmt.Sprintf(`{"ok":false,"success":false,"error":%q,"code":"mcp_allowed_dirs_denied"}`, message)
 	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content, Outcome: core.OutcomeFailure, Code: "mcp_allowed_dirs_denied"}
 }
 
 func (t *Tool) deniedPath(args map[string]any) (string, bool) {
@@ -291,4 +291,13 @@ func flattenContent(content []sdk.Content) (string, []map[string]any) {
 		}
 	}
 	return strings.TrimSpace(strings.Join(textParts, "\n")), media
+}
+
+// outcomeForMCPFlag maps the MCP protocol error flag onto the structured
+// outcome; the funnel keeps the final say after parsing the envelope.
+func outcomeForMCPFlag(isError bool) core.ToolOutcome {
+	if isError {
+		return core.OutcomeFailure
+	}
+	return core.OutcomeSuccess
 }

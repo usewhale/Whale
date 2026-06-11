@@ -45,7 +45,7 @@ type echoTool struct{}
 
 func (e echoTool) Name() string { return "echo" }
 func (e echoTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok:" + call.Input}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "ok:" + call.Input}, nil
 }
 
 type namedTestTool struct {
@@ -54,7 +54,7 @@ type namedTestTool struct {
 
 func (t namedTestTool) Name() string { return t.name }
 func (t namedTestTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok:" + call.Input}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "ok:" + call.Input}, nil
 }
 
 type oneToolProvider struct {
@@ -82,23 +82,23 @@ func (f *flakyTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
 		return ToolResult{
 			ToolCallID: call.ID,
 			Name:       call.Name,
-			Content:    `{"success":false,"error":"command failed","code":"exec_failed"}`,
-			IsError:    true,
+			ModelText:  `{"success":false,"error":"command failed","code":"exec_failed"}`,
+			Outcome:    "failure",
 		}, nil
 	}
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"success":true,"data":{"ok":true}}`}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: `{"success":true,"data":{"ok":true}}`}, nil
 }
 
 type writeLikeTool struct{}
 
 func (w writeLikeTool) Name() string { return "write" }
 func (w writeLikeTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok:" + call.Input}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "ok:" + call.Input}, nil
 }
 
 type viewLikeTool struct{}
 
 func (v viewLikeTool) Name() string { return "read_file" }
 func (v viewLikeTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "scavenged-ok:" + call.Input}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "scavenged-ok:" + call.Input}, nil
 }

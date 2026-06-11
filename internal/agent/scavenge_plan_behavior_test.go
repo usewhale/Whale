@@ -71,9 +71,9 @@ func TestPlanModeBlocksWriteTools(t *testing.T) {
 		if ev.Type == AgentEventTypeToolModeBlocked && ev.ToolBlocked != nil && ev.ToolBlocked.ReasonCode == "plan_mode_blocked" {
 			sawModeBlocked = true
 		}
-		if ev.Type == AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, "plan_mode_blocked") {
+		if ev.Type == AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.ModelText, "plan_mode_blocked") {
 			sawPlanBlockedResult = true
-			blockedContent = ev.Result.Content
+			blockedContent = ev.Result.ModelText
 		}
 	}
 	if !sawModeBlocked {

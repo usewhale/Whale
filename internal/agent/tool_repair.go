@@ -99,8 +99,8 @@ func (r *toolCallRepair) process(
 			dropped = append(dropped, core.ToolResult{
 				ToolCallID: c.ID,
 				Name:       c.Name,
-				Content:    `{"ok":false,"error":"repetitive tool call blocked","code":"storm_blocked"}`,
-				IsError:    true,
+				ModelText:  `{"ok":false,"error":"repetitive tool call blocked","code":"storm_blocked"}`,
+				Code:       "storm_blocked",
 			})
 			continue
 		}

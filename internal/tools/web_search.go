@@ -169,7 +169,7 @@ func marshalWebSearchError(call core.ToolCall, err *webSearchError) core.ToolRes
 	if marshalErr != nil {
 		return marshalToolError(call, "web_search_failed", err.message)
 	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content, Outcome: core.OutcomeFailure, Code: "web_search_failed"}
 }
 
 func (b *Toolset) searchWithFallback(ctx context.Context, query string, maxResults int, timeoutMS int) ([]webSearchEntry, string, string, error) {
