@@ -251,13 +251,14 @@ func (a *Agent) appendDispatchedToolResult(ctx context.Context, sessionID string
 			addHookContextToToolResult(&finalRes, report.AdditionalContext)
 		}
 	}
-	// Hook injection (and recovery wrappers that bypass the dispatch
-	// funnel) leave Content ahead of ModelText; re-derive the structured
-	// channel so both stay in lockstep before the result is persisted.
-	if finalRes.Content != finalRes.ModelText {
-		finalRes.ModelText = ""
-		finalRes.Payload = nil
+	// Recovery wrappers that bypass the dispatch funnel arrive without a
+	// model channel: derive everything. Hook injection only appends text —
+	// the structured Payload must survive (the hook context already lives
+	// in Metadata), so the model channel just follows the mutated text.
+	if finalRes.ModelText == "" {
 		finalRes = core.FinalizeToolResultChannels(finalRes)
+	} else if finalRes.Content != finalRes.ModelText {
+		finalRes.ModelText = finalRes.Content
 	}
 	*results = append(*results, finalRes)
 	r := finalRes
