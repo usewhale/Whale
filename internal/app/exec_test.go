@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestRunExecReturnsFinalOutput(t *testing.T) {
@@ -34,5 +36,19 @@ func TestRunExecReturnsFinalOutput(t *testing.T) {
 	}
 	if res.Model == "" {
 		t.Fatal("expected model")
+	}
+}
+
+func TestSummarizeExecTextPreservesUTF8(t *testing.T) {
+	input := strings.Repeat("中文🙂", 100)
+	got := summarizeExecText(input)
+	if !utf8.ValidString(got) {
+		t.Fatalf("summary must be valid UTF-8: %q", got)
+	}
+	if strings.Contains(got, "�") {
+		t.Fatalf("summary must not contain replacement characters: %q", got)
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Fatalf("expected truncated marker, got %q", got)
 	}
 }

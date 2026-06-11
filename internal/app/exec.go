@@ -146,8 +146,9 @@ func (a *App) ExecPromptWithContent(ctx context.Context, parts []core.MessagePar
 
 func summarizeExecText(v string) string {
 	trimmed := strings.TrimSpace(v)
-	if len(trimmed) > 240 {
-		return trimmed[:240] + "..."
+	runes := []rune(trimmed)
+	if len(runes) > 240 {
+		return string(runes[:240]) + "..."
 	}
 	return trimmed
 }
