@@ -290,11 +290,20 @@ func addHookContextToToolResult(res *core.ToolResult, hookContext string) {
 	if hookContext == "" {
 		return
 	}
+	// Bypass producers arrive without a model channel: derive it first so
+	// the injection lands on the rendered text, not the raw envelope.
+	if res.ModelText == "" {
+		*res = core.FinalizeToolResultChannels(*res)
+	}
 	if res.Metadata == nil {
 		res.Metadata = map[string]any{}
 	}
 	res.Metadata["hook_context"] = appendHookContextValue(res.Metadata["hook_context"], hookContext)
 	res.Content = addHookContextToToolContent(res.Content, hookContext)
+	// Keep the model channel in lockstep immediately: the PostToolUse
+	// payload is built from ToolResultModelText right after a pre-hook
+	// injection and must see the added context.
+	res.ModelText = res.Content
 }
 
 func addHookContextToToolContent(content, hookContext string) string {
