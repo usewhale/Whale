@@ -68,7 +68,7 @@ func (m *model) hydrateSessionMessages(msgs []protocol.Message) {
 					continue
 				}
 				if tr.Name == "update_plan" {
-					if text, ok := hydratedPlanUpdateText(body); ok {
+					if text, ok := hydratedPlanUpdateFromResult(tr); ok {
 						if m.assembler == nil {
 							m.assembler = tuirender.NewAssembler()
 						}
@@ -231,6 +231,51 @@ func hasVisibleHydratedAssistantText(msg protocol.Message) bool {
 		}
 	}
 	return strings.TrimSpace(msg.Text) != "" && !isEnvironmentInventoryBlock(msg.Text)
+}
+
+// hydratedPlanUpdateFromResult restores a plan update from the structured
+// payload (both live plain-text results and legacy sessions carry it — the
+// legacy decoder backfills Payload from the stored envelope); parsing the
+// text remains as a last-resort fallback.
+func hydratedPlanUpdateFromResult(tr protocol.ToolResult) (string, bool) {
+	if text, ok := hydratedPlanUpdateFromPayload(tr.Payload); ok {
+		return text, ok
+	}
+	return hydratedPlanUpdateText(strings.TrimSpace(tr.Content))
+}
+
+func hydratedPlanUpdateFromPayload(payload map[string]any) (string, bool) {
+	if payload == nil {
+		return "", false
+	}
+	steps := core.AsAnySlice(payload["plan"])
+	if len(steps) == 0 {
+		return "", false
+	}
+	explanation := strings.TrimSpace(core.AsString(payload["explanation"]))
+	var b strings.Builder
+	if explanation != "" {
+		b.WriteString(explanation)
+		b.WriteString("\n\n")
+	}
+	for _, s := range steps {
+		step, ok := s.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch strings.TrimSpace(core.AsString(step["status"])) {
+		case "completed":
+			b.WriteString("[x] ")
+		case "in_progress":
+			b.WriteString("[~] ")
+		default:
+			b.WriteString("[ ] ")
+		}
+		b.WriteString(strings.TrimSpace(core.AsString(step["step"])))
+		b.WriteString("\n")
+	}
+	text := strings.TrimSpace(b.String())
+	return text, text != ""
 }
 
 func hydratedPlanUpdateText(body string) (string, bool) {
