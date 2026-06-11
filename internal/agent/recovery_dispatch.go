@@ -204,7 +204,7 @@ func emitRecoveryAttempt(call core.ToolCall, class FailureClass, rule RecoveryRu
 func (a *Agent) executeFallbackReadonly(ctx context.Context, tools *core.ToolRegistry, call core.ToolCall, cause core.ToolResult) (core.ToolResult, bool) {
 	fallbackCall := core.ToolCall{ID: call.ID + "-fallback", Name: "list_dir", Input: `{"path":"."}`}
 	switch call.Name {
-	case "write", "edit":
+	case "write", "edit", "multi_edit":
 		var in struct {
 			FilePath string `json:"file_path"`
 		}
@@ -215,8 +215,6 @@ func (a *Agent) executeFallbackReadonly(ctx context.Context, tools *core.ToolReg
 			}
 			fallbackCall = core.ToolCall{ID: call.ID + "-fallback", Name: "read_file", Input: string(b)}
 		}
-	case "apply_patch":
-		fallbackCall = core.ToolCall{ID: call.ID + "-fallback", Name: "list_dir", Input: `{"path":"."}`}
 	case "shell_run":
 		fallbackCall = core.ToolCall{ID: call.ID + "-fallback", Name: "list_dir", Input: `{"path":"."}`}
 	default:

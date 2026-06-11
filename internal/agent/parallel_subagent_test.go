@@ -50,7 +50,7 @@ func TestEligibleParallelSubagentGroupsMixedToolsCreateBoundaries(t *testing.T) 
 		{ID: "5", Name: "shell"},
 		{ID: "6", Name: "spawn_subagent"},
 		{ID: "7", Name: "spawn_subagent"},
-		{ID: "8", Name: "apply_patch"},
+		{ID: "8", Name: "multi_edit"},
 		{ID: "9", Name: "todo_add"},
 		{ID: "10", Name: "request_user_input"},
 		{ID: "11", Name: "spawn_subagent"},

@@ -174,32 +174,6 @@ func TestTaskEditWithoutReadReturnsReadRequired(t *testing.T) {
 	}
 }
 
-func TestTaskInvalidApplyPatchReturnsError(t *testing.T) {
-	_, err := RunTask(context.Background(), TaskSpec{
-		ID:    "invalid-apply-patch",
-		Suite: SuiteRegression,
-		Scenario: ScenarioSpec{
-			Turns: []TurnSpec{
-				{
-					Steps: []StepSpec{
-						{ID: "patch", ToolName: "apply_patch", Input: `{"patch":"not-a-patch"}`, ExpectError: true},
-					},
-				},
-			},
-			Verify: func(run *Run) error {
-				step := run.FindStep("patch")
-				if step == nil || step.Envelope.Code == "" {
-					return fmt.Errorf("expected structured patch error envelope")
-				}
-				return nil
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("run task: %v", err)
-	}
-}
-
 func TestTaskExpectedToolFailureStopsCleanly(t *testing.T) {
 	run, err := RunTask(context.Background(), TaskSpec{
 		ID:    "expected-failure-clean-stop",

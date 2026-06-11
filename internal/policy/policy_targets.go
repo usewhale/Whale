@@ -14,7 +14,7 @@ func permissionKind(toolName string) string {
 	switch toolName {
 	case "read_file", "grep", "search_files", "list_dir", "load_skill":
 		return "read"
-	case "edit", "write", "apply_patch":
+	case "edit", "write", "multi_edit":
 		return "edit"
 	case "shell_run":
 		return "shell"
@@ -69,11 +69,6 @@ func permissionTarget(call core.ToolCall) string {
 		for _, key := range []string{"file_path", "path", "pattern", "url", "query", "name"} {
 			if v, ok := body[key].(string); ok && strings.TrimSpace(v) != "" {
 				return strings.TrimSpace(v)
-			}
-		}
-		if call.Name == "apply_patch" {
-			if v, ok := body["patch"].(string); ok && strings.TrimSpace(v) != "" {
-				return "apply_patch:" + hashString(v)
 			}
 		}
 	}

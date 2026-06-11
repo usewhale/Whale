@@ -404,7 +404,7 @@ func toolDisplayKind(toolName string) string {
 		return "shell"
 	case "read_file", "list_dir", "search_files", "grep", "search_content", "fetch", "web_fetch", "web_search":
 		return "explore"
-	case "write_file", "edit_file", "apply_patch", "write", "edit":
+	case "write_file", "edit_file", "write", "edit", "multi_edit":
 		return "edit"
 	case "parallel_reason", "spawn_subagent":
 		return "task"
@@ -646,15 +646,12 @@ func editLine(toolName, fallback string, env toolResultEnvelope) string {
 			return "Edit failed " + path
 		}
 		return "Edited " + path
-	case "apply_patch":
-		files := stringSlice(firstNonEmptyAny(payload["files_changed"], data["files_changed"]))
-		if len(files) == 1 {
-			return "Edited " + files[0]
+	case "multi_edit":
+		path := core.FirstNonEmpty(core.AsString(payload["file_path"]), core.AsString(data["file_path"]), actionDetailFallback(fallback, "Edited"), actionDetailFallback(fallback, "Edit failed"), "file")
+		if !toolEnvelopeSucceeded(env) {
+			return "Edit failed " + path
 		}
-		if len(files) > 1 {
-			return fmt.Sprintf("Edited %d files", len(files))
-		}
-		return "Edited files"
+		return "Edited " + path
 	default:
 		return "Edited " + core.FirstNonEmpty(fallback, "files")
 	}

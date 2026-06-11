@@ -455,32 +455,19 @@ func TestRulePolicyDefaultShellPatternsAreNotDeepShellParsing(t *testing.T) {
 	}
 }
 
-func TestRulePolicyApplyPatchAppliesEditRulesToTargetFiles(t *testing.T) {
+func TestRulePolicyMultiEditAppliesEditRulesToTargetFile(t *testing.T) {
 	rules := append(DefaultRules(), PermissionRule{Permission: "edit", Pattern: "*.go", Action: PermissionDeny})
 	p := RulePolicy{Default: PermissionAllow, Rules: rules}
-	spec := core.ToolSpec{Name: "apply_patch"}
+	spec := core.ToolSpec{Name: "multi_edit"}
 
-	goPatch := "*** Begin Patch\n*** Update File: main.go\n@@\n-old\n+new\n*** End Patch\n"
-	denied := p.Decide(spec, core.ToolCall{Name: "apply_patch", Input: `{"patch":` + strconv.Quote(goPatch) + `}`})
+	denied := p.Decide(spec, core.ToolCall{Name: "multi_edit", Input: `{"file_path":"main.go","edits":[{"search":"old","replace":"new"}]}`})
 	if denied.Allow || denied.Code != "permission_denied" {
-		t.Fatalf("apply_patch touching main.go = %+v, want deny via *.go edit rule", denied)
+		t.Fatalf("multi_edit touching main.go = %+v, want deny via *.go edit rule", denied)
 	}
 
-	mdPatch := "*** Begin Patch\n*** Update File: docs/readme.md\n@@\n-old\n+new\n*** End Patch\n"
-	allowed := p.Decide(spec, core.ToolCall{Name: "apply_patch", Input: `{"patch":` + strconv.Quote(mdPatch) + `}`})
+	allowed := p.Decide(spec, core.ToolCall{Name: "multi_edit", Input: `{"file_path":"docs/readme.md","edits":[{"search":"old","replace":"new"}]}`})
 	if !allowed.Allow || allowed.Code == "permission_denied" {
-		t.Fatalf("apply_patch touching docs/readme.md = %+v, want not denied by the *.go rule", allowed)
-	}
-}
-
-func TestRulePolicyApplyPatchIncludesMoveTargets(t *testing.T) {
-	rules := append(DefaultRules(), PermissionRule{Permission: "edit", Pattern: "*.env", Action: PermissionDeny})
-	p := RulePolicy{Default: PermissionAllow, Rules: rules}
-
-	patch := "*** Begin Patch\n*** Update File: config.txt\n*** Move to: .env\n@@\n-old\n+new\n*** End Patch\n"
-	got := p.Decide(core.ToolSpec{Name: "apply_patch"}, core.ToolCall{Name: "apply_patch", Input: `{"patch":` + strconv.Quote(patch) + `}`})
-	if got.Allow || got.Code != "permission_denied" {
-		t.Fatalf("apply_patch moving a file to .env = %+v, want deny via *.env edit rule", got)
+		t.Fatalf("multi_edit touching docs/readme.md = %+v, want not denied by the *.go rule", allowed)
 	}
 }
 

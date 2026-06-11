@@ -168,17 +168,9 @@ func ApprovalKeys(call core.ToolCall) []string {
 		return []string{base + "|" + strings.TrimSpace(call.Input)}
 	}
 	switch call.Name {
-	case "edit", "write":
+	case "edit", "write", "multi_edit":
 		if v, _ := body["file_path"].(string); strings.TrimSpace(v) != "" {
 			return []string{approvalFileKey(v)}
-		}
-	case "apply_patch":
-		if files := approvalPatchFiles(body); len(files) > 0 {
-			keys := make([]string, 0, len(files))
-			for _, file := range files {
-				keys = append(keys, approvalFileKey(file))
-			}
-			return keys
 		}
 	case "shell_run":
 		if v, _ := body["command"].(string); strings.TrimSpace(v) != "" {
@@ -357,19 +349,17 @@ func ApprovalFiles(call core.ToolCall) []string {
 		return nil
 	}
 	switch call.Name {
-	case "edit", "write":
+	case "edit", "write", "multi_edit":
 		if v, _ := body["file_path"].(string); strings.TrimSpace(v) != "" {
 			return []string{approvalCleanPath(v)}
 		}
-	case "apply_patch":
-		return approvalPatchFiles(body)
 	}
 	return nil
 }
 
 func ApprovalKind(call core.ToolCall) string {
 	switch call.Name {
-	case "edit", "write", "apply_patch":
+	case "edit", "write", "multi_edit":
 		return "file_diff_review"
 	case "shell_run":
 		return "shell"
@@ -534,11 +524,10 @@ func ApprovalSummary(call core.ToolCall) string {
 		if v, _ := body["file_path"].(string); strings.TrimSpace(v) != "" {
 			return fmt.Sprintf("edit: %s", strings.TrimSpace(v))
 		}
-	case "apply_patch":
-		if files := approvalPatchFiles(body); len(files) > 0 {
-			return fmt.Sprintf("apply_patch: %s", formatApprovalFiles(files))
+	case "multi_edit":
+		if v, _ := body["file_path"].(string); strings.TrimSpace(v) != "" {
+			return fmt.Sprintf("multi_edit: %s", strings.TrimSpace(v))
 		}
-		return "apply_patch: patch payload"
 	case "web_search":
 		if v := approvalSearchQuery(body); v != "" {
 			return fmt.Sprintf("web_search: %s", v)
@@ -588,16 +577,6 @@ func ApprovalScope(call core.ToolCall) string {
 	}
 	if v, _ := body["path"].(string); strings.TrimSpace(v) != "" {
 		return "path:" + strings.TrimSpace(v)
-	}
-	if call.Name == "apply_patch" {
-		files := approvalPatchFiles(body)
-		if len(files) == 1 {
-			return "file:" + files[0]
-		}
-		if len(files) > 1 {
-			return "files:" + strings.Join(files, ",")
-		}
-		return "patch"
 	}
 	if call.Name == "shell_run" {
 		return "shell"

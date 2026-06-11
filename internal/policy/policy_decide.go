@@ -211,16 +211,6 @@ func (p RulePolicy) requestsFor(spec core.ToolSpec, call core.ToolCall) []permis
 		// not the query text, so that searching for ".env" is not mistaken
 		// for reading a .env file.
 		requests[0].Pattern = readScopeTarget(call)
-	case "apply_patch":
-		// Evaluate edit rules against each file the patch touches so that
-		// path-based [permissions.edit] rules apply, rather than matching a
-		// hash of the whole patch.
-		if paths := patchEditPaths(call.Input); len(paths) > 0 {
-			requests = requests[:0]
-			for _, path := range paths {
-				requests = append(requests, permissionRequest{Kind: kind, Pattern: path})
-			}
-		}
 	}
 	return requests
 }
@@ -282,31 +272,4 @@ func hasCapability(spec core.ToolSpec, capability string) bool {
 		}
 	}
 	return false
-}
-
-// patchEditPaths extracts the file paths an apply_patch call modifies from its
-// "*** Update/Add/Delete File:" headers. Rename targets ("*** Move to:") are
-// included as well, so a rule cannot be bypassed by moving an allowed file
-// onto a denied path.
-func patchEditPaths(input string) []string {
-	var body map[string]any
-	if err := json.Unmarshal([]byte(input), &body); err != nil {
-		return nil
-	}
-	patch, _ := body["patch"].(string)
-	if strings.TrimSpace(patch) == "" {
-		return nil
-	}
-	var paths []string
-	for _, line := range strings.Split(patch, "\n") {
-		line = strings.TrimRight(line, "\r")
-		for _, prefix := range []string{"*** Update File: ", "*** Add File: ", "*** Delete File: ", "*** Move to: "} {
-			if strings.HasPrefix(line, prefix) {
-				if path := strings.TrimSpace(strings.TrimPrefix(line, prefix)); path != "" {
-					paths = append(paths, path)
-				}
-			}
-		}
-	}
-	return uniqueStrings(paths)
 }

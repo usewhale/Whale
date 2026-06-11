@@ -400,7 +400,7 @@ func TestWriteFileRefreshesRuntimeStateForEdit(t *testing.T) {
 	}
 }
 
-func TestApplyPatchRefreshesRuntimeStateForEdit(t *testing.T) {
+func TestMultiEditAppliesOrderedEditsAndRefreshesRuntimeStateForEdit(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a.txt")
 	if err := os.WriteFile(path, []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
@@ -410,20 +410,17 @@ func TestApplyPatchRefreshesRuntimeStateForEdit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new toolset: %v", err)
 	}
-	patch := strings.Join([]string{
-		"*** Begin Patch",
-		"*** Update File: a.txt",
-		"@@",
-		" alpha",
-		"-beta",
-		"+BETA",
-		" gamma",
-		"*** End Patch",
-	}, "\n")
+	readFileFull(t, ts, "a.txt")
 
-	patchRes, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil || patchRes.IsError() {
-		t.Fatalf("apply_patch failed: err=%v res=%+v", err, patchRes)
+	res, err := ts.multiEditFile(context.Background(), tc("multi_edit", map[string]any{
+		"file_path": "a.txt",
+		"edits": []map[string]any{
+			{"search": "alpha", "replace": "ALPHA"},
+			{"search": "ALPHA\nbeta", "replace": "first\nBETA"},
+		},
+	}))
+	if err != nil || res.IsError() {
+		t.Fatalf("multi_edit failed: err=%v res=%+v", err, res)
 	}
 	editRes, err := ts.editFile(context.Background(), tc("edit", map[string]any{
 		"file_path": "a.txt",
@@ -431,20 +428,21 @@ func TestApplyPatchRefreshesRuntimeStateForEdit(t *testing.T) {
 		"replace":   "whale",
 	}))
 	if err != nil || editRes.IsError() {
-		t.Fatalf("edit after apply_patch failed: err=%v res=%+v", err, editRes)
+		t.Fatalf("edit after multi_edit failed: err=%v res=%+v", err, editRes)
 	}
 	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read result: %v", err)
 	}
-	if string(got) != "alpha\nBETA\nwhale\n" {
-		t.Fatalf("content = %q, want patch and edit applied", string(got))
+	if string(got) != "first\nBETA\nwhale\n" {
+		t.Fatalf("content = %q, want ordered multi_edit and edit applied", string(got))
 	}
 }
 
-func TestApplyPatchDeleteClearsRuntimeState(t *testing.T) {
+func TestMultiEditFailureLeavesFileUntouched(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("alpha\n"), 0o644); err != nil {
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("alpha\nbeta\n"), 0o644); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
 	ts, err := NewToolset(dir)
@@ -452,26 +450,198 @@ func TestApplyPatchDeleteClearsRuntimeState(t *testing.T) {
 		t.Fatalf("new toolset: %v", err)
 	}
 	readFileFull(t, ts, "a.txt")
-	patch := strings.Join([]string{
-		"*** Begin Patch",
-		"*** Delete File: a.txt",
-		"*** End Patch",
-	}, "\n")
 
-	patchRes, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil || patchRes.IsError() {
-		t.Fatalf("apply_patch delete failed: err=%v res=%+v", err, patchRes)
-	}
-	editRes, err := ts.editFile(context.Background(), tc("edit", map[string]any{
+	res, err := ts.multiEditFile(context.Background(), tc("multi_edit", map[string]any{
 		"file_path": "a.txt",
-		"search":    "alpha",
-		"replace":   "whale",
+		"edits": []map[string]any{
+			{"search": "alpha", "replace": "ALPHA"},
+			{"search": "missing", "replace": "MISSING"},
+		},
 	}))
 	if err != nil {
-		t.Fatalf("edit dispatch error: %v", err)
+		t.Fatalf("multi_edit returned dispatch error: %v", err)
 	}
-	if got := toolErrorCode(t, editRes); got != "not_found" {
-		t.Fatalf("code = %q, want not_found; content=%s", got, editRes.ModelText)
+	if got := toolErrorCode(t, res); got != "search_not_found" {
+		t.Fatalf("code = %q, want search_not_found; content=%s", got, res.ModelText)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	if string(got) != "alpha\nbeta\n" {
+		t.Fatalf("file modified despite failed multi_edit: %q", string(got))
+	}
+}
+
+func TestMultiEditRejectsNonUniqueSearchUnlessAllTrue(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("foo\nfoo\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	readFileFull(t, ts, "a.txt")
+
+	res, err := ts.multiEditFile(context.Background(), tc("multi_edit", map[string]any{
+		"file_path": "a.txt",
+		"edits": []map[string]any{
+			{"search": "foo", "replace": "bar"},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("multi_edit returned dispatch error: %v", err)
+	}
+	if got := toolErrorCode(t, res); got != "search_not_unique" {
+		t.Fatalf("code = %q, want search_not_unique; content=%s", got, res.ModelText)
+	}
+
+	res, err = ts.multiEditFile(context.Background(), tc("multi_edit", map[string]any{
+		"file_path": "a.txt",
+		"edits": []map[string]any{
+			{"search": "foo", "replace": "bar", "all": true},
+		},
+	}))
+	if err != nil || res.IsError() {
+		t.Fatalf("multi_edit all=true failed: err=%v res=%+v", err, res)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	if string(got) != "bar\nbar\n" {
+		t.Fatalf("content = %q, want all matches replaced", string(got))
+	}
+}
+
+func TestMultiEditMatchesLFSearchAndPreservesCRLF(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("alpha\r\nbeta\r\ngamma\r\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	readFileFull(t, ts, "a.txt")
+	call := tc("multi_edit", map[string]any{
+		"file_path": "a.txt",
+		"edits": []map[string]any{
+			{"search": "beta", "replace": "whale"},
+		},
+	})
+
+	preview, err := ts.previewMultiEditFile(context.Background(), call)
+	if err != nil {
+		t.Fatalf("preview multi_edit: %v", err)
+	}
+	if diff := firstMetadataDiff(t, preview); !strings.Contains(diff, "-beta") || !strings.Contains(diff, "+whale") {
+		t.Fatalf("unexpected preview diff:\n%s", diff)
+	}
+	res, err := ts.multiEditFile(context.Background(), call)
+	if err != nil || res.IsError() {
+		t.Fatalf("multi_edit failed: err=%v res=%+v", err, res)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	if string(got) != "alpha\r\nwhale\r\ngamma\r\n" {
+		t.Fatalf("content = %q, want CRLF preserved", string(got))
+	}
+}
+
+func TestMultiEditPreservesMixedLineEndings(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("alpha\r\nbeta\ngamma\r\ndelta\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	readFileFull(t, ts, "a.txt")
+
+	res, err := ts.multiEditFile(context.Background(), tc("multi_edit", map[string]any{
+		"file_path": "a.txt",
+		"edits": []map[string]any{
+			{"search": "beta", "replace": "whale\ninserted"},
+		},
+	}))
+	if err != nil || res.IsError() {
+		t.Fatalf("multi_edit failed: err=%v res=%+v", err, res)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	if string(got) != "alpha\r\nwhale\ninserted\ngamma\r\ndelta\n" {
+		t.Fatalf("content = %q, want mixed line endings preserved", string(got))
+	}
+}
+
+func TestMultiEditPreviewAndResultMetadataMatch(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello\nworld\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	readFileFull(t, ts, "a.txt")
+	call := tc("multi_edit", map[string]any{
+		"file_path": "a.txt",
+		"edits": []map[string]any{
+			{"search": "world", "replace": "whale"},
+		},
+	})
+
+	preview, err := ts.previewMultiEditFile(context.Background(), call)
+	if err != nil {
+		t.Fatalf("preview multi_edit: %v", err)
+	}
+	res, err := ts.multiEditFile(context.Background(), call)
+	if err != nil || res.IsError() {
+		t.Fatalf("multi_edit failed: err=%v res=%+v", err, res)
+	}
+	if got, want := firstMetadataDiff(t, res.Metadata), firstMetadataDiff(t, preview); got != want {
+		t.Fatalf("preview/result diff mismatch:\npreview:\n%s\nresult:\n%s", want, got)
+	}
+}
+
+func TestMultiEditToolDescriptionDocumentsSchema(t *testing.T) {
+	dir := t.TempDir()
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	var spec core.ToolSpec
+	for _, tool := range ts.Tools() {
+		if tool.Name() == "multi_edit" {
+			spec = core.DescribeTool(tool)
+			break
+		}
+	}
+	if spec.Name == "" {
+		t.Fatal("multi_edit tool not found")
+	}
+	for _, want := range []string{
+		"Apply multiple ordered SEARCH/REPLACE edits",
+		"all=false requires search to match exactly once",
+		"all=true replaces every occurrence",
+	} {
+		if !strings.Contains(spec.Description, want) {
+			t.Fatalf("multi_edit description missing %q:\n%s", want, spec.Description)
+		}
+	}
+	props, _ := spec.Parameters["properties"].(map[string]any)
+	if _, ok := props["edits"].(map[string]any); !ok {
+		t.Fatalf("multi_edit schema missing edits property: %+v", props)
 	}
 }
 
@@ -1062,464 +1232,6 @@ func TestEditFileDetectsExternalChangeBeforeWrite(t *testing.T) {
 	}
 }
 
-func TestApplyPatchMatchesLFHunksAndPreservesCRLF(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "a.txt")
-	if err := os.WriteFile(path, []byte("alpha\r\nbeta\r\ngamma\r\n"), 0o644); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	ts, err := NewToolset(dir)
-	if err != nil {
-		t.Fatalf("new toolset: %v", err)
-	}
-	patch := strings.Join([]string{
-		"*** Begin Patch",
-		"*** Update File: a.txt",
-		"@@",
-		" alpha",
-		"-beta",
-		"+whale",
-		" gamma",
-		"*** End Patch",
-	}, "\n")
-
-	preview, err := ts.previewApplyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil {
-		t.Fatalf("preview patch: %v", err)
-	}
-	if diff := firstMetadataDiff(t, preview); !strings.Contains(diff, "-beta") || !strings.Contains(diff, "+whale") {
-		t.Fatalf("unexpected preview diff:\n%s", diff)
-	}
-	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil || res.IsError() {
-		t.Fatalf("apply patch failed: err=%v res=%+v", err, res)
-	}
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read result: %v", err)
-	}
-	if string(got) != "alpha\r\nwhale\r\ngamma\r\n" {
-		t.Fatalf("content = %q, want CRLF preserved", string(got))
-	}
-}
-
-func TestApplyPatchMatchesFirstLineAfterUTF8BOMAndPreservesBOM(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "a.txt")
-	if err := os.WriteFile(path, append([]byte{0xEF, 0xBB, 0xBF}, []byte("SIF LOCAL:1 > 0\r\n中文┃全角\r\n")...), 0o644); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	ts, err := NewToolset(dir)
-	if err != nil {
-		t.Fatalf("new toolset: %v", err)
-	}
-	patch := strings.Join([]string{
-		"*** Begin Patch",
-		"*** Update File: a.txt",
-		"@@",
-		"-SIF LOCAL:1 > 0",
-		"+SIF LOCAL:1 > 1",
-		" 中文┃全角",
-		"*** End Patch",
-	}, "\n")
-
-	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil || res.IsError() {
-		t.Fatalf("apply patch failed: err=%v res=%+v", err, res)
-	}
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read result: %v", err)
-	}
-	want := append([]byte{0xEF, 0xBB, 0xBF}, []byte("SIF LOCAL:1 > 1\r\n中文┃全角\r\n")...)
-	if string(got) != string(want) {
-		t.Fatalf("content bytes = % x, want % x", got, want)
-	}
-}
-
-func TestApplyPatchPreservesMixedLineEndings(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "a.txt")
-	if err := os.WriteFile(path, []byte("alpha\r\nbeta\ngamma\r\ndelta\n"), 0o644); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	ts, err := NewToolset(dir)
-	if err != nil {
-		t.Fatalf("new toolset: %v", err)
-	}
-	patch := strings.Join([]string{
-		"*** Begin Patch",
-		"*** Update File: a.txt",
-		"@@",
-		" alpha",
-		"-beta",
-		"+whale",
-		"+inserted",
-		" gamma",
-		"*** End Patch",
-	}, "\n")
-
-	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil || res.IsError() {
-		t.Fatalf("apply patch failed: err=%v res=%+v", err, res)
-	}
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read result: %v", err)
-	}
-	if string(got) != "alpha\r\nwhale\ninserted\ngamma\r\ndelta\n" {
-		t.Fatalf("content = %q, want mixed line endings preserved", string(got))
-	}
-}
-
-func TestApplyPatchMultipleHunksUseOriginalForwardPositions(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "a.txt")
-	if err := os.WriteFile(path, []byte("A\nA\n"), 0o644); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	ts, err := NewToolset(dir)
-	if err != nil {
-		t.Fatalf("new toolset: %v", err)
-	}
-	patch := strings.Join([]string{
-		"*** Begin Patch",
-		"*** Update File: a.txt",
-		"@@",
-		"-A",
-		"+X",
-		"+A",
-		"@@",
-		"-A",
-		"+Y",
-		"*** End Patch",
-	}, "\n")
-
-	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil || res.IsError() {
-		t.Fatalf("apply patch failed: err=%v res=%+v", err, res)
-	}
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read result: %v", err)
-	}
-	if string(got) != "X\nA\nY\n" {
-		t.Fatalf("content = %q, want later hunk to match the later original line", string(got))
-	}
-}
-
-func TestApplyPatchMultipleHunksUseOriginalForwardPositionsWithMixedLineEndings(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "a.txt")
-	if err := os.WriteFile(path, []byte("A\r\nA\n"), 0o644); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	ts, err := NewToolset(dir)
-	if err != nil {
-		t.Fatalf("new toolset: %v", err)
-	}
-	patch := strings.Join([]string{
-		"*** Begin Patch",
-		"*** Update File: a.txt",
-		"@@",
-		"-A",
-		"+X",
-		"+A",
-		"@@",
-		"-A",
-		"+Y",
-		"*** End Patch",
-	}, "\n")
-
-	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil || res.IsError() {
-		t.Fatalf("apply patch failed: err=%v res=%+v", err, res)
-	}
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read result: %v", err)
-	}
-	if string(got) != "X\r\nA\nY\n" {
-		t.Fatalf("content = %q, want later hunk to match the later original line and preserve separators", string(got))
-	}
-}
-
-func TestApplyPatchDuplicateInsertionBeforeContextKeepsMixedLineEndings(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "a.txt")
-	if err := os.WriteFile(path, []byte("a\nc\r\n"), 0o644); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	ts, err := NewToolset(dir)
-	if err != nil {
-		t.Fatalf("new toolset: %v", err)
-	}
-	patch := strings.Join([]string{
-		"*** Begin Patch",
-		"*** Update File: a.txt",
-		"@@",
-		" a",
-		"+c",
-		" c",
-		"*** End Patch",
-	}, "\n")
-
-	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil || res.IsError() {
-		t.Fatalf("apply patch failed: err=%v res=%+v", err, res)
-	}
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read result: %v", err)
-	}
-	if string(got) != "a\nc\nc\r\n" {
-		t.Fatalf("content = %q, want inserted duplicate to keep context separator", string(got))
-	}
-}
-
-func TestApplyPatchDoesNotCarryDeletedSeparatorAcrossContext(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "a.txt")
-	if err := os.WriteFile(path, []byte("a\r\nb\nc\r\n"), 0o644); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	ts, err := NewToolset(dir)
-	if err != nil {
-		t.Fatalf("new toolset: %v", err)
-	}
-	patch := strings.Join([]string{
-		"*** Begin Patch",
-		"*** Update File: a.txt",
-		"@@",
-		"-a",
-		" b",
-		"+x",
-		" c",
-		"*** End Patch",
-	}, "\n")
-
-	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil || res.IsError() {
-		t.Fatalf("apply patch failed: err=%v res=%+v", err, res)
-	}
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read result: %v", err)
-	}
-	if string(got) != "b\nx\nc\r\n" {
-		t.Fatalf("content = %q, want deletion separator not to cross context", string(got))
-	}
-}
-
-func TestApplyPatchConflictLeavesFilesUntouched(t *testing.T) {
-	dir := t.TempDir()
-	aPath := filepath.Join(dir, "a.txt")
-	bPath := filepath.Join(dir, "b.txt")
-	if err := os.WriteFile(aPath, []byte("one\n"), 0o644); err != nil {
-		t.Fatalf("write fixture a: %v", err)
-	}
-	if err := os.WriteFile(bPath, []byte("two\n"), 0o644); err != nil {
-		t.Fatalf("write fixture b: %v", err)
-	}
-	ts, err := NewToolset(dir)
-	if err != nil {
-		t.Fatalf("new toolset: %v", err)
-	}
-	var once sync.Once
-	ts.beforeFileCommit = func(abs string) {
-		if abs != bPath {
-			return
-		}
-		once.Do(func() {
-			if err := os.WriteFile(bPath, []byte("external\n"), 0o644); err != nil {
-				t.Errorf("external write: %v", err)
-			}
-		})
-	}
-	patch := strings.Join([]string{
-		"*** Begin Patch",
-		"*** Update File: a.txt",
-		"@@",
-		"-one",
-		"+ONE",
-		"*** Update File: b.txt",
-		"@@",
-		"-two",
-		"+TWO",
-		"*** End Patch",
-	}, "\n")
-
-	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil {
-		t.Fatalf("apply_patch returned dispatch error: %v", err)
-	}
-	if got := toolErrorCode(t, res); got != "patch_conflict" {
-		t.Fatalf("code = %q, want patch_conflict; content=%s", got, res.ModelText)
-	}
-	gotA, err := os.ReadFile(aPath)
-	if err != nil {
-		t.Fatalf("read a: %v", err)
-	}
-	if string(gotA) != "one\n" {
-		t.Fatalf("a.txt = %q, want original content preserved", string(gotA))
-	}
-	gotB, err := os.ReadFile(bPath)
-	if err != nil {
-		t.Fatalf("read b: %v", err)
-	}
-	if string(gotB) != "external\n" {
-		t.Fatalf("b.txt = %q, want external write preserved", string(gotB))
-	}
-}
-
-func TestApplyPatchToolDescriptionDocumentsFormat(t *testing.T) {
-	dir := t.TempDir()
-	ts, err := NewToolset(dir)
-	if err != nil {
-		t.Fatalf("new toolset: %v", err)
-	}
-	var spec core.ToolSpec
-	for _, tool := range ts.Tools() {
-		if tool.Name() == "apply_patch" {
-			spec = core.DescribeTool(tool)
-			break
-		}
-	}
-	if spec.Name == "" {
-		t.Fatal("apply_patch tool not found")
-	}
-	for _, want := range []string{
-		"*** Begin Patch",
-		"*** Update File: path/to/file",
-		"*** Add File: <path>",
-		"*** Delete File: <path>",
-		"Do not use unified diff headers",
-	} {
-		if !strings.Contains(spec.Description, want) {
-			t.Fatalf("apply_patch description missing %q:\n%s", want, spec.Description)
-		}
-	}
-	props, _ := spec.Parameters["properties"].(map[string]any)
-	patchProp, _ := props["patch"].(map[string]any)
-	desc, _ := patchProp["description"].(string)
-	if !strings.Contains(desc, "*** Begin Patch") || !strings.Contains(desc, "Do not send unified diff") {
-		t.Fatalf("patch parameter description does not document patch format: %q", desc)
-	}
-}
-
-func TestApplyPatchParseErrorsGuideAwayFromUnifiedDiff(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello\nworld\n"), 0o644); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	ts, err := NewToolset(dir)
-	if err != nil {
-		t.Fatalf("new toolset: %v", err)
-	}
-	patch := strings.Join([]string{
-		"*** Begin Patch",
-		"--- a/a.txt",
-		"+++ b/a.txt",
-		"@@",
-		"-world",
-		"+whale",
-		"*** End Patch",
-	}, "\n")
-
-	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil {
-		t.Fatalf("apply patch returned dispatch error: %v", err)
-	}
-	if !res.IsError() {
-		t.Fatalf("expected parse error, got %+v", res)
-	}
-	env, ok := core.ParseToolEnvelope(res.ModelText)
-	if !ok {
-		t.Fatalf("parse envelope: %s", res.ModelText)
-	}
-	if env.Code != "patch_parse_failed" {
-		t.Fatalf("code = %q, want patch_parse_failed", env.Code)
-	}
-	for _, want := range []string{
-		"unified diff syntax",
-		"*** Update File/Add File/Delete File",
-		"Minimal valid example:",
-	} {
-		if !strings.Contains(env.Error, want) {
-			t.Fatalf("parse error missing %q:\n%s", want, env.Error)
-		}
-	}
-}
-
-func TestApplyPatchParseErrorsGuideBadUpdateHeader(t *testing.T) {
-	dir := t.TempDir()
-	ts, err := NewToolset(dir)
-	if err != nil {
-		t.Fatalf("new toolset: %v", err)
-	}
-	patch := strings.Join([]string{
-		"*** Begin Patch",
-		"Update File: a.txt",
-		"@@",
-		"-old",
-		"+new",
-		"*** End Patch",
-	}, "\n")
-
-	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil {
-		t.Fatalf("apply patch returned dispatch error: %v", err)
-	}
-	if !res.IsError() {
-		t.Fatalf("expected parse error, got %+v", res)
-	}
-	env, ok := core.ParseToolEnvelope(res.ModelText)
-	if !ok {
-		t.Fatalf("parse envelope: %s", res.ModelText)
-	}
-	if !strings.Contains(env.Error, "must start with the exact header *** Update File: <path>") {
-		t.Fatalf("parse error did not explain update header:\n%s", env.Error)
-	}
-}
-
-func TestApplyPatchInvalidHunkLineIncludesRecovery(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello\nworld\n"), 0o644); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	ts, err := NewToolset(dir)
-	if err != nil {
-		t.Fatalf("new toolset: %v", err)
-	}
-	patch := strings.Join([]string{
-		"*** Begin Patch",
-		"*** Update File: a.txt",
-		"@@",
-		"world",
-		"+whale",
-		"*** End Patch",
-	}, "\n")
-
-	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil {
-		t.Fatalf("apply patch returned dispatch error: %v", err)
-	}
-	if got := toolErrorCode(t, res); got != "patch_parse_failed" {
-		t.Fatalf("code = %q, want patch_parse_failed; content=%s", got, res.ModelText)
-	}
-	recovery := toolRecoveryData(t, res)
-	if got := recovery["code"]; got != "apply_patch_parse_failed" {
-		t.Fatalf("recovery code = %#v, want apply_patch_parse_failed", got)
-	}
-	if got := recovery["recommended_next_tool"]; got != "apply_patch" {
-		t.Fatalf("recommended_next_tool = %#v, want apply_patch", got)
-	}
-	patchHint := recovery["recommended_input_patch"].(map[string]any)
-	if got := patchHint["patch"].(string); !strings.Contains(got, "every line must start with space") {
-		t.Fatalf("patch recovery hint missing hunk prefix guidance: %q", got)
-	}
-}
-
 func TestReadFileRangeDefaults(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("zero\none\ntwo\nthree\n"), 0o644); err != nil {
@@ -1967,38 +1679,6 @@ func TestWriteAndEditReturnDiffMetadata(t *testing.T) {
 	}
 }
 
-func TestApplyPatchPreviewAndResultMetadataMatch(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello\nworld\n"), 0o644); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	ts, err := NewToolset(dir)
-	if err != nil {
-		t.Fatalf("new toolset: %v", err)
-	}
-	call := tc("apply_patch", map[string]any{"patch": strings.Join([]string{
-		"*** Begin Patch",
-		"*** Update File: a.txt",
-		"@@",
-		" hello",
-		"-world",
-		"+whale",
-		"*** End Patch",
-	}, "\n")})
-
-	preview, err := ts.previewApplyPatch(context.Background(), call)
-	if err != nil {
-		t.Fatalf("preview patch: %v", err)
-	}
-	res, err := ts.applyPatch(context.Background(), call)
-	if err != nil || res.IsError() {
-		t.Fatalf("apply patch failed: err=%v res=%+v", err, res)
-	}
-	if got, want := firstMetadataDiff(t, res.Metadata), firstMetadataDiff(t, preview); got != want {
-		t.Fatalf("preview/result diff mismatch:\npreview:\n%s\nresult:\n%s", want, got)
-	}
-}
-
 func firstMetadataDiff(t *testing.T, metadata map[string]any) string {
 	t.Helper()
 	if metadata["kind"] != fileDiffMetadataKind {
@@ -2009,8 +1689,8 @@ func firstMetadataDiff(t *testing.T, metadata map[string]any) string {
 		t.Fatalf("expected metadata files, got %+v", metadata["files"])
 	}
 	diff, _ := files[0]["unified_diff"].(string)
-	if diff == "" {
-		t.Fatalf("expected unified diff, got %+v", files[0])
+	if strings.TrimSpace(diff) == "" {
+		t.Fatalf("expected non-empty unified diff, got %+v", files[0])
 	}
 	return diff
 }
@@ -2702,61 +2382,6 @@ func TestWriteSchemaDocumentsRegularFilePermissions(t *testing.T) {
 		return
 	}
 	t.Fatal("write not registered")
-}
-
-func TestApplyPatchUpdateAddDelete(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello\nworld\n"), 0o644); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-	ts, err := NewToolset(dir)
-	if err != nil {
-		t.Fatalf("new toolset: %v", err)
-	}
-	patch := strings.Join([]string{
-		"*** Begin Patch",
-		"*** Update File: a.txt",
-		"@@",
-		" hello",
-		"-world",
-		"+whale",
-		"*** Add File: b.txt",
-		"+new file",
-		"*** Delete File: a.txt",
-		"*** End Patch",
-	}, "\n")
-	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil {
-		t.Fatalf("apply patch err: %v", err)
-	}
-	if res.IsError() {
-		t.Fatalf("apply patch result error: %+v", res)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "a.txt")); !os.IsNotExist(err) {
-		t.Fatalf("expected a.txt deleted, stat err=%v", err)
-	}
-	gotB, err := os.ReadFile(filepath.Join(dir, "b.txt"))
-	if err != nil {
-		t.Fatalf("read b.txt: %v", err)
-	}
-	if string(gotB) != "new file" {
-		t.Fatalf("unexpected b.txt content: %q", string(gotB))
-	}
-}
-
-func TestApplyPatchInvalidPatch(t *testing.T) {
-	dir := t.TempDir()
-	ts, err := NewToolset(dir)
-	if err != nil {
-		t.Fatalf("new toolset: %v", err)
-	}
-	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": "bad patch"}))
-	if err != nil {
-		t.Fatalf("apply patch err: %v", err)
-	}
-	if !res.IsError() || !strings.Contains(res.ModelText, "patch_parse_failed") {
-		t.Fatalf("expected patch_parse_failed, got: %+v", res)
-	}
 }
 
 func TestSearchFiles(t *testing.T) {

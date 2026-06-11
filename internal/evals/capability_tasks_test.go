@@ -14,9 +14,9 @@ import (
 	"github.com/usewhale/whale/internal/session"
 )
 
-func TestTaskSearchApplyPatchReadbackFlow(t *testing.T) {
+func TestTaskSearchMultiEditReadbackFlow(t *testing.T) {
 	run, err := RunTask(context.Background(), TaskSpec{
-		ID:    "search-apply-patch-readback",
+		ID:    "search-multi-edit-readback",
 		Suite: SuiteCapability,
 		Scenario: ScenarioSpec{
 			Setup: func(root string) error {
@@ -29,7 +29,8 @@ func TestTaskSearchApplyPatchReadbackFlow(t *testing.T) {
 				{
 					Steps: []StepSpec{
 						{ID: "search", ToolName: "search_files", Input: `{"path":".","pattern":"app.txt","limit":20}`},
-						{ID: "patch", ToolName: "apply_patch", Input: "{\"patch\":\"*** Begin Patch\\n*** Update File: internal/cfg/app.txt\\n@@\\n-mode=old\\n+mode=new\\n*** End Patch\\n\"}"},
+						{ID: "read-before-edit", ToolName: "read_file", Input: `{"file_path":"internal/cfg/app.txt","offset":0,"limit":20}`},
+						{ID: "multi", ToolName: "multi_edit", Input: `{"file_path":"internal/cfg/app.txt","edits":[{"search":"mode=old","replace":"mode=new"}]}`},
 						{ID: "read", ToolName: "read_file", Input: `{"file_path":"internal/cfg/app.txt","offset":0,"limit":20}`},
 					},
 				},
@@ -37,7 +38,7 @@ func TestTaskSearchApplyPatchReadbackFlow(t *testing.T) {
 			Verify: func(run *Run) error {
 				read := run.FindStep("read")
 				if read == nil || !strings.Contains(read.Result.ModelText, "mode=new") {
-					return fmt.Errorf("patched content missing from readback")
+					return fmt.Errorf("edited content missing from readback")
 				}
 				return nil
 			},

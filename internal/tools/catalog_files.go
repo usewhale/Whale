@@ -2,33 +2,20 @@ package tools
 
 import "github.com/usewhale/whale/internal/core"
 
-const applyPatchDescription = `Apply structured multi-file patch text.
+const multiEditDescription = `Apply multiple ordered SEARCH/REPLACE edits to one existing file atomically.
 
-Use Whale's apply_patch format, not unified diff. The patch must be a single string with this shape:
+Use this for most partial file modifications, especially when changing several locations in the same file. Each edit runs against the result of the previous edit in memory, and Whale writes the file only if every edit succeeds. A failure leaves the file untouched.
 
-*** Begin Patch
-*** Update File: path/to/file
-@@
- context line to keep
--old line to remove
-+new line to add
- context line to keep
-*** End Patch
+Requires prior runtime file state from read_file, write, edit, or a successful multi_edit for the same file; do not pass any file-state token.
 
-Supported file operations:
-*** Add File: <path>    creates a new file; every content line must start with +
-*** Delete File: <path> deletes an existing file; no hunks follow
-*** Update File: <path> patches an existing file; include one or more @@ hunks
-
-Hunk rules:
-- Each hunk starts with @@ on its own line.
-- Hunk lines must start with exactly one of: space for context, - for removed text, + for added text.
-- Keep enough context lines for an exact match.
-- Paths are relative to the workspace. Do not use absolute paths.
-- Do not use unified diff headers such as diff --git, --- a/file, or +++ b/file.
-- A successful apply_patch updates Whale's runtime file state. Do not re-read files just to confirm the patch applied; the tool fails when it cannot apply the patch.`
-
-const applyPatchParamDescription = `Full patch text in Whale's *** Begin Patch format. Do not send unified diff. Use headers like *** Update File: path, then @@ hunks with space/-/+ lines.`
+Rules:
+- file_path is relative to the workspace, or an absolute path inside the workspace root.
+- edits must contain at least one step.
+- search must be exact current text copied from read_file content.
+- replace may be empty to delete text.
+- all=false requires search to match exactly once at that step.
+- all=true replaces every occurrence at that step and requires at least one match.
+- A successful multi_edit updates Whale's runtime file state. Do not re-read files just to confirm the edit applied; the tool fails when it cannot apply the edit.`
 
 func (b *Toolset) fileDiscoveryTools() []core.Tool {
 	return []core.Tool{
@@ -87,7 +74,7 @@ func (b *Toolset) fileMutationTools() []core.Tool {
 	return []core.Tool{
 		toolFn{
 			name:        "edit",
-			description: "Apply SEARCH/REPLACE edits to an existing file. Requires prior runtime file state from read_file, write, apply_patch, or a successful edit for the same file; do not pass any file-state token. Requires exact search text; returns search_not_found when search is not found. Use for small surgical changes when the exact current text is known. Prefer apply_patch for most edits, multi-hunk changes, and multi-file changes.",
+			description: "Apply one SEARCH/REPLACE edit to an existing file. Requires prior runtime file state from read_file, write, multi_edit, or a successful edit for the same file; do not pass any file-state token. Requires exact search text; returns search_not_found when search is not found. Use for small surgical changes when the exact current text is known. Prefer multi_edit for multiple edits in the same file.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
@@ -105,7 +92,7 @@ func (b *Toolset) fileMutationTools() []core.Tool {
 		},
 		toolFn{
 			name:        "write",
-			description: "Write full file content under workspace root (create or overwrite). Use for new files or intentional full rewrites. New files are created as regular non-executable files; use shell_run with chmod if a script must be executable. For most partial modifications, prefer apply_patch.",
+			description: "Write full file content under workspace root (create or overwrite). Use for new files or intentional full rewrites. New files are created as regular non-executable files; use shell_run with chmod if a script must be executable. For most partial modifications, prefer multi_edit.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
@@ -120,19 +107,34 @@ func (b *Toolset) fileMutationTools() []core.Tool {
 			preview:      b.previewWriteFile,
 		},
 		toolFn{
-			name:        "apply_patch",
-			description: applyPatchDescription,
+			name:        "multi_edit",
+			description: multiEditDescription,
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
 				"properties": map[string]any{
-					"patch": map[string]any{"type": "string", "description": applyPatchParamDescription},
+					"file_path": map[string]any{"type": "string", "description": "Target file path relative to workspace, or an absolute path inside the workspace root"},
+					"edits": map[string]any{
+						"type":        "array",
+						"minItems":    1,
+						"description": "Ordered edits. Each step sees the file as left by the previous step.",
+						"items": map[string]any{
+							"type":                 "object",
+							"additionalProperties": false,
+							"properties": map[string]any{
+								"search":  map[string]any{"type": "string", "description": "Exact text to replace. Without all=true, must match exactly once at this step."},
+								"replace": map[string]any{"type": "string", "description": "Replacement text; use an empty string to delete text."},
+								"all":     map[string]any{"type": "boolean", "description": "Replace every occurrence at this step instead of requiring uniqueness."},
+							},
+							"required": []string{"search", "replace"},
+						},
+					},
 				},
-				"required": []string{"patch"},
+				"required": []string{"file_path", "edits"},
 			},
 			capabilities: []string{"workspace.write"},
-			fn:           b.applyPatch,
-			preview:      b.previewApplyPatch,
+			fn:           b.multiEditFile,
+			preview:      b.previewMultiEditFile,
 		},
 	}
 }

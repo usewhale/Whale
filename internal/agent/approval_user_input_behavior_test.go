@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -907,7 +906,7 @@ func (p *failedFileApprovalProvider) StreamResponse(_ context.Context, _ []Messa
 	p.calls++
 	switch p.calls {
 	case 1:
-		return eventStream(toolUseEvent(toolCall("tc-bad-patch", "apply_patch", patchApprovalInput("*** Begin Patch\n*** Update File: a.txt\n@@\n-missing\n+new\n*** End Patch"))))
+		return eventStream(toolUseEvent(toolCall("tc-bad-multi-edit", "multi_edit", `{"file_path":"a.txt","edits":[{"search":"missing","replace":"new"}]}`)))
 	case 2:
 		return eventStream(toolUseEvent(toolCall("tc-write-after-fail", "write", `{"file_path":"a.txt","content":"new"}`)))
 	default:
@@ -922,7 +921,7 @@ func TestApprovalAllowForSessionDoesNotCacheFailedFileMutation(t *testing.T) {
 	a := NewAgentWithRegistry(
 		prov,
 		store,
-		NewToolRegistry([]Tool{failingNamedTool("apply_patch"), namedNoopTool("write")}),
+		NewToolRegistry([]Tool{failingNamedTool("multi_edit"), namedNoopTool("write")}),
 		WithToolPolicy(editApprovalPolicy()),
 		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
 			asked++
@@ -1026,35 +1025,35 @@ func (p *patchScopedApprovalProvider) StreamResponse(_ context.Context, _ []Mess
 	p.calls++
 	switch p.calls {
 	case 1:
-		return eventStream(toolUseEvent(toolCall("tc-patch-ab", "apply_patch", patchApprovalInput("*** Begin Patch\n*** Update File: a.txt\n@@\n-old\n+new\n*** Add File: b.txt\n+created\n*** End Patch"))))
+		return eventStream(toolUseEvent(toolCall("tc-multi-a", "multi_edit", `{"file_path":"a.txt","edits":[{"search":"old","replace":"new"}]}`)))
 	case 3:
-		return eventStream(toolUseEvent(toolCall("tc-patch-a", "apply_patch", patchApprovalInput("*** Begin Patch\n*** Update File: a.txt\n@@\n-new\n+newer\n*** End Patch"))))
+		return eventStream(toolUseEvent(toolCall("tc-multi-a-again", "multi_edit", `{"file_path":"a.txt","edits":[{"search":"new","replace":"newer"}]}`)))
 	case 5:
-		return eventStream(toolUseEvent(toolCall("tc-patch-ac", "apply_patch", patchApprovalInput("*** Begin Patch\n*** Update File: a.txt\n@@\n-newer\n+final\n*** Add File: c.txt\n+created\n*** End Patch"))))
+		return eventStream(toolUseEvent(toolCall("tc-multi-b", "multi_edit", `{"file_path":"b.txt","edits":[{"search":"old","replace":"new"}]}`)))
 	default:
 		return eventStream(endTurnEvent("done"))
 	}
 }
 
-func TestApprovalAllowForSessionCachesApplyPatchByIndividualFiles(t *testing.T) {
+func TestApprovalAllowForSessionCachesMultiEditByFile(t *testing.T) {
 	store := NewInMemoryStore()
 	prov := &patchScopedApprovalProvider{}
 	asked := 0
 	a := NewAgentWithRegistry(
 		prov,
 		store,
-		NewToolRegistry([]Tool{namedNoopTool("apply_patch")}),
+		NewToolRegistry([]Tool{namedNoopTool("multi_edit")}),
 		WithToolPolicy(editApprovalPolicy()),
 		WithApprovalFunc(func(req ApprovalRequest) ApprovalDecision {
 			asked++
 			switch req.ToolCall.ID {
-			case "tc-patch-ab":
-				if got, want := req.Keys, []string{"file:a.txt", "file:b.txt"}; !reflect.DeepEqual(got, want) {
-					t.Fatalf("first patch approval keys = %v, want %v", got, want)
+			case "tc-multi-a":
+				if got, want := req.Keys, []string{"file:a.txt"}; !reflect.DeepEqual(got, want) {
+					t.Fatalf("first multi_edit approval keys = %v, want %v", got, want)
 				}
-			case "tc-patch-ac":
-				if got, want := req.Keys, []string{"file:a.txt", "file:c.txt"}; !reflect.DeepEqual(got, want) {
-					t.Fatalf("third patch approval keys = %v, want %v", got, want)
+			case "tc-multi-b":
+				if got, want := req.Keys, []string{"file:b.txt"}; !reflect.DeepEqual(got, want) {
+					t.Fatalf("third multi_edit approval keys = %v, want %v", got, want)
 				}
 			default:
 				t.Fatalf("unexpected approval for %s", req.ToolCall.ID)
@@ -1063,21 +1062,16 @@ func TestApprovalAllowForSessionCachesApplyPatchByIndividualFiles(t *testing.T) 
 		}),
 	)
 
-	if _, err := a.RunSession(context.Background(), "s-patch-approval", "patch ab"); err != nil {
+	if _, err := a.RunSession(context.Background(), "s-multi-edit-approval", "edit a"); err != nil {
 		t.Fatalf("run1 failed: %v", err)
 	}
-	if _, err := a.RunSession(context.Background(), "s-patch-approval", "patch a"); err != nil {
+	if _, err := a.RunSession(context.Background(), "s-multi-edit-approval", "edit a again"); err != nil {
 		t.Fatalf("run2 failed: %v", err)
 	}
-	if _, err := a.RunSession(context.Background(), "s-patch-approval", "patch ac"); err != nil {
+	if _, err := a.RunSession(context.Background(), "s-multi-edit-approval", "edit b"); err != nil {
 		t.Fatalf("run3 failed: %v", err)
 	}
 	if asked != 2 {
-		t.Fatalf("expected approvals for first file set and later new file only, got %d", asked)
+		t.Fatalf("expected approvals for first file and later new file only, got %d", asked)
 	}
-}
-
-func patchApprovalInput(patch string) string {
-	raw, _ := json.Marshal(map[string]string{"patch": patch})
-	return string(raw)
 }

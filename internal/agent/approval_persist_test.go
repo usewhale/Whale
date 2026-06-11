@@ -89,21 +89,21 @@ func (p *persistPatchApprovalProvider) StreamResponse(_ context.Context, _ []Mes
 	p.calls++
 	switch p.calls {
 	case 1:
-		return eventStream(toolUseEvent(toolCall("tc-persist-ab", "apply_patch", patchApprovalInput("*** Begin Patch\n*** Update File: a.txt\n@@\n-old\n+new\n*** Add File: b.txt\n+created\n*** End Patch"))))
+		return eventStream(toolUseEvent(toolCall("tc-persist-a", "multi_edit", `{"file_path":"a.txt","edits":[{"search":"old","replace":"new"}]}`)))
 	case 3:
-		return eventStream(toolUseEvent(toolCall("tc-persist-a", "apply_patch", patchApprovalInput("*** Begin Patch\n*** Update File: a.txt\n@@\n-new\n+newer\n*** End Patch"))))
+		return eventStream(toolUseEvent(toolCall("tc-persist-a-again", "multi_edit", `{"file_path":"a.txt","edits":[{"search":"new","replace":"newer"}]}`)))
 	default:
 		return eventStream(endTurnEvent("done"))
 	}
 }
 
-func TestApprovalPersistsApplyPatchFileKeysAcrossAgentInstances(t *testing.T) {
+func TestApprovalPersistsMultiEditFileKeysAcrossAgentInstances(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewJSONLStore(filepath.Join(dir, "sessions"))
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}
-	reg := NewToolRegistry([]Tool{namedNoopTool("apply_patch")})
+	reg := NewToolRegistry([]Tool{namedNoopTool("multi_edit")})
 	prov := &persistPatchApprovalProvider{}
 	asked1 := 0
 	a1 := NewAgentWithRegistry(

@@ -442,7 +442,7 @@ func TestImmutableSystemPromptUsesStableToolPolicyWithoutToolCatalog(t *testing.
 		"do not invent tools",
 		"Prefer read-only inspection tools",
 		"read_file, list_dir, grep, search_files",
-		"Mutating tools such as apply_patch, edit, write",
+		"Mutating tools such as multi_edit, edit, write",
 		"may be blocked by mode, policy, or user approval",
 		"shell_run can be read-only only for safe inspection commands accepted by policy",
 		"do not retry the same action through another tool",

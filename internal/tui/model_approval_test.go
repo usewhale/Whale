@@ -645,11 +645,11 @@ func TestApprovalViewShowsFileReviewSessionScope(t *testing.T) {
 	m.width = 100
 	m.height = 30
 	m.mode = modeApproval
-	m.approval.toolName = "apply_patch"
-	m.approval.reason = "apply_patch: a.txt, b.txt"
+	m.approval.toolName = "multi_edit"
+	m.approval.reason = "multi_edit: a.txt"
 	m.approval.metadata = testFileDiffMetadata()
 	m.approval.metadata["approval_kind"] = "file_diff_review"
-	m.approval.metadata["approval_session_scope"] = "these files: a.txt, b.txt"
+	m.approval.metadata["approval_session_scope"] = "this file: a.txt"
 
 	view := m.View()
 	for _, want := range []string{
@@ -662,7 +662,7 @@ func TestApprovalViewShowsFileReviewSessionScope(t *testing.T) {
 			t.Fatalf("expected approval view to contain %q:\n%s", want, view)
 		}
 	}
-	if strings.Contains(view, "Allow for session =") || strings.Contains(view, "these files: a.txt, b.txt") {
+	if strings.Contains(view, "Allow for session =") || strings.Contains(view, "this file: a.txt") {
 		t.Fatalf("approval view should not expose session scope detail:\n%s", view)
 	}
 }
@@ -691,8 +691,8 @@ func TestApprovalViewKeepsLargeDiffPreviewBounded(t *testing.T) {
 	m.width = 120
 	m.height = 30
 	m.mode = modeApproval
-	m.approval.toolName = "apply_patch"
-	m.approval.reason = "apply_patch: roadmap.md"
+	m.approval.toolName = "multi_edit"
+	m.approval.reason = "multi_edit: roadmap.md"
 	m.approval.metadata = largeTranslationDiffMetadata(190, 190)
 	m.approval.metadata["approval_kind"] = "file_diff_review"
 

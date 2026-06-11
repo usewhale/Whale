@@ -23,7 +23,7 @@ func TestRunScenarioOfflineToolLoop(t *testing.T) {
 				Steps: []StepSpec{
 					{ID: "list", ToolName: "list_dir", Input: `{"path":"."}`},
 					{ID: "view", ToolName: "read_file", Input: `{"file_path":"notes.txt","offset":0,"limit":20}`},
-					{ID: "patch", ToolName: "apply_patch", Input: "{\"patch\": \"*** Begin Patch\\n*** Update File: notes.txt\\n@@\\n-alpha\\n+alpha patched\\n*** End Patch\\n\"}"},
+					{ID: "multi", ToolName: "multi_edit", Input: `{"file_path":"notes.txt","edits":[{"search":"alpha","replace":"alpha patched"}]}`},
 					{ID: "shell", ToolName: "shell_run", Input: `{"command":"printf whale-eval"}`},
 				},
 			},

@@ -280,7 +280,7 @@ func isShellToolEvent(m UIMessage) bool {
 
 func isEditToolEvent(m UIMessage) bool {
 	switch strings.TrimSpace(m.ToolName) {
-	case "write_file", "edit_file", "apply_patch", "write", "edit":
+	case "write_file", "edit_file", "write", "edit", "multi_edit":
 		return true
 	default:
 		return false

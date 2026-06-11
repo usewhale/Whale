@@ -1836,7 +1836,7 @@ func TestToDeepSeekTools_FlattensDeepSchema(t *testing.T) {
 	}
 }
 
-func TestToDeepSeekToolsIncludesApplyPatchFormatInstructions(t *testing.T) {
+func TestToDeepSeekToolsIncludesMultiEditSchema(t *testing.T) {
 	ts, err := whaletools.NewToolset(t.TempDir())
 	if err != nil {
 		t.Fatalf("new toolset: %v", err)
@@ -1845,30 +1845,29 @@ func TestToDeepSeekToolsIncludesApplyPatchFormatInstructions(t *testing.T) {
 	var fn map[string]any
 	for _, tool := range out {
 		candidate, _ := tool["function"].(map[string]any)
-		if candidate["name"] == "apply_patch" {
+		if candidate["name"] == "multi_edit" {
 			fn = candidate
 			break
 		}
 	}
 	if fn == nil {
-		t.Fatal("apply_patch tool not sent to provider")
+		t.Fatal("multi_edit tool not sent to provider")
 	}
 	desc, _ := fn["description"].(string)
 	for _, want := range []string{
-		"*** Begin Patch",
-		"*** Update File: path/to/file",
-		"Do not use unified diff headers",
+		"Apply multiple ordered SEARCH/REPLACE edits",
+		"all=false requires search to match exactly once",
+		"all=true replaces every occurrence",
 	} {
 		if !strings.Contains(desc, want) {
-			t.Fatalf("apply_patch provider description missing %q:\n%s", want, desc)
+			t.Fatalf("multi_edit provider description missing %q:\n%s", want, desc)
 		}
 	}
 	params, _ := fn["parameters"].(map[string]any)
 	props, _ := params["properties"].(map[string]any)
-	patchProp, _ := props["patch"].(map[string]any)
-	patchDesc, _ := patchProp["description"].(string)
-	if !strings.Contains(patchDesc, "*** Begin Patch") || !strings.Contains(patchDesc, "Do not send unified diff") {
-		t.Fatalf("patch parameter description missing format guidance: %q", patchDesc)
+	editsProp, _ := props["edits"].(map[string]any)
+	if editsProp["type"] != "array" {
+		t.Fatalf("multi_edit edits property missing array schema: %#v", editsProp)
 	}
 }
 

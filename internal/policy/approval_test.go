@@ -20,19 +20,19 @@ func TestApprovalKeysUseSharedFileKeyForEditAndWrite(t *testing.T) {
 	}
 }
 
-func TestApprovalKeysExtractApplyPatchFiles(t *testing.T) {
-	call := core.ToolCall{ID: "patch-1", Name: "apply_patch", Input: `{"patch":"*** Begin Patch\n*** Update File: b.txt\n@@\n-old\n+new\n*** Add File: a.txt\n+created\n*** Update File: b.txt\n@@\n-new\n+newer\n*** End Patch"}`}
+func TestApprovalKeysUseSharedFileKeyForMultiEdit(t *testing.T) {
+	call := core.ToolCall{ID: "multi-1", Name: "multi_edit", Input: `{"file_path":"./b.txt","edits":[{"search":"old","replace":"new"}]}`}
 
-	if got, want := ApprovalKeys(call), []string{"file:a.txt", "file:b.txt"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("apply_patch keys = %v, want %v", got, want)
+	if got, want := ApprovalKeys(call), []string{"file:b.txt"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("multi_edit keys = %v, want %v", got, want)
 	}
-	if got, want := ApprovalFiles(call), []string{"a.txt", "b.txt"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("apply_patch files = %v, want %v", got, want)
+	if got, want := ApprovalFiles(call), []string{"b.txt"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("multi_edit files = %v, want %v", got, want)
 	}
-	if got := ApprovalSessionScope(call); got != "these files: a.txt, b.txt" {
+	if got := ApprovalSessionScope(call); got != "this file: b.txt" {
 		t.Fatalf("session scope = %q", got)
 	}
-	if got := ApprovalScope(call); got != "files:a.txt,b.txt" {
+	if got := ApprovalScope(call); got != "file:b.txt" {
 		t.Fatalf("approval scope = %q", got)
 	}
 }
@@ -215,7 +215,7 @@ func TestApprovalKeysForDecisionDoNotReuseExternalDirectoryGrantForMutatingFileT
 	calls := []core.ToolCall{
 		{Name: "edit", Input: `{"file_path":"/tmp/a.txt","search":"old","replace":"new"}`},
 		{Name: "write", Input: `{"file_path":"/tmp/a.txt","content":"new"}`},
-		{Name: "apply_patch", Input: `{"patch":"*** Begin Patch\n*** Update File: /tmp/a.txt\n@@\n-old\n+new\n*** End Patch"}`},
+		{Name: "multi_edit", Input: `{"file_path":"/tmp/a.txt","edits":[{"search":"old","replace":"new"}]}`},
 	}
 
 	cache := NewSessionApprovalCache()

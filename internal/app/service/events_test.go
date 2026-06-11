@@ -1445,10 +1445,10 @@ func TestAwaitApprovalEmitsFileReviewMetadataAndDefersFileCache(t *testing.T) {
 	}
 	call := core.ToolCall{
 		ID:    "approval-files",
-		Name:  "apply_patch",
-		Input: `{"patch":"*** Begin Patch\n*** Update File: a.txt\n@@\n-old\n+new\n*** Add File: b.txt\n+created\n*** End Patch"}`,
+		Name:  "multi_edit",
+		Input: `{"file_path":"a.txt","edits":[{"search":"old","replace":"new"}]}`,
 	}
-	keys := []string{"file:a.txt", "file:b.txt"}
+	keys := []string{"file:a.txt"}
 	approvalDone := make(chan policy.ApprovalDecision, 1)
 	go func() {
 		approvalDone <- svc.awaitApproval(policy.ApprovalRequest{
@@ -1463,7 +1463,7 @@ func TestAwaitApprovalEmitsFileReviewMetadataAndDefersFileCache(t *testing.T) {
 	if got := ev.Metadata["approval_kind"]; got != "file_diff_review" {
 		t.Fatalf("approval kind = %v, want file_diff_review", got)
 	}
-	if got := ev.Metadata["approval_session_scope"]; got != "these files: a.txt, b.txt" {
+	if got := ev.Metadata["approval_session_scope"]; got != "this file: a.txt" {
 		t.Fatalf("session scope = %v", got)
 	}
 	svc.resolveApproval("approval-files", policy.ApprovalAllowForSession)
@@ -1489,7 +1489,7 @@ func TestAwaitApprovalEmitsFileReviewMetadataAndDefersFileCache(t *testing.T) {
 	svc.syncApprovalGrant(&agent.ToolApprovalGranted{
 		SessionID:  "session-1",
 		ToolCallID: "approval-files",
-		ToolName:   "apply_patch",
+		ToolName:   "multi_edit",
 		Key:        keys[0],
 		Keys:       keys,
 	})

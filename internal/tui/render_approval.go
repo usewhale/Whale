@@ -154,7 +154,7 @@ func isFileDiffApproval(toolName string, metadata map[string]any) bool {
 		return true
 	}
 	switch toolName {
-	case "edit", "write", "apply_patch":
+	case "edit", "write", "multi_edit":
 		return true
 	default:
 		return false

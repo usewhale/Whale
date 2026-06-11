@@ -4,14 +4,11 @@ package tools
 // model failed to edit internal/tasks/subagent.go and escaped to a python
 // heredoc. The failure chain was:
 //
-//  1. apply_patch rejected because the model emitted hunk body lines without
-//     the space/-/+ prefix (m-1270).
-//  2. edit rejected because the model rewrote a 356-line search block from
+//  1. edit rejected because the model rewrote a 356-line search block from
 //     memory and omitted a 3-line comment present in the file (m-1288).
 //
-// These tests cover the fixes derived from that session: blank-line parser
-// tolerance in apply_patch, large-search recovery guidance, and divergence
-// diagnostics for failed edit searches.
+// These tests cover the fixes derived from that session: large-search recovery
+// guidance and divergence diagnostics for failed edit searches.
 
 import (
 	"context"
@@ -110,69 +107,6 @@ func TestEditSearchDivergenceSilentForUnanchoredSearch(t *testing.T) {
 	}
 }
 
-func TestApplyPatchRejectsUnprefixedHunkBodyLines(t *testing.T) {
-	dir := t.TempDir()
-	ts := newToolsetWithFile(t, dir, "subagent.go", sessionFileContent)
-
-	// As emitted in m-1270: raw tab-indented code lines inside the hunk,
-	// no space/-/+ prefixes at all.
-	patch := strings.Join([]string{
-		"*** Begin Patch",
-		"*** Update File: subagent.go",
-		"@@",
-		"\treturn run(opts)",
-		"}",
-		"+",
-		"+func helper() {}",
-		"*** End Patch",
-	}, "\n")
-
-	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil {
-		t.Fatalf("applyPatch returned transport error: %v", err)
-	}
-	if !res.IsError() {
-		t.Fatalf("expected patch_parse_failed, got success: %s", res.ModelText)
-	}
-	if !strings.Contains(res.ModelText, "patch_parse_failed") {
-		t.Fatalf("expected patch_parse_failed code, got: %s", res.ModelText)
-	}
-	if !strings.Contains(res.ModelText, "invalid hunk line") {
-		t.Fatalf("expected invalid hunk line message, got: %s", res.ModelText)
-	}
-}
-
-func TestApplyPatchAcceptsBlankContextLineInsideHunk(t *testing.T) {
-	dir := t.TempDir()
-	ts := newToolsetWithFile(t, dir, "a.go", "alpha\n\nbeta\n")
-
-	// Models routinely emit a truly empty line for blank context lines
-	// instead of a single space. Like codex, whale treats it as an empty
-	// context line instead of rejecting the whole patch.
-	patch := strings.Join([]string{
-		"*** Begin Patch",
-		"*** Update File: a.go",
-		"@@",
-		" alpha",
-		"",
-		"-beta",
-		"+whale",
-		"*** End Patch",
-	}, "\n")
-
-	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil || res.IsError() {
-		t.Fatalf("apply patch failed: err=%v res=%+v", err, res)
-	}
-	got, err := os.ReadFile(filepath.Join(dir, "a.go"))
-	if err != nil {
-		t.Fatalf("read result: %v", err)
-	}
-	if string(got) != "alpha\n\nwhale\n" {
-		t.Fatalf("content = %q, want blank context line matched", string(got))
-	}
-}
-
 func TestEditWhitespaceRelaxedMatchesTrailingSpaceDrift(t *testing.T) {
 	dir := t.TempDir()
 	// File lines carry trailing spaces the model's search omits.
@@ -238,79 +172,13 @@ func TestEditWhitespaceRelaxedRejectsAmbiguousMatch(t *testing.T) {
 	}
 }
 
-func TestApplyPatchRelaxedHunkPreservesFileContextWhitespace(t *testing.T) {
-	dir := t.TempDir()
-	// Context lines in the file have trailing spaces the patch omits; the
-	// hunk should still apply and the untouched context lines must keep
-	// their original trailing whitespace.
-	ts := newToolsetWithFile(t, dir, "a.go", "alpha \nbeta\ngamma \n")
-
-	patch := strings.Join([]string{
-		"*** Begin Patch",
-		"*** Update File: a.go",
-		"@@",
-		" alpha",
-		"-beta",
-		"+whale",
-		" gamma",
-		"*** End Patch",
-	}, "\n")
-
-	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil || res.IsError() {
-		t.Fatalf("apply patch failed: err=%v res=%+v", err, res)
-	}
-	got, err := os.ReadFile(filepath.Join(dir, "a.go"))
-	if err != nil {
-		t.Fatalf("read result: %v", err)
-	}
-	if string(got) != "alpha \nwhale\ngamma \n" {
-		t.Fatalf("content = %q, want context trailing spaces preserved", string(got))
-	}
-}
-
-func TestApplyPatchRelaxedHunkRejectsAmbiguousMatch(t *testing.T) {
-	dir := t.TempDir()
-	// Two blocks are identical after whitespace trimming; a hunk whose
-	// context omitted the drift must not silently patch the first one.
-	ts := newToolsetWithFile(t, dir, "a.go", "call() \nend\nmiddle\ncall()\t\nend\n")
-
-	patch := strings.Join([]string{
-		"*** Begin Patch",
-		"*** Update File: a.go",
-		"@@",
-		" call()",
-		"-end",
-		"+done",
-		"*** End Patch",
-	}, "\n")
-
-	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil {
-		t.Fatalf("applyPatch returned transport error: %v", err)
-	}
-	if !res.IsError() {
-		t.Fatalf("expected ambiguous relaxed match to fail, got success: %s", res.ModelText)
-	}
-	if !strings.Contains(res.ModelText, "multiple locations") {
-		t.Fatalf("expected ambiguity message, got: %s", res.ModelText)
-	}
-	got, err := os.ReadFile(filepath.Join(dir, "a.go"))
-	if err != nil {
-		t.Fatalf("read result: %v", err)
-	}
-	if string(got) != "call() \nend\nmiddle\ncall()\t\nend\n" {
-		t.Fatalf("file modified despite ambiguous match: %q", string(got))
-	}
-}
-
 func TestEditNotFoundRecoverySuggestsSplittingLargeSearchBlocks(t *testing.T) {
 	dir := t.TempDir()
 	ts := newToolsetWithFile(t, dir, "subagent.go", sessionFileContent)
 
 	// A large search block that cannot match, like the 356-line block from
 	// the session. The recovery hint should steer toward splitting the edit
-	// or using apply_patch.
+	// or using multi_edit.
 	large := strings.Repeat("\tthis line does not exist in the file\n", largeEditSearchLines+1)
 	res, err := ts.editFile(context.Background(), tc("edit", map[string]any{
 		"file_path": "subagent.go",
@@ -320,8 +188,8 @@ func TestEditNotFoundRecoverySuggestsSplittingLargeSearchBlocks(t *testing.T) {
 	if err != nil || !res.IsError() {
 		t.Fatalf("expected error result: err=%v res=%+v", err, res)
 	}
-	if !strings.Contains(res.ModelText, "apply_patch") {
-		t.Fatalf("expected large-search guidance mentioning apply_patch, got: %s", res.ModelText)
+	if !strings.Contains(res.ModelText, "multi_edit") {
+		t.Fatalf("expected large-search guidance mentioning multi_edit, got: %s", res.ModelText)
 	}
 
 	// Small failed searches keep the focused message without the guidance.
@@ -333,7 +201,7 @@ func TestEditNotFoundRecoverySuggestsSplittingLargeSearchBlocks(t *testing.T) {
 	if err != nil || !res.IsError() {
 		t.Fatalf("expected error result: err=%v res=%+v", err, res)
 	}
-	if strings.Contains(res.ModelText, "apply_patch") {
+	if strings.Contains(res.ModelText, "multi_edit") {
 		t.Fatalf("small search should not trigger large-block guidance, got: %s", res.ModelText)
 	}
 }

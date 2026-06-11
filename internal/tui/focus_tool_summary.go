@@ -391,7 +391,7 @@ func focusToolKindFromName(toolName string) string {
 		return "list"
 	case "search_files", "grep", "search_content", "web_search":
 		return "search"
-	case "write_file", "edit_file", "apply_patch", "write", "edit":
+	case "write_file", "edit_file", "write", "edit", "multi_edit":
 		return "edit"
 	case "parallel_reason", "spawn_subagent":
 		return "task"
@@ -412,7 +412,7 @@ func focusToolKindFromName(toolName string) string {
 		return "list"
 	case strings.Contains(name, "search"), strings.Contains(name, "grep"):
 		return "search"
-	case strings.Contains(name, "write_file"), strings.Contains(name, "edit_file"), strings.Contains(name, "apply_patch"):
+	case strings.Contains(name, "write_file"), strings.Contains(name, "edit_file"), strings.Contains(name, "multi_edit"):
 		return "edit"
 	default:
 		return "unknown"

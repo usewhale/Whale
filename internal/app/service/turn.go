@@ -536,8 +536,10 @@ func summarizeToolCall(call core.ToolCall) string {
 		if u, _ := body["url"].(string); strings.TrimSpace(u) != "" {
 			return fmt.Sprintf("%s: %s", name, strings.TrimSpace(u))
 		}
-	case "apply_patch":
-		return "apply_patch: patch payload"
+	case "multi_edit":
+		if path, _ := body["file_path"].(string); strings.TrimSpace(path) != "" {
+			return fmt.Sprintf("multi_edit: %s", strings.TrimSpace(path))
+		}
 	case "request_user_input":
 		if qs := body["questions"]; qs != nil {
 			return fmt.Sprintf("request_user_input: %d question(s)", len(core.AsAnySlice(qs)))

@@ -134,13 +134,13 @@ func (b *Toolset) previewEditFile(_ context.Context, call core.ToolCall) (map[st
 
 // largeEditSearchLines is the search size beyond which a failed match is more
 // likely content drift from rewriting code by memory than a small copy slip,
-// so recovery steers toward smaller edits or apply_patch hunks.
+// so recovery steers toward smaller edits or multi_edit steps.
 const largeEditSearchLines = 40
 
 func editSearchNotFoundReason(search string) string {
 	reason := "edit search text must exactly match the current file content; read the file again and copy the literal text before retrying edit"
 	if lines := strings.Count(search, "\n") + 1; lines > largeEditSearchLines {
-		reason += fmt.Sprintf("; the failed search block is %d lines, so a single omitted or reworded line makes the whole match fail — split the change into several small edit calls or use apply_patch with small hunks instead", lines)
+		reason += fmt.Sprintf("; the failed search block is %d lines, so a single omitted or reworded line makes the whole match fail — split the change into several small edit calls or use multi_edit with smaller steps instead", lines)
 	}
 	return reason
 }

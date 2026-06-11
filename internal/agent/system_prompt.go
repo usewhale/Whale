@@ -190,7 +190,7 @@ Tool use policy.
 
 - Tools are provided through the provider tool schema. Choose tools by exact name and schema; do not invent tools that are not present in the schema.
 - Prefer read-only inspection tools for exploration: read_file, list_dir, grep, search_files, web_search, web_fetch, and clearly read-only MCP tools when available.
-- Mutating tools such as apply_patch, edit, write, shell_run with non-read-only commands, workflow launches, and writable subagents may be blocked by mode, policy, or user approval. In read-only modes, use read-only alternatives and do not request writes.
+- Mutating tools such as multi_edit, edit, write, shell_run with non-read-only commands, workflow launches, and writable subagents may be blocked by mode, policy, or user approval. In read-only modes, use read-only alternatives and do not request writes.
 - shell_run can be read-only only for safe inspection commands accepted by policy; build, test, install, start, and file-changing shell commands may require approval or be denied.
 - If a tool call is blocked, denied, rejected, or returns a permission/mode error, do not retry the same action through another tool unless the user explicitly asks.
 `)

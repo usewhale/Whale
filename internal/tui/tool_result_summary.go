@@ -670,15 +670,9 @@ func summarizeEditResult(toolName string, env toolResultEnvelope, successBySigna
 		if n := asInt(firstNonEmptyAny(env.payload["bytes"], env.data["bytes"])); n > 0 {
 			return "result_ok", fmt.Sprintf("✓ · %d bytes", n)
 		}
-	case "edit_file", "edit":
+	case "edit_file", "edit", "multi_edit":
 		if n := asInt(firstNonEmptyAny(env.payload["replacements"], env.data["replacements"])); n > 0 {
 			return "result_ok", fmt.Sprintf("✓ · %d %s", n, pluralize(n, "replacement", "replacements"))
-		}
-	case "apply_patch":
-		additions := asInt(firstNonEmptyAny(env.payload["additions"], env.data["additions"]))
-		deletions := asInt(firstNonEmptyAny(env.payload["deletions"], env.data["deletions"]))
-		if additions > 0 || deletions > 0 {
-			return "result_ok", fmt.Sprintf("✓ · +%d -%d", additions, deletions)
 		}
 	}
 	return "result_ok", "✓"
