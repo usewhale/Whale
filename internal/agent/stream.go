@@ -235,6 +235,12 @@ func (a *Agent) appendDispatchedToolResult(ctx context.Context, sessionID string
 			return false
 		}
 	}
+	// Recovery wrappers and other bypass producers arrive without the
+	// channel-separated fields; finalize before hooks so PostToolUse
+	// payloads see the same result shape that is persisted and emitted.
+	if finalRes.ModelText == "" {
+		finalRes = core.FinalizeToolResultChannels(finalRes)
+	}
 	if prepared.PreHookContext != "" {
 		addHookContextToToolResult(&finalRes, prepared.PreHookContext)
 	}
@@ -251,13 +257,9 @@ func (a *Agent) appendDispatchedToolResult(ctx context.Context, sessionID string
 			addHookContextToToolResult(&finalRes, report.AdditionalContext)
 		}
 	}
-	// Recovery wrappers that bypass the dispatch funnel arrive without a
-	// model channel: derive everything. Hook injection only appends text —
-	// the structured Payload must survive (the hook context already lives
-	// in Metadata), so the model channel just follows the mutated text.
-	if finalRes.ModelText == "" {
-		finalRes = core.FinalizeToolResultChannels(finalRes)
-	} else if finalRes.Content != finalRes.ModelText {
+	// Defensive: hook injection keeps the channels in lockstep itself;
+	// any remaining drift follows the mutated text.
+	if finalRes.Content != finalRes.ModelText {
 		finalRes.ModelText = finalRes.Content
 	}
 	*results = append(*results, finalRes)

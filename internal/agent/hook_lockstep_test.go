@@ -36,3 +36,21 @@ func TestHookInjectionKeepsModelChannelInLockstep(t *testing.T) {
 		t.Fatalf("bypass classification lost: %+v", bypass)
 	}
 }
+
+func TestBypassResultFinalizedBeforePostHook(t *testing.T) {
+	// The PostToolUse payload must see the same shape the system persists:
+	// finalized structured fields and rendered text, not raw legacy JSON.
+	res := core.ToolResult{
+		ToolCallID: "c1", Name: "read_file",
+		Content: `{"success":false,"error":"missing file","code":"not_found"}`,
+		IsError: true,
+	}
+	finalized := core.FinalizeToolResultChannels(res)
+	payload := NewPostToolUsePayload("s1", core.ToolCall{ID: "c1", Name: "read_file"}, nil, finalized)
+	if payload.ToolOutcome != string(core.OutcomeFailure) || payload.ToolErrorCode != "not_found" {
+		t.Fatalf("hook payload missing structured fields: %+v", payload)
+	}
+	if !strings.HasPrefix(payload.ToolResult, "error (not_found)") {
+		t.Fatalf("hook payload should carry rendered text, got %q", payload.ToolResult)
+	}
+}

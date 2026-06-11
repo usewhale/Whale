@@ -204,10 +204,16 @@ func (s *Service) runTurnWith(start func(context.Context) (<-chan agent.AgentEve
 				}
 				s.maybeWatchWorkflowToolResult(ev.Result)
 				resPayload, _ := ev.Result.Payload.(map[string]any)
+				resOutcome := core.ToolResultOutcome(*ev.Result)
+				status := ""
+				if resOutcome != core.OutcomeSuccess && resOutcome != core.OutcomeNoResult {
+					status = "failed"
+				}
 				s.emit(Event{
 					Kind: EventToolResult, ToolCallID: ev.Result.ToolCallID, ToolName: ev.Result.Name,
 					Text: core.ToolResultModelText(*ev.Result), Metadata: ev.Result.Metadata,
-					ToolOutcome: string(core.ToolResultOutcome(*ev.Result)), ToolCode: ev.Result.Code, ToolPayload: resPayload,
+					Status:      status,
+					ToolOutcome: string(resOutcome), ToolCode: ev.Result.Code, ToolPayload: resPayload,
 				})
 			}
 		case agent.AgentEventTypeHookStarted:

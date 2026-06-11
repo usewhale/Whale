@@ -407,6 +407,12 @@ func workflowRunID(ev protocol.Event) string {
 }
 
 func resultLooksFailed(ev protocol.Event) bool {
+	switch strings.TrimSpace(ev.ToolOutcome) {
+	case "failure", "timeout", "cancelled", "blocked":
+		return true
+	case "success", "no_result":
+		return false
+	}
 	status := strings.ToLower(strings.TrimSpace(ev.Status))
 	if status == "failed" || status == "error" || status == "canceled" || status == "cancelled" {
 		return true
