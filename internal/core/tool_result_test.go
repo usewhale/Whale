@@ -163,3 +163,24 @@ func TestDispatchPopulatesChannelSeparatedFields(t *testing.T) {
 		t.Fatalf("not-found result must carry mirrored ModelText, got %q", res.ModelText)
 	}
 }
+
+func TestShellRenderWithoutMetricsAvoidsExitHeader(t *testing.T) {
+	// Approval/validation failures never ran a process: no exit header.
+	res := NewToolResultError(ToolCall{ID: "c1", Name: "shell_run"}, "approval_denied", "tool approval denied", nil)
+	if strings.HasPrefix(res.ModelText, "exit") || strings.Contains(res.ModelText, "exit none") {
+		t.Fatalf("non-executed shell failure must not carry an exit header: %q", res.ModelText)
+	}
+	if !strings.HasPrefix(res.ModelText, "error (approval_denied)") {
+		t.Fatalf("expected generic error rendering, got %q", res.ModelText)
+	}
+
+	// Real exits keep the header.
+	env := NewToolSuccessEnvelope(map[string]any{
+		"metrics": map[string]any{"exit_code": 0, "duration_ms": 12},
+		"payload": map[string]any{"stdout": "done"},
+	})
+	ok := NewToolResultFromEnvelope(ToolCall{ID: "c2", Name: "shell_run"}, env, nil)
+	if !strings.HasPrefix(ok.ModelText, "exit 0 (12ms)") {
+		t.Fatalf("executed command must keep the exit header: %q", ok.ModelText)
+	}
+}

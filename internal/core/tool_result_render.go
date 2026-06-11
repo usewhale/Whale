@@ -113,15 +113,22 @@ func renderShellText(outcome ToolOutcome, code string, payload map[string]any) s
 	exitCode, hasExit := payloadInt(metrics, "exit_code")
 	duration, _ := payloadInt(metrics, "duration_ms")
 	timedOut, _ := metrics["timed_out"].(bool)
+	isErr := outcome != OutcomeSuccess && outcome != OutcomeNoResult
+	if !hasExit && !timedOut {
+		// No process ran (validation, approval, policy failures): an exit
+		// header would mislead the model into reasoning about a command
+		// that never executed.
+		if isErr {
+			return renderErrorText(code, payload)
+		}
+		return renderGenericText(payload)
+	}
 	switch {
 	case timedOut:
 		fmt.Fprintf(&b, "timed out after %dms (no exit)", duration)
-	case hasExit:
-		fmt.Fprintf(&b, "exit %d (%dms)", exitCode, duration)
 	default:
-		fmt.Fprintf(&b, "exit none (%dms)", duration)
+		fmt.Fprintf(&b, "exit %d (%dms)", exitCode, duration)
 	}
-	isErr := outcome != OutcomeSuccess && outcome != OutcomeNoResult
 	headline := FirstNonEmpty(payloadString(payload, "message"), payloadString(payload, "summary"))
 	if isErr && code != "" && code != "exec_failed" {
 		// Non-exit failures (policy, approval, repair) keep their code.
