@@ -42,10 +42,10 @@ func legacyFixtureMessages(t *testing.T) []core.Message {
 			{ID: "tc-empty", Name: "noop", Input: `{}`},
 		}},
 		{SessionID: legacyFixtureSession, Role: core.RoleTool, ToolResults: []core.ToolResult{
-			{ToolCallID: "tc-ok", Name: "read_file", Content: successEnvelope},
-			{ToolCallID: "tc-err", Name: "shell_run", Content: errorEnvelope, IsError: true},
-			{ToolCallID: "tc-raw", Name: "mcp_tool", Content: "raw non-envelope text & <tags>"},
-			{ToolCallID: "tc-empty", Name: "noop", Content: ""},
+			{ToolCallID: "tc-ok", Name: "read_file", ModelText: successEnvelope},
+			{ToolCallID: "tc-err", Name: "shell_run", ModelText: errorEnvelope, Outcome: core.OutcomeFailure},
+			{ToolCallID: "tc-raw", Name: "mcp_tool", ModelText: "raw non-envelope text & <tags>"},
+			{ToolCallID: "tc-empty", Name: "noop", ModelText: ""},
 		}},
 	}
 }
@@ -93,14 +93,14 @@ func TestLegacySessionFixtureRoundTrip(t *testing.T) {
 		// The model-visible text loaded from a legacy file is byte-identical
 		// to what was written: the legacy decoder backfills ModelText from
 		// Content and derives the structured fields.
-		if got.ModelText != wantResults[i].Content {
-			t.Errorf("result %d (%s): model-visible text drifted:\nwant: %q\ngot:  %q", i, got.ToolCallID, wantResults[i].Content, got.ModelText)
+		if got.ModelText != wantResults[i].ModelText {
+			t.Errorf("result %d (%s): model-visible text drifted:\nwant: %q\ngot:  %q", i, got.ToolCallID, wantResults[i].ModelText, got.ModelText)
 		}
-		if got.Content != wantResults[i].Content {
-			t.Errorf("result %d (%s): transitional Content drifted:\nwant: %q\ngot:  %q", i, got.ToolCallID, wantResults[i].Content, got.Content)
+		if got.ModelText != wantResults[i].ModelText {
+			t.Errorf("result %d (%s): transitional Content drifted:\nwant: %q\ngot:  %q", i, got.ToolCallID, wantResults[i].ModelText, got.ModelText)
 		}
-		if got.IsError != wantResults[i].IsError {
-			t.Errorf("result %d (%s): error flag drifted: got %v want %v", i, got.ToolCallID, got.IsError, wantResults[i].IsError)
+		if got.IsError() != wantResults[i].IsError() {
+			t.Errorf("result %d (%s): error flag drifted: got %v want %v", i, got.ToolCallID, got.IsError(), wantResults[i].IsError())
 		}
 		if got.Outcome != wantOutcomes[i] {
 			t.Errorf("result %d (%s): outcome = %s, want %s", i, got.ToolCallID, got.Outcome, wantOutcomes[i])
@@ -144,8 +144,8 @@ func TestNewSchemaPersistsModelTextOnce(t *testing.T) {
 		t.Fatalf("reload failed: err=%v msgs=%+v", err, msgs)
 	}
 	got := msgs[0].ToolResults[0]
-	if got.ModelText != res.ModelText || got.Content != res.ModelText {
-		t.Fatalf("reload must restore mirrored text:\nwant %q\ngot ModelText=%q Content=%q", res.ModelText, got.ModelText, got.Content)
+	if got.ModelText != res.ModelText {
+		t.Fatalf("reload must restore mirrored text:\nwant %q\ngot ModelText=%q Content=%q", res.ModelText, got.ModelText, got.ModelText)
 	}
 	if got.Outcome != core.OutcomeSuccess || got.Code != "ok" {
 		t.Fatalf("reload classification drifted: %+v", got)

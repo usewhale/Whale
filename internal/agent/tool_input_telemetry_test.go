@@ -58,7 +58,7 @@ func (t telemetryNestedTool) Parameters() map[string]any {
 }
 
 func (t telemetryNestedTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"success":true,"code":"ok"}`}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: `{"success":true,"code":"ok"}`}, nil
 }
 
 type requiredPathTool struct{}
@@ -77,7 +77,7 @@ func (t requiredPathTool) Parameters() map[string]any {
 }
 
 func (t requiredPathTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"success":true,"code":"ok"}`}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: `{"success":true,"code":"ok"}`}, nil
 }
 
 type decodeArgsTool struct{}
@@ -99,9 +99,9 @@ func (t decodeArgsTool) Run(_ context.Context, call ToolCall) (ToolResult, error
 		Count int `json:"count"`
 	}
 	if err := json.Unmarshal([]byte(call.Input), &in); err != nil {
-		return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"success":false,"error":"bad count","code":"invalid_args"}`, IsError: true}, nil
+		return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: `{"success":false,"error":"bad count","code":"invalid_args"}`, Outcome: core.OutcomeFailure}, nil
 	}
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"success":true,"code":"ok"}`}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: `{"success":true,"code":"ok"}`}, nil
 }
 
 type telemetryArrayTool struct{}
@@ -128,9 +128,9 @@ func (t telemetryArrayTool) Run(_ context.Context, call ToolCall) (ToolResult, e
 		Prompts []string `json:"prompts"`
 	}
 	if err := json.Unmarshal([]byte(call.Input), &in); err != nil {
-		return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"success":false,"error":"bad prompts","code":"invalid_args"}`, IsError: true}, nil
+		return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: `{"success":false,"error":"bad prompts","code":"invalid_args"}`, Outcome: core.OutcomeFailure}, nil
 	}
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"success":true,"code":"ok"}`}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: `{"success":true,"code":"ok"}`}, nil
 }
 
 type telemetryPathTool struct{}
@@ -153,12 +153,12 @@ func (t telemetryPathTool) Run(_ context.Context, call ToolCall) (ToolResult, er
 		FilePath string `json:"file_path"`
 	}
 	if err := json.Unmarshal([]byte(call.Input), &in); err != nil {
-		return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"success":false,"error":"bad path","code":"invalid_args"}`, IsError: true}, nil
+		return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: `{"success":false,"error":"bad path","code":"invalid_args"}`, Outcome: core.OutcomeFailure}, nil
 	}
 	if in.FilePath != "README.md" {
-		return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"success":false,"error":"path was not repaired","code":"invalid_args"}`, IsError: true}, nil
+		return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: `{"success":false,"error":"path was not repaired","code":"invalid_args"}`, Outcome: core.OutcomeFailure}, nil
 	}
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"success":true,"code":"ok"}`}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: `{"success":true,"code":"ok"}`}, nil
 }
 
 func TestToolInputTelemetryRecordsTruncatedJSONRepair(t *testing.T) {

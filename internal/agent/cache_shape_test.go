@@ -341,12 +341,12 @@ func TestBuildCacheShapeHashesReplayedToolResultContent(t *testing.T) {
 	base := []core.Message{
 		{Role: core.RoleSystem, Text: "system"},
 		{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "call_1", Name: "shell_run", Input: "{}"}}},
-		{Role: core.RoleTool, ToolResults: []core.ToolResult{{ToolCallID: "call_1", Name: "shell_run", Content: rawA, Metadata: map[string]any{"ignored": "a"}}}},
+		{Role: core.RoleTool, ToolResults: []core.ToolResult{{ToolCallID: "call_1", Name: "shell_run", ModelText: rawA, Metadata: map[string]any{"ignored": "a"}}}},
 	}
 	changedRawOnly := []core.Message{
 		{Role: core.RoleSystem, Text: "system"},
 		{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "call_1", Name: "shell_run", Input: "{}"}}},
-		{Role: core.RoleTool, ToolResults: []core.ToolResult{{ToolCallID: "call_1", Name: "shell_run", Content: rawB, Metadata: map[string]any{"ignored": "b"}}}},
+		{Role: core.RoleTool, ToolResults: []core.ToolResult{{ToolCallID: "call_1", Name: "shell_run", ModelText: rawB, Metadata: map[string]any{"ignored": "b"}}}},
 	}
 
 	first := buildCacheShape(base, nil, "")
@@ -405,12 +405,12 @@ func TestBuildCacheShapeIgnoresBlankToolCallIDStoredResult(t *testing.T) {
 	base := []core.Message{
 		{Role: core.RoleSystem, Text: "system"},
 		{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{Name: "shell_run", Input: "{}"}}},
-		{Role: core.RoleTool, ToolResults: []core.ToolResult{{Name: "shell_run", Content: "result a"}}},
+		{Role: core.RoleTool, ToolResults: []core.ToolResult{{Name: "shell_run", ModelText: "result a"}}},
 	}
 	changedResult := []core.Message{
 		{Role: core.RoleSystem, Text: "system"},
 		{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{Name: "shell_run", Input: "{}"}}},
-		{Role: core.RoleTool, ToolResults: []core.ToolResult{{Name: "shell_run", Content: "result b"}}},
+		{Role: core.RoleTool, ToolResults: []core.ToolResult{{Name: "shell_run", ModelText: "result b"}}},
 	}
 
 	first := buildCacheShape(base, nil, "")

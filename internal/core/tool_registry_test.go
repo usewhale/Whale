@@ -14,7 +14,7 @@ type snapshotTestTool struct {
 
 func (t snapshotTestTool) Name() string { return t.name }
 func (t snapshotTestTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: t.content}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: t.content}, nil
 }
 func (t snapshotTestTool) Parameters() map[string]any { return t.params }
 
@@ -25,7 +25,7 @@ type dynamicParamsTool struct {
 
 func (t *dynamicParamsTool) Name() string { return t.name }
 func (t *dynamicParamsTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok"}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "ok"}, nil
 }
 func (t *dynamicParamsTool) Parameters() map[string]any {
 	t.calls++
@@ -43,7 +43,7 @@ type nilParamsTool struct {
 
 func (t nilParamsTool) Name() string { return t.name }
 func (t nilParamsTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok"}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "ok"}, nil
 }
 func (t nilParamsTool) Parameters() map[string]any { return nil }
 
@@ -65,7 +65,7 @@ func TestToolRegistrySnapshotIsStableAfterReplace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dispatch snapshot tool: %v", err)
 	}
-	if res.IsError || !strings.Contains(res.Content, "old-ok") {
+	if res.IsError() || !strings.Contains(res.ModelText, "old-ok") {
 		t.Fatalf("unexpected snapshot dispatch result: %+v", res)
 	}
 }
@@ -213,7 +213,7 @@ func TestSearchFilesUnknownIncludeReturnsRecoveryHint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatalf("expected invalid input error, got %+v", res)
 	}
 	for _, want := range []string{
@@ -222,8 +222,8 @@ func TestSearchFilesUnknownIncludeReturnsRecoveryHint(t *testing.T) {
 		"search_files does not support include; retry with grep for content search or remove include.",
 		`recovery:`,
 	} {
-		if !strings.Contains(res.Content, want) {
-			t.Fatalf("result missing %q:\n%s", want, res.Content)
+		if !strings.Contains(res.ModelText, want) {
+			t.Fatalf("result missing %q:\n%s", want, res.ModelText)
 		}
 	}
 }
@@ -251,7 +251,7 @@ func TestSearchFilesMissingPatternReturnsRecoveryHint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatalf("expected invalid input error, got %+v", res)
 	}
 	for _, want := range []string{
@@ -260,8 +260,8 @@ func TestSearchFilesMissingPatternReturnsRecoveryHint(t *testing.T) {
 		"search_files requires pattern; provide pattern and path, or use grep for content search.",
 		`recovery:`,
 	} {
-		if !strings.Contains(res.Content, want) {
-			t.Fatalf("result missing %q:\n%s", want, res.Content)
+		if !strings.Contains(res.ModelText, want) {
+			t.Fatalf("result missing %q:\n%s", want, res.ModelText)
 		}
 	}
 }
@@ -290,7 +290,7 @@ func TestWebFetchMaxResultsReturnsRecoveryHint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatalf("expected invalid input error, got %+v", res)
 	}
 	for _, want := range []string{
@@ -299,8 +299,8 @@ func TestWebFetchMaxResultsReturnsRecoveryHint(t *testing.T) {
 		"web_fetch does not support max_results; remove it or use web_search when you need multiple search results.",
 		`recovery:`,
 	} {
-		if !strings.Contains(res.Content, want) {
-			t.Fatalf("result missing %q:\n%s", want, res.Content)
+		if !strings.Contains(res.ModelText, want) {
+			t.Fatalf("result missing %q:\n%s", want, res.ModelText)
 		}
 	}
 }
@@ -329,7 +329,7 @@ func TestFetchFormatReturnsRecoveryHint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
 	}
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatalf("expected invalid input error, got %+v", res)
 	}
 	for _, want := range []string{
@@ -338,8 +338,8 @@ func TestFetchFormatReturnsRecoveryHint(t *testing.T) {
 		"fetch does not support format; omit it and use prompt to request the output shape.",
 		`recovery:`,
 	} {
-		if !strings.Contains(res.Content, want) {
-			t.Fatalf("result missing %q:\n%s", want, res.Content)
+		if !strings.Contains(res.ModelText, want) {
+			t.Fatalf("result missing %q:\n%s", want, res.ModelText)
 		}
 	}
 }

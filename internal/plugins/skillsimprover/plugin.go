@@ -252,7 +252,7 @@ func toolResult(call core.ToolCall, data map[string]any) (core.ToolResult, error
 	if err != nil {
 		return core.ToolResult{}, err
 	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content}, nil
 }
 
 func toolError(call core.ToolCall, code, msg string) core.ToolResult {
@@ -260,7 +260,7 @@ func toolError(call core.ToolCall, code, msg string) core.ToolResult {
 	if err != nil {
 		content = `{"success":false,"code":"tool_error","error":"failed to marshal tool error"}`
 	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content}
 }
 
 func SortEvidence(evs []Evidence) {

@@ -152,8 +152,8 @@ func TestApprovalRequiredAndDenied(t *testing.T) {
 		if ev.Type == AgentEventTypeToolApprovalRequired {
 			sawApproval = true
 		}
-		if ev.Type == AgentEventTypeToolResult && ev.Result != nil && ev.Result.IsError {
-			if strings.Contains(ev.Result.Content, "approval_denied") {
+		if ev.Type == AgentEventTypeToolResult && ev.Result != nil && ev.Result.IsError() {
+			if strings.Contains(ev.Result.ModelText, "approval_denied") {
 				sawDenied = true
 			}
 		}
@@ -258,8 +258,8 @@ func TestRunOptionsReadOnlyDeniesMutatingToolWithoutApproval(t *testing.T) {
 			if ev.Result.Metadata["ui_visibility"] != "audit" || ev.Result.Metadata["auto_denied"] != true || ev.Result.Metadata["policy_code"] != "read_only_turn_denied" {
 				t.Fatalf("expected audit auto-deny metadata, got %+v", ev.Result.Metadata)
 			}
-			if !strings.Contains(ev.Result.Content, "do_not_retry_same_call") {
-				t.Fatalf("expected model-facing retry guard in result, got %q", ev.Result.Content)
+			if !strings.Contains(ev.Result.ModelText, "do_not_retry_same_call") {
+				t.Fatalf("expected model-facing retry guard in result, got %q", ev.Result.ModelText)
 			}
 			sawAuditToolResult = true
 		}
@@ -390,7 +390,7 @@ func TestApprovalCancelDoesNotPersistDeniedMarker(t *testing.T) {
 		if ev.Type == AgentEventTypeDone {
 			t.Fatalf("unexpected done event after approval cancel")
 		}
-		if ev.Type == AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, "approval_denied") {
+		if ev.Type == AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.ModelText, "approval_denied") {
 			t.Fatalf("approval cancel produced denial result: %+v", ev.Result)
 		}
 	}
@@ -480,7 +480,7 @@ type countingTool struct {
 func (c *countingTool) Name() string { return "counting" }
 func (c *countingTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
 	c.calls++
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok"}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "ok"}, nil
 }
 
 func TestApprovalDeniedSkipsRemainingToolCalls(t *testing.T) {
@@ -837,21 +837,21 @@ type namedNoopTool string
 
 func (n namedNoopTool) Name() string { return string(n) }
 func (n namedNoopTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok"}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "ok"}, nil
 }
 
 type failingNamedTool string
 
 func (f failingNamedTool) Name() string { return string(f) }
 func (f failingNamedTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"success":false,"error":"bad hunk","code":"patch_apply_failed"}`, IsError: true}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: `{"success":false,"error":"bad hunk","code":"patch_apply_failed"}`, Outcome: core.OutcomeFailure}, nil
 }
 
 type notFoundEditTool struct{}
 
 func (n notFoundEditTool) Name() string { return "edit" }
 func (n notFoundEditTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"success":false,"error":"file not found","code":"not_found"}`, IsError: true}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: `{"success":false,"error":"file not found","code":"not_found"}`, Outcome: core.OutcomeFailure}, nil
 }
 
 type fileScopedApprovalProvider struct {

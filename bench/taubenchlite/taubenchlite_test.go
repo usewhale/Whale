@@ -60,19 +60,19 @@ func TestRetailToolsHappyAndErrorPaths(t *testing.T) {
 		tools[tool.Name()] = tool
 	}
 	res := runTool(t, tools["lookup_order"], `{"orderId":"o_1002"}`)
-	if res.IsError || !strings.Contains(res.Content, `"status":"processing"`) {
+	if res.IsError() || !strings.Contains(res.ModelText, `"status":"processing"`) {
 		t.Fatalf("lookup_order unexpected result: %+v", res)
 	}
 	res = runTool(t, tools["update_address"], `{"orderId":"o_1002","address":"5 Birch Rd, NYC, NY 10001"}`)
-	if res.IsError || db.Orders["o_1002"].Address != "5 Birch Rd, NYC, NY 10001" {
+	if res.IsError() || db.Orders["o_1002"].Address != "5 Birch Rd, NYC, NY 10001" {
 		t.Fatalf("update_address did not mutate processing order: %+v db=%+v", res, db.Orders["o_1002"])
 	}
 	res = runTool(t, tools["update_address"], `{"orderId":"o_1001","address":"99 New St, SF, CA"}`)
-	if !res.IsError || db.Orders["o_1001"].Address != "1 Elm St, SF, CA 94110" {
+	if !res.IsError() || db.Orders["o_1001"].Address != "1 Elm St, SF, CA 94110" {
 		t.Fatalf("update_address changed shipped order: %+v db=%+v", res, db.Orders["o_1001"])
 	}
 	res = runTool(t, tools["refund_order"], `{"orderId":"o_1003","reason":"arrived broken"}`)
-	if res.IsError || db.Orders["o_1003"].Status != "refunded" || db.Refunds["o_1003"].Amount != 55.0 {
+	if res.IsError() || db.Orders["o_1003"].Status != "refunded" || db.Refunds["o_1003"].Amount != 55.0 {
 		t.Fatalf("refund_order unexpected result: %+v db=%+v", res, db)
 	}
 }

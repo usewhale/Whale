@@ -33,7 +33,7 @@ func TestViewWriteEdit(t *testing.T) {
 		"file_path": "a.txt",
 		"content":   "hello\nworld\n",
 	}))
-	if err != nil || writeRes.IsError {
+	if err != nil || writeRes.IsError() {
 		t.Fatalf("write failed: err=%v res=%+v", err, writeRes)
 	}
 
@@ -42,11 +42,11 @@ func TestViewWriteEdit(t *testing.T) {
 		"offset":    1,
 		"limit":     1,
 	}))
-	if err != nil || viewRes.IsError {
+	if err != nil || viewRes.IsError() {
 		t.Fatalf("view failed: err=%v res=%+v", err, viewRes)
 	}
-	if !strings.Contains(viewRes.Content, "world") {
-		t.Fatalf("unexpected view content: %s", viewRes.Content)
+	if !strings.Contains(viewRes.ModelText, "world") {
+		t.Fatalf("unexpected view content: %s", viewRes.ModelText)
 	}
 
 	editRes, err := ts.editFile(context.Background(), tc("edit", map[string]any{
@@ -54,7 +54,7 @@ func TestViewWriteEdit(t *testing.T) {
 		"search":    "world",
 		"replace":   "whale",
 	}))
-	if err != nil || editRes.IsError {
+	if err != nil || editRes.IsError() {
 		t.Fatalf("edit failed: err=%v res=%+v", err, editRes)
 	}
 	got, _ := os.ReadFile(filepath.Join(dir, "a.txt"))
@@ -76,7 +76,7 @@ func TestReadFileNormalizesCRLFContent(t *testing.T) {
 	res, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
 		"file_path": "a.txt",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
 	}
 	data := readFileData(t, res)
@@ -107,7 +107,7 @@ func TestReadFileStripsUTF8BOMFromVisibleContent(t *testing.T) {
 	res, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
 		"file_path": "a.txt",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
 	}
 	data := readFileData(t, res)
@@ -139,7 +139,7 @@ func TestEditFileRequiresObservedReadState(t *testing.T) {
 		t.Fatalf("edit dispatch error: %v", err)
 	}
 	if got := toolErrorCode(t, res); got != "read_required" {
-		t.Fatalf("code = %q, want read_required; content=%s", got, res.Content)
+		t.Fatalf("code = %q, want read_required; content=%s", got, res.ModelText)
 	}
 
 	rangeRes, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
@@ -147,7 +147,7 @@ func TestEditFileRequiresObservedReadState(t *testing.T) {
 		"offset":    0,
 		"limit":     1,
 	}))
-	if err != nil || rangeRes.IsError {
+	if err != nil || rangeRes.IsError() {
 		t.Fatalf("range read failed: err=%v res=%+v", err, rangeRes)
 	}
 	res, err = ts.editFile(context.Background(), tc("edit", map[string]any{
@@ -155,7 +155,7 @@ func TestEditFileRequiresObservedReadState(t *testing.T) {
 		"search":    "beta",
 		"replace":   "whale",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("edit after range read failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "a.txt"))
@@ -184,7 +184,7 @@ func TestEditFileUsesObservedReadState(t *testing.T) {
 		"search":    "beta",
 		"replace":   "whale",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("edit failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(path)
@@ -220,7 +220,7 @@ func TestEditFileRejectsStaleRuntimeState(t *testing.T) {
 		t.Fatalf("edit dispatch error: %v", err)
 	}
 	if got := toolErrorCode(t, res); got != "stale_read" {
-		t.Fatalf("code = %q, want stale_read; content=%s", got, res.Content)
+		t.Fatalf("code = %q, want stale_read; content=%s", got, res.ModelText)
 	}
 }
 
@@ -254,7 +254,7 @@ func TestEditFileDoesNotMarkInternalReadBeforeStaleValidation(t *testing.T) {
 		t.Fatalf("edit dispatch error: %v", err)
 	}
 	if got := toolErrorCode(t, res); got != "stale_read" {
-		t.Fatalf("code = %q, want stale_read; content=%s", got, res.Content)
+		t.Fatalf("code = %q, want stale_read; content=%s", got, res.ModelText)
 	}
 	if internalReadMarked {
 		t.Fatalf("stale edit marked its internal read before validation")
@@ -276,7 +276,7 @@ func TestEditFileRejectsStaleRangeReadState(t *testing.T) {
 		"offset":    0,
 		"limit":     1,
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("range read failed: err=%v res=%+v", err, res)
 	}
 	if err := os.WriteFile(path, []byte("external\nbeta\n"), 0o644); err != nil {
@@ -292,7 +292,7 @@ func TestEditFileRejectsStaleRangeReadState(t *testing.T) {
 		t.Fatalf("edit dispatch error: %v", err)
 	}
 	if got := toolErrorCode(t, res); got != "stale_read" {
-		t.Fatalf("code = %q, want stale_read; content=%s", got, res.Content)
+		t.Fatalf("code = %q, want stale_read; content=%s", got, res.ModelText)
 	}
 }
 
@@ -316,7 +316,7 @@ func TestEditFileValidStateStillReportsMissingSearch(t *testing.T) {
 		t.Fatalf("edit dispatch error: %v", err)
 	}
 	if got := toolErrorCode(t, res); got != "search_not_found" {
-		t.Fatalf("code = %q, want search_not_found; content=%s", got, res.Content)
+		t.Fatalf("code = %q, want search_not_found; content=%s", got, res.ModelText)
 	}
 	recovery := toolRecoveryData(t, res)
 	if got := recovery["code"]; got != "edit_search_not_found" {
@@ -348,7 +348,7 @@ func TestEditFileSuccessfulEditRefreshesRuntimeState(t *testing.T) {
 		"search":    "alpha",
 		"replace":   "ALPHA",
 	}))
-	if err != nil || first.IsError {
+	if err != nil || first.IsError() {
 		t.Fatalf("first edit failed: err=%v res=%+v", err, first)
 	}
 	second, err := ts.editFile(context.Background(), tc("edit", map[string]any{
@@ -356,7 +356,7 @@ func TestEditFileSuccessfulEditRefreshesRuntimeState(t *testing.T) {
 		"search":    "beta",
 		"replace":   "BETA",
 	}))
-	if err != nil || second.IsError {
+	if err != nil || second.IsError() {
 		t.Fatalf("second edit failed without reread: err=%v res=%+v", err, second)
 	}
 	got, err := os.ReadFile(path)
@@ -380,7 +380,7 @@ func TestWriteFileRefreshesRuntimeStateForEdit(t *testing.T) {
 		"file_path": "a.txt",
 		"content":   "alpha\nbeta\n",
 	}))
-	if err != nil || writeRes.IsError {
+	if err != nil || writeRes.IsError() {
 		t.Fatalf("write failed: err=%v res=%+v", err, writeRes)
 	}
 	editRes, err := ts.editFile(context.Background(), tc("edit", map[string]any{
@@ -388,7 +388,7 @@ func TestWriteFileRefreshesRuntimeStateForEdit(t *testing.T) {
 		"search":    "beta",
 		"replace":   "whale",
 	}))
-	if err != nil || editRes.IsError {
+	if err != nil || editRes.IsError() {
 		t.Fatalf("edit after write failed: err=%v res=%+v", err, editRes)
 	}
 	got, err := os.ReadFile(path)
@@ -422,7 +422,7 @@ func TestApplyPatchRefreshesRuntimeStateForEdit(t *testing.T) {
 	}, "\n")
 
 	patchRes, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil || patchRes.IsError {
+	if err != nil || patchRes.IsError() {
 		t.Fatalf("apply_patch failed: err=%v res=%+v", err, patchRes)
 	}
 	editRes, err := ts.editFile(context.Background(), tc("edit", map[string]any{
@@ -430,7 +430,7 @@ func TestApplyPatchRefreshesRuntimeStateForEdit(t *testing.T) {
 		"search":    "gamma",
 		"replace":   "whale",
 	}))
-	if err != nil || editRes.IsError {
+	if err != nil || editRes.IsError() {
 		t.Fatalf("edit after apply_patch failed: err=%v res=%+v", err, editRes)
 	}
 	got, err := os.ReadFile(path)
@@ -459,7 +459,7 @@ func TestApplyPatchDeleteClearsRuntimeState(t *testing.T) {
 	}, "\n")
 
 	patchRes, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil || patchRes.IsError {
+	if err != nil || patchRes.IsError() {
 		t.Fatalf("apply_patch delete failed: err=%v res=%+v", err, patchRes)
 	}
 	editRes, err := ts.editFile(context.Background(), tc("edit", map[string]any{
@@ -471,7 +471,7 @@ func TestApplyPatchDeleteClearsRuntimeState(t *testing.T) {
 		t.Fatalf("edit dispatch error: %v", err)
 	}
 	if got := toolErrorCode(t, editRes); got != "not_found" {
-		t.Fatalf("code = %q, want not_found; content=%s", got, editRes.Content)
+		t.Fatalf("code = %q, want not_found; content=%s", got, editRes.ModelText)
 	}
 }
 
@@ -491,11 +491,11 @@ func TestReadFileDirectoryReturnsStableToolError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read_file dispatch error: %v", err)
 	}
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatalf("expected read_file directory to fail, got: %+v", res)
 	}
-	if !strings.Contains(res.Content, "not_file") || strings.Contains(res.Content, "Incorrect function") {
-		t.Fatalf("expected stable not_file error without OS-specific text, got: %s", res.Content)
+	if !strings.Contains(res.ModelText, "not_file") || strings.Contains(res.ModelText, "Incorrect function") {
+		t.Fatalf("expected stable not_file error without OS-specific text, got: %s", res.ModelText)
 	}
 	recovery := toolRecoveryData(t, res)
 	if got := recovery["code"]; got != "read_file_target_is_directory" {
@@ -525,7 +525,7 @@ func TestWriteFilePreservesCRLFWhenOverwritingExistingFile(t *testing.T) {
 		"file_path": "a.txt",
 		"content":   "alpha\nwhale\n",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("write failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(path)
@@ -552,7 +552,7 @@ func TestWriteFilePreservesLFWhenOverwritingExistingFile(t *testing.T) {
 		"file_path": "a.txt",
 		"content":   "alpha\r\nwhale\r\n",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("write failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(path)
@@ -579,7 +579,7 @@ func TestWriteFilePreservesUTF8BOMWhenOverwritingExistingFile(t *testing.T) {
 		"file_path": "a.txt",
 		"content":   "alpha\nwhale\n",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("write failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(path)
@@ -604,7 +604,7 @@ func TestWriteFileKeepsNewFileContentExact(t *testing.T) {
 		"file_path": "a.txt",
 		"content":   "alpha\r\nwhale\r\n",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("write failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(path)
@@ -634,7 +634,7 @@ func TestWriteFilePreservesExistingExecutableMode(t *testing.T) {
 		"file_path": "script.sh",
 		"content":   "#!/bin/sh\necho after\n",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("write failed: err=%v res=%+v", err, res)
 	}
 	info, err := os.Stat(path)
@@ -670,7 +670,7 @@ func TestWriteFileKeepsExistingFileContentExactWhenNoLineEndingStyle(t *testing.
 				"file_path": "a.txt",
 				"content":   tt.content,
 			}))
-			if err != nil || res.IsError {
+			if err != nil || res.IsError() {
 				t.Fatalf("write failed: err=%v res=%+v", err, res)
 			}
 			got, err := os.ReadFile(path)
@@ -737,9 +737,9 @@ func TestWriteFileConcurrentCreateConflictDoesNotOverwrite(t *testing.T) {
 		if errs[i] != nil {
 			t.Fatalf("write %d returned dispatch error: %v", i, errs[i])
 		}
-		if res.IsError {
+		if res.IsError() {
 			if got := toolErrorCode(t, res); got != "write_conflict" {
-				t.Fatalf("write %d error code = %q, want write_conflict; content=%s", i, got, res.Content)
+				t.Fatalf("write %d error code = %q, want write_conflict; content=%s", i, got, res.ModelText)
 			}
 			conflicts++
 			continue
@@ -775,7 +775,7 @@ func TestEditFileMatchesLFSearchAndPreservesCRLF(t *testing.T) {
 		"search":    "alpha\nbeta",
 		"replace":   "alpha\nwhale",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("edit failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(path)
@@ -804,7 +804,7 @@ func TestEditFileRepairsJSONEscapedControlCharacters(t *testing.T) {
 		"search":    `\tbody := string(raw)\n\tcontent := body`,
 		"replace":   `\tbody := string(raw)\n\ttext := htmlToText(body)\n\tcontent := text`,
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("edit failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(path)
@@ -820,7 +820,7 @@ func TestEditFileRepairsJSONEscapedControlCharacters(t *testing.T) {
 			Repair string `json:"repair"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+	if err := json.Unmarshal([]byte(res.ModelText), &out); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
 	if out.Data.Repair != "json_escape_unwrapped" {
@@ -848,8 +848,8 @@ func TestEditFileRejectsAmbiguousJSONEscapedRepair(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, "JSON-escaped") || !strings.Contains(res.Content, "multiple") {
-		t.Fatalf("expected ambiguous escaped-search error, got: %s", res.Content)
+	if !res.IsError() || !strings.Contains(res.ModelText, "JSON-escaped") || !strings.Contains(res.ModelText, "multiple") {
+		t.Fatalf("expected ambiguous escaped-search error, got: %s", res.ModelText)
 	}
 }
 
@@ -870,7 +870,7 @@ func TestEditFileMatchesFirstLineAfterUTF8BOMAndPreservesBOM(t *testing.T) {
 		"search":    "SIF LOCAL:1 > 0",
 		"replace":   "SIF LOCAL:1 > 1",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("edit failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(path)
@@ -900,7 +900,7 @@ func TestEditFilePreservesMixedLineEndings(t *testing.T) {
 		"search":    "beta\ngamma",
 		"replace":   "whale\ngamma",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("edit failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(path)
@@ -929,7 +929,7 @@ func TestEditFileDuplicateReplacementKeepsMixedLineEndings(t *testing.T) {
 		"search":    "b",
 		"replace":   "c",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("edit failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(path)
@@ -998,9 +998,9 @@ func TestEditFileConcurrentConflictDoesNotLoseUpdate(t *testing.T) {
 		if errs[i] != nil {
 			t.Fatalf("edit %d returned dispatch error: %v", i, errs[i])
 		}
-		if res.IsError {
+		if res.IsError() {
 			if got := toolErrorCode(t, res); got != "write_conflict" {
-				t.Fatalf("edit %d error code = %q, want write_conflict; content=%s", i, got, res.Content)
+				t.Fatalf("edit %d error code = %q, want write_conflict; content=%s", i, got, res.ModelText)
 			}
 			conflicts++
 			continue
@@ -1051,7 +1051,7 @@ func TestEditFileDetectsExternalChangeBeforeWrite(t *testing.T) {
 		t.Fatalf("edit returned dispatch error: %v", err)
 	}
 	if got := toolErrorCode(t, res); got != "write_conflict" {
-		t.Fatalf("code = %q, want write_conflict; content=%s", got, res.Content)
+		t.Fatalf("code = %q, want write_conflict; content=%s", got, res.ModelText)
 	}
 	got, err := os.ReadFile(path)
 	if err != nil {
@@ -1091,7 +1091,7 @@ func TestApplyPatchMatchesLFHunksAndPreservesCRLF(t *testing.T) {
 		t.Fatalf("unexpected preview diff:\n%s", diff)
 	}
 	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("apply patch failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(path)
@@ -1124,7 +1124,7 @@ func TestApplyPatchMatchesFirstLineAfterUTF8BOMAndPreservesBOM(t *testing.T) {
 	}, "\n")
 
 	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("apply patch failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(path)
@@ -1160,7 +1160,7 @@ func TestApplyPatchPreservesMixedLineEndings(t *testing.T) {
 	}, "\n")
 
 	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("apply patch failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(path)
@@ -1196,7 +1196,7 @@ func TestApplyPatchMultipleHunksUseOriginalForwardPositions(t *testing.T) {
 	}, "\n")
 
 	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("apply patch failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(path)
@@ -1232,7 +1232,7 @@ func TestApplyPatchMultipleHunksUseOriginalForwardPositionsWithMixedLineEndings(
 	}, "\n")
 
 	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("apply patch failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(path)
@@ -1265,7 +1265,7 @@ func TestApplyPatchDuplicateInsertionBeforeContextKeepsMixedLineEndings(t *testi
 	}, "\n")
 
 	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("apply patch failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(path)
@@ -1299,7 +1299,7 @@ func TestApplyPatchDoesNotCarryDeletedSeparatorAcrossContext(t *testing.T) {
 	}, "\n")
 
 	res, err := ts.applyPatch(context.Background(), tc("apply_patch", map[string]any{"patch": patch}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("apply patch failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(path)
@@ -1354,7 +1354,7 @@ func TestApplyPatchConflictLeavesFilesUntouched(t *testing.T) {
 		t.Fatalf("apply_patch returned dispatch error: %v", err)
 	}
 	if got := toolErrorCode(t, res); got != "patch_conflict" {
-		t.Fatalf("code = %q, want patch_conflict; content=%s", got, res.Content)
+		t.Fatalf("code = %q, want patch_conflict; content=%s", got, res.ModelText)
 	}
 	gotA, err := os.ReadFile(aPath)
 	if err != nil {
@@ -1430,12 +1430,12 @@ func TestApplyPatchParseErrorsGuideAwayFromUnifiedDiff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("apply patch returned dispatch error: %v", err)
 	}
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatalf("expected parse error, got %+v", res)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok {
-		t.Fatalf("parse envelope: %s", res.Content)
+		t.Fatalf("parse envelope: %s", res.ModelText)
 	}
 	if env.Code != "patch_parse_failed" {
 		t.Fatalf("code = %q, want patch_parse_failed", env.Code)
@@ -1470,12 +1470,12 @@ func TestApplyPatchParseErrorsGuideBadUpdateHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("apply patch returned dispatch error: %v", err)
 	}
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatalf("expected parse error, got %+v", res)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok {
-		t.Fatalf("parse envelope: %s", res.Content)
+		t.Fatalf("parse envelope: %s", res.ModelText)
 	}
 	if !strings.Contains(env.Error, "must start with the exact header *** Update File: <path>") {
 		t.Fatalf("parse error did not explain update header:\n%s", env.Error)
@@ -1505,7 +1505,7 @@ func TestApplyPatchInvalidHunkLineIncludesRecovery(t *testing.T) {
 		t.Fatalf("apply patch returned dispatch error: %v", err)
 	}
 	if got := toolErrorCode(t, res); got != "patch_parse_failed" {
-		t.Fatalf("code = %q, want patch_parse_failed; content=%s", got, res.Content)
+		t.Fatalf("code = %q, want patch_parse_failed; content=%s", got, res.ModelText)
 	}
 	recovery := toolRecoveryData(t, res)
 	if got := recovery["code"]; got != "apply_patch_parse_failed" {
@@ -1534,7 +1534,7 @@ func TestReadFileRangeDefaults(t *testing.T) {
 		"file_path": "a.txt",
 		"limit":     1,
 	}))
-	if err != nil || limitOnly.IsError {
+	if err != nil || limitOnly.IsError() {
 		t.Fatalf("limit-only read failed: err=%v res=%+v", err, limitOnly)
 	}
 	limitData := readFileData(t, limitOnly)
@@ -1555,7 +1555,7 @@ func TestReadFileRangeDefaults(t *testing.T) {
 		"file_path": "a.txt",
 		"offset":    1,
 	}))
-	if err != nil || offsetOnly.IsError {
+	if err != nil || offsetOnly.IsError() {
 		t.Fatalf("offset-only read failed: err=%v res=%+v", err, offsetOnly)
 	}
 	offsetData := readFileData(t, offsetOnly)
@@ -1575,7 +1575,7 @@ func TestReadFileRangeDefaults(t *testing.T) {
 	fullRead, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
 		"file_path": "a.txt",
 	}))
-	if err != nil || fullRead.IsError {
+	if err != nil || fullRead.IsError() {
 		t.Fatalf("full read failed: err=%v res=%+v", err, fullRead)
 	}
 	fullData := readFileData(t, fullRead)
@@ -1588,7 +1588,7 @@ func TestReadFileRangeDefaults(t *testing.T) {
 		"offset":    1,
 		"limit":     1,
 	}))
-	if err != nil || scopedRead.IsError {
+	if err != nil || scopedRead.IsError() {
 		t.Fatalf("scoped read failed: err=%v res=%+v", err, scopedRead)
 	}
 	scopedData := readFileData(t, scopedRead)
@@ -1616,7 +1616,7 @@ func TestReadFileDefaultsToBoundedResult(t *testing.T) {
 	res, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
 		"file_path": "large.txt",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
 	}
 	data := readFileData(t, res)
@@ -1679,7 +1679,7 @@ func TestEditFileAfterLargeOutlineRead(t *testing.T) {
 	res, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
 		"file_path": "large.txt",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
 	}
 	data := readFileData(t, res)
@@ -1696,7 +1696,7 @@ func TestEditFileAfterLargeOutlineRead(t *testing.T) {
 		"search":    "UNIQUE_LARGE_FILE_MARKER",
 		"replace":   "UNIQUE_LARGE_FILE_EDITED",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("edit after outline read failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(path)
@@ -1726,7 +1726,7 @@ func TestEditFileRejectsStaleLargeOutlineReadState(t *testing.T) {
 	res, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
 		"file_path": "large.txt",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
 	}
 	if got := metricString(t, readFileData(t, res), "mode"); got != "outline" {
@@ -1745,7 +1745,7 @@ func TestEditFileRejectsStaleLargeOutlineReadState(t *testing.T) {
 		t.Fatalf("edit dispatch error: %v", err)
 	}
 	if got := toolErrorCode(t, res); got != "stale_read" {
-		t.Fatalf("code = %q, want stale_read; content=%s", got, res.Content)
+		t.Fatalf("code = %q, want stale_read; content=%s", got, res.ModelText)
 	}
 }
 
@@ -1765,15 +1765,15 @@ func TestReadFileDefaultNearRegistryCapDoesNotAdvertiseFull(t *testing.T) {
 	res, err := registry.Dispatch(context.Background(), tc("read_file", map[string]any{
 		"file_path": fileName,
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
 	}
-	if len(res.Content) > core.DefaultMaxToolResultChars {
-		t.Fatalf("registry result len = %d, want <= %d", len(res.Content), core.DefaultMaxToolResultChars)
+	if len(res.ModelText) > core.DefaultMaxToolResultChars {
+		t.Fatalf("registry result len = %d, want <= %d", len(res.ModelText), core.DefaultMaxToolResultChars)
 	}
 	data, ok := res.Payload.(map[string]any)
 	if !ok {
-		t.Fatalf("missing structured payload: %s", res.Content)
+		t.Fatalf("missing structured payload: %s", res.ModelText)
 	}
 	if outputTruncated, _ := res.Metadata["output_truncated"].(bool); outputTruncated {
 		t.Fatalf("registry should not truncate read_file result: %+v", res.Metadata)
@@ -1820,15 +1820,15 @@ func TestReadFileOutlineShrinksToFitRegistryCap(t *testing.T) {
 	res, err := registry.Dispatch(context.Background(), tc("read_file", map[string]any{
 		"file_path": "wide-outline.txt",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
 	}
-	if len(res.Content) > core.DefaultMaxToolResultChars {
-		t.Fatalf("registry result len = %d, want <= %d", len(res.Content), core.DefaultMaxToolResultChars)
+	if len(res.ModelText) > core.DefaultMaxToolResultChars {
+		t.Fatalf("registry result len = %d, want <= %d", len(res.ModelText), core.DefaultMaxToolResultChars)
 	}
 	data, ok := res.Payload.(map[string]any)
 	if !ok {
-		t.Fatalf("missing structured payload: %s", res.Content)
+		t.Fatalf("missing structured payload: %s", res.ModelText)
 	}
 	if outputTruncated, _ := res.Metadata["output_truncated"].(bool); outputTruncated {
 		t.Fatalf("registry should not truncate read_file result: %+v", res.Metadata)
@@ -1868,7 +1868,7 @@ func TestReadFileDefaultByteCap(t *testing.T) {
 		"offset":    0,
 		"limit":     100,
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
 	}
 	data := readFileData(t, res)
@@ -1909,7 +1909,7 @@ func TestReadFileFirstLineExceedsByteCap(t *testing.T) {
 		"offset":    0,
 		"limit":     2,
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
 	}
 	data := readFileData(t, res)
@@ -1946,7 +1946,7 @@ func TestWriteAndEditReturnDiffMetadata(t *testing.T) {
 		"search":    "world",
 		"replace":   "whale",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("edit failed: err=%v res=%+v", err, res)
 	}
 	diff := firstMetadataDiff(t, res.Metadata)
@@ -1958,7 +1958,7 @@ func TestWriteAndEditReturnDiffMetadata(t *testing.T) {
 		"file_path": "b.txt",
 		"content":   "new file\n",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("write failed: err=%v res=%+v", err, res)
 	}
 	diff = firstMetadataDiff(t, res.Metadata)
@@ -1991,7 +1991,7 @@ func TestApplyPatchPreviewAndResultMetadataMatch(t *testing.T) {
 		t.Fatalf("preview patch: %v", err)
 	}
 	res, err := ts.applyPatch(context.Background(), call)
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("apply patch failed: err=%v res=%+v", err, res)
 	}
 	if got, want := firstMetadataDiff(t, res.Metadata), firstMetadataDiff(t, preview); got != want {
@@ -2027,11 +2027,11 @@ func TestPathEscapeDenied(t *testing.T) {
 	insideRes, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
 		"file_path": filepath.Join(dir, "inside.txt"),
 	}))
-	if err != nil || insideRes.IsError {
+	if err != nil || insideRes.IsError() {
 		t.Fatalf("expected absolute path inside workspace to be allowed: err=%v res=%+v", err, insideRes)
 	}
-	if !strings.Contains(insideRes.Content, "ok") {
-		t.Fatalf("expected inside file content, got: %s", insideRes.Content)
+	if !strings.Contains(insideRes.ModelText, "ok") {
+		t.Fatalf("expected inside file content, got: %s", insideRes.ModelText)
 	}
 	res, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
 		"file_path": "../x",
@@ -2039,7 +2039,7 @@ func TestPathEscapeDenied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, "permission_denied") {
+	if !res.IsError() || !strings.Contains(res.ModelText, "permission_denied") {
 		t.Fatalf("expected permission_denied, got: %+v", res)
 	}
 	outside := filepath.Join(t.TempDir(), "outside.txt")
@@ -2052,7 +2052,7 @@ func TestPathEscapeDenied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, "permission_denied") {
+	if !res.IsError() || !strings.Contains(res.ModelText, "permission_denied") {
 		t.Fatalf("expected absolute outside path to be denied, got: %+v", res)
 	}
 }
@@ -2159,19 +2159,19 @@ func TestApprovedExternalReadRootsAllowReadOnlyTools(t *testing.T) {
 	ctx := WithApprovedExternalReadRoots(context.Background(), []string{external})
 
 	readRes, err := ts.readFile(ctx, tc("read_file", map[string]any{"file_path": filepath.Join(external, "nested", "guide.txt")}))
-	if err != nil || readRes.IsError || !strings.Contains(readRes.Content, "needle") {
+	if err != nil || readRes.IsError() || !strings.Contains(readRes.ModelText, "needle") {
 		t.Fatalf("approved external read_file failed: err=%v res=%+v", err, readRes)
 	}
 	listRes, err := ts.listDir(ctx, tc("list_dir", map[string]any{"path": external}))
-	if err != nil || listRes.IsError || !strings.Contains(listRes.Content, "nested/") {
+	if err != nil || listRes.IsError() || !strings.Contains(listRes.ModelText, "nested/") {
 		t.Fatalf("approved external list_dir failed: err=%v res=%+v", err, listRes)
 	}
 	grepRes, err := ts.searchContent(ctx, tc("grep", map[string]any{"path": external, "pattern": "needle"}))
-	if err != nil || grepRes.IsError || !strings.Contains(grepRes.Content, "guide.txt") {
+	if err != nil || grepRes.IsError() || !strings.Contains(grepRes.ModelText, "guide.txt") {
 		t.Fatalf("approved external grep failed: err=%v res=%+v", err, grepRes)
 	}
 	searchRes, err := ts.searchFiles(ctx, tc("search_files", map[string]any{"path": external, "pattern": "guide"}))
-	if err != nil || searchRes.IsError || !strings.Contains(searchRes.Content, "guide.txt") {
+	if err != nil || searchRes.IsError() || !strings.Contains(searchRes.ModelText, "guide.txt") {
 		t.Fatalf("approved external search_files failed: err=%v res=%+v", err, searchRes)
 	}
 }
@@ -2214,7 +2214,7 @@ func TestApprovedExternalReadRootsPreserveMissingPathErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("grep err: %v", err)
 	}
-	if strings.Contains(grepRes.Content, "permission_denied") {
+	if strings.Contains(grepRes.ModelText, "permission_denied") {
 		t.Fatalf("grep missing path should not be permission_denied: %+v", grepRes)
 	}
 
@@ -2222,7 +2222,7 @@ func TestApprovedExternalReadRootsPreserveMissingPathErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search_files err: %v", err)
 	}
-	if searchRes.IsError || strings.Contains(searchRes.Content, "permission_denied") {
+	if searchRes.IsError() || strings.Contains(searchRes.ModelText, "permission_denied") {
 		t.Fatalf("search_files missing path should not be permission_denied: %+v", searchRes)
 	}
 }
@@ -2248,10 +2248,10 @@ func TestApprovedExternalReadRootsExpandHomeBeforeWorkspaceFallback(t *testing.T
 
 	for _, raw := range []string{"~/guide.txt", "$HOME/guide.txt"} {
 		res, err := ts.readFile(ctx, tc("read_file", map[string]any{"file_path": raw}))
-		if err != nil || res.IsError {
+		if err != nil || res.IsError() {
 			t.Fatalf("approved home read %q failed: err=%v res=%+v", raw, err, res)
 		}
-		if !strings.Contains(res.Content, "home file") || strings.Contains(res.Content, "workspace tilde") {
+		if !strings.Contains(res.ModelText, "home file") || strings.Contains(res.ModelText, "workspace tilde") {
 			t.Fatalf("home read %q used wrong file: %+v", raw, res)
 		}
 	}
@@ -2282,11 +2282,11 @@ func TestReadOnlyToolsCanReadDiscoveredGlobalSkillReferences(t *testing.T) {
 		"name":      "global-skill",
 		"arguments": "arg text",
 	}))
-	if err != nil || loadRes.IsError {
+	if err != nil || loadRes.IsError() {
 		t.Fatalf("load_skill failed: err=%v res=%+v", err, loadRes)
 	}
-	if !strings.Contains(loadRes.Content, "Use global instructions") || !strings.Contains(loadRes.Content, "arg text") {
-		t.Fatalf("unexpected load_skill content: %s", loadRes.Content)
+	if !strings.Contains(loadRes.ModelText, "Use global instructions") || !strings.Contains(loadRes.ModelText, "arg text") {
+		t.Fatalf("unexpected load_skill content: %s", loadRes.ModelText)
 	}
 	readRes, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
 		"file_path": refPath,
@@ -2294,14 +2294,14 @@ func TestReadOnlyToolsCanReadDiscoveredGlobalSkillReferences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read_file err: %v", err)
 	}
-	if readRes.IsError || !strings.Contains(readRes.Content, "reference marker") || !strings.Contains(readRes.Content, "$global-skill/references/guide.md") {
+	if readRes.IsError() || !strings.Contains(readRes.ModelText, "reference marker") || !strings.Contains(readRes.ModelText, "$global-skill/references/guide.md") {
 		t.Fatalf("expected read_file to read global skill reference, got: %+v", readRes)
 	}
 
 	lsRes, err := ts.listDir(context.Background(), tc("list_dir", map[string]any{
 		"path": refDir,
 	}))
-	if err != nil || lsRes.IsError || !strings.Contains(lsRes.Content, "guide.md") {
+	if err != nil || lsRes.IsError() || !strings.Contains(lsRes.ModelText, "guide.md") {
 		t.Fatalf("expected list_dir to list global skill reference dir: err=%v res=%+v", err, lsRes)
 	}
 
@@ -2309,7 +2309,7 @@ func TestReadOnlyToolsCanReadDiscoveredGlobalSkillReferences(t *testing.T) {
 		"path":    skillDir,
 		"pattern": "guide",
 	}))
-	if err != nil || filesRes.IsError || !strings.Contains(filesRes.Content, "$global-skill/references/guide.md") {
+	if err != nil || filesRes.IsError() || !strings.Contains(filesRes.ModelText, "$global-skill/references/guide.md") {
 		t.Fatalf("expected search_files to search global skill dir: err=%v res=%+v", err, filesRes)
 	}
 
@@ -2318,7 +2318,7 @@ func TestReadOnlyToolsCanReadDiscoveredGlobalSkillReferences(t *testing.T) {
 		"pattern":      "reference marker",
 		"literal_text": true,
 	}))
-	if err != nil || grepRes.IsError || !strings.Contains(grepRes.Content, "$global-skill/references/guide.md") {
+	if err != nil || grepRes.IsError() || !strings.Contains(grepRes.ModelText, "$global-skill/references/guide.md") {
 		t.Fatalf("expected grep to search global skill dir: err=%v res=%+v", err, grepRes)
 	}
 
@@ -2329,7 +2329,7 @@ func TestReadOnlyToolsCanReadDiscoveredGlobalSkillReferences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write_file err: %v", err)
 	}
-	if !writeRes.IsError || !strings.Contains(writeRes.Content, "permission_denied") {
+	if !writeRes.IsError() || !strings.Contains(writeRes.ModelText, "permission_denied") {
 		t.Fatalf("expected write_file to deny global skill path, got: %+v", writeRes)
 	}
 
@@ -2341,7 +2341,7 @@ func TestReadOnlyToolsCanReadDiscoveredGlobalSkillReferences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("edit_file err: %v", err)
 	}
-	if !editRes.IsError || !strings.Contains(editRes.Content, "permission_denied") {
+	if !editRes.IsError() || !strings.Contains(editRes.ModelText, "permission_denied") {
 		t.Fatalf("expected edit_file to deny global skill path, got: %+v", editRes)
 	}
 }
@@ -2376,7 +2376,7 @@ func TestSkillReadPathDoesNotFollowSymlinkOutsideSkillDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read_file err: %v", err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, "permission_denied") {
+	if !res.IsError() || !strings.Contains(res.ModelText, "permission_denied") {
 		t.Fatalf("expected symlink escape to be denied, got: %+v", res)
 	}
 }
@@ -2407,7 +2407,7 @@ func TestDisabledSkillDoesNotExpandReadBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read_file err: %v", err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, "permission_denied") {
+	if !res.IsError() || !strings.Contains(res.ModelText, "permission_denied") {
 		t.Fatalf("expected disabled skill reference to be denied, got: %+v", res)
 	}
 }
@@ -2437,7 +2437,7 @@ func TestInvalidSkillDoesNotExpandReadBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read_file err: %v", err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, "permission_denied") {
+	if !res.IsError() || !strings.Contains(res.ModelText, "permission_denied") {
 		t.Fatalf("expected invalid skill reference to be denied, got: %+v", res)
 	}
 }
@@ -2463,8 +2463,8 @@ func TestLoadSkillUnknownListsAvailableAndRegistryReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load_skill err: %v", err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, "known-skill") {
-		t.Fatalf("expected available skill in error, got: %s", res.Content)
+	if !res.IsError() || !strings.Contains(res.ModelText, "known-skill") {
+		t.Fatalf("expected available skill in error, got: %s", res.ModelText)
 	}
 	var found bool
 	for _, tool := range ts.Tools() {
@@ -2499,7 +2499,7 @@ func TestLoadSkillFiltersDisabledPluginSkills(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load_skill err: %v", err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, "skill disabled") {
+	if !res.IsError() || !strings.Contains(res.ModelText, "skill disabled") {
 		t.Fatalf("expected disabled plugin skill to be rejected, got: %+v", res)
 	}
 
@@ -2509,8 +2509,8 @@ func TestLoadSkillFiltersDisabledPluginSkills(t *testing.T) {
 	if err != nil {
 		t.Fatalf("missing load_skill err: %v", err)
 	}
-	if strings.Contains(missing.Content, "plugin-skill") {
-		t.Fatalf("disabled plugin skill leaked into available list: %s", missing.Content)
+	if strings.Contains(missing.ModelText, "plugin-skill") {
+		t.Fatalf("disabled plugin skill leaked into available list: %s", missing.ModelText)
 	}
 }
 
@@ -2524,20 +2524,20 @@ func TestListDirAndShellRun(t *testing.T) {
 		t.Fatalf("new toolset: %v", err)
 	}
 	lsRes, err := ts.listDir(context.Background(), tc("list_dir", map[string]any{}))
-	if err != nil || lsRes.IsError {
+	if err != nil || lsRes.IsError() {
 		t.Fatalf("ls failed: err=%v res=%+v", err, lsRes)
 	}
-	if !strings.Contains(lsRes.Content, "x.txt") {
-		t.Fatalf("ls missing file: %s", lsRes.Content)
+	if !strings.Contains(lsRes.ModelText, "x.txt") {
+		t.Fatalf("ls missing file: %s", lsRes.ModelText)
 	}
 	shellRes, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
 		"command": "echo hi",
 	}))
-	if err != nil || shellRes.IsError {
+	if err != nil || shellRes.IsError() {
 		t.Fatalf("shell_run failed: err=%v res=%+v", err, shellRes)
 	}
-	if !strings.Contains(shellRes.Content, "hi") {
-		t.Fatalf("unexpected shell output: %s", shellRes.Content)
+	if !strings.Contains(shellRes.ModelText, "hi") {
+		t.Fatalf("unexpected shell output: %s", shellRes.ModelText)
 	}
 }
 
@@ -2587,12 +2587,12 @@ func TestListDirIgnoresLegacyIgnoreInput(t *testing.T) {
 	lsRes, err := registry.Dispatch(context.Background(), tc("list_dir", map[string]any{
 		"ignore": []string{".git", "node"},
 	}))
-	if err != nil || lsRes.IsError {
+	if err != nil || lsRes.IsError() {
 		t.Fatalf("list_dir failed: err=%v res=%+v", err, lsRes)
 	}
 	for _, want := range []string{".gitignore", "node_modules/", "x.txt"} {
-		if !strings.Contains(lsRes.Content, want) {
-			t.Fatalf("list_dir should not filter %q with legacy ignore input: %s", want, lsRes.Content)
+		if !strings.Contains(lsRes.ModelText, want) {
+			t.Fatalf("list_dir should not filter %q with legacy ignore input: %s", want, lsRes.ModelText)
 		}
 	}
 }
@@ -2729,7 +2729,7 @@ func TestApplyPatchUpdateAddDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("apply patch err: %v", err)
 	}
-	if res.IsError {
+	if res.IsError() {
 		t.Fatalf("apply patch result error: %+v", res)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "a.txt")); !os.IsNotExist(err) {
@@ -2754,7 +2754,7 @@ func TestApplyPatchInvalidPatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("apply patch err: %v", err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, "patch_parse_failed") {
+	if !res.IsError() || !strings.Contains(res.ModelText, "patch_parse_failed") {
 		t.Fatalf("expected patch_parse_failed, got: %+v", res)
 	}
 }
@@ -2774,11 +2774,11 @@ func TestSearchFiles(t *testing.T) {
 	res, err := ts.searchFiles(context.Background(), tc("search_files", map[string]any{
 		"pattern": "alpha",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("search_files failed: err=%v res=%+v", err, res)
 	}
-	if !strings.Contains(res.Content, "alpha.go") {
-		t.Fatalf("expected alpha.go in result: %s", res.Content)
+	if !strings.Contains(res.ModelText, "alpha.go") {
+		t.Fatalf("expected alpha.go in result: %s", res.ModelText)
 	}
 }
 
@@ -2798,7 +2798,7 @@ func TestSearchFilesAcceptsLimitAndCapsMatches(t *testing.T) {
 		"pattern": "alpha",
 		"limit":   3,
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("search_files failed: err=%v res=%+v", err, res)
 	}
 	data := readFileData(t, res)
@@ -2841,7 +2841,7 @@ func TestSearchFilesFallsBackWhenRipgrepUnavailable(t *testing.T) {
 	res, err := ts.searchFiles(context.Background(), tc("search_files", map[string]any{
 		"pattern": "alpha",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("search_files failed: err=%v res=%+v", err, res)
 	}
 	data := readFileData(t, res)
@@ -2868,7 +2868,7 @@ func TestSearchFilesDoesNotMatchWorkspaceParentPath(t *testing.T) {
 	res, err := ts.searchFiles(context.Background(), tc("search_files", map[string]any{
 		"pattern": "parenthit",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("search_files failed: err=%v res=%+v", err, res)
 	}
 	data := readFileData(t, res)
@@ -2895,7 +2895,7 @@ func TestSearchFilesWithRipgrepIncludesGitignoredFiles(t *testing.T) {
 	res, err := ts.searchFiles(context.Background(), tc("search_files", map[string]any{
 		"pattern": "ignored",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("search_files failed: err=%v res=%+v", err, res)
 	}
 	data := readFileData(t, res)
@@ -2961,7 +2961,7 @@ func TestGrepAcceptsLimitAndCapsMatches(t *testing.T) {
 		"include": "*.txt",
 		"limit":   3,
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("grep failed: err=%v res=%+v", err, res)
 	}
 	data := readFileData(t, res)
@@ -3008,7 +3008,7 @@ func TestGrepInvalidPatternIncludesLiteralRecovery(t *testing.T) {
 		t.Fatalf("grep dispatch error: %v", err)
 	}
 	if got := toolErrorCode(t, res); got != "invalid_pattern" {
-		t.Fatalf("code = %q, want invalid_pattern; content=%s", got, res.Content)
+		t.Fatalf("code = %q, want invalid_pattern; content=%s", got, res.ModelText)
 	}
 	recovery := toolRecoveryData(t, res)
 	if got := recovery["code"]; got != "grep_invalid_pattern" {
@@ -3038,7 +3038,7 @@ func TestGrepTruncatesLongLines(t *testing.T) {
 		"include": "*.txt",
 		"limit":   10,
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("grep failed: err=%v res=%+v", err, res)
 	}
 	data := readFileData(t, res)
@@ -3115,7 +3115,7 @@ func TestGrepFallsBackWhenRipgrepJSONLineExceedsScannerBuffer(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("grep hung after ripgrep scanner error")
 	}
-	if res.IsError {
+	if res.IsError() {
 		t.Fatalf("grep returned tool error: %+v", res)
 	}
 	data := readFileData(t, res)
@@ -3184,12 +3184,12 @@ func TestGrepTruncatesLongLinesAroundMatch(t *testing.T) {
 		"pattern":      "needle",
 		"literal_text": true,
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("grep failed: err=%v res=%+v", err, res)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok {
-		t.Fatalf("parse envelope: %s", res.Content)
+		t.Fatalf("parse envelope: %s", res.ModelText)
 	}
 	payload := env.Data["payload"].(map[string]any)
 	matches := payload["matches"].([]any)
@@ -3232,12 +3232,12 @@ func TestGrepTruncatesUnicodeLongLinesAroundByteOffset(t *testing.T) {
 		"pattern":      "needle",
 		"literal_text": true,
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("grep failed: err=%v res=%+v", err, res)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok {
-		t.Fatalf("parse envelope: %s", res.Content)
+		t.Fatalf("parse envelope: %s", res.ModelText)
 	}
 	payload := env.Data["payload"].(map[string]any)
 	matches := payload["matches"].([]any)
@@ -3279,12 +3279,12 @@ func TestGrepDoesNotTruncateUnicodeLineUnderCharacterLimit(t *testing.T) {
 		"pattern":      "needle",
 		"literal_text": true,
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("grep failed: err=%v res=%+v", err, res)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok {
-		t.Fatalf("parse envelope: %s", res.Content)
+		t.Fatalf("parse envelope: %s", res.ModelText)
 	}
 	metrics := env.Data["metrics"].(map[string]any)
 	if metrics["lines_truncated"] != false {
@@ -3474,7 +3474,7 @@ func TestShellRunBackgroundAndWait(t *testing.T) {
 		"command":    "echo hello",
 		"background": true,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run background failed: err=%v res=%+v", err, startRes)
 	}
 	var envelope struct {
@@ -3485,21 +3485,21 @@ func TestShellRunBackgroundAndWait(t *testing.T) {
 			} `json:"payload"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal([]byte(startRes.Content), &envelope); err != nil {
+	if err := json.Unmarshal([]byte(startRes.ModelText), &envelope); err != nil {
 		t.Fatalf("unmarshal start result: %v", err)
 	}
 	if envelope.Data.Payload.TaskID == "" {
-		t.Fatalf("expected task_id, got: %s", startRes.Content)
+		t.Fatalf("expected task_id, got: %s", startRes.ModelText)
 	}
 	waitRes, err := ts.shellWait(context.Background(), tc("shell_wait", map[string]any{
 		"task_id":    envelope.Data.Payload.TaskID,
 		"timeout_ms": 5000,
 	}))
-	if err != nil || waitRes.IsError {
+	if err != nil || waitRes.IsError() {
 		t.Fatalf("shell_wait failed: err=%v res=%+v", err, waitRes)
 	}
-	if !strings.Contains(waitRes.Content, "hello") {
-		t.Fatalf("expected output in wait result: %s", waitRes.Content)
+	if !strings.Contains(waitRes.ModelText, "hello") {
+		t.Fatalf("expected output in wait result: %s", waitRes.ModelText)
 	}
 }
 
@@ -3516,10 +3516,10 @@ func TestBackgroundShellTasksAndCancel(t *testing.T) {
 		"command":    "sleep 30",
 		"background": true,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run background failed: err=%v res=%+v", err, startRes)
 	}
-	taskID := toolsetBackgroundTaskID(t, startRes.Content)
+	taskID := toolsetBackgroundTaskID(t, startRes.ModelText)
 
 	tasks := ts.BackgroundShellTasks()
 	if len(tasks) != 1 || tasks[0].ID != taskID || tasks[0].Status != "running" || !strings.Contains(tasks[0].Command, "sleep 30") {
@@ -3558,14 +3558,14 @@ func TestCancelAllBackgroundShellTasks(t *testing.T) {
 		"command":    "sleep 30",
 		"background": true,
 	}))
-	if err != nil || first.IsError {
+	if err != nil || first.IsError() {
 		t.Fatalf("first shell_run background failed: err=%v res=%+v", err, first)
 	}
 	second, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
 		"command":    "sleep 31",
 		"background": true,
 	}))
-	if err != nil || second.IsError {
+	if err != nil || second.IsError() {
 		t.Fatalf("second shell_run background failed: err=%v res=%+v", err, second)
 	}
 
@@ -3603,10 +3603,10 @@ func TestRunningBackgroundShellTasksExcludesTimedOutTasks(t *testing.T) {
 		"background": true,
 		"timeout_ms": 1,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run background failed: err=%v res=%+v", err, startRes)
 	}
-	taskID := toolsetBackgroundTaskID(t, startRes.Content)
+	taskID := toolsetBackgroundTaskID(t, startRes.ModelText)
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -3635,20 +3635,20 @@ func TestShellRunBackgroundFinalWaitReleasesTask(t *testing.T) {
 		"command":    "echo cleanup",
 		"background": true,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run background failed: err=%v res=%+v", err, startRes)
 	}
-	taskID := toolsetBackgroundTaskID(t, startRes.Content)
+	taskID := toolsetBackgroundTaskID(t, startRes.ModelText)
 
 	waitRes, err := ts.shellWait(context.Background(), tc("shell_wait", map[string]any{
 		"task_id":    taskID,
 		"timeout_ms": 5000,
 	}))
-	if err != nil || waitRes.IsError {
+	if err != nil || waitRes.IsError() {
 		t.Fatalf("shell_wait failed: err=%v res=%+v", err, waitRes)
 	}
-	if !strings.Contains(waitRes.Content, `"done":true`) {
-		t.Fatalf("expected final wait result, got: %s", waitRes.Content)
+	if !strings.Contains(waitRes.ModelText, `"done":true`) {
+		t.Fatalf("expected final wait result, got: %s", waitRes.ModelText)
 	}
 
 	ts.tasks.mu.RLock()
@@ -3683,10 +3683,10 @@ func TestShellRunBackgroundCompletionSchedulesRegistryCleanup(t *testing.T) {
 		"command":    "echo cleanup",
 		"background": true,
 	}))
-	if err != nil || startRes.IsError {
+	if err != nil || startRes.IsError() {
 		t.Fatalf("shell_run background failed: err=%v res=%+v", err, startRes)
 	}
-	taskID := toolsetBackgroundTaskID(t, startRes.Content)
+	taskID := toolsetBackgroundTaskID(t, startRes.ModelText)
 
 	var cleanup scheduledCleanup
 	select {
@@ -3751,11 +3751,11 @@ func TestShellRunCWDStaysInsideWorkspace(t *testing.T) {
 		"command": "pwd",
 		"cwd":     "sub",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("shell_run cwd failed: err=%v res=%+v", err, res)
 	}
-	if !strings.Contains(res.Content, filepath.Join(dir, "sub")) || !strings.Contains(res.Content, `"cwd":"sub"`) {
-		t.Fatalf("expected command to run in subdir with cwd metadata: %s", res.Content)
+	if !strings.Contains(res.ModelText, filepath.Join(dir, "sub")) || !strings.Contains(res.ModelText, `"cwd":"sub"`) {
+		t.Fatalf("expected command to run in subdir with cwd metadata: %s", res.ModelText)
 	}
 	escaped, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
 		"command": "pwd",
@@ -3764,19 +3764,19 @@ func TestShellRunCWDStaysInsideWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("shell_run escaped cwd returned dispatch error: %v", err)
 	}
-	if !escaped.IsError || !strings.Contains(escaped.Content, "path escapes workspace") {
+	if !escaped.IsError() || !strings.Contains(escaped.ModelText, "path escapes workspace") {
 		t.Fatalf("expected escaped cwd to be rejected: %+v", escaped)
 	}
 }
 
 func toolErrorMessage(t *testing.T, res core.ToolResult) string {
 	t.Helper()
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatalf("expected tool error, got %+v", res)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok {
-		t.Fatalf("parse tool envelope: %s", res.Content)
+		t.Fatalf("parse tool envelope: %s", res.ModelText)
 	}
 	if env.Message == "" {
 		t.Fatalf("expected error message in envelope: %+v", env)
@@ -3786,12 +3786,12 @@ func toolErrorMessage(t *testing.T, res core.ToolResult) string {
 
 func toolErrorCode(t *testing.T, res core.ToolResult) string {
 	t.Helper()
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatalf("expected tool error, got %+v", res)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok {
-		t.Fatalf("parse tool envelope: %s", res.Content)
+		t.Fatalf("parse tool envelope: %s", res.ModelText)
 	}
 	if env.Code == "" {
 		t.Fatalf("expected error code in envelope: %+v", env)
@@ -3801,16 +3801,16 @@ func toolErrorCode(t *testing.T, res core.ToolResult) string {
 
 func toolRecoveryData(t *testing.T, res core.ToolResult) map[string]any {
 	t.Helper()
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatalf("expected tool error, got %+v", res)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok {
-		t.Fatalf("parse tool envelope: %s", res.Content)
+		t.Fatalf("parse tool envelope: %s", res.ModelText)
 	}
 	recovery, ok := env.Data["recovery"].(map[string]any)
 	if !ok {
-		t.Fatalf("expected object recovery in envelope data, got %#v from %s", env.Data["recovery"], res.Content)
+		t.Fatalf("expected object recovery in envelope data, got %#v from %s", env.Data["recovery"], res.ModelText)
 	}
 	return recovery
 }
@@ -3822,9 +3822,9 @@ func readFileData(t *testing.T, res core.ToolResult) map[string]any {
 	if payload, ok := res.Payload.(map[string]any); ok {
 		return payload
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok {
-		t.Fatalf("parse read_file envelope: %s", res.Content)
+		t.Fatalf("parse read_file envelope: %s", res.ModelText)
 	}
 	return env.Data
 }
@@ -3864,12 +3864,12 @@ func readFileFull(t *testing.T, ts *Toolset, path string) {
 	res, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
 		"file_path": path,
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
 	}
 	payload, ok := readFileData(t, res)["payload"].(map[string]any)
 	if !ok {
-		t.Fatalf("missing payload in read_file result: %s", res.Content)
+		t.Fatalf("missing payload in read_file result: %s", res.ModelText)
 	}
 	if _, ok := payload["snapshot_id"]; ok {
 		t.Fatalf("read_file should not expose snapshot_id: %#v", payload)

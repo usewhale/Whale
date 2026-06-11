@@ -25,7 +25,7 @@ func TestWorkflowToolRejectsUnsavedScriptLaunch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, "saved as a named workflow") {
+	if !res.IsError() || !strings.Contains(res.ModelText, "saved as a named workflow") {
 		t.Fatalf("expected unsaved script confirmation error, got: %+v", res)
 	}
 	if len(store.events) != 0 {
@@ -86,12 +86,12 @@ func TestWorkflowToolStatusWorksWhenDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.IsError {
-		t.Fatalf("status should not be a tool error: %s", res.Content)
+	if res.IsError() {
+		t.Fatalf("status should not be a tool error: %s", res.ModelText)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok || !env.Success || env.Code != "workflow_disabled" {
-		t.Fatalf("unexpected envelope: %s", res.Content)
+		t.Fatalf("unexpected envelope: %s", res.ModelText)
 	}
 	if env.Summary != workflowDisabledUserMessage {
 		t.Fatalf("disabled status should expose a short user-facing summary, got %q", env.Summary)
@@ -111,11 +111,11 @@ func TestWorkflowToolStatusWorksWhenDisabled(t *testing.T) {
 	if env.Data["autoEnable"] != false {
 		t.Fatalf("disabled status should disallow auto-enable: %+v", env.Data)
 	}
-	if strings.Contains(res.Content, ".whale/config.local.toml") || strings.Contains(res.Content, "set [workflows]") {
-		t.Fatalf("disabled status should not instruct config-file edits: %s", res.Content)
+	if strings.Contains(res.ModelText, ".whale/config.local.toml") || strings.Contains(res.ModelText, "set [workflows]") {
+		t.Fatalf("disabled status should not instruct config-file edits: %s", res.ModelText)
 	}
-	if !strings.Contains(res.Content, "read or edit Whale configuration") {
-		t.Fatalf("disabled status should tell the model not to mutate config: %s", res.Content)
+	if !strings.Contains(res.ModelText, "read or edit Whale configuration") {
+		t.Fatalf("disabled status should tell the model not to mutate config: %s", res.ModelText)
 	}
 }
 
@@ -137,27 +137,27 @@ log('disabled')
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !res.IsError {
-		t.Fatalf("disabled list should be a tool error: %s", res.Content)
+	if !res.IsError() {
+		t.Fatalf("disabled list should be a tool error: %s", res.ModelText)
 	}
 	if res.Metadata["abort_turn_after_tool_result"] != true {
 		t.Fatalf("disabled list should request turn abort, got metadata: %+v", res.Metadata)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok || env.Success || env.Code != "workflow_disabled" {
-		t.Fatalf("unexpected envelope: %s", res.Content)
+		t.Fatalf("unexpected envelope: %s", res.ModelText)
 	}
 	if _, hasWorkflows := env.Data["workflows"]; hasWorkflows {
 		t.Fatalf("disabled list should not expose scanned workflows: %+v", env.Data)
 	}
-	if strings.Contains(res.Content, "disabled-scan") {
-		t.Fatalf("disabled list should not scan workflow definitions: %s", res.Content)
+	if strings.Contains(res.ModelText, "disabled-scan") {
+		t.Fatalf("disabled list should not scan workflow definitions: %s", res.ModelText)
 	}
-	if strings.Contains(res.Content, ".whale/config.local.toml") || strings.Contains(res.Content, "set [workflows]") {
-		t.Fatalf("disabled list should not instruct config-file edits: %s", res.Content)
+	if strings.Contains(res.ModelText, ".whale/config.local.toml") || strings.Contains(res.ModelText, "set [workflows]") {
+		t.Fatalf("disabled list should not instruct config-file edits: %s", res.ModelText)
 	}
-	if !strings.Contains(res.Content, "edit configuration") {
-		t.Fatalf("disabled list should tell the model not to mutate config: %s", res.Content)
+	if !strings.Contains(res.ModelText, "edit configuration") {
+		t.Fatalf("disabled list should tell the model not to mutate config: %s", res.ModelText)
 	}
 }
 
@@ -172,15 +172,15 @@ func TestWorkflowToolRunReturnsDisabledWithoutConfigMutationGuidance(t *testing.
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !res.IsError {
-		t.Fatalf("disabled run should be a tool error: %s", res.Content)
+	if !res.IsError() {
+		t.Fatalf("disabled run should be a tool error: %s", res.ModelText)
 	}
 	if res.Metadata["abort_turn_after_tool_result"] != true {
 		t.Fatalf("disabled run should request turn abort, got metadata: %+v", res.Metadata)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok || env.Success || env.Code != "workflow_disabled" {
-		t.Fatalf("unexpected envelope: %s", res.Content)
+		t.Fatalf("unexpected envelope: %s", res.ModelText)
 	}
 	if env.Error != workflowDisabledUserMessage {
 		t.Fatalf("disabled run should expose a short user-facing error, got %q", env.Error)
@@ -198,13 +198,13 @@ func TestWorkflowToolRunReturnsDisabledWithoutConfigMutationGuidance(t *testing.
 		t.Fatalf("disabled run should keep model-only guidance in data: %+v", env.Data)
 	}
 	for _, unexpected := range []string{".whale/config.local.toml", "set [workflows]", "enabled = true", "unless the user explicitly asks", "tell me", "I can help after"} {
-		if strings.Contains(res.Content, unexpected) {
-			t.Fatalf("disabled run should not instruct config mutation via %q: %s", unexpected, res.Content)
+		if strings.Contains(res.ModelText, unexpected) {
+			t.Fatalf("disabled run should not instruct config mutation via %q: %s", unexpected, res.ModelText)
 		}
 	}
 	for _, want := range []string{"Reply only", "Dynamic workflows are disabled in Whale", "Do not say Whisper", "Do not ask what to do next", "present choices", "inspect workflow directories", "edit configuration", "retry within the same turn", "shell/manual substitutes", "later user request", "call workflow again"} {
-		if !strings.Contains(res.Content, want) {
-			t.Fatalf("disabled run missing %q: %s", want, res.Content)
+		if !strings.Contains(res.ModelText, want) {
+			t.Fatalf("disabled run missing %q: %s", want, res.ModelText)
 		}
 	}
 }
@@ -237,12 +237,12 @@ log('user')
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.IsError {
-		t.Fatalf("list should not be a tool error: %s", res.Content)
+	if res.IsError() {
+		t.Fatalf("list should not be a tool error: %s", res.ModelText)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok || !env.Success || env.Code != "workflow_list" {
-		t.Fatalf("unexpected envelope: %s", res.Content)
+		t.Fatalf("unexpected envelope: %s", res.ModelText)
 	}
 	available, _ := env.Data["available"].([]any)
 	if !containsAnyString(available, "project-scan") || !containsAnyString(available, "user-scan") {
@@ -279,12 +279,12 @@ log('ok')
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.IsError {
-		t.Fatalf("resolve should not be a tool error: %s", res.Content)
+	if res.IsError() {
+		t.Fatalf("resolve should not be a tool error: %s", res.ModelText)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok || !env.Success || env.Code != "workflow_resolved" {
-		t.Fatalf("unexpected envelope: %s", res.Content)
+		t.Fatalf("unexpected envelope: %s", res.ModelText)
 	}
 	workflowData, _ := env.Data["workflow"].(map[string]any)
 	if workflowData["name"] != "named-resolve" || workflowData["source"] != "project" {
@@ -317,12 +317,12 @@ log('ok')
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !res.IsError {
-		t.Fatalf("missing resolve should be a tool error: %s", res.Content)
+	if !res.IsError() {
+		t.Fatalf("missing resolve should be a tool error: %s", res.ModelText)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok || env.Success || env.Code != "workflow_not_found" {
-		t.Fatalf("unexpected envelope: %s", res.Content)
+		t.Fatalf("unexpected envelope: %s", res.ModelText)
 	}
 	if !strings.Contains(env.Message, "known-workflow") {
 		t.Fatalf("missing resolve should list available workflows, got %q", env.Message)
@@ -359,12 +359,12 @@ log('saved ' + args.topic)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.IsError {
-		t.Fatalf("unexpected tool error: %s", res.Content)
+	if res.IsError() {
+		t.Fatalf("unexpected tool error: %s", res.ModelText)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok || !env.Success {
-		t.Fatalf("unexpected envelope: %s", res.Content)
+		t.Fatalf("unexpected envelope: %s", res.ModelText)
 	}
 	if env.Code != "workflow_confirmation_required" || env.Data["workflowName"] != "generated-review" {
 		t.Fatalf("expected confirmation envelope, got: %+v", env)
@@ -406,18 +406,18 @@ log('scan')
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !res.IsError {
-		t.Fatalf("expected create without script/saveAs to fail, got: %s", res.Content)
+	if !res.IsError() {
+		t.Fatalf("expected create without script/saveAs to fail, got: %s", res.ModelText)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok || env.Code != "invalid_input" {
-		t.Fatalf("expected invalid_input envelope, got: %s", res.Content)
+		t.Fatalf("expected invalid_input envelope, got: %s", res.ModelText)
 	}
 	if _, hasMeta := res.Metadata["workflow_confirmation_required"]; hasMeta {
 		t.Fatalf("malformed create must not request workflow confirmation: %+v", res.Metadata)
 	}
-	if strings.Contains(res.Content, "workflow_confirmation_required") {
-		t.Fatalf("malformed create must not fall through to launch confirmation: %s", res.Content)
+	if strings.Contains(res.ModelText, "workflow_confirmation_required") {
+		t.Fatalf("malformed create must not fall through to launch confirmation: %s", res.ModelText)
 	}
 }
 
@@ -443,12 +443,12 @@ log('topic ' + args.topic)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.IsError {
-		t.Fatalf("unexpected tool error: %s", res.Content)
+	if res.IsError() {
+		t.Fatalf("unexpected tool error: %s", res.ModelText)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok || !env.Success || env.Code != "workflow_confirmation_required" {
-		t.Fatalf("unexpected envelope: %s", res.Content)
+		t.Fatalf("unexpected envelope: %s", res.ModelText)
 	}
 	if env.Data["workflowName"] != "custom-workflow" || env.Data["workflowScriptPath"] != path || env.Data["scriptPath"] != path {
 		t.Fatalf("unexpected workflow data: %+v", env.Data)
@@ -477,12 +477,12 @@ log('topic ' + args.topic)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.IsError {
-		t.Fatalf("unexpected tool error: %s", res.Content)
+	if res.IsError() {
+		t.Fatalf("unexpected tool error: %s", res.ModelText)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok || !env.Success {
-		t.Fatalf("unexpected envelope: %s", res.Content)
+		t.Fatalf("unexpected envelope: %s", res.ModelText)
 	}
 	if env.Code != "workflow_confirmation_required" || env.Data["workflowName"] != "named-tool" || env.Data["workflowArgs"] != `{"topic":"ok"}` {
 		t.Fatalf("expected confirmation data, got: %+v", env)
@@ -524,12 +524,12 @@ log('question ' + args)
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if res.IsError {
-		t.Fatalf("unexpected tool error: %s", res.Content)
+	if res.IsError() {
+		t.Fatalf("unexpected tool error: %s", res.ModelText)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok || !env.Success {
-		t.Fatalf("unexpected envelope: %s", res.Content)
+		t.Fatalf("unexpected envelope: %s", res.ModelText)
 	}
 	if env.Code != "workflow_confirmation_required" || env.Data["workflowName"] != "string-args" || env.Data["workflowArgs"] != "What changed in Node.js permissions?" {
 		t.Fatalf("expected confirmation data, got: %+v", env)
@@ -551,11 +551,11 @@ func TestWorkflowToolReturnsRejectedScriptAsToolError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatalf("expected tool error")
 	}
-	if !strings.Contains(res.Content, "export const meta") {
-		t.Fatalf("unexpected error content: %s", res.Content)
+	if !strings.Contains(res.ModelText, "export const meta") {
+		t.Fatalf("unexpected error content: %s", res.ModelText)
 	}
 	if len(store.events) != 0 {
 		t.Fatalf("rejected script should not start run: %+v", store.events)

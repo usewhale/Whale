@@ -335,7 +335,7 @@ func (t guardedReadOnlyTool) guardReadOnly(call core.ToolCall) (core.ToolResult,
 	return core.ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
-		Content:    errorContent("read_only_required", "subagent tools are restricted to read-only calls"),
-		IsError:    true,
+		ModelText:  errorContent("read_only_required", "subagent tools are restricted to read-only calls"),
+		Code:       "read_only_required",
 	}, true
 }

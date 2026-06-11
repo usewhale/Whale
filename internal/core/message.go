@@ -184,19 +184,18 @@ type ToolCall struct {
 	Input string
 }
 
+// ToolResult is channel-separated: Outcome/Code/Payload are the structured
+// channel for the TUI, recovery, and evals; ModelText is the only text the
+// model sees, rendered once at creation and never re-rendered. Tools that
+// still produce a legacy envelope put it in ModelText; the dispatch funnel
+// re-derives and re-renders it. Error-ness is derived from Outcome via
+// IsError().
 type ToolResult struct {
 	ToolCallID string
 	Name       string
-	Content    string
 	Metadata   map[string]any `json:"metadata,omitempty"`
-	IsError    bool
-	// Channel-separated fields (phase 1): Outcome/Code/Payload are the
-	// structured channel for the TUI, recovery, and evals; ModelText is
-	// the only text the model sees, rendered once at creation and never
-	// re-rendered. Content/IsError remain during the migration and are
-	// removed in the final step.
-	Outcome   ToolOutcome `json:"Outcome,omitempty"`
-	Code      string      `json:"Code,omitempty"`
-	Payload   any         `json:"Payload,omitempty"`
-	ModelText string      `json:"ModelText,omitempty"`
+	Outcome    ToolOutcome    `json:"Outcome,omitempty"`
+	Code       string         `json:"Code,omitempty"`
+	Payload    any            `json:"Payload,omitempty"`
+	ModelText  string         `json:"ModelText,omitempty"`
 }

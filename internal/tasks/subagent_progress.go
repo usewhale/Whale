@@ -175,7 +175,7 @@ func summarizeSearchTarget(args map[string]any) string {
 }
 
 func summarizeChildToolResult(res core.ToolResult, action childToolAction) string {
-	if res.IsError {
+	if res.IsError() {
 		if action.Target != "" {
 			return action.DoneVerb + " " + action.Target + " failed"
 		}

@@ -126,7 +126,7 @@ type readOnlyViewTool struct{}
 func (r readOnlyViewTool) Name() string   { return "read_file" }
 func (r readOnlyViewTool) ReadOnly() bool { return true }
 func (r readOnlyViewTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok"}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "ok"}, nil
 }
 
 func TestPlanModeInjectsSystemPrompt(t *testing.T) {
@@ -605,10 +605,10 @@ func TestPlanModeAllowsReadOnlyToolsWithoutChecklistPlan(t *testing.T) {
 	var sawReadResult bool
 	var sawRequired bool
 	for ev := range events {
-		if ev.Type == AgentEventTypeToolResult && ev.Result != nil && ev.Result.Name == "read_file" && strings.Contains(ev.Result.Content, "ok") {
+		if ev.Type == AgentEventTypeToolResult && ev.Result != nil && ev.Result.Name == "read_file" && strings.Contains(ev.Result.ModelText, "ok") {
 			sawReadResult = true
 		}
-		if ev.Type == AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, "plan_required") {
+		if ev.Type == AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.ModelText, "plan_required") {
 			sawRequired = true
 		}
 	}
@@ -651,7 +651,7 @@ func TestRecoveryRetriesTimeoutLikeAndSucceeds(t *testing.T) {
 			sawAttempt = true
 		}
 		if ev.Type == AgentEventTypeToolResult && ev.Result != nil {
-			finalErr = ev.Result.IsError
+			finalErr = ev.Result.IsError()
 		}
 	}
 	if !sawScheduled || !sawAttempt {
@@ -669,8 +669,8 @@ func (a alwaysFailTool) Run(_ context.Context, call ToolCall) (ToolResult, error
 	return ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
-		Content:    `{"success":false,"error":"policy denied tool call","code":"policy_denied"}`,
-		IsError:    true,
+		ModelText:  `{"success":false,"error":"policy denied tool call","code":"policy_denied"}`,
+		Outcome:    core.OutcomeFailure,
 	}, nil
 }
 
@@ -713,8 +713,8 @@ func (f failWriteTool) Run(_ context.Context, call ToolCall) (ToolResult, error)
 	return ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
-		Content:    `{"success":false,"error":"command failed","code":"exec_failed"}`,
-		IsError:    true,
+		ModelText:  `{"success":false,"error":"command failed","code":"exec_failed"}`,
+		Outcome:    core.OutcomeFailure,
 	}, nil
 }
 
@@ -743,7 +743,7 @@ func TestRecoveryFallbackReadonlyExecutesTool(t *testing.T) {
 		if ev.Type == AgentEventTypeToolRecoveryExhausted && ev.Recovery != nil && ev.Recovery.Executed {
 			sawExecuted = true
 		}
-		if ev.Type == AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, "recovered_with_fallback") {
+		if ev.Type == AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.ModelText, "recovered_with_fallback") {
 			sawRecoveredResult = true
 		}
 	}
@@ -759,8 +759,8 @@ func (f failExecDefaultTool) Run(_ context.Context, call ToolCall) (ToolResult, 
 	return ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
-		Content:    `{"success":false,"error":"command failed","code":"exec_failed"}`,
-		IsError:    true,
+		ModelText:  `{"success":false,"error":"command failed","code":"exec_failed"}`,
+		Outcome:    core.OutcomeFailure,
 	}, nil
 }
 
@@ -771,8 +771,8 @@ func (u unknownDefaultTool) Run(_ context.Context, call ToolCall) (ToolResult, e
 	return ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
-		Content:    `{"success":false,"error":"opaque failure","code":"opaque_failure"}`,
-		IsError:    true,
+		ModelText:  `{"success":false,"error":"opaque failure","code":"opaque_failure"}`,
+		Outcome:    core.OutcomeFailure,
 	}, nil
 }
 
@@ -783,8 +783,8 @@ func (s searchNotFoundTool) Run(_ context.Context, call ToolCall) (ToolResult, e
 	return ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
-		Content:    `{"success":false,"error":"search text not found","code":"search_not_found"}`,
-		IsError:    true,
+		ModelText:  `{"success":false,"error":"search text not found","code":"search_not_found"}`,
+		Outcome:    core.OutcomeFailure,
 	}, nil
 }
 
@@ -795,8 +795,8 @@ func (m mcpDeniedDefaultTool) Run(_ context.Context, call ToolCall) (ToolResult,
 	return ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
-		Content:    `{"success":false,"error":"Error: Access denied - path outside allowed directories: /workspace not in /tmp","code":"mcp_tool_error"}`,
-		IsError:    true,
+		ModelText:  `{"success":false,"error":"Error: Access denied - path outside allowed directories: /workspace not in /tmp","code":"mcp_tool_error"}`,
+		Outcome:    core.OutcomeFailure,
 	}, nil
 }
 
@@ -835,10 +835,10 @@ func TestDefaultRecoveryPassesThroughCommonToolFailures(t *testing.T) {
 					t.Fatalf("unexpected recovery event for %s: %s", tt.name, ev.Type)
 				case AgentEventTypeToolResult:
 					if ev.Result != nil {
-						if strings.Contains(ev.Result.Content, `error (request_replan)`) {
-							t.Fatalf("unexpected request_replan: %s", ev.Result.Content)
+						if strings.Contains(ev.Result.ModelText, `error (request_replan)`) {
+							t.Fatalf("unexpected request_replan: %s", ev.Result.ModelText)
 						}
-						if strings.Contains(ev.Result.Content, tt.code) {
+						if strings.Contains(ev.Result.ModelText, tt.code) {
 							sawOriginal = true
 						}
 					}
@@ -876,7 +876,7 @@ func TestRecoveryRequestReplanBuildsStructuredResult(t *testing.T) {
 		if ev.Type == AgentEventTypeToolRecoveryExhausted && ev.Recovery != nil && ev.Recovery.ReplanInjected {
 			sawReplanEvent = true
 		}
-		if ev.Type == AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, `error (request_replan)`) {
+		if ev.Type == AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.ModelText, `error (request_replan)`) {
 			sawReplanResult = true
 		}
 	}
@@ -892,8 +892,8 @@ func (n notFoundTool) Run(_ context.Context, call ToolCall) (ToolResult, error) 
 	return ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
-		Content:    `{"success":false,"error":"missing file","code":"not_found"}`,
-		IsError:    true,
+		ModelText:  `{"success":false,"error":"missing file","code":"not_found"}`,
+		Outcome:    core.OutcomeFailure,
 	}, nil
 }
 
@@ -918,10 +918,10 @@ func TestRecoveryDoesNotWrapExploratoryPathFailures(t *testing.T) {
 			t.Fatalf("unexpected recovery event for path failure: %s", ev.Type)
 		case AgentEventTypeToolResult:
 			if ev.Result != nil {
-				if strings.Contains(ev.Result.Content, "request_replan") {
-					t.Fatalf("unexpected replan result: %s", ev.Result.Content)
+				if strings.Contains(ev.Result.ModelText, "request_replan") {
+					t.Fatalf("unexpected replan result: %s", ev.Result.ModelText)
 				}
-				if strings.Contains(ev.Result.Content, `error (not_found)`) {
+				if strings.Contains(ev.Result.ModelText, `error (not_found)`) {
 					sawNotFound = true
 				}
 			}

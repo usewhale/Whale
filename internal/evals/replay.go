@@ -53,7 +53,7 @@ func RecordEntriesFromRun(run *Run) []RecordEntry {
 			StepID:       step.Spec.ID,
 			Tool:         step.Call.Name,
 			Input:        step.Spec.Input,
-			IsError:      step.Result.IsError,
+			IsError:      step.Result.IsError(),
 			Result:       core.ToolResultModelText(step.Result),
 			ResultDigest: summarizeResult(core.ToolResultModelText(step.Result)),
 		}

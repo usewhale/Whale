@@ -39,7 +39,7 @@ func TestRunScenarioOfflineToolLoop(t *testing.T) {
 			if len(run.Steps) != 4 {
 				return fmt.Errorf("expected 4 steps, got %d", len(run.Steps))
 			}
-			if !strings.Contains(run.Steps[3].Result.Content, "whale-eval") {
+			if !strings.Contains(run.Steps[3].Result.ModelText, "whale-eval") {
 				return fmt.Errorf("shell output missing expected token")
 			}
 			return nil
@@ -107,7 +107,7 @@ func TestRunTaskVerifiesWorkspaceState(t *testing.T) {
 				if string(b) != "hello whale\n" {
 					return fmt.Errorf("unexpected guide content: %q", string(b))
 				}
-				if !strings.Contains(run.Steps[1].Result.Content, "hello whale") {
+				if !strings.Contains(run.Steps[1].Result.ModelText, "hello whale") {
 					return fmt.Errorf("read step missing file content")
 				}
 				return nil

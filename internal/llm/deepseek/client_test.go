@@ -25,14 +25,14 @@ type fakeTool struct{ n string }
 
 func (f fakeTool) Name() string { return f.n }
 func (f fakeTool) Run(_ context.Context, call core.ToolCall) (core.ToolResult, error) {
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok"}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "ok"}, nil
 }
 
 type nestedTool struct{}
 
 func (nestedTool) Name() string { return "nested" }
 func (nestedTool) Run(_ context.Context, call core.ToolCall) (core.ToolResult, error) {
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok"}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "ok"}, nil
 }
 func (nestedTool) Description() string { return "nested test tool" }
 func (nestedTool) Parameters() map[string]any {
@@ -997,7 +997,7 @@ func TestStreamResponseWithAttachmentStripsReasoningContentForOpenAIPayload(t *t
 			Role: core.RoleTool,
 			ToolResults: []core.ToolResult{{
 				ToolCallID: "call_1",
-				Content:    `{"success":true}`,
+				ModelText:  `{"success":true}`,
 			}},
 		},
 		core.UserMessageFromParts("s1", []core.MessagePart{
@@ -1424,7 +1424,7 @@ func TestToDeepSeekMessagesDropsStrayToolResults(t *testing.T) {
 		{
 			Role: core.RoleTool,
 			ToolResults: []core.ToolResult{
-				{ToolCallID: "orphan", Name: "bash", Content: "x"},
+				{ToolCallID: "orphan", Name: "bash", ModelText: "x"},
 			},
 		},
 	}
@@ -1451,7 +1451,7 @@ func TestToDeepSeekMessagesDoesNotSendToolResultMetadata(t *testing.T) {
 				{
 					ToolCallID: "call_1",
 					Name:       "edit",
-					Content:    `{"success":true}`,
+					ModelText:  `{"success":true}`,
 					Metadata: map[string]any{
 						"kind":  "file_diff",
 						"files": []any{map[string]any{"unified_diff": "-old\n+new"}},
@@ -1506,7 +1506,7 @@ func TestToDeepSeekMessagesCompactsOversizedToolResultForReplay(t *testing.T) {
 		{
 			Role: core.RoleTool,
 			ToolResults: []core.ToolResult{
-				{ToolCallID: "call_1", Name: "read_file", Content: large},
+				{ToolCallID: "call_1", Name: "read_file", ModelText: large},
 			},
 		},
 	}
@@ -1543,7 +1543,7 @@ func TestToDeepSeekMessagesCompactsMediumToolResultForReplay(t *testing.T) {
 		{
 			Role: core.RoleTool,
 			ToolResults: []core.ToolResult{
-				{ToolCallID: "call_1", Name: "grep", Content: medium},
+				{ToolCallID: "call_1", Name: "grep", ModelText: medium},
 			},
 		},
 	}
@@ -1572,7 +1572,7 @@ func TestToDeepSeekMessagesLeavesSmallToolResultUnchanged(t *testing.T) {
 		{
 			Role: core.RoleTool,
 			ToolResults: []core.ToolResult{
-				{ToolCallID: "call_1", Name: "echo", Content: "small result"},
+				{ToolCallID: "call_1", Name: "echo", ModelText: "small result"},
 			},
 		},
 	}
@@ -1596,7 +1596,7 @@ func TestToDeepSeekMessagesCompactsOversizedWhitespaceToolResult(t *testing.T) {
 		{
 			Role: core.RoleTool,
 			ToolResults: []core.ToolResult{
-				{ToolCallID: "call_1", Name: "shell_run", Content: large},
+				{ToolCallID: "call_1", Name: "shell_run", ModelText: large},
 			},
 		},
 	}
@@ -1623,7 +1623,7 @@ func TestToDeepSeekMessagesCompactsToolResultOnRuneBoundaries(t *testing.T) {
 		{
 			Role: core.RoleTool,
 			ToolResults: []core.ToolResult{
-				{ToolCallID: "call_1", Name: "read_file", Content: large},
+				{ToolCallID: "call_1", Name: "read_file", ModelText: large},
 			},
 		},
 	}
@@ -1888,7 +1888,7 @@ func TestToolResultReplayDiagnosticsCountsCompactionSavings(t *testing.T) {
 	large := strings.Repeat("0123456789abcdef", 4096)
 	history := []core.Message{
 		{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "call_1", Name: "shell_run"}}},
-		{Role: core.RoleTool, ToolResults: []core.ToolResult{{ToolCallID: "call_1", Name: "shell_run", Content: large}}},
+		{Role: core.RoleTool, ToolResults: []core.ToolResult{{ToolCallID: "call_1", Name: "shell_run", ModelText: large}}},
 	}
 	msgs, _ := sanitizeDeepSeekMessagesForRequest(toDeepSeekMessages(history), true)
 
@@ -1909,7 +1909,7 @@ func TestToolResultReplayDiagnosticsCountsCompactionSavings(t *testing.T) {
 
 func TestToolResultReplayDiagnosticsIgnoresStrayRawToolResults(t *testing.T) {
 	history := []core.Message{
-		{Role: core.RoleTool, ToolResults: []core.ToolResult{{ToolCallID: "orphan", Name: "shell_run", Content: "unused"}}},
+		{Role: core.RoleTool, ToolResults: []core.ToolResult{{ToolCallID: "orphan", Name: "shell_run", ModelText: "unused"}}},
 	}
 	msgs, _ := sanitizeDeepSeekMessagesForRequest(toDeepSeekMessages(history), true)
 
@@ -1927,7 +1927,7 @@ func TestToDeepSeekMessagesKeepsPriorToolReplayStableWhenAppendingResults(t *tes
 		content := fmt.Sprintf("result-%02d %s", i, chunk)
 		history = append(history,
 			core.Message{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: id, Name: "shell_run", Input: "{}"}}},
-			core.Message{Role: core.RoleTool, ToolResults: []core.ToolResult{{ToolCallID: id, Name: "shell_run", Content: content}}},
+			core.Message{Role: core.RoleTool, ToolResults: []core.ToolResult{{ToolCallID: id, Name: "shell_run", ModelText: content}}},
 		)
 	}
 
@@ -1947,7 +1947,7 @@ func TestToDeepSeekMessagesKeepsPriorToolReplayStableWhenAppendingResults(t *tes
 
 	history = append(history,
 		core.Message{Role: core.RoleAssistant, ToolCalls: []core.ToolCall{{ID: "call_12", Name: "shell_run", Input: "{}"}}},
-		core.Message{Role: core.RoleTool, ToolResults: []core.ToolResult{{ToolCallID: "call_12", Name: "shell_run", Content: "new result"}}},
+		core.Message{Role: core.RoleTool, ToolResults: []core.ToolResult{{ToolCallID: "call_12", Name: "shell_run", ModelText: "new result"}}},
 	)
 
 	after := toDeepSeekMessages(history)

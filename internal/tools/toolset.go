@@ -169,7 +169,7 @@ func marshalToolResultWithMetadata(call core.ToolCall, data any, metadata map[st
 	if err != nil {
 		return core.ToolResult{}, err
 	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, Metadata: metadata}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content, Outcome: core.OutcomeSuccess, Code: "ok", Metadata: metadata}, nil
 }
 
 func marshalToolError(call core.ToolCall, code, msg string) core.ToolResult {
@@ -182,7 +182,7 @@ func marshalToolError(call core.ToolCall, code, msg string) core.ToolResult {
 	if err != nil {
 		content = fmt.Sprintf(`{"success":false,"code":%q,"message":%q}`, code, msg)
 	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content, Outcome: core.OutcomeForErrorCode(code), Code: code}
 }
 
 type toolRecoveryHint struct {
@@ -207,7 +207,7 @@ func marshalToolErrorWithRecovery(call core.ToolCall, code, msg string, recovery
 	if err != nil {
 		content = fmt.Sprintf(`{"success":false,"code":%q,"message":%q}`, code, msg)
 	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content, Outcome: core.OutcomeForErrorCode(code), Code: code}
 }
 
 func toolInputPath(raw string) string {

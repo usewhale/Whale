@@ -30,7 +30,7 @@ func TestShellRunRecordsCheckpointForWorkspaceMutations(t *testing.T) {
 	res, err := ts.shellRun(ctx, tc("shell_run", map[string]any{
 		"command": "printf after > existing.txt && printf created > created.txt",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("shell_run failed: err=%v res=%+v", err, res)
 	}
 	if !manager.CanRestore("s1", "m1") {

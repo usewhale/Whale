@@ -78,5 +78,5 @@ func marshalWebFetchError(call core.ToolCall, err *webfetch.Error) core.ToolResu
 	if marshalErr != nil {
 		return marshalToolError(call, err.Code, err.Message)
 	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content, Outcome: core.OutcomeForErrorCode(err.Code), Code: err.Code}
 }

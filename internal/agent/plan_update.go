@@ -21,8 +21,8 @@ func (a *Agent) handleUpdatePlan(ctx context.Context, call core.ToolCall, events
 		return core.ToolResult{
 			ToolCallID: call.ID,
 			Name:       call.Name,
-			Content:    fmt.Sprintf(`{"success":false,"error":%q,"code":"invalid_update_plan"}`, err.Error()),
-			IsError:    true,
+			ModelText:  fmt.Sprintf(`{"success":false,"error":%q,"code":"invalid_update_plan"}`, err.Error()),
+			Code:       "invalid_update_plan",
 		}, nil
 	}
 	if !sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypePlanUpdate, PlanUpdate: &update}) {
@@ -32,7 +32,7 @@ func (a *Agent) handleUpdatePlan(ctx context.Context, call core.ToolCall, events
 		"success": true,
 		"data":    update,
 	})
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: string(payload)}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: string(payload)}, nil
 }
 
 func parsePlanUpdate(input string) (PlanUpdateInfo, error) {

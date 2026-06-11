@@ -14,7 +14,7 @@ type regTestTool struct{ name string }
 
 func (t regTestTool) Name() string { return t.name }
 func (t regTestTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok"}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "ok"}, nil
 }
 func (t regTestTool) Description() string { return "desc " + t.name }
 func (t regTestTool) Parameters() map[string]any {
@@ -32,7 +32,7 @@ func TestToolRegistrySpecsAndDispatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dispatch err: %v", err)
 	}
-	if res.IsError || res.Content != "ok" || res.Code != "ok" {
+	if res.IsError() || res.ModelText != "ok" || res.Code != "ok" {
 		t.Fatalf("unexpected dispatch result: %+v", res)
 	}
 }
@@ -43,7 +43,7 @@ func TestToolRegistryDispatchNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dispatch err: %v", err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, "not_found") {
+	if !res.IsError() || !strings.Contains(res.ModelText, "not_found") {
 		t.Fatalf("expected not_found error, got %+v", res)
 	}
 }
@@ -52,7 +52,7 @@ type badSpecTool struct{}
 
 func (b badSpecTool) Name() string { return "bad_spec" }
 func (b badSpecTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok"}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "ok"}, nil
 }
 func (b badSpecTool) Parameters() map[string]any {
 	return map[string]any{
@@ -88,7 +88,7 @@ func (l longOutputTool) Run(_ context.Context, call ToolCall) (ToolResult, error
 	return ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
-		Content:    strings.Repeat("a", 4096),
+		ModelText:  strings.Repeat("a", 4096),
 	}, nil
 }
 
@@ -99,14 +99,14 @@ func TestToolRegistryTruncatesLargeResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dispatch err: %v", err)
 	}
-	if len(res.Content) > 2048 {
-		t.Fatalf("truncated result length = %d, want <= 2048: %s", len(res.Content), res.Content)
+	if len(res.ModelText) > 2048 {
+		t.Fatalf("truncated result length = %d, want <= 2048: %s", len(res.ModelText), res.ModelText)
 	}
-	if res.IsError {
+	if res.IsError() {
 		t.Fatalf("truncated successful result should not be an error: %+v", res)
 	}
-	if !strings.Contains(res.Content, "...[output truncated:") {
-		t.Fatalf("truncated result should carry the omission marker, got: %s", res.Content)
+	if !strings.Contains(res.ModelText, "...[output truncated:") {
+		t.Fatalf("truncated result should carry the omission marker, got: %s", res.ModelText)
 	}
 	if res.Outcome != core.OutcomeSuccess || res.Code != "ok" {
 		t.Fatalf("truncated result should preserve success classification, got: %+v", res)
@@ -144,8 +144,8 @@ func TestToolRegistryArchivesLargeResultBeforeTruncation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read archive: %v", err)
 	}
-	if len(full) <= len(res.Content) || !strings.Contains(string(full), strings.Repeat("a", 256)) {
-		t.Fatalf("archive did not preserve larger normalized payload, archived=%d replay=%d", len(full), len(res.Content))
+	if len(full) <= len(res.ModelText) || !strings.Contains(string(full), strings.Repeat("a", 256)) {
+		t.Fatalf("archive did not preserve larger normalized payload, archived=%d replay=%d", len(full), len(res.ModelText))
 	}
 	if res.Metadata["full_result_path"] != path || res.Metadata["output_truncated"] != true {
 		t.Fatalf("tool result metadata missing archive path: %+v", res.Metadata)

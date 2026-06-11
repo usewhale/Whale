@@ -203,11 +203,11 @@ func validateScenario(spec ScenarioSpec, run *Run) error {
 		if step.Call.Name != step.Spec.ToolName {
 			return fmt.Errorf("scenario %q step %q ran tool %q, expected %q", spec.Name, step.Spec.ID, step.Call.Name, step.Spec.ToolName)
 		}
-		if step.Spec.ExpectError && !step.Result.IsError {
+		if step.Spec.ExpectError && !step.Result.IsError() {
 			return fmt.Errorf("scenario %q step %q expected tool error", spec.Name, step.Spec.ID)
 		}
-		if !step.Spec.ExpectError && step.Result.IsError {
-			return fmt.Errorf("scenario %q step %q returned unexpected tool error: %s", spec.Name, step.Spec.ID, step.Result.Content)
+		if !step.Spec.ExpectError && step.Result.IsError() {
+			return fmt.Errorf("scenario %q step %q returned unexpected tool error: %s", spec.Name, step.Spec.ID, step.Result.ModelText)
 		}
 		if outcome := core.ToolResultOutcome(step.Result); outcome != "" {
 			succeeded := outcome == core.OutcomeSuccess || outcome == core.OutcomeNoResult
@@ -312,7 +312,7 @@ func writeRecord(path string, run *Run) error {
 			StepID:       step.Spec.ID,
 			Tool:         step.Call.Name,
 			Input:        step.Spec.Input,
-			IsError:      step.Result.IsError,
+			IsError:      step.Result.IsError(),
 			Result:       core.ToolResultModelText(step.Result),
 			ResultDigest: summarizeResult(core.ToolResultModelText(step.Result)),
 		}

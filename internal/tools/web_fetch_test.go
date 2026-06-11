@@ -27,7 +27,7 @@ func TestWebFetchExtractsTitleAndText(t *testing.T) {
 		}, nil
 	})}
 	res, err := ts.webFetch(context.Background(), core.ToolCall{ID: "1", Name: "web_fetch", Input: `{"url":"https://example.com","prompt":"main content"}`})
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("web_fetch failed err=%v res=%+v", err, res)
 	}
 
@@ -37,7 +37,7 @@ func TestWebFetchExtractsTitleAndText(t *testing.T) {
 			Content string `json:"content"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+	if err := json.Unmarshal([]byte(res.ModelText), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if out.Data.Title != "Example Page" {
@@ -65,7 +65,7 @@ func TestWebFetchDecodesHTMLMetaCharset(t *testing.T) {
 		}, nil
 	})}
 	res, err := ts.webFetch(context.Background(), core.ToolCall{ID: "1", Name: "web_fetch", Input: `{"url":"https://example.com","prompt":"read page"}`})
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("web_fetch failed err=%v res=%+v", err, res)
 	}
 
@@ -75,7 +75,7 @@ func TestWebFetchDecodesHTMLMetaCharset(t *testing.T) {
 			Content string `json:"content"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+	if err := json.Unmarshal([]byte(res.ModelText), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if out.Data.Title != "日本語" || !strings.Contains(out.Data.Content, "日本語") {
@@ -98,7 +98,7 @@ func TestWebFetchMarksLowContentSPAShell(t *testing.T) {
 		}, nil
 	})}
 	res, err := ts.webFetch(context.Background(), core.ToolCall{ID: "1", Name: "web_fetch", Input: `{"url":"https://antigravity.google/docs/hooks","prompt":"extract hooks docs"}`})
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("web_fetch failed err=%v res=%+v", err, res)
 	}
 
@@ -109,11 +109,11 @@ func TestWebFetchMarksLowContentSPAShell(t *testing.T) {
 			NextSteps  string `json:"next_steps"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+	if err := json.Unmarshal([]byte(res.ModelText), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if !out.Data.LowContent {
-		t.Fatalf("expected low content diagnosis, got: %s", res.Content)
+		t.Fatalf("expected low content diagnosis, got: %s", res.ModelText)
 	}
 	if out.Data.Reason == "" || !strings.Contains(out.Data.NextSteps, "web_search") {
 		t.Fatalf("expected actionable diagnosis, got reason=%q next_steps=%q", out.Data.Reason, out.Data.NextSteps)

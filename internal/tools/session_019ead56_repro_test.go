@@ -56,19 +56,19 @@ func TestReadFileResultKeepsOperatorsVerbatim(t *testing.T) {
 	res, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
 		"file_path": "Patch_GeneIntercept.cs",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
 	}
 	for _, esc := range []string{`\u0026`, `\u003c`, `\u003e`} {
-		if strings.Contains(res.Content, esc) {
+		if strings.Contains(res.ModelText, esc) {
 			t.Errorf("read_file result shows the model literal %s instead of the file's bytes", esc)
 		}
 	}
-	if !strings.Contains(res.Content, "elem != null && elem.ValueWithoutLink > 0") {
-		t.Errorf("expected C# operators verbatim in read_file result, got:\n%s", res.Content)
+	if !strings.Contains(res.ModelText, "elem != null && elem.ValueWithoutLink > 0") {
+		t.Errorf("expected C# operators verbatim in read_file result, got:\n%s", res.ModelText)
 	}
-	if !strings.Contains(res.Content, "HasCondition<ConAnorexia>()") {
-		t.Errorf("expected generic type syntax verbatim in read_file result, got:\n%s", res.Content)
+	if !strings.Contains(res.ModelText, "HasCondition<ConAnorexia>()") {
+		t.Errorf("expected generic type syntax verbatim in read_file result, got:\n%s", res.ModelText)
 	}
 }
 
@@ -93,8 +93,8 @@ func TestEditSearchCopiedFromEscapedReadResultCannotMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("editFile returned transport error: %v", err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, "search_not_found") {
-		t.Fatalf("expected search_not_found for escaped search text, got: %s", res.Content)
+	if !res.IsError() || !strings.Contains(res.ModelText, "search_not_found") {
+		t.Fatalf("expected search_not_found for escaped search text, got: %s", res.ModelText)
 	}
 }
 

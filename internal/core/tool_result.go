@@ -102,9 +102,7 @@ func NewToolResultFromEnvelope(call ToolCall, env ToolEnvelope, metadata map[str
 		Code:       env.Code,
 		Payload:    payload,
 		ModelText:  text,
-		Content:    text,
 		Metadata:   metadata,
-		IsError:    outcome != OutcomeSuccess && outcome != OutcomeNoResult,
 	}
 }
 
@@ -124,23 +122,29 @@ func NewToolResultError(call ToolCall, code, msg string, data map[string]any) To
 }
 
 // ToolResultModelText returns the model-visible text of a result.
-// Transitional: falls back to Content for results deserialized from
-// legacy session files; once the legacy decoder populates ModelText on
-// load, this collapses to the field read.
 func ToolResultModelText(r ToolResult) string {
-	if r.ModelText != "" {
-		return r.ModelText
-	}
-	return r.Content
+	return r.ModelText
 }
 
-// ToolResultOutcome returns the protocol outcome, deriving it from legacy
-// fields when the result predates the channel separation.
+// ToolResultOutcome returns the protocol outcome, deriving it for results
+// whose producer has not classified them yet (raw envelope in ModelText).
 func ToolResultOutcome(r ToolResult) ToolOutcome {
 	if r.Outcome != "" {
 		return r.Outcome
 	}
 	return FinalizeToolResultChannels(r).Outcome
+}
+
+// IsError reports whether the result is a failure-class outcome.
+// OutcomeNoResult ("searched fine, found nothing") is not an error.
+// Unclassified results (raw envelope in ModelText, pre-funnel) derive
+// their outcome on the fly so the answer never depends on which side of
+// the dispatch funnel the caller sits.
+func (r ToolResult) IsError() bool {
+	if r.Outcome == "" {
+		return FinalizeToolResultChannels(r).outcomeIsError()
+	}
+	return r.outcomeIsError()
 }
 
 // ToolEnvelopeView rebuilds the legacy envelope view from the structured
@@ -181,11 +185,10 @@ func ToolEnvelopeView(res ToolResult) (ToolEnvelope, bool) {
 // the same result reloaded from an old session file classify identically.
 // Idempotent: results that already carry ModelText pass through unchanged.
 func FinalizeToolResultChannels(res ToolResult) ToolResult {
-	if res.ModelText != "" {
+	if res.Outcome != "" {
 		return res
 	}
-	res.ModelText = res.Content
-	env, parsed := ParseToolEnvelope(res.Content)
+	env, parsed := ParseToolEnvelope(res.ModelText)
 	if parsed {
 		if res.Code == "" {
 			res.Code = env.Code
@@ -193,23 +196,15 @@ func FinalizeToolResultChannels(res ToolResult) ToolResult {
 		if res.Payload == nil {
 			res.Payload = CanonicalizeToolPayload(env)
 		}
-	}
-	if res.Outcome == "" {
-		if res.IsError {
-			res.Outcome = OutcomeForErrorCode(res.Code)
-		} else {
-			res.Outcome = OutcomeSuccess
-		}
-	}
-	if parsed {
-		// Live bypass producers still build envelope JSON literals; render
-		// the model channel plain like the funnel does and keep Content in
-		// lockstep for single-write persistence.
+		res.Outcome = outcomeForEnvelope(env)
+		// Bypass producers build envelope JSON literals; render the model
+		// channel plain like the funnel does.
 		if payload, ok := res.Payload.(map[string]any); ok || res.Payload == nil {
 			res.ModelText = RenderToolResultText(res.Name, res.Outcome, res.Code, payload)
-			res.Content = res.ModelText
 		}
+		return res
 	}
+	res.Outcome = OutcomeSuccess
 	return res
 }
 
@@ -233,19 +228,15 @@ func (r ToolResult) MarshalJSON() ([]byte, error) {
 		ToolCallID: r.ToolCallID,
 		Name:       r.Name,
 		Metadata:   r.Metadata,
-		IsError:    r.IsError,
 		Outcome:    r.Outcome,
 		Code:       r.Code,
 		Payload:    r.Payload,
 		ModelText:  r.ModelText,
 	}
-	if r.Content != r.ModelText {
-		w.Content = r.Content
-	}
-	// Phase 1: ModelText still carries the envelope, so the canonical
-	// payload is fully derivable on load — don't store the data twice.
-	// (Phase 2's plain-text ModelText will persist Payload explicitly.)
-	if w.Content == "" && r.ModelText != "" {
+	// Results that still carry a raw envelope as ModelText (pre-funnel or
+	// phase-1 files rewritten in place) stay single-write: the canonical
+	// payload is fully derivable on load.
+	if r.ModelText != "" {
 		if _, ok := ParseToolEnvelope(r.ModelText); ok {
 			w.Payload = nil
 		}
@@ -261,25 +252,18 @@ func (r *ToolResult) UnmarshalJSON(b []byte) error {
 	res := ToolResult{
 		ToolCallID: w.ToolCallID,
 		Name:       w.Name,
-		Content:    w.Content,
 		Metadata:   w.Metadata,
-		IsError:    w.IsError,
 		Outcome:    w.Outcome,
 		Code:       w.Code,
 		Payload:    w.Payload,
 		ModelText:  w.ModelText,
 	}
-	if res.Content == "" && res.ModelText != "" {
-		res.Content = res.ModelText
-	}
-	// Re-derive the canonical payload when it was elided at save time
-	// (phase-1 envelope ModelText), and backfill the structured fields for
-	// legacy lines that predate the channel separation. Historical model
-	// bytes are NEVER re-rendered: old turns must replay byte-identically.
-	// Must never reject a line — the JSONL loader drops lines whose
-	// unmarshal fails.
+	// Legacy lines carry only Content/IsError: backfill the channels.
+	// Historical model bytes are NEVER re-rendered — old turns must replay
+	// byte-identically. Must never reject a line — the JSONL loader drops
+	// lines whose unmarshal fails.
 	if res.ModelText == "" {
-		res.ModelText = res.Content
+		res.ModelText = w.Content
 	}
 	if env, ok := ParseToolEnvelope(res.ModelText); ok {
 		if res.Code == "" {
@@ -290,31 +274,26 @@ func (r *ToolResult) UnmarshalJSON(b []byte) error {
 		}
 		if res.Outcome == "" {
 			res.Outcome = outcomeForEnvelope(env)
-			if res.IsError && res.Outcome == OutcomeSuccess {
+			if w.IsError && res.Outcome == OutcomeSuccess {
 				res.Outcome = OutcomeForErrorCode(env.Code)
 			}
 		}
 	}
 	if res.Outcome == "" {
-		if res.IsError {
+		if w.IsError {
 			res.Outcome = OutcomeForErrorCode(res.Code)
 		} else {
 			res.Outcome = OutcomeSuccess
 		}
 	}
-	res.IsError = res.outcomeIsError()
 	*r = res
 	return nil
 }
 
 func (r ToolResult) outcomeIsError() bool {
 	switch r.Outcome {
-	case OutcomeSuccess, OutcomeNoResult:
+	case OutcomeSuccess, OutcomeNoResult, "":
 		return false
-	case "":
-		// Legacy or hand-built results that predate Outcome: fall back to
-		// the stored flag until the field is universally populated.
-		return r.IsError
 	}
 	return true
 }

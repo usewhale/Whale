@@ -40,11 +40,11 @@ func TestWebSearchDuckDuckGoSuccess(t *testing.T) {
 		Name:  "web_search",
 		Input: `{"query":"alpha","max_results":3}`,
 	})
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("web search failed err=%v res=%+v", err, res)
 	}
-	if !strings.Contains(res.Content, `"source":"duckduckgo"`) {
-		t.Fatalf("expected duckduckgo source, got %s", res.Content)
+	if !strings.Contains(res.ModelText, `"source":"duckduckgo"`) {
+		t.Fatalf("expected duckduckgo source, got %s", res.ModelText)
 	}
 	var out struct {
 		Success bool `json:"success"`
@@ -54,11 +54,11 @@ func TestWebSearchDuckDuckGoSuccess(t *testing.T) {
 			} `json:"results"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+	if err := json.Unmarshal([]byte(res.ModelText), &out); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
 	if len(out.Data.Results) == 0 || out.Data.Results[0].Title != "Alpha & One" {
-		t.Fatalf("missing parsed title: %s", res.Content)
+		t.Fatalf("missing parsed title: %s", res.ModelText)
 	}
 }
 
@@ -94,14 +94,14 @@ func TestWebSearchFallsBackToBing(t *testing.T) {
 		Name:  "web_search",
 		Input: `{"query":"beta"}`,
 	})
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("web search failed err=%v res=%+v", err, res)
 	}
-	if !strings.Contains(res.Content, `"source":"bing"`) {
-		t.Fatalf("expected bing source, got %s", res.Content)
+	if !strings.Contains(res.ModelText, `"source":"bing"`) {
+		t.Fatalf("expected bing source, got %s", res.ModelText)
 	}
-	if !strings.Contains(res.Content, "example.com/path?q=1") {
-		t.Fatalf("expected normalized bing url, got %s", res.Content)
+	if !strings.Contains(res.ModelText, "example.com/path?q=1") {
+		t.Fatalf("expected normalized bing url, got %s", res.ModelText)
 	}
 }
 
@@ -134,14 +134,14 @@ func TestWebSearchBingNoResultsUsesBingSource(t *testing.T) {
 		Name:  "web_search",
 		Input: `{"query":"nope"}`,
 	})
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("web search failed err=%v res=%+v", err, res)
 	}
-	if !strings.Contains(res.Content, `"source":"bing"`) {
-		t.Fatalf("expected bing source for bing no-results page, got %s", res.Content)
+	if !strings.Contains(res.ModelText, `"source":"bing"`) {
+		t.Fatalf("expected bing source for bing no-results page, got %s", res.ModelText)
 	}
-	if !strings.Contains(res.Content, `"count":0`) {
-		t.Fatalf("expected zero count, got %s", res.Content)
+	if !strings.Contains(res.ModelText, `"count":0`) {
+		t.Fatalf("expected zero count, got %s", res.ModelText)
 	}
 }
 
@@ -174,14 +174,14 @@ func TestWebSearchDuckDuckGoNoResultsWinsOverUnparseableBing(t *testing.T) {
 		Name:  "web_search",
 		Input: `{"query":"primary-empty"}`,
 	})
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("web search should preserve duckduckgo no-results err=%v res=%+v", err, res)
 	}
-	if !strings.Contains(res.Content, `"source":"duckduckgo"`) {
-		t.Fatalf("expected duckduckgo source, got %s", res.Content)
+	if !strings.Contains(res.ModelText, `"source":"duckduckgo"`) {
+		t.Fatalf("expected duckduckgo source, got %s", res.ModelText)
 	}
-	if !strings.Contains(res.Content, `"count":0`) {
-		t.Fatalf("expected zero count, got %s", res.Content)
+	if !strings.Contains(res.ModelText, `"count":0`) {
+		t.Fatalf("expected zero count, got %s", res.ModelText)
 	}
 }
 
@@ -415,11 +415,11 @@ func TestWebSearchForceBingEnv(t *testing.T) {
 		Name:  "web_search",
 		Input: `{"query":"force-bing"}`,
 	})
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("web search failed err=%v res=%+v", err, res)
 	}
-	if !strings.Contains(res.Content, `"source":"bing"`) {
-		t.Fatalf("expected forced bing source, got %s", res.Content)
+	if !strings.Contains(res.ModelText, `"source":"bing"`) {
+		t.Fatalf("expected forced bing source, got %s", res.ModelText)
 	}
 }
 
@@ -436,8 +436,8 @@ func TestWebSearchMissingQuery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, "query is required") {
-		t.Fatalf("expected query required error, got %s", res.Content)
+	if !res.IsError() || !strings.Contains(res.ModelText, "query is required") {
+		t.Fatalf("expected query required error, got %s", res.ModelText)
 	}
 }
 
@@ -483,7 +483,7 @@ func TestWebSearchCompatSearchQueryArray(t *testing.T) {
 	}
 	b, _ := json.Marshal(in)
 	res, err := ts.webSearch(context.Background(), core.ToolCall{ID: "1", Name: "web_search", Input: string(b)})
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("compat search query failed err=%v res=%+v", err, res)
 	}
 }
@@ -516,7 +516,7 @@ func webSearchErrorForStatuses(t *testing.T, ddgStatus, bingStatus int) core.Too
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatalf("expected web search error, got %+v", res)
 	}
 	return res
@@ -531,12 +531,12 @@ type testWebSearchRecovery struct {
 
 func toolErrorRecovery(t *testing.T, res core.ToolResult) testWebSearchRecovery {
 	t.Helper()
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatalf("expected tool error, got %+v", res)
 	}
-	env, ok := core.ParseToolEnvelope(res.Content)
+	env, ok := core.ParseToolEnvelope(res.ModelText)
 	if !ok {
-		t.Fatalf("parse tool envelope: %s", res.Content)
+		t.Fatalf("parse tool envelope: %s", res.ModelText)
 	}
 	raw, ok := env.Data["recovery"]
 	if !ok {

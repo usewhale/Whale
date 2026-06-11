@@ -360,7 +360,7 @@ func shellRunForegroundFinalResult(call core.ToolCall, snap shellTaskSnapshot, r
 	if marshalErr != nil {
 		return marshalToolError(call, code, message), nil
 	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content, Outcome: core.OutcomeForErrorCode(code), Code: code}, nil
 }
 
 func shellRunForegroundTimeoutResult(call core.ToolCall, snap shellTaskSnapshot, requestedTimeoutMS int, effectiveTimeoutMS int, warnings []string) (core.ToolResult, error) {
@@ -391,7 +391,7 @@ func shellRunForegroundTimeoutResult(call core.ToolCall, snap shellTaskSnapshot,
 	if marshalErr != nil {
 		return marshalToolError(call, "timeout", "command timed out"), nil
 	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content, IsError: true}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content, Outcome: core.OutcomeTimeout, Code: "timeout"}, nil
 }
 
 func shellRunBackgroundedResult(snap shellTaskSnapshot, requestedYieldMS int, effectiveYieldMS int, requestedMaxRuntimeMS int, effectiveMaxRuntimeMS int, warnings []string, diagnosis shellDiagnosis) map[string]any {

@@ -46,7 +46,7 @@ func TestFetchReturnsReadableContent(t *testing.T) {
 		Name:  "fetch",
 		Input: `{"url":"https://example.com","prompt":"return the main text"}`,
 	})
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("fetch failed err=%v res=%+v", err, res)
 	}
 	var out struct {
@@ -56,7 +56,7 @@ func TestFetchReturnsReadableContent(t *testing.T) {
 			Content string `json:"content"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+	if err := json.Unmarshal([]byte(res.ModelText), &out); err != nil {
 		t.Fatalf("unmarshal output: %v", err)
 	}
 	if out.Data.URL != "https://example.com" || out.Data.Title != "T" {
@@ -85,7 +85,7 @@ func TestFetchUsesConfiguredExtractor(t *testing.T) {
 		Name:  "fetch",
 		Input: `{"url":"https://example.com","prompt":"summarize"}`,
 	})
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("fetch failed err=%v res=%+v", err, res)
 	}
 	var out struct {
@@ -93,7 +93,7 @@ func TestFetchUsesConfiguredExtractor(t *testing.T) {
 			Content string `json:"content"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+	if err := json.Unmarshal([]byte(res.ModelText), &out); err != nil {
 		t.Fatalf("unmarshal output: %v", err)
 	}
 	if out.Data.Content != "answer from extractor" {
@@ -114,8 +114,8 @@ func TestFetchRejectsMissingPromptAndOldFormatOnlyInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if !res.IsError || !strings.Contains(res.Content, "prompt is required") {
-		t.Fatalf("expected prompt required error, got: %s", res.Content)
+	if !res.IsError() || !strings.Contains(res.ModelText, "prompt is required") {
+		t.Fatalf("expected prompt required error, got: %s", res.ModelText)
 	}
 }
 
@@ -129,7 +129,7 @@ func TestFetchFileURLIncludesRecoveryHint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatalf("expected error, got: %+v", res)
 	}
 	for _, want := range []string{
@@ -138,8 +138,8 @@ func TestFetchFileURLIncludesRecoveryHint(t *testing.T) {
 		"fetch only supports http/https URLs; use read_file for local file paths or tool result files.",
 		`"recovery"`,
 	} {
-		if !strings.Contains(res.Content, want) {
-			t.Fatalf("result missing %q:\n%s", want, res.Content)
+		if !strings.Contains(res.ModelText, want) {
+			t.Fatalf("result missing %q:\n%s", want, res.ModelText)
 		}
 	}
 }
@@ -162,7 +162,7 @@ func TestFetchHTTPErrorIncludesRecoveryHint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	if !res.IsError {
+	if !res.IsError() {
 		t.Fatalf("expected error, got: %+v", res)
 	}
 	var out struct {
@@ -173,7 +173,7 @@ func TestFetchHTTPErrorIncludesRecoveryHint(t *testing.T) {
 			} `json:"recovery"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal([]byte(res.Content), &out); err != nil {
+	if err := json.Unmarshal([]byte(res.ModelText), &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if out.Data.Recovery.Code != "github_auth_or_api_blocked" || !strings.Contains(out.Data.Recovery.RecommendedAction, "raw.githubusercontent.com") {

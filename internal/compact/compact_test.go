@@ -30,8 +30,8 @@ func TestEstimateMessagesTokensIncludesToolPayloads(t *testing.T) {
 	}, {
 		Role: core.RoleTool,
 		ToolResults: []core.ToolResult{{
-			Name:    "write",
-			Content: strings.Repeat("c", 8),
+			Name:      "write",
+			ModelText: strings.Repeat("c", 8),
 		}},
 	}}
 	if got := EstimateMessagesTokens(msgs); got == 0 {

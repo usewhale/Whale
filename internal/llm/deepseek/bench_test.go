@@ -44,7 +44,7 @@ func syntheticHistory(nTurns, assistantBytes, reasoningBytes, toolResultBytes in
 			ToolResults: []core.ToolResult{{
 				ToolCallID: callID,
 				Name:       "read_file",
-				Content:    toolContent,
+				ModelText:  toolContent,
 			}},
 		})
 	}

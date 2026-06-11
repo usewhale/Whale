@@ -186,7 +186,7 @@ func TestAgentPreToolHookBlockSkipsDispatch(t *testing.T) {
 	toolCalled := false
 	tool := staticTool{name: "echo", run: func(_ context.Context, _ ToolCall) (ToolResult, error) {
 		toolCalled = true
-		return ToolResult{ToolCallID: "tc-1", Name: "echo", Content: "ok"}, nil
+		return ToolResult{ToolCallID: "tc-1", Name: "echo", ModelText: "ok"}, nil
 	}}
 	a := NewAgentWithRegistry(&preBlockProvider{}, store, core.NewToolRegistry([]core.Tool{tool}), WithHooks([]ResolvedHook{{HookConfig: HookConfig{Command: "deny"}, Event: HookEventPreToolUse}}, "."))
 	a.hooks.spawner = func(_ context.Context, _ HookSpawnInput) HookSpawnResult {
@@ -617,7 +617,7 @@ func TestAgentPreToolHookHandlerCanRewriteInputAndAddContext(t *testing.T) {
 		if err != nil {
 			t.Fatalf("marshal envelope: %v", err)
 		}
-		return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content}, nil
+		return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content}, nil
 	}}
 	a := NewAgentWithRegistry(&preBlockProvider{}, store, core.NewToolRegistry([]core.Tool{tool}),
 		WithHookHandlers(HookHandler{
@@ -640,15 +640,15 @@ func TestAgentPreToolHookHandlerCanRewriteInputAndAddContext(t *testing.T) {
 	found := false
 	for _, msg := range msgs {
 		for _, result := range msg.ToolResults {
-			if strings.Contains(result.Content, "hook ctx") && result.Metadata["hook_context"] != nil {
+			if strings.Contains(result.ModelText, "hook ctx") && result.Metadata["hook_context"] != nil {
 				found = true
 				// Hook injection must not destroy the structured channel:
 				// the TUI and workflow detection read Payload, not the text.
 				if result.Outcome == "" {
 					t.Fatalf("hook-injected result lost its outcome: %+v", result)
 				}
-				if result.ModelText != result.Content {
-					t.Fatalf("model channel must follow the hook-mutated text: ModelText=%q Content=%q", result.ModelText, result.Content)
+				if result.ModelText != result.ModelText {
+					t.Fatalf("model channel must follow the hook-mutated text: ModelText=%q Content=%q", result.ModelText, result.ModelText)
 				}
 			}
 		}
@@ -695,7 +695,7 @@ func TestAgentPreToolShellHookJSONCanRewriteInput(t *testing.T) {
 		if !strings.Contains(call.Input, `"x":2`) {
 			t.Fatalf("tool input was not rewritten by shell hook: %s", call.Input)
 		}
-		return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "tool ok"}, nil
+		return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "tool ok"}, nil
 	}}
 	a := NewAgentWithRegistry(&preBlockProvider{}, store, core.NewToolRegistry([]core.Tool{tool}),
 		WithHooks([]ResolvedHook{{HookConfig: HookConfig{Command: "rewrite"}, Event: HookEventPreToolUse}}, "."),
@@ -713,7 +713,7 @@ func TestAgentPreToolShellHookJSONCanRewriteInput(t *testing.T) {
 	found := false
 	for _, msg := range msgs {
 		for _, result := range msg.ToolResults {
-			if strings.Contains(result.Content, "shell ctx") {
+			if strings.Contains(result.ModelText, "shell ctx") {
 				found = true
 			}
 		}
@@ -728,7 +728,7 @@ func TestAgentPostToolShellHookWarnDoesNotFailTurn(t *testing.T) {
 	toolCalled := false
 	tool := staticTool{name: "echo", run: func(_ context.Context, call ToolCall) (ToolResult, error) {
 		toolCalled = true
-		return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "tool ok"}, nil
+		return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "tool ok"}, nil
 	}}
 	a := NewAgentWithRegistry(&preBlockProvider{}, store, core.NewToolRegistry([]core.Tool{tool}),
 		WithHooks([]ResolvedHook{{HookConfig: HookConfig{Command: "post-warn"}, Event: HookEventPostToolUse}}, "."),

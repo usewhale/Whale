@@ -19,7 +19,7 @@ func protocolMessagesForTest(messages []core.Message) []protocol.Message {
 		}
 		toolResults := make([]protocol.ToolResult, 0, len(message.ToolResults))
 		for _, result := range message.ToolResults {
-			toolResults = append(toolResults, protocol.ToolResult{ToolCallID: result.ToolCallID, Name: result.Name, Content: result.Content, Metadata: result.Metadata, IsError: result.IsError})
+			toolResults = append(toolResults, protocol.ToolResult{ToolCallID: result.ToolCallID, Name: result.Name, Content: result.ModelText, Metadata: result.Metadata, IsError: result.IsError()})
 		}
 		out = append(out, protocol.Message{
 			ID:           message.ID,
@@ -188,7 +188,7 @@ func TestHydrateSessionMessages_RestoresUpdatePlanAsPlanUpdate(t *testing.T) {
 			ToolResults: []core.ToolResult{{
 				ToolCallID: "plan-1",
 				Name:       "update_plan",
-				Content:    `{"success":true,"data":{"explanation":"resume checklist","plan":[{"step":"Inspect","status":"completed"},{"step":"Patch","status":"in_progress"},{"step":"Test","status":"pending"}]}}`,
+				ModelText:  `{"success":true,"data":{"explanation":"resume checklist","plan":[{"step":"Inspect","status":"completed"},{"step":"Patch","status":"in_progress"},{"step":"Test","status":"pending"}]}}`,
 			}},
 		},
 	}
@@ -231,7 +231,7 @@ func TestSessionHydrationRestoresHiddenWorkflowResultInsteadOfLaunchReasoning(t 
 				ToolResults: []core.ToolResult{{
 					ToolCallID: "call-workflow-1",
 					Name:       "workflow",
-					Content:    `{"success":true,"data":{"status":"workflow_confirmation_required","name":"issue251-live"}}`,
+					ModelText:  `{"success":true,"data":{"status":"workflow_confirmation_required","name":"issue251-live"}}`,
 				}},
 			},
 			{
@@ -518,7 +518,7 @@ func TestSessionHydrationRendersStoredToolLifecycleThroughTimelineInOrder(t *tes
 			{Role: core.RoleTool, ToolResults: []core.ToolResult{{
 				ToolCallID: "read-1",
 				Name:       "read_file",
-				Content:    `{"success":true,"data":{"content":"ok"}}`,
+				ModelText:  `{"success":true,"data":{"content":"ok"}}`,
 			}}},
 			{Role: core.RoleAssistant, Text: "after tool"},
 		}),
@@ -553,8 +553,8 @@ func TestSessionHydrationSuppressesStoredAuditOnlyToolLifecycle(t *testing.T) {
 			{Role: core.RoleTool, ToolResults: []core.ToolResult{{
 				ToolCallID: "deny-1",
 				Name:       "shell_run",
-				Content:    `{"success":false,"code":"plan_mode_blocked"}`,
-				IsError:    true,
+				ModelText:  `{"success":false,"code":"plan_mode_blocked"}`,
+				Outcome:    core.OutcomeFailure,
 				Metadata: map[string]any{
 					"ui_visibility":       "audit",
 					"auto_denied":         true,

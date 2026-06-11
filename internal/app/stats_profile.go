@@ -248,8 +248,8 @@ func readProfileSessionFile(path, id string, modTime time.Time) profileSessionSt
 			addProfileToolCall(stats.ByTool, tc.Name)
 		}
 		for _, tr := range msg.ToolResults {
-			stats.ToolResultChars += len(tr.Content)
-			addProfileToolResult(stats.ByTool, tr.Name, len(tr.Content))
+			stats.ToolResultChars += len(tr.ModelText)
+			addProfileToolResult(stats.ByTool, tr.Name, len(tr.ModelText))
 		}
 	}
 	if stats.HasHiddenUserTask && isTrivialProfileUserText(stats.FirstUserText) {

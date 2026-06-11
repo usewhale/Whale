@@ -36,7 +36,7 @@ func TestTaskSearchApplyPatchReadbackFlow(t *testing.T) {
 			},
 			Verify: func(run *Run) error {
 				read := run.FindStep("read")
-				if read == nil || !strings.Contains(read.Result.Content, "mode=new") {
+				if read == nil || !strings.Contains(read.Result.ModelText, "mode=new") {
 					return fmt.Errorf("patched content missing from readback")
 				}
 				return nil
@@ -82,7 +82,7 @@ func TestTaskShellRunCreatesFileInSubdir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run task: %v", err)
 	}
-	if read := run.FindStep("read"); read == nil || !strings.Contains(read.Result.Content, "from-shell") {
+	if read := run.FindStep("read"); read == nil || !strings.Contains(read.Result.ModelText, "from-shell") {
 		t.Fatal("expected readback of shell-written file")
 	}
 }
@@ -109,7 +109,7 @@ func TestTaskPlanModeReadOnlyFlow(t *testing.T) {
 			},
 			Verify: func(run *Run) error {
 				read := run.FindStep("read")
-				if read == nil || !strings.Contains(read.Result.Content, "plan safe") {
+				if read == nil || !strings.Contains(read.Result.ModelText, "plan safe") {
 					return fmt.Errorf("plan mode read-only flow did not read file")
 				}
 				return nil
@@ -143,7 +143,7 @@ func TestTaskApprovalRequiredWriteApproved(t *testing.T) {
 			},
 			Verify: func(run *Run) error {
 				read := run.FindStep("read")
-				if read == nil || !strings.Contains(read.Result.Content, "approved") {
+				if read == nil || !strings.Contains(read.Result.ModelText, "approved") {
 					return fmt.Errorf("approval-approved write missing readback")
 				}
 				return nil
@@ -153,7 +153,7 @@ func TestTaskApprovalRequiredWriteApproved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run task: %v", err)
 	}
-	if step := run.FindStep("write"); step == nil || step.Result.IsError {
+	if step := run.FindStep("write"); step == nil || step.Result.IsError() {
 		t.Fatal("expected approved write step to succeed")
 	}
 }
@@ -189,7 +189,7 @@ func TestTaskGrepReadEditFlow(t *testing.T) {
 			},
 			Verify: func(run *Run) error {
 				grep := run.FindStep("grep")
-				if grep == nil || !strings.Contains(grep.Result.Content, "pkg/banner.go") {
+				if grep == nil || !strings.Contains(grep.Result.ModelText, "pkg/banner.go") {
 					return fmt.Errorf("grep did not surface expected file")
 				}
 				b, err := os.ReadFile(filepath.Join(run.Root, "pkg", "banner.go"))
@@ -241,7 +241,7 @@ func TestTaskBackgroundShellWaitWithHistoryLookup(t *testing.T) {
 			},
 			Verify: func(run *Run) error {
 				wait := run.FindStep("wait")
-				if wait == nil || !strings.Contains(wait.Result.Content, "hello-from-bg") {
+				if wait == nil || !strings.Contains(wait.Result.ModelText, "hello-from-bg") {
 					return fmt.Errorf("background wait missing stdout")
 				}
 				b, err := os.ReadFile(filepath.Join(run.Root, "bg.txt"))
@@ -317,7 +317,7 @@ func TestTaskTodoWorkflowAddUpdateListRemove(t *testing.T) {
 					return fmt.Errorf("expected empty todo state after remove, got %+v", state.Items)
 				}
 				step := run.FindStep("list-updated")
-				if step == nil || !strings.Contains(step.Result.Content, "ship evals now") {
+				if step == nil || !strings.Contains(step.Result.ModelText, "ship evals now") {
 					return fmt.Errorf("updated todo not visible in list result")
 				}
 				return nil
@@ -380,7 +380,7 @@ func TestTaskTodoWorkflowClearDone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run task: %v", err)
 	}
-	if list := run.FindStep("list"); list == nil || !strings.Contains(list.Result.Content, "keep item") {
+	if list := run.FindStep("list"); list == nil || !strings.Contains(list.Result.ModelText, "keep item") {
 		t.Fatal("expected remaining todo to appear in list")
 	}
 }
@@ -430,10 +430,10 @@ func TestTaskBackgroundShellRunningThenExited(t *testing.T) {
 			Verify: func(run *Run) error {
 				running := run.FindStep("wait-running")
 				exited := run.FindStep("wait-exited")
-				if running == nil || !strings.Contains(running.Result.Content, `running in background`) {
+				if running == nil || !strings.Contains(running.Result.ModelText, `running in background`) {
 					return fmt.Errorf("expected running wait result, got %+v", running)
 				}
-				if exited == nil || !strings.Contains(exited.Result.Content, `exit 0`) || !strings.Contains(exited.Result.Content, "delayed-ok") {
+				if exited == nil || !strings.Contains(exited.Result.ModelText, `exit 0`) || !strings.Contains(exited.Result.ModelText, "delayed-ok") {
 					return fmt.Errorf("expected exited wait result with stdout, got %+v", exited)
 				}
 				return nil

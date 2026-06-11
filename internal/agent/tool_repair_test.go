@@ -61,7 +61,7 @@ func TestToolCallRepair_BlocksRepeatedCalls(t *testing.T) {
 	if len(dropped) != 1 {
 		t.Fatalf("expected 1 dropped, got %d", len(dropped))
 	}
-	if !dropped[0].IsError {
+	if !dropped[0].IsError() {
 		t.Fatalf("expected dropped call to be error")
 	}
 	if dropped[0].ToolCallID != "4" {

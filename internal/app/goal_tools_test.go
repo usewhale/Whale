@@ -40,8 +40,8 @@ func TestGoalToolsGetActiveGoal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get_goal: %v", err)
 	}
-	if result.IsError {
-		t.Fatalf("get_goal returned error envelope: %s", result.Content)
+	if result.IsError() {
+		t.Fatalf("get_goal returned error envelope: %s", result.ModelText)
 	}
 	env := parseGoalToolEnvelope(t, result)
 	goal, ok := env.Data["goal"].(map[string]any)
@@ -85,8 +85,8 @@ func TestGetGoalToolDoesNotPersistRefreshedBudgetState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get_goal: %v", err)
 	}
-	if !result.IsError {
-		t.Fatalf("over-budget get_goal should report no active goal without persisting: %s", result.Content)
+	if !result.IsError() {
+		t.Fatalf("over-budget get_goal should report no active goal without persisting: %s", result.ModelText)
 	}
 	st, ok, err := session.LoadGoalState(app.sessionsDir, app.sessionID)
 	if err != nil || !ok {
@@ -133,8 +133,8 @@ func TestGoalToolCompleteSettlesUsageAndDoesNotReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update_goal: %v", err)
 	}
-	if result.IsError {
-		t.Fatalf("update_goal returned error envelope: %s", result.Content)
+	if result.IsError() {
+		t.Fatalf("update_goal returned error envelope: %s", result.ModelText)
 	}
 	st, ok, err := session.LoadGoalState(app.sessionsDir, app.sessionID)
 	if err != nil || !ok {
@@ -180,8 +180,8 @@ func TestGoalToolsRejectNonActiveGoal(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s update_goal: %v", status, err)
 		}
-		if !result.IsError {
-			t.Fatalf("%s update_goal should reject non-active goal: %s", status, result.Content)
+		if !result.IsError() {
+			t.Fatalf("%s update_goal should reject non-active goal: %s", status, result.ModelText)
 		}
 	}
 }
@@ -205,16 +205,16 @@ func TestGoalToolRejectsUnsupportedStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update_goal: %v", err)
 	}
-	if !result.IsError {
-		t.Fatalf("unsupported status should be rejected: %s", result.Content)
+	if !result.IsError() {
+		t.Fatalf("unsupported status should be rejected: %s", result.ModelText)
 	}
 }
 
 func parseGoalToolEnvelope(t *testing.T, result core.ToolResult) core.ToolEnvelope {
 	t.Helper()
-	env, ok := core.ParseToolEnvelope(result.Content)
+	env, ok := core.ParseToolEnvelope(result.ModelText)
 	if !ok {
-		t.Fatalf("result content is not a tool envelope: %s", result.Content)
+		t.Fatalf("result content is not a tool envelope: %s", result.ModelText)
 	}
 	return env
 }

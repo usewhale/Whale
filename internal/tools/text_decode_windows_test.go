@@ -48,7 +48,7 @@ func TestWindowsReadFileDecodesGB18030Text(t *testing.T) {
 	res, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
 		"file_path": "gbk.txt",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("read_file failed: err=%v res=%+v", err, res)
 	}
 	content := readFileContent(t, readFileData(t, res))
@@ -79,7 +79,7 @@ func TestWindowsEditFilePreservesGB18030Bytes(t *testing.T) {
 		"search":    "OLD",
 		"replace":   "NEW",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("edit_file failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(path)
@@ -117,7 +117,7 @@ func TestWindowsEditFileMatchesVisibleGB18030Text(t *testing.T) {
 		"search":    "中文内容",
 		"replace":   "中文结果",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("edit_file failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(path)
@@ -155,7 +155,7 @@ func TestWindowsEditFilePreservesNonChineseLegacyBytes(t *testing.T) {
 		"search":    "OLD",
 		"replace":   "NEW",
 	}))
-	if err != nil || res.IsError {
+	if err != nil || res.IsError() {
 		t.Fatalf("edit_file failed: err=%v res=%+v", err, res)
 	}
 	got, err := os.ReadFile(path)

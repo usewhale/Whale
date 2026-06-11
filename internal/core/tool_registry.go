@@ -276,8 +276,8 @@ func (r *ToolRegistry) DispatchWithProgress(ctx context.Context, call ToolCall, 
 		return normalizeRegistryResult(ctx, call, ToolResult{
 			ToolCallID: call.ID,
 			Name:       call.Name,
-			Content:    `{"ok":false,"error":"tool not found","code":"not_found"}`,
-			IsError:    true,
+			ModelText:  `{"ok":false,"error":"tool not found","code":"not_found"}`,
+			Code:       "not_found",
 		}, maxResultChars, time.Since(start).Milliseconds()), nil
 	}
 	if hasSpec {
@@ -285,8 +285,8 @@ func (r *ToolRegistry) DispatchWithProgress(ctx context.Context, call ToolCall, 
 			return normalizeRegistryResult(ctx, call, ToolResult{
 				ToolCallID: call.ID,
 				Name:       call.Name,
-				Content:    invalidToolInputContent(call.Name, err),
-				IsError:    true,
+				ModelText:  invalidToolInputContent(call.Name, err),
+				Code:       "invalid_input",
 			}, maxResultChars, time.Since(start).Milliseconds()), nil
 		}
 	}
@@ -305,8 +305,8 @@ func (r *ToolRegistry) DispatchWithProgress(ctx context.Context, call ToolCall, 
 		return normalizeRegistryResult(ctx, call, ToolResult{
 			ToolCallID: call.ID,
 			Name:       call.Name,
-			Content:    fmt.Sprintf(`{"ok":false,"error":%q,"code":%q}`, err.Error(), code),
-			IsError:    true,
+			ModelText:  fmt.Sprintf(`{"ok":false,"error":%q,"code":%q}`, err.Error(), code),
+			Code:       code,
 		}, maxResultChars, time.Since(start).Milliseconds()), nil
 	}
 	return normalizeRegistryResult(ctx, call, res, maxResultChars, time.Since(start).Milliseconds()), nil
@@ -356,15 +356,13 @@ func normalizeRegistryResult(ctx context.Context, call ToolCall, res ToolResult,
 	if maxResultChars <= 0 {
 		maxResultChars = DefaultMaxToolResultChars
 	}
-	content, isErr, archivePath, env, boundedPayload := normalizeToolContent(ctx, call.Name, call.ID, res.Content, res.IsError, maxResultChars, durationMS)
+	// The tool's raw output (envelope or plain text) arrives in ModelText;
+	// the normalize funnel re-derives every channel from it. Tool-level
+	// error-ness flows through the envelope itself (ok/success flags), so
+	// the fallback flag only matters for non-envelope output.
+	content, isErr, archivePath, env, boundedPayload := normalizeToolContent(ctx, call.Name, call.ID, res.ModelText, res.IsError(), maxResultChars, durationMS)
 	res.ToolCallID = call.ID
 	res.Name = call.Name
-	res.Content = content
-	res.IsError = isErr
-	// The normalize step is the single funnel every dispatched result
-	// passes through, so the channel-separated fields are assigned here:
-	// ModelText carries the exact bytes the model sees today, and
-	// Outcome/Code/Payload expose the same information structurally.
 	res.ModelText = content
 	res.Code = env.Code
 	if isErr {

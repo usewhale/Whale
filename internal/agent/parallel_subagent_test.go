@@ -162,7 +162,7 @@ func (c *readOnlyCountingTool) ReadOnly() bool {
 }
 func (c *readOnlyCountingTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
 	c.calls++
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok"}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "ok"}, nil
 }
 
 func TestSpawnSubagentHookBlockDoesNotSkipFollowingSerialCall(t *testing.T) {
@@ -191,7 +191,7 @@ func TestSpawnSubagentHookBlockDoesNotSkipFollowingSerialCall(t *testing.T) {
 	}
 	var sawHookBlock bool
 	for ev := range events {
-		if ev.Type == AgentEventTypeToolResult && ev.Result != nil && ev.Result.ToolCallID == "tc-subagent-1" && ev.Result.IsError {
+		if ev.Type == AgentEventTypeToolResult && ev.Result != nil && ev.Result.ToolCallID == "tc-subagent-1" && ev.Result.IsError() {
 			sawHookBlock = true
 		}
 	}
@@ -343,14 +343,14 @@ func (t *mockParallelReasonTool) Run(ctx context.Context, call ToolCall) (ToolRe
 		return ToolResult{
 			ToolCallID: call.ID,
 			Name:       call.Name,
-			Content:    `{"success":false,"error":"reason failed","code":"parallel_reason_failed"}`,
-			IsError:    true,
+			ModelText:  `{"success":false,"error":"reason failed","code":"parallel_reason_failed"}`,
+			Outcome:    core.OutcomeFailure,
 		}, nil
 	}
 	return ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
-		Content:    `{"success":true,"data":{"summary":"ok:` + call.ID + `"}}`,
+		ModelText:  `{"success":true,"data":{"summary":"ok:` + call.ID + `"}}`,
 	}, nil
 }
 
@@ -444,8 +444,8 @@ func (t *mockSpawnSubagentTool) RunWithProgress(ctx context.Context, call ToolCa
 		return ToolResult{
 			ToolCallID: call.ID,
 			Name:       call.Name,
-			Content:    `{"success":false,"error":"subagent failed","code":"spawn_subagent_failed"}`,
-			IsError:    true,
+			ModelText:  `{"success":false,"error":"subagent failed","code":"spawn_subagent_failed"}`,
+			Outcome:    core.OutcomeFailure,
 		}, nil
 	}
 	if t.result != nil {
@@ -455,10 +455,10 @@ func (t *mockSpawnSubagentTool) RunWithProgress(ctx context.Context, call ToolCa
 		return ToolResult{
 			ToolCallID: call.ID,
 			Name:       call.Name,
-			Content:    `{"success":true,"data":{"role":"review","summary":"subagent completed"}}`,
+			ModelText:  `{"success":true,"data":{"role":"review","summary":"subagent completed"}}`,
 		}, nil
 	}
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok:" + call.ID}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "ok:" + call.ID}, nil
 }
 
 func waitOrCancel(ctx context.Context, delay time.Duration) error {
@@ -613,11 +613,11 @@ func TestParallelReasonFailureStaysInOriginalResultSlot(t *testing.T) {
 	if got := toolResultIDs(resultEvents); !sameStringSlice(got, wantIDs) {
 		t.Fatalf("tool result event order = %v, want %v", got, wantIDs)
 	}
-	if !toolMsg.ToolResults[1].IsError {
+	if !toolMsg.ToolResults[1].IsError() {
 		t.Fatalf("expected middle parallel_reason result to be marked error: %+v", toolMsg.ToolResults[1])
 	}
 	for _, idx := range []int{0, 2} {
-		if toolMsg.ToolResults[idx].IsError {
+		if toolMsg.ToolResults[idx].IsError() {
 			t.Fatalf("expected successful parallel_reason result at index %d, got error %+v", idx, toolMsg.ToolResults[idx])
 		}
 	}
@@ -938,7 +938,7 @@ func TestParallelSpawnSubagentFailureIsIsolatedToOriginalResultSlot(t *testing.T
 			return ToolResult{
 				ToolCallID: call.ID,
 				Name:       call.Name,
-				Content:    `{"success":true,"data":{"summary":"ok:` + call.ID + `"}}`,
+				ModelText:  `{"success":true,"data":{"summary":"ok:` + call.ID + `"}}`,
 			}
 		},
 	}
@@ -1001,22 +1001,22 @@ func TestParallelSpawnSubagentFailureIsIsolatedToOriginalResultSlot(t *testing.T
 		if event.ToolCallID != wantID {
 			t.Fatalf("tool result event %d id = %q, want %q", i, event.ToolCallID, wantID)
 		}
-		if persisted.IsError != event.IsError || persisted.Content != event.Content {
+		if persisted.IsError() != event.IsError() || persisted.ModelText != event.ModelText {
 			t.Fatalf("event result %d = %+v, want persisted %+v", i, event, persisted)
 		}
 	}
-	if !toolMsg.ToolResults[1].IsError {
+	if !toolMsg.ToolResults[1].IsError() {
 		t.Fatalf("expected middle subagent result to be marked error: %+v", toolMsg.ToolResults[1])
 	}
-	if !strings.Contains(toolMsg.ToolResults[1].Content, `error (spawn_subagent_failed)`) {
-		t.Fatalf("expected existing spawn_subagent_failed error text, got %q", toolMsg.ToolResults[1].Content)
+	if !strings.Contains(toolMsg.ToolResults[1].ModelText, `error (spawn_subagent_failed)`) {
+		t.Fatalf("expected existing spawn_subagent_failed error text, got %q", toolMsg.ToolResults[1].ModelText)
 	}
 	for _, idx := range []int{0, 2} {
-		if toolMsg.ToolResults[idx].IsError {
+		if toolMsg.ToolResults[idx].IsError() {
 			t.Fatalf("expected successful subagent result at index %d, got error %+v", idx, toolMsg.ToolResults[idx])
 		}
 		if got := core.ToolResultOutcome(toolMsg.ToolResults[idx]); got != core.OutcomeSuccess {
-			t.Fatalf("expected success outcome at index %d, got %s (%q)", idx, got, toolMsg.ToolResults[idx].Content)
+			t.Fatalf("expected success outcome at index %d, got %s (%q)", idx, got, toolMsg.ToolResults[idx].ModelText)
 		}
 	}
 }

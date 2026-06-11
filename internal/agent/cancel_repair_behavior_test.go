@@ -93,7 +93,7 @@ func (c cancelYieldsTaskTool) Run(ctx context.Context, call ToolCall) (ToolResul
 	return ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
-		Content:    `{"success":true,"code":"ok","data":{"status":"running","diagnosis":{"reason":"yield_interrupted"},"payload":{"task_id":"task-cancel-1","done":false}}}`,
+		ModelText:  `{"success":true,"code":"ok","data":{"status":"running","diagnosis":{"reason":"yield_interrupted"},"payload":{"task_id":"task-cancel-1","done":false}}}`,
 	}, nil
 }
 
@@ -122,8 +122,8 @@ func TestRunStreamCancelDuringToolSkipsRecovery(t *testing.T) {
 		case AgentEventTypeToolRecoveryScheduled, AgentEventTypeToolRecoveryAttempt, AgentEventTypeToolRecoveryExhausted, AgentEventTypeReplanRequiredSet:
 			t.Fatalf("unexpected recovery event after cancel: %s", ev.Type)
 		case AgentEventTypeToolResult:
-			if ev.Result != nil && strings.Contains(ev.Result.Content, "request_replan") {
-				t.Fatalf("unexpected replan result after cancel: %s", ev.Result.Content)
+			if ev.Result != nil && strings.Contains(ev.Result.ModelText, "request_replan") {
+				t.Fatalf("unexpected replan result after cancel: %s", ev.Result.ModelText)
 			}
 		}
 	}
@@ -157,7 +157,7 @@ func TestRunStreamCancelDuringToolPersistsReturnedTaskResult(t *testing.T) {
 	var seenTaskResult bool
 	for ev := range events {
 		if ev.Type == AgentEventTypeToolResult && ev.Result != nil {
-			if strings.Contains(ev.Result.Content, `"task_id":"task-cancel-1"`) && strings.Contains(ev.Result.Content, `"yield_interrupted"`) {
+			if strings.Contains(ev.Result.ModelText, `"task_id":"task-cancel-1"`) && strings.Contains(ev.Result.ModelText, `"yield_interrupted"`) {
 				seenTaskResult = true
 			}
 		}
@@ -173,7 +173,7 @@ func TestRunStreamCancelDuringToolPersistsReturnedTaskResult(t *testing.T) {
 		t.Fatalf("expected user, assistant, tool, interrupt marker messages, got %d: %+v", len(msgs), msgs)
 	}
 	toolMsg := msgs[len(msgs)-2]
-	if toolMsg.Role != RoleTool || len(toolMsg.ToolResults) != 1 || !strings.Contains(toolMsg.ToolResults[0].Content, `"task_id":"task-cancel-1"`) {
+	if toolMsg.Role != RoleTool || len(toolMsg.ToolResults) != 1 || !strings.Contains(toolMsg.ToolResults[0].ModelText, `"task_id":"task-cancel-1"`) {
 		t.Fatalf("expected persisted task tool result before interrupt marker, got: %+v", toolMsg)
 	}
 	last := msgs[len(msgs)-1]
@@ -204,7 +204,7 @@ func (s signalCancelTaskTool) Run(ctx context.Context, call ToolCall) (ToolResul
 	return ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
-		Content:    `{"success":true,"code":"ok","data":{"status":"running","diagnosis":{"reason":"yield_interrupted"},"payload":{"task_id":"task-cancel-1","done":false}}}`,
+		ModelText:  `{"success":true,"code":"ok","data":{"status":"running","diagnosis":{"reason":"yield_interrupted"},"payload":{"task_id":"task-cancel-1","done":false}}}`,
 	}, nil
 }
 
@@ -265,11 +265,11 @@ cancelStartedTool:
 	if toolMsg.Role != RoleTool || len(toolMsg.ToolResults) != 25 {
 		t.Fatalf("expected persisted task result plus skipped results, got: %+v", toolMsg)
 	}
-	if !strings.Contains(toolMsg.ToolResults[0].Content, `"task_id":"task-cancel-1"`) {
+	if !strings.Contains(toolMsg.ToolResults[0].ModelText, `"task_id":"task-cancel-1"`) {
 		t.Fatalf("expected first result to be returned task, got: %+v", toolMsg.ToolResults[0])
 	}
 	for _, result := range toolMsg.ToolResults[1:] {
-		if !result.IsError || !strings.Contains(result.Content, "turn_aborted") {
+		if !result.IsError() || !strings.Contains(result.ModelText, "turn_aborted") {
 			t.Fatalf("expected skipped result after cancel, got: %+v", result)
 		}
 	}
@@ -300,7 +300,7 @@ func (e echoJSONTool) Run(_ context.Context, call ToolCall) (ToolResult, error) 
 	if err := json.Unmarshal([]byte(call.Input), &v); err != nil {
 		return ToolResult{}, err
 	}
-	return ToolResult{ToolCallID: call.ID, Name: call.Name, Content: "ok"}, nil
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "ok"}, nil
 }
 
 func TestRunStreamEmitsRepairAndBlockedEvents(t *testing.T) {

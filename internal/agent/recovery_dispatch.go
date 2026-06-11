@@ -27,14 +27,14 @@ func (a *Agent) dispatchWithRecovery(ctx context.Context, sessionID, assistantMe
 			return res, true, false
 		}
 		if err != nil {
-			res = core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: err.Error(), IsError: true}
+			res = core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: err.Error()}
 		}
 		if code := toolInputInvalidCode(res); code != "" {
 			a.recordToolInputInvalid(sessionID, model, assistantMessageID, call, code)
 		}
 		class := classifyToolFailure(res, err)
 		if class == "" {
-			return res, true, !res.IsError
+			return res, true, !res.IsError()
 		}
 		rule, exists := a.recovery.Rules[class]
 		next, done, primarySucceeded := a.handleRecoveryRule(ctx, dispatchCtx, tools, call, res, class, rule, exists, attempt, emit)
@@ -88,18 +88,18 @@ func (a *Agent) handleRecoveryRule(ctx context.Context, dispatchCtx context.Cont
 	if rule.Action == RecoveryActionFallbackReadOnly {
 		fallbackRes, ok := a.executeFallbackReadonly(dispatchCtx, tools, call, res)
 		if ok {
-			if !emitRecoveryExhausted(call, class, rule, attempt, res.Content, true, false, emit) {
+			if !emitRecoveryExhausted(call, class, rule, attempt, core.ToolResultModelText(res), true, false, emit) {
 				return res, true, false
 			}
 			return fallbackRes, true, false
 		}
 	}
 	if rule.Action == RecoveryActionRequestReplan {
-		replanRes := buildRequestReplanResult(call, class, attempt, res.Content)
-		if !emitRecoveryReplanRequired(call, class, rule, attempt, res.Content, emit) {
+		replanRes := buildRequestReplanResult(call, class, attempt, core.ToolResultModelText(res))
+		if !emitRecoveryReplanRequired(call, class, rule, attempt, core.ToolResultModelText(res), emit) {
 			return res, true, false
 		}
-		if !emitRecoveryExhausted(call, class, rule, attempt, res.Content, true, true, emit) {
+		if !emitRecoveryExhausted(call, class, rule, attempt, core.ToolResultModelText(res), true, true, emit) {
 			return res, true, false
 		}
 		return replanRes, true, false
@@ -108,12 +108,12 @@ func (a *Agent) handleRecoveryRule(ctx context.Context, dispatchCtx context.Cont
 		return res, true, false
 	}
 	if attempt > rule.MaxAttempts || rule.Action == RecoveryActionHardBlock {
-		if !emitRecoveryExhausted(call, class, rule, attempt, res.Content, false, false, emit) {
+		if !emitRecoveryExhausted(call, class, rule, attempt, core.ToolResultModelText(res), false, false, emit) {
 			return res, true, false
 		}
 		return res, true, false
 	}
-	if !emitRecoveryScheduled(call, class, rule, attempt, res.Content, emit) {
+	if !emitRecoveryScheduled(call, class, rule, attempt, core.ToolResultModelText(res), emit) {
 		return res, true, false
 	}
 	return res, false, false
@@ -175,7 +175,13 @@ func waitRecoveryBackoff(ctx context.Context, call core.ToolCall, rule RecoveryR
 	select {
 	case <-ctx.Done():
 		timer.Stop()
-		return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: ctx.Err().Error(), IsError: true}, true
+		return core.ToolResult{
+			ToolCallID: call.ID,
+			Name:       call.Name,
+			ModelText:  ctx.Err().Error(),
+			Outcome:    core.OutcomeCancelled,
+			Code:       "cancelled",
+		}, true
 	case <-timer.C:
 		return core.ToolResult{}, false
 	}
@@ -228,11 +234,11 @@ func (a *Agent) executeFallbackReadonly(ctx context.Context, tools *core.ToolReg
 			"failure": map[string]any{
 				"tool":  call.Name,
 				"code":  classifyToolFailure(cause, nil),
-				"error": cause.Content,
+				"error": core.ToolResultModelText(cause),
 			},
 			"fallback": map[string]any{
 				"tool":   fallbackCall.Name,
-				"result": res.Content,
+				"result": core.ToolResultModelText(res),
 			},
 		},
 	})
@@ -242,8 +248,7 @@ func (a *Agent) executeFallbackReadonly(ctx context.Context, tools *core.ToolReg
 	return core.ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
-		Content:    string(wrapped),
-		IsError:    false,
+		ModelText:  string(wrapped),
 	}, true
 }
 
@@ -262,12 +267,12 @@ func buildRequestReplanResult(call core.ToolCall, class FailureClass, attempt in
 		},
 	})
 	if err != nil {
-		return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: `{"success":false,"error":"recovery exhausted, replan required","code":"request_replan"}`, IsError: true}
+		return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: `{"success":false,"error":"recovery exhausted, replan required","code":"request_replan"}`, Code: "request_replan"}
 	}
 	return core.ToolResult{
 		ToolCallID: call.ID,
 		Name:       call.Name,
-		Content:    string(b),
-		IsError:    true,
+		ModelText:  string(b),
+		Code:       "request_replan",
 	}
 }

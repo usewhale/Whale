@@ -66,9 +66,9 @@ func (r *Run) Summary() RunSummary {
 			Tool:         step.Call.Name,
 			Turn:         step.Turn,
 			Index:        step.Index,
-			IsError:      step.Result.IsError,
+			IsError:      step.Result.IsError(),
 			EnvelopeCode: step.Envelope.Code,
-			ResultDigest: summarizeResult(step.Result.Content),
+			ResultDigest: summarizeResult(step.Result.ModelText),
 		})
 	}
 	return RunSummary{

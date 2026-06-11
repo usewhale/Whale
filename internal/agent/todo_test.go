@@ -101,7 +101,7 @@ func TestUpdatePlanBlockedInPlanMode(t *testing.T) {
 		if ev.Type == AgentEventTypePlanUpdate {
 			sawPlanUpdate = true
 		}
-		if ev.Type == AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.Content, "plan_mode_blocked") {
+		if ev.Type == AgentEventTypeToolResult && ev.Result != nil && strings.Contains(ev.Result.ModelText, "plan_mode_blocked") {
 			sawBlocked = true
 		}
 	}

@@ -364,11 +364,11 @@ func recordAgentEvent(turn int, ev agent.AgentEvent) (transcriptRecord, bool) {
 		if ev.Result == nil {
 			return transcriptRecord{}, false
 		}
-		success := !ev.Result.IsError
+		success := !ev.Result.IsError()
 		rec.Role = "tool"
 		rec.Tool = ev.Result.Name
 		rec.Success = &success
-		rec.Content = ev.Result.Content
+		rec.Content = ev.Result.ModelText
 	case agent.AgentEventTypePrefixCacheMetrics:
 		if ev.CacheMetrics == nil {
 			return transcriptRecord{}, false

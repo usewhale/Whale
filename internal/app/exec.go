@@ -117,8 +117,8 @@ func (a *App) ExecPromptWithContent(ctx context.Context, parts []core.MessagePar
 			if ev.Result != nil {
 				result.Tools = append(result.Tools, ExecToolSummary{
 					Name:    ev.Result.Name,
-					Success: !ev.Result.IsError,
-					Output:  summarizeExecText(ev.Result.Content),
+					Success: !ev.Result.IsError(),
+					Output:  summarizeExecText(ev.Result.ModelText),
 				})
 			}
 		case agent.AgentEventTypeDone:

@@ -92,10 +92,10 @@ func TestAgentExecutesToolsetToolsInLoop(t *testing.T) {
 		t.Fatalf("expected 3 tool results, got %d", len(toolMsg.ToolResults))
 	}
 	for i, tr := range toolMsg.ToolResults {
-		if tr.IsError {
+		if tr.IsError() {
 			t.Fatalf("tool result %d is error: %+v", i, tr)
 		}
-		if tr.Content == "" {
+		if tr.ModelText == "" {
 			t.Fatalf("tool result %d empty content", i)
 		}
 	}

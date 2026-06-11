@@ -277,10 +277,10 @@ func TestTaskBackgroundShellRunningThenFailed(t *testing.T) {
 			Verify: func(run *Run) error {
 				running := run.FindStep("wait-running")
 				failed := run.FindStep("wait-failed")
-				if running == nil || !strings.Contains(running.Result.Content, `running in background`) {
+				if running == nil || !strings.Contains(running.Result.ModelText, `running in background`) {
 					return fmt.Errorf("expected running wait result")
 				}
-				if failed == nil || !strings.Contains(failed.Result.Content, `exit `) || !strings.Contains(failed.Result.Content, "nope") {
+				if failed == nil || !strings.Contains(failed.Result.ModelText, `exit `) || !strings.Contains(failed.Result.ModelText, "nope") {
 					return fmt.Errorf("expected failed terminal wait result, got %+v", failed)
 				}
 				return nil
@@ -361,7 +361,7 @@ func TestTaskPostToolHookWarnStillCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run task: %v", err)
 	}
-	if read := run.FindStep("read"); read == nil || !strings.Contains(read.Result.Content, "ok") {
+	if read := run.FindStep("read"); read == nil || !strings.Contains(read.Result.ModelText, "ok") {
 		t.Fatal("expected readback after hook warning")
 	}
 }
@@ -380,7 +380,7 @@ func TestTaskTodoUpdateUnknownIDReturnsNotFound(t *testing.T) {
 			},
 			Verify: func(run *Run) error {
 				step := run.FindStep("update")
-				if step == nil || !strings.Contains(step.Result.Content, "todo_not_found") {
+				if step == nil || !strings.Contains(step.Result.ModelText, "todo_not_found") {
 					return fmt.Errorf("unexpected todo update error: %+v", step)
 				}
 				return nil
@@ -406,7 +406,7 @@ func TestTaskTodoRemoveInvalidPayloadReturnsInvalidTodoRemove(t *testing.T) {
 			},
 			Verify: func(run *Run) error {
 				step := run.FindStep("remove")
-				if step == nil || !strings.Contains(step.Result.Content, "invalid_todo_remove") {
+				if step == nil || !strings.Contains(step.Result.ModelText, "invalid_todo_remove") {
 					return fmt.Errorf("unexpected todo remove error: %+v", step)
 				}
 				return nil

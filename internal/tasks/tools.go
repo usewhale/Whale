@@ -232,7 +232,7 @@ func (t spawnSubagentTool) RunWithProgress(ctx context.Context, call core.ToolCa
 	if err != nil {
 		return core.ToolResult{}, err
 	}
-	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, Content: content}, nil
+	return core.ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: content, Outcome: core.OutcomeSuccess, Code: "ok"}, nil
 }
 
 func spawnSubagentInputHasDeprecatedCapabilities(input string) bool {

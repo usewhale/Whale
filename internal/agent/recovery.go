@@ -72,7 +72,7 @@ func classifyToolFailure(res core.ToolResult, dispatchErr error) FailureClass {
 		}
 		return FailureClassUnknown
 	}
-	if !res.IsError {
+	if !res.IsError() {
 		if strings.TrimSpace(core.ToolResultModelText(res)) == "" {
 			return FailureClassEmptyOutput
 		}
