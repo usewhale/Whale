@@ -442,92 +442,26 @@ func parseBeginPatch(patch string) ([]patchOp, error) {
 		}
 		switch {
 		case strings.HasPrefix(line, "*** Update File: "):
-			path := strings.TrimSpace(strings.TrimPrefix(line, "*** Update File: "))
-			if path == "" {
-				return nil, fmt.Errorf("empty update path")
+			op, next, err := parseUpdateOp(lines, i)
+			if err != nil {
+				return nil, err
 			}
-			i++
-			hunks := make([]patchHunk, 0)
-			for i < len(lines) {
-				if strings.HasPrefix(lines[i], "*** ") || strings.TrimSpace(lines[i]) == "*** End Patch" {
-					break
-				}
-				if strings.HasPrefix(lines[i], "@@") {
-					i++
-					oldLines := make([]string, 0)
-					newLines := make([]string, 0)
-					hunkLines := make([]patchHunkLine, 0)
-					for i < len(lines) {
-						l := lines[i]
-						if strings.HasPrefix(l, "@@") || strings.HasPrefix(l, "*** ") || strings.TrimSpace(l) == "*** End Patch" {
-							break
-						}
-						if strings.HasPrefix(l, "-") {
-							v := strings.TrimPrefix(l, "-")
-							oldLines = append(oldLines, v)
-							hunkLines = append(hunkLines, patchHunkLine{kind: patchHunkRemove, text: v})
-						} else if strings.HasPrefix(l, "+") {
-							v := strings.TrimPrefix(l, "+")
-							newLines = append(newLines, v)
-							hunkLines = append(hunkLines, patchHunkLine{kind: patchHunkAdd, text: v})
-						} else if strings.HasPrefix(l, " ") {
-							v := strings.TrimPrefix(l, " ")
-							oldLines = append(oldLines, v)
-							newLines = append(newLines, v)
-							hunkLines = append(hunkLines, patchHunkLine{kind: patchHunkContext, text: v})
-						} else if l == "" {
-							// Models routinely drop the leading space on blank
-							// context lines; treat a fully empty line as empty
-							// context rather than failing the whole patch.
-							oldLines = append(oldLines, "")
-							newLines = append(newLines, "")
-							hunkLines = append(hunkLines, patchHunkLine{kind: patchHunkContext, text: ""})
-						} else if l == `\ No newline at end of file` {
-							// ignore marker
-						} else {
-							return nil, fmt.Errorf("invalid hunk line: %s", l)
-						}
-						i++
-					}
-					if len(oldLines) == 0 && len(newLines) == 0 {
-						return nil, fmt.Errorf("empty hunk for %s", path)
-					}
-					hunks = append(hunks, patchHunk{oldLines: oldLines, newLines: newLines, lines: hunkLines})
-					continue
-				}
-				i++
-			}
-			if len(hunks) == 0 {
-				return nil, fmt.Errorf("update file without hunks: %s", path)
-			}
-			ops = append(ops, patchOp{kind: patchOpUpdate, path: path, hunks: hunks})
+			ops = append(ops, op)
+			i = next
 		case strings.HasPrefix(line, "*** Add File: "):
-			path := strings.TrimSpace(strings.TrimPrefix(line, "*** Add File: "))
-			if path == "" {
-				return nil, fmt.Errorf("empty add path")
+			op, next, err := parseAddOp(lines, i)
+			if err != nil {
+				return nil, err
 			}
-			i++
-			added := make([]string, 0)
-			for i < len(lines) {
-				l := lines[i]
-				if strings.HasPrefix(l, "*** ") || strings.TrimSpace(l) == "*** End Patch" {
-					break
-				}
-				if strings.HasPrefix(l, "+") {
-					added = append(added, strings.TrimPrefix(l, "+"))
-				} else {
-					return nil, fmt.Errorf("invalid add line: %s", l)
-				}
-				i++
-			}
-			ops = append(ops, patchOp{kind: patchOpAdd, path: path, added: added})
+			ops = append(ops, op)
+			i = next
 		case strings.HasPrefix(line, "*** Delete File: "):
-			path := strings.TrimSpace(strings.TrimPrefix(line, "*** Delete File: "))
-			if path == "" {
-				return nil, fmt.Errorf("empty delete path")
+			op, next, err := parseDeleteOp(lines, i)
+			if err != nil {
+				return nil, err
 			}
-			ops = append(ops, patchOp{kind: patchOpDelete, path: path})
-			i++
+			ops = append(ops, op)
+			i = next
 		default:
 			if strings.TrimSpace(line) == "" {
 				i++
@@ -537,6 +471,127 @@ func parseBeginPatch(patch string) ([]patchOp, error) {
 		}
 	}
 	return nil, fmt.Errorf("missing *** End Patch")
+}
+
+// parseOneHunk parses a single hunk starting at lines[start] (the first line after "@@").
+func parseOneHunk(lines []string, start int) (patchHunk, int, error) {
+	oldLines := make([]string, 0)
+	newLines := make([]string, 0)
+	hunkLines := make([]patchHunkLine, 0)
+	i := start
+	for i < len(lines) {
+		l := lines[i]
+		if strings.HasPrefix(l, "@@") || strings.HasPrefix(l, "*** ") || strings.TrimSpace(l) == "*** End Patch" {
+			break
+		}
+		if strings.HasPrefix(l, "-") {
+			v := strings.TrimPrefix(l, "-")
+			oldLines = append(oldLines, v)
+			hunkLines = append(hunkLines, patchHunkLine{kind: patchHunkRemove, text: v})
+		} else if strings.HasPrefix(l, "+") {
+			v := strings.TrimPrefix(l, "+")
+			newLines = append(newLines, v)
+			hunkLines = append(hunkLines, patchHunkLine{kind: patchHunkAdd, text: v})
+		} else if strings.HasPrefix(l, " ") {
+			v := strings.TrimPrefix(l, " ")
+			oldLines = append(oldLines, v)
+			newLines = append(newLines, v)
+			hunkLines = append(hunkLines, patchHunkLine{kind: patchHunkContext, text: v})
+		} else if l == "" {
+			// Models routinely drop the leading space on blank
+			// context lines; treat a fully empty line as empty
+			// context rather than failing the whole patch.
+			oldLines = append(oldLines, "")
+			newLines = append(newLines, "")
+			hunkLines = append(hunkLines, patchHunkLine{kind: patchHunkContext, text: ""})
+		} else if l == `\ No newline at end of file` {
+			// ignore marker
+		} else {
+			return patchHunk{}, 0, fmt.Errorf("invalid hunk line: %s", l)
+		}
+		i++
+	}
+	if len(oldLines) == 0 && len(newLines) == 0 {
+		return patchHunk{}, 0, fmt.Errorf("empty hunk")
+	}
+	return patchHunk{oldLines: oldLines, newLines: newLines, lines: hunkLines}, i, nil
+}
+
+// parseUpdateHunks parses all hunks in an update section starting at lines[start].
+func parseUpdateHunks(lines []string, start int, path string) ([]patchHunk, int, error) {
+	hunks := make([]patchHunk, 0)
+	i := start
+	for i < len(lines) {
+		if strings.HasPrefix(lines[i], "*** ") || strings.TrimSpace(lines[i]) == "*** End Patch" {
+			break
+		}
+		if strings.HasPrefix(lines[i], "@@") {
+			i++
+			hunk, next, err := parseOneHunk(lines, i)
+			if err != nil {
+				if err.Error() == "empty hunk" {
+					return nil, 0, fmt.Errorf("empty hunk for %s", path)
+				}
+				return nil, 0, err
+			}
+			hunks = append(hunks, hunk)
+			i = next
+			continue
+		}
+		i++
+	}
+	if len(hunks) == 0 {
+		return nil, 0, fmt.Errorf("update file without hunks: %s", path)
+	}
+	return hunks, i, nil
+}
+
+// parseUpdateOp parses a "*** Update File:" section starting at lines[start].
+func parseUpdateOp(lines []string, start int) (patchOp, int, error) {
+	line := lines[start]
+	path := strings.TrimSpace(strings.TrimPrefix(line, "*** Update File: "))
+	if path == "" {
+		return patchOp{}, 0, fmt.Errorf("empty update path")
+	}
+	hunks, next, err := parseUpdateHunks(lines, start+1, path)
+	if err != nil {
+		return patchOp{}, 0, err
+	}
+	return patchOp{kind: patchOpUpdate, path: path, hunks: hunks}, next, nil
+}
+
+// parseAddOp parses a "*** Add File:" section starting at lines[start].
+func parseAddOp(lines []string, start int) (patchOp, int, error) {
+	line := lines[start]
+	path := strings.TrimSpace(strings.TrimPrefix(line, "*** Add File: "))
+	if path == "" {
+		return patchOp{}, 0, fmt.Errorf("empty add path")
+	}
+	i := start + 1
+	added := make([]string, 0)
+	for i < len(lines) {
+		l := lines[i]
+		if strings.HasPrefix(l, "*** ") || strings.TrimSpace(l) == "*** End Patch" {
+			break
+		}
+		if strings.HasPrefix(l, "+") {
+			added = append(added, strings.TrimPrefix(l, "+"))
+		} else {
+			return patchOp{}, 0, fmt.Errorf("invalid add line: %s", l)
+		}
+		i++
+	}
+	return patchOp{kind: patchOpAdd, path: path, added: added}, i, nil
+}
+
+// parseDeleteOp parses a "*** Delete File:" section starting at lines[start].
+func parseDeleteOp(lines []string, start int) (patchOp, int, error) {
+	line := lines[start]
+	path := strings.TrimSpace(strings.TrimPrefix(line, "*** Delete File: "))
+	if path == "" {
+		return patchOp{}, 0, fmt.Errorf("empty delete path")
+	}
+	return patchOp{kind: patchOpDelete, path: path}, start + 1, nil
 }
 
 func patchFormatHint(line string) string {
