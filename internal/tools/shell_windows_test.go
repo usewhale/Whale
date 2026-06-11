@@ -28,18 +28,18 @@ func TestWindowsShellRunForegroundAndBackground(t *testing.T) {
 	foreground, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
 		"command": "echo " + marker,
 	}))
-	if err != nil || foreground.IsError {
+	if err != nil || foreground.IsError() {
 		t.Fatalf("shell_run foreground failed: err=%v res=%+v", err, foreground)
 	}
-	if !strings.Contains(foreground.Content, marker) {
-		t.Fatalf("foreground result missing marker %q: %s", marker, foreground.Content)
+	if !strings.Contains(foreground.ModelText, marker) {
+		t.Fatalf("foreground result missing marker %q: %s", marker, foreground.ModelText)
 	}
 
 	start, err := ts.shellRun(context.Background(), tc("shell_run", map[string]any{
 		"command":    "echo " + marker,
 		"background": true,
 	}))
-	if err != nil || start.IsError {
+	if err != nil || start.IsError() {
 		t.Fatalf("shell_run background failed: err=%v res=%+v", err, start)
 	}
 
@@ -50,22 +50,22 @@ func TestWindowsShellRunForegroundAndBackground(t *testing.T) {
 			} `json:"payload"`
 		} `json:"data"`
 	}
-	if err := json.Unmarshal([]byte(start.Content), &envelope); err != nil {
+	if err := json.Unmarshal([]byte(start.ModelText), &envelope); err != nil {
 		t.Fatalf("unmarshal background result: %v", err)
 	}
 	if envelope.Data.Payload.TaskID == "" {
-		t.Fatalf("expected task_id, got: %s", start.Content)
+		t.Fatalf("expected task_id, got: %s", start.ModelText)
 	}
 
 	wait, err := ts.shellWait(context.Background(), tc("shell_wait", map[string]any{
 		"task_id":    envelope.Data.Payload.TaskID,
 		"timeout_ms": 5000,
 	}))
-	if err != nil || wait.IsError {
+	if err != nil || wait.IsError() {
 		t.Fatalf("shell_wait failed: err=%v res=%+v", err, wait)
 	}
-	if !strings.Contains(wait.Content, marker) {
-		t.Fatalf("background result missing marker %q: %s", marker, wait.Content)
+	if !strings.Contains(wait.ModelText, marker) {
+		t.Fatalf("background result missing marker %q: %s", marker, wait.ModelText)
 	}
 }
 
@@ -256,13 +256,13 @@ func TestWindowsShellWaitDecodesGBKOutput(t *testing.T) {
 		"command":    windowsGBKOutputHelperCommand(t, "stdout", 0),
 		"background": true,
 	}))
-	if err != nil || start.IsError {
+	if err != nil || start.IsError() {
 		t.Fatalf("shell_run background failed: err=%v res=%+v", err, start)
 	}
 
-	taskID := shellTaskID(t, start.Content)
+	taskID := shellTaskID(t, start.ModelText)
 	wait := shellWaitUntilDone(t, ts, taskID)
-	stdout := shellPayloadString(t, wait.Content, "stdout")
+	stdout := shellPayloadString(t, wait.ModelText, "stdout")
 	if stdout != "拒绝访问 - \\" {
 		t.Fatalf("background stdout = %q, want decoded GBK text", stdout)
 	}
@@ -436,10 +436,10 @@ func shellWaitUntilDone(t *testing.T, ts *Toolset, taskID string) core.ToolResul
 			"task_id":    taskID,
 			"timeout_ms": 5000,
 		}))
-		if err != nil || wait.IsError {
+		if err != nil || wait.IsError() {
 			t.Fatalf("shell_wait failed: err=%v res=%+v", err, wait)
 		}
-		if shellPayloadBool(t, wait.Content, "done") {
+		if shellPayloadBool(t, wait.ModelText, "done") {
 			return wait
 		}
 		time.Sleep(100 * time.Millisecond)
