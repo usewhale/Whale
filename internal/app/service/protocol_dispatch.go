@@ -63,8 +63,6 @@ func serviceIntentKind(kind protocol.IntentKind) IntentKind {
 		return IntentCancelUserInput
 	case protocol.IntentSelectSession:
 		return IntentSelectSession
-	case protocol.IntentSelectRewindMessage:
-		return IntentSelectRewindMessage
 	case protocol.IntentRequestSessions:
 		return IntentRequestSessions
 	case protocol.IntentRequestExit:

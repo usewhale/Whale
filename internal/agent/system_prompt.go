@@ -119,7 +119,7 @@ func renderOutputStyleBlock(viewMode string) string {
 Focus view is active in the terminal.
 
 - Keep user-facing text brief and high-level.
-- Emit text only when it changes what the user needs to know: a result, finding, blocker, risk, decision point, meaningful plan change, checkpoint, or final summary.
+- Emit text only when it changes what the user needs to know: a result, finding, blocker, risk, decision point, meaningful plan change, milestone, or final summary.
 - The UI already summarizes tool calls, file reads, searches, shell commands, edits, plans, and todos. Do not write assistant text merely to announce routine tool use, file inspection, searching, reading, or continuing with the next obvious step.
 - Lead with the answer, action, blocker, or decision. Skip preambles and routine narration.
 - Do not list every command, file, or tool call unless those details are evidence for a finding or the user explicitly asked for them.

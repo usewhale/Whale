@@ -139,7 +139,7 @@ func TestFormatTurnDuration(t *testing.T) {
 		})
 	}
 }
-func TestReplacingCurrentTurnAssistantRewindsNativeScrollback(t *testing.T) {
+func TestReplacingCurrentTurnAssistantRefreshesNativeScrollback(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 80
 	m.height = 8

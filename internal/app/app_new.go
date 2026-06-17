@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 
-	"github.com/usewhale/whale/internal/checkpoint"
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/plugins"
 	"github.com/usewhale/whale/internal/policy"
@@ -86,7 +85,6 @@ func New(ctx context.Context, cfg Config, start StartOptions) (*App, error) {
 		pluginManager:         toolInit.pluginManager,
 		pluginTools:           append([]core.Tool{}, toolInit.pluginTools...),
 		pluginAgents:          append([]plugins.AgentDefinition{}, toolInit.pluginAgents...),
-		checkpoints:           checkpoint.NewManager(sessionInit.sessionsDir, workspaceRoot),
 		workflowManager:       runtimeInit.workflowManager,
 		workflowRunner:        runtimeInit.workflowRunner,
 		workflowConfigOverlay: workflowOverlay,

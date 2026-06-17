@@ -48,7 +48,6 @@ const (
 	EventWorktreeExitPrompt   EventKind = "worktree_exit_prompt"
 	EventExitRequested        EventKind = "exit_requested"
 	EventSessionHydrated      EventKind = "session_hydrated"
-	EventRewindMessagesListed EventKind = "rewind_messages_listed"
 	EventWorkflowPanel        EventKind = "workflow_panel"
 	EventWorkflowSnapshot     EventKind = "workflow_snapshot"
 	EventWorkflowResult       EventKind = "workflow_result"

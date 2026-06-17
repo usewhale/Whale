@@ -137,8 +137,6 @@ func (m *model) handleServiceEvent(ev protocol.Event) (tea.Cmd, bool, bool) {
 		m.handleUserInputDoneEvent(ev)
 	case protocol.EventSessionsListed:
 		m.handleSessionsListedEvent(ev)
-	case protocol.EventRewindMessagesListed:
-		m.handleRewindMessagesListedEvent(ev)
 	case protocol.EventLocalSubmitDone:
 		m.clearProviderRetryStatus()
 		return m.finishLocalSubmit(), false, false

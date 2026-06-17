@@ -11,7 +11,6 @@ const (
 	IntentCancelToolApproval        IntentKind = "cancel_tool_approval"
 	IntentSubmitUserInput           IntentKind = "submit_user_input"
 	IntentCancelUserInput           IntentKind = "cancel_user_input"
-	IntentSelectRewindMessage       IntentKind = "select_rewind_message"
 	IntentSelectSession             IntentKind = "select_session"
 	IntentRequestSessions           IntentKind = "request_sessions"
 	IntentRequestExit               IntentKind = "request_exit"

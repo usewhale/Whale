@@ -20,7 +20,6 @@ func TestServiceIntentKindMapsProtocolKinds(t *testing.T) {
 		{protocol.IntentSubmitUserInput, IntentSubmitUserInput},
 		{protocol.IntentCancelUserInput, IntentCancelUserInput},
 		{protocol.IntentSelectSession, IntentSelectSession},
-		{protocol.IntentSelectRewindMessage, IntentSelectRewindMessage},
 		{protocol.IntentRequestSessions, IntentRequestSessions},
 		{protocol.IntentRequestExit, IntentRequestExit},
 		{protocol.IntentShutdown, IntentShutdown},

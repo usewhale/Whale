@@ -9,8 +9,6 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
-
-	"github.com/usewhale/whale/internal/checkpoint"
 )
 
 type fileMutationLocks struct {
@@ -86,13 +84,6 @@ func (b *Toolset) commitFilePlans(ctx context.Context, plans []fileCommitPlan) e
 	if b.beforeFileCommit != nil {
 		for _, plan := range plans {
 			b.beforeFileCommit(plan.abs)
-		}
-	}
-	if recorder := checkpoint.RecorderFromContext(ctx); recorder != nil {
-		for _, plan := range plans {
-			if err := recorder.TrackFileBeforeMutation(plan.abs); err != nil {
-				return err
-			}
 		}
 	}
 	for _, plan := range plans {

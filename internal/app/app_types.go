@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/usewhale/whale/internal/agent"
-	"github.com/usewhale/whale/internal/checkpoint"
 	"github.com/usewhale/whale/internal/core"
 	whalemcp "github.com/usewhale/whale/internal/mcp"
 	"github.com/usewhale/whale/internal/plugins"
@@ -145,7 +144,6 @@ type App struct {
 	pluginManager         *plugins.Manager
 	pluginTools           []core.Tool
 	pluginAgents          []plugins.AgentDefinition
-	checkpoints           *checkpoint.Manager
 	workflowManager       *workflow.RunManager
 	workflowRunner        *workflow.ScriptRunner
 	workflowConfigOverlay workflowConfigOverlay
