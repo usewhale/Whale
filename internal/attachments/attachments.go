@@ -151,7 +151,7 @@ func prepareOne(src Source, attachmentsDir string, opts Options) (core.Attachmen
 	}
 	header = header[:n]
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return core.AttachmentRef{}, fmt.Errorf("rewind attachment %q: %w", rawPath, err)
+		return core.AttachmentRef{}, fmt.Errorf("seek attachment %q: %w", rawPath, err)
 	}
 
 	kind, mime := classifyAttachment(resolved, header)

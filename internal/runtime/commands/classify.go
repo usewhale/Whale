@@ -163,11 +163,6 @@ func classifySlashFields(head string, fields []string, line string) SubmitClass 
 			return SubmitLocalMutating
 		}
 		return SubmitUsageError
-	case "/rewind", "/checkpoint":
-		if len(fields) == 1 {
-			return SubmitLocalUI
-		}
-		return SubmitUsageError
 	case "/clear":
 		if len(fields) == 1 {
 			return SubmitLocalMutating

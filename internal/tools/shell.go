@@ -39,7 +39,6 @@ func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolRe
 	requestedYieldMS, effectiveYieldMS := shellRunYieldMS(in.YieldTimeMS, in.TimeoutMS, b.foregroundShellWait)
 	requestedMaxRuntimeMS, effectiveMaxRuntimeMS := shellRunMaxRuntimeMS(in.MaxRuntimeMS, in.TimeoutMS, in.Background)
 	if in.Background {
-		mutationSnapshot := b.captureShellMutationSnapshot(ctx, workdir, in.Command)
 		shellPol := shellPolicyWithForegroundWait(in.Command, requestedYieldMS, b.foregroundShellWait)
 		transport, err := shellRunTransport(mode, shellPol)
 		if err != nil {
@@ -60,9 +59,7 @@ func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolRe
 		go func() {
 			defer b.tasks.completed(task.ID)
 			defer cancel()
-			runShellBackgroundWithAfter(cctx, workdir, in.Command, task, func() {
-				b.recordShellMutations(mutationSnapshot)
-			})
+			runShellBackground(cctx, workdir, in.Command, task)
 		}()
 		if transport == shellTransportPTY {
 			_ = task.waitForStdin(ctx, time.Duration(shellStdinReadyTimeoutMS)*time.Millisecond)
@@ -92,7 +89,6 @@ func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolRe
 	}
 
 	shellPol := shellPolicyWithForegroundWait(in.Command, requestedYieldMS, b.foregroundShellWait)
-	mutationSnapshot := b.captureShellMutationSnapshot(ctx, workdir, in.Command)
 	transport, err := shellRunTransport(mode, shellPol)
 	if err != nil {
 		return marshalToolError(call, "unsupported_transport", err.Error()), nil
@@ -112,9 +108,7 @@ func (b *Toolset) shellRun(ctx context.Context, call core.ToolCall) (core.ToolRe
 	go func() {
 		defer b.tasks.completed(task.ID)
 		defer cancel()
-		runShellBackgroundWithAfter(cctx, workdir, in.Command, task, func() {
-			b.recordShellMutations(mutationSnapshot)
-		})
+		runShellBackground(cctx, workdir, in.Command, task)
 	}()
 
 	timer := time.NewTimer(time.Duration(effectiveYieldMS) * time.Millisecond)

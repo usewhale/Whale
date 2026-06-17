@@ -69,11 +69,6 @@ func (a *Agent) InjectTurnInput(ctx context.Context, sessionID string, newMessag
 		}
 		createdMessages = append(createdMessages, created)
 	}
-	if checkpointMessageID := firstVisibleMessageID(createdMessages); checkpointMessageID != "" && a.checkpoints != nil {
-		if err := a.checkpoints.CreateSnapshot(sessionID, checkpointMessageID); err != nil {
-			return true, fmt.Errorf("create injected checkpoint: %w", err)
-		}
-	}
 	turnState.appendPending(createdMessages)
 	return true, nil
 }
@@ -99,14 +94,6 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 		}
 		createdMessages = append(createdMessages, created)
 	}
-	checkpointMessageID := firstVisibleMessageID(createdMessages)
-	if checkpointMessageID != "" && a.checkpoints != nil {
-		if err := a.checkpoints.CreateSnapshot(sessionID, checkpointMessageID); err != nil {
-			a.active.Delete(sessionID)
-			return nil, fmt.Errorf("create checkpoint: %w", err)
-		}
-	}
-
 	history, err := a.store.List(ctx, sessionID)
 	if err != nil {
 		a.active.Delete(sessionID)
@@ -207,7 +194,7 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 					return
 				}
 			}
-			assistant, toolMsg, usage, modelName, cacheShape, abortTurn, attemptedToolCalls, sErr := a.streamAndHandle(ctx, sessionID, checkpointMessageID, history, rt, out, turnPolicy, toolSnapshot, remainingToolCalls, autoDenyCounts, opts)
+			assistant, toolMsg, usage, modelName, cacheShape, abortTurn, attemptedToolCalls, sErr := a.streamAndHandle(ctx, sessionID, history, rt, out, turnPolicy, toolSnapshot, remainingToolCalls, autoDenyCounts, opts)
 			if sErr != nil {
 				if errors.Is(sErr, context.Canceled) {
 					a.persistInterruptedTurnMarker(sessionID)
@@ -341,18 +328,4 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 	}()
 
 	return out, nil
-}
-
-func firstVisibleMessageID(msgs []core.Message) string {
-	for _, msg := range msgs {
-		if !msg.Hidden && msg.ID != "" {
-			return msg.ID
-		}
-	}
-	for _, msg := range msgs {
-		if msg.ID != "" {
-			return msg.ID
-		}
-	}
-	return ""
 }

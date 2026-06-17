@@ -1076,7 +1076,7 @@ func TestProjectFocusMessagesShowsUnknownMCPAsMCPTool(t *testing.T) {
 func TestProjectFocusMessagesKeepsAssistantTextAsGroupBreaker(t *testing.T) {
 	messages := []tuirender.UIMessage{
 		{Role: "result_ok", Kind: tuirender.KindToolCall, ToolName: "read_file", Text: "Explored\nRead internal/tui/model.go"},
-		{Role: "assistant", Kind: tuirender.KindText, Text: "checkpoint"},
+		{Role: "assistant", Kind: tuirender.KindText, Text: "milestone"},
 		{Role: "result_ok", Kind: tuirender.KindToolCall, ToolName: "grep", Text: "Explored\nSearch focus"},
 	}
 
@@ -1086,7 +1086,7 @@ func TestProjectFocusMessagesKeepsAssistantTextAsGroupBreaker(t *testing.T) {
 	}
 	want := []string{
 		"Read 1 file: internal/tui/model.go (ctrl+o to expand)",
-		"checkpoint",
+		"milestone",
 		`Searched for 1 pattern: "focus" (ctrl+o to expand)`,
 	}
 	for i := range want {

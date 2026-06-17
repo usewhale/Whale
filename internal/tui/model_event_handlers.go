@@ -611,7 +611,6 @@ func (m *model) handleSessionHydratedEvent(ev protocol.Event) tea.Cmd {
 	preserveHooksStartupReview := m.mode == modeHooksStartupReview || (m.mode == modeHooksManager && m.hooksManager.startupReviewOpen)
 	m.mode = modeChat
 	m.resumeMenu = false
-	isRewind := metadataBool(ev.Metadata["rewind"])
 	prevSessionID := m.sessionID
 	if strings.TrimSpace(ev.SessionID) != "" {
 		m.sessionID = strings.TrimSpace(ev.SessionID)
@@ -630,22 +629,9 @@ func (m *model) handleSessionHydratedEvent(ev protocol.Event) tea.Cmd {
 	m.commitLiveTranscript(true)
 	m.trimHydratedTranscriptForDisplay(maxHydratedTranscriptLines)
 	var eventCmd tea.Cmd
-	if sessionChanged || isRewind {
+	if sessionChanged {
 		hadStartupHeaderPrinted = false
 		eventCmd = clearScreenCmd()
-	}
-	if isRewind {
-		m.input.SetValue(metadataString(ev.Metadata["restore_input"]))
-		m.input.SetCursorEnd()
-		m.historyIndex = -1
-		m.historyDraft = ""
-		m.lastHistoryText = ""
-		m.inHistoryNav = false
-		m.slash.matches = nil
-		m.slash.selected = 0
-		m.slash.argumentHint = ""
-		m.skills.matches = nil
-		m.skills.selected = 0
 	}
 	if len(m.transcript) > 0 || hadStartupHeaderPrinted {
 		m.startupHeaderPrinted = true

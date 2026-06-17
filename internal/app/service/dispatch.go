@@ -45,18 +45,6 @@ func (s *Service) Dispatch(in Intent) {
 		} else {
 			s.emitSessionChoices()
 		}
-	case IntentSelectRewindMessage:
-		restoreInput, err := s.app.RewindToMessage(s.ctx, in.MessageID)
-		if err != nil {
-			s.emit(Event{Kind: EventError, Text: err.Error()})
-			s.emit(Event{Kind: EventTurnDone})
-			return
-		}
-		s.emitSessionHydratedWithMetadata(map[string]any{
-			"rewind":        true,
-			"restore_input": restoreInput,
-		})
-		s.emit(Event{Kind: EventTurnDone})
 	case IntentShutdown:
 		s.cancelMu.Lock()
 		if s.cancel != nil {

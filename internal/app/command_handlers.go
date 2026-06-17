@@ -260,9 +260,6 @@ func (a *App) ExecuteLocalCommand(line string) (CommandExecution, error) {
 		result := buildDoctorLocalResult(a)
 		return CommandExecution{Handled: true, Text: result.PlainText, LocalResult: result}, nil
 	}
-	if isRewindCommand(trimmed) {
-		return a.executeRewindCommand(trimmed)
-	}
 	if a.pluginManager != nil {
 		res, handled, err := a.pluginManager.HandleCommand(a.ctx, trimmed)
 		if handled || err != nil {

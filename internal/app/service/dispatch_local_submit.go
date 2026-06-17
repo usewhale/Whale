@@ -115,10 +115,6 @@ func (s *Service) handleLocalSubmit(line string) {
 		s.emitLocalSessionChoices()
 		return
 	}
-	if line == "/rewind" || line == "/checkpoint" {
-		s.emitRewindMessages(false)
-		return
-	}
 	if strings.HasPrefix(line, "/model ") {
 		s.emit(localSubmitResultEvent("error", "usage: /model"))
 		return

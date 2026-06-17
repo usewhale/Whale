@@ -133,10 +133,6 @@ func (s *Service) handleSubmitSlashCommand(state *submitState) bool {
 		s.emit(Event{Kind: EventTurnDone})
 		return true
 	}
-	if state.line == "/rewind" || state.line == "/checkpoint" {
-		s.emitRewindMessages(true)
-		return true
-	}
 	if strings.HasPrefix(state.line, "/model ") {
 		s.emit(Event{Kind: EventError, Text: "usage: /model"})
 		s.emit(Event{Kind: EventTurnDone})

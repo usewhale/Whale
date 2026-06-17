@@ -62,8 +62,7 @@ func TestShellRunDescriptionWarnsAgainstDestructiveGitRestore(t *testing.T) {
 		"git restore",
 		"git reset --hard",
 		"git clean",
-		"Whale's /rewind command or /checkpoint alias",
-		"unless the user explicitly asked to discard local changes",
+		"only when the user explicitly asked to discard local changes",
 	} {
 		if !strings.Contains(desc, want) {
 			t.Fatalf("description missing %q:\n%s", want, desc)

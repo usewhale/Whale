@@ -14,14 +14,13 @@ import (
 )
 
 type streamDispatchContext struct {
-	SessionID           string
-	Assistant           core.Message
-	Model               string
-	Policy              policy.ToolPolicy
-	Tools               *core.ToolRegistry
-	Events              chan<- AgentEvent
-	CheckpointMessageID string
-	AutoDenyCounts      map[string]int
+	SessionID      string
+	Assistant      core.Message
+	Model          string
+	Policy         policy.ToolPolicy
+	Tools          *core.ToolRegistry
+	Events         chan<- AgentEvent
+	AutoDenyCounts map[string]int
 }
 
 type toolApprovalResult struct {
@@ -626,7 +625,7 @@ func (a *Agent) dispatchPostApprovalSpecialTool(ctx context.Context, sc streamDi
 }
 
 func (a *Agent) dispatchStandardTool(ctx context.Context, sc streamDispatchContext, prepared preparedToolDispatch, results *[]core.ToolResult) (bool, error) {
-	finalRes, ok, primarySucceeded := a.dispatchWithRecovery(ctx, sc.SessionID, sc.Assistant.ID, sc.CheckpointMessageID, sc.Model, prepared.Call, prepared.ExternalReadRoots, sc.Events, sc.Tools)
+	finalRes, ok, primarySucceeded := a.dispatchWithRecovery(ctx, sc.SessionID, sc.Assistant.ID, sc.Model, prepared.Call, prepared.ExternalReadRoots, sc.Events, sc.Tools)
 	canceled := ctx.Err() != nil
 	if canceled && !toolResultUsableAfterCancel(finalRes) {
 		return false, ctx.Err()

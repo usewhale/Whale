@@ -415,14 +415,7 @@ func shellTaskExpired(task shellTaskSnapshot, now time.Time) bool {
 }
 
 func runShellBackground(ctx context.Context, dir, command string, task *shellTask) {
-	runShellBackgroundWithAfter(ctx, dir, command, task, nil)
-}
-
-func runShellBackgroundWithAfter(ctx context.Context, dir, command string, task *shellTask, after func()) {
 	defer task.closeDone()
-	if after != nil {
-		defer after()
-	}
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			markShellTaskFailed(task, fmt.Sprintf("panic: %v", recovered))
