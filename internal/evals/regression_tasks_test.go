@@ -145,9 +145,9 @@ func TestTaskEditMissingSearchReturnsSearchNotFound(t *testing.T) {
 	}
 }
 
-func TestTaskEditWithoutReadReturnsReadRequired(t *testing.T) {
+func TestTaskEditWithoutReadAppliesCurrentDiskContent(t *testing.T) {
 	_, err := RunTask(context.Background(), TaskSpec{
-		ID:    "edit-read-required",
+		ID:    "edit-without-read",
 		Suite: SuiteRegression,
 		Scenario: ScenarioSpec{
 			Setup: func(root string) error {
@@ -156,14 +156,21 @@ func TestTaskEditWithoutReadReturnsReadRequired(t *testing.T) {
 			Turns: []TurnSpec{
 				{
 					Steps: []StepSpec{
-						{ID: "edit", ToolName: "edit", Input: `{"file_path":"notes.txt","search":"hello","replace":"new"}`, ExpectError: true},
+						{ID: "edit", ToolName: "edit", Input: `{"file_path":"notes.txt","search":"hello","replace":"new"}`},
 					},
 				},
 			},
 			Verify: func(run *Run) error {
 				step := run.FindStep("edit")
-				if step == nil || step.Envelope.Code != "read_required" {
-					return fmt.Errorf("unexpected edit error code: %s", step.Envelope.Code)
+				if step == nil || step.Envelope.Code != "ok" {
+					return fmt.Errorf("unexpected edit code: %s", step.Envelope.Code)
+				}
+				got, err := os.ReadFile(filepath.Join(run.Root, "notes.txt"))
+				if err != nil {
+					return err
+				}
+				if string(got) != "new\n" {
+					return fmt.Errorf("notes.txt = %q, want edited content", string(got))
 				}
 				return nil
 			},

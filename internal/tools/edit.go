@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -35,9 +34,6 @@ func (b *Toolset) editFile(ctx context.Context, call core.ToolCall) (core.ToolRe
 		return marshalToolError(call, "read_failed", err.Error()), nil
 	}
 	before, lineEndings := normalizeTextFileBytes(data)
-	if code, msg := b.validateFileState(abs, before); code != "" {
-		return marshalToolError(call, code, msg), nil
-	}
 	if b.afterFileRead != nil {
 		b.afterFileRead(abs)
 	}
@@ -113,9 +109,6 @@ func (b *Toolset) previewEditFile(_ context.Context, call core.ToolCall) (map[st
 		return nil, err
 	}
 	before, _ := normalizeTextFileBytes(data)
-	if code, msg := b.validateFileState(abs, before); code != "" {
-		return nil, errors.New(code + ": " + msg)
-	}
 	if in.Search == "" {
 		return nil, os.ErrInvalid
 	}

@@ -98,9 +98,6 @@ func (b *Toolset) planMultiEdit(call core.ToolCall) (multiEditPlan, error) {
 		return multiEditPlan{}, multiEditApplyError{code: "read_failed", message: err.Error()}
 	}
 	before, lineEndings := normalizeTextFileBytes(data)
-	if code, msg := b.validateFileState(abs, before); code != "" {
-		return multiEditPlan{}, multiEditApplyError{code: code, message: msg}
-	}
 	if b.afterFileRead != nil {
 		b.afterFileRead(abs)
 	}

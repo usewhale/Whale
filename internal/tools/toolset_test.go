@@ -120,7 +120,7 @@ func TestReadFileStripsUTF8BOMFromVisibleContent(t *testing.T) {
 	}
 }
 
-func TestEditFileRequiresObservedReadState(t *testing.T) {
+func TestEditFileDoesNotRequireObservedReadState(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("alpha\nbeta\n"), 0o644); err != nil {
 		t.Fatalf("write fixture: %v", err)
@@ -138,32 +138,15 @@ func TestEditFileRequiresObservedReadState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("edit dispatch error: %v", err)
 	}
-	if got := toolErrorCode(t, res); got != "read_required" {
-		t.Fatalf("code = %q, want read_required; content=%s", got, res.ModelText)
-	}
-
-	rangeRes, err := ts.readFile(context.Background(), tc("read_file", map[string]any{
-		"file_path": "a.txt",
-		"offset":    0,
-		"limit":     1,
-	}))
-	if err != nil || rangeRes.IsError() {
-		t.Fatalf("range read failed: err=%v res=%+v", err, rangeRes)
-	}
-	res, err = ts.editFile(context.Background(), tc("edit", map[string]any{
-		"file_path": "a.txt",
-		"search":    "beta",
-		"replace":   "whale",
-	}))
-	if err != nil || res.IsError() {
-		t.Fatalf("edit after range read failed: err=%v res=%+v", err, res)
+	if res.IsError() {
+		t.Fatalf("edit without prior read failed: %s", res.ModelText)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "a.txt"))
 	if err != nil {
 		t.Fatalf("read result: %v", err)
 	}
 	if string(got) != "alpha\nwhale\n" {
-		t.Fatalf("content = %q, want range-read edit to apply", string(got))
+		t.Fatalf("content = %q, want edit to apply", string(got))
 	}
 }
 
@@ -196,7 +179,7 @@ func TestEditFileUsesObservedReadState(t *testing.T) {
 	}
 }
 
-func TestEditFileRejectsStaleRuntimeState(t *testing.T) {
+func TestEditFileUsesCurrentDiskContentAfterExternalChange(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a.txt")
 	if err := os.WriteFile(path, []byte("alpha\nbeta\n"), 0o644); err != nil {
@@ -219,12 +202,19 @@ func TestEditFileRejectsStaleRuntimeState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("edit dispatch error: %v", err)
 	}
-	if got := toolErrorCode(t, res); got != "stale_read" {
-		t.Fatalf("code = %q, want stale_read; content=%s", got, res.ModelText)
+	if res.IsError() {
+		t.Fatalf("edit after external change failed: %s", res.ModelText)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	if string(got) != "external\nwhale\n" {
+		t.Fatalf("content = %q, want edit against current disk content", string(got))
 	}
 }
 
-func TestEditFileDoesNotMarkInternalReadBeforeStaleValidation(t *testing.T) {
+func TestEditFileMarksInternalReadBeforeEditing(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a.txt")
 	if err := os.WriteFile(path, []byte("alpha\nbeta\n"), 0o644); err != nil {
@@ -253,15 +243,15 @@ func TestEditFileDoesNotMarkInternalReadBeforeStaleValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("edit dispatch error: %v", err)
 	}
-	if got := toolErrorCode(t, res); got != "stale_read" {
-		t.Fatalf("code = %q, want stale_read; content=%s", got, res.ModelText)
+	if res.IsError() {
+		t.Fatalf("edit after external change failed: %s", res.ModelText)
 	}
-	if internalReadMarked {
-		t.Fatalf("stale edit marked its internal read before validation")
+	if !internalReadMarked {
+		t.Fatalf("edit did not mark its internal read")
 	}
 }
 
-func TestEditFileRejectsStaleRangeReadState(t *testing.T) {
+func TestEditFileUsesCurrentDiskContentAfterRangeReadStateChanges(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a.txt")
 	if err := os.WriteFile(path, []byte("alpha\nbeta\n"), 0o644); err != nil {
@@ -291,8 +281,15 @@ func TestEditFileRejectsStaleRangeReadState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("edit dispatch error: %v", err)
 	}
-	if got := toolErrorCode(t, res); got != "stale_read" {
-		t.Fatalf("code = %q, want stale_read; content=%s", got, res.ModelText)
+	if res.IsError() {
+		t.Fatalf("edit after changed range-read state failed: %s", res.ModelText)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	if string(got) != "external\nwhale\n" {
+		t.Fatalf("content = %q, want edit against current disk content", string(got))
 	}
 }
 
@@ -400,7 +397,7 @@ func TestWriteFileRefreshesRuntimeStateForEdit(t *testing.T) {
 	}
 }
 
-func TestMultiEditAppliesOrderedEditsAndRefreshesRuntimeStateForEdit(t *testing.T) {
+func TestMultiEditDoesNotRequireObservedReadStateAndFeedsFollowupEdit(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "a.txt")
 	if err := os.WriteFile(path, []byte("alpha\nbeta\ngamma\n"), 0o644); err != nil {
@@ -410,7 +407,6 @@ func TestMultiEditAppliesOrderedEditsAndRefreshesRuntimeStateForEdit(t *testing.
 	if err != nil {
 		t.Fatalf("new toolset: %v", err)
 	}
-	readFileFull(t, ts, "a.txt")
 
 	res, err := ts.multiEditFile(context.Background(), tc("multi_edit", map[string]any{
 		"file_path": "a.txt",
@@ -1420,7 +1416,7 @@ func TestEditFileAfterLargeOutlineRead(t *testing.T) {
 	}
 }
 
-func TestEditFileRejectsStaleLargeOutlineReadState(t *testing.T) {
+func TestEditFileUsesCurrentDiskContentAfterLargeOutlineReadStateChanges(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "large.txt")
 	body := strings.Repeat("outline\n", 22000) + "UNIQUE_LARGE_FILE_MARKER\n"
@@ -1456,8 +1452,15 @@ func TestEditFileRejectsStaleLargeOutlineReadState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("edit dispatch error: %v", err)
 	}
-	if got := toolErrorCode(t, res); got != "stale_read" {
-		t.Fatalf("code = %q, want stale_read; content=%s", got, res.ModelText)
+	if res.IsError() {
+		t.Fatalf("edit after changed outline-read state failed: %s", res.ModelText)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read result: %v", err)
+	}
+	if !strings.Contains(string(got), "UNIQUE_LARGE_FILE_EDITED") {
+		t.Fatalf("content missing edit after changed outline-read state")
 	}
 }
 

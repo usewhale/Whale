@@ -6,22 +6,20 @@ const multiEditDescription = `Apply multiple ordered SEARCH/REPLACE edits to one
 
 Use this for most partial file modifications, especially when changing several locations in the same file. Each edit runs against the result of the previous edit in memory, and Whale writes the file only if every edit succeeds. A failure leaves the file untouched.
 
-Requires prior runtime file state from read_file, write, edit, or a successful multi_edit for the same file; do not pass any file-state token.
-
 Rules:
 - file_path is relative to the workspace, or an absolute path inside the workspace root.
 - edits must contain at least one step.
-- search must be exact current text copied from read_file content.
+- search must be exact current file text; use read_file first when you need to inspect or copy the target text.
 - replace may be empty to delete text.
 - all=false requires search to match exactly once at that step.
 - all=true replaces every occurrence at that step and requires at least one match.
-- A successful multi_edit updates Whale's runtime file state. Do not re-read files just to confirm the edit applied; the tool fails when it cannot apply the edit.`
+- Do not re-read files just to confirm the edit applied; the tool fails when it cannot apply the edit.`
 
 func (b *Toolset) fileDiscoveryTools() []core.Tool {
 	return []core.Tool{
 		toolFn{
 			name:        "read_file",
-			description: "Read file content. Workspace, git worktree, and discovered local skill paths are read directly; external paths request file access approval before reading. Use this before edit/write to confirm exact text. Any successful read records runtime file state required by edit, including outline and bounded range reads. Files up to 32KB return full content by default; larger files return an outline with head lines and continuation hints. Use offset/limit to read bounded ranges.",
+			description: "Read file content. Workspace, git worktree, and discovered local skill paths are read directly; external paths request file access approval before reading. Use this before edit/write when you need to inspect or copy exact text. Files up to 32KB return full content by default; larger files return an outline with head lines and continuation hints. Use offset/limit to read bounded ranges.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
@@ -74,7 +72,7 @@ func (b *Toolset) fileMutationTools() []core.Tool {
 	return []core.Tool{
 		toolFn{
 			name:        "edit",
-			description: "Apply one SEARCH/REPLACE edit to an existing file. Requires prior runtime file state from read_file, write, multi_edit, or a successful edit for the same file; do not pass any file-state token. Requires exact search text; returns search_not_found when search is not found. Use for small surgical changes when the exact current text is known. Prefer multi_edit for multiple edits in the same file.",
+			description: "Apply one SEARCH/REPLACE edit to an existing file. Requires exact current file text; returns search_not_found when search is not found. Use read_file first when you need to inspect or copy the target text. Use for small surgical changes when the exact current text is known. Prefer multi_edit for multiple edits in the same file.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,

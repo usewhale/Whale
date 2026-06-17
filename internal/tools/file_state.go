@@ -35,19 +35,6 @@ func (r *fileStateCache) set(abs, normalizedContent string) fileState {
 	return state
 }
 
-func (r *fileStateCache) delete(abs string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.byAbs, filepath.Clean(abs))
-}
-
-func (r *fileStateCache) get(abs string) (fileState, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	state, ok := r.byAbs[filepath.Clean(abs)]
-	return state, ok
-}
-
 func fileStateHash(normalizedContent string) string {
 	sum := sha256.Sum256([]byte(normalizedContent))
 	return hex.EncodeToString(sum[:])
@@ -60,28 +47,7 @@ func (b *Toolset) storeFileState(abs, normalizedContent string) {
 	b.fileStates.set(abs, normalizedContent)
 }
 
-func (b *Toolset) clearFileState(abs string) {
-	if b.fileStates == nil {
-		return
-	}
-	b.fileStates.delete(abs)
-}
-
 func (b *Toolset) storeFileStateFromBytes(abs string, data []byte) {
 	normalized, _ := normalizeTextFileBytes(data)
 	b.storeFileState(abs, normalized)
-}
-
-func (b *Toolset) validateFileState(abs, normalizedContent string) (string, string) {
-	if b.fileStates == nil {
-		return "read_required", "file has not been observed yet; read it with read_file before editing"
-	}
-	state, ok := b.fileStates.get(abs)
-	if !ok {
-		return "read_required", "file has not been observed yet; read it with read_file before editing"
-	}
-	if state.Hash != fileStateHash(normalizedContent) {
-		return "stale_read", "file changed since it was last read or modified by Whale; read the file again before editing"
-	}
-	return "", ""
 }
