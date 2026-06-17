@@ -313,6 +313,9 @@ func completedToolTitle(toolName, raw, previous string) string {
 		if cmd == "" {
 			cmd = "shell command"
 		}
+		if env.status == "running" {
+			return "Running " + cmd
+		}
 		if !toolEnvelopeSucceeded(env) && env.code == "exec_failed" && !shellFailureIsNoMatches(env) {
 			return shellFailureLabel(env) + ": " + cmd
 		}

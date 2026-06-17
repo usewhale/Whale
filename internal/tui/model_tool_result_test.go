@@ -610,6 +610,15 @@ func TestSummarizeToolResultForChat_ShellRunAutoBackgrounded(t *testing.T) {
 		t.Fatalf("unexpected running summary: role=%q text=%q", role, got)
 	}
 }
+
+func TestCompletedToolTitle_ShellRunRunningStaysRunning(t *testing.T) {
+	raw := `{"success":true,"code":"ok","data":{"status":"running","metrics":{"duration_ms":69026,"auto_backgrounded":true},"payload":{"task_id":"task-123","command":"rustup update stable 2>&1","done":false}}}`
+	got := completedToolTitle("shell_run", raw, "")
+	if got != "Running rustup update stable 2>&1" {
+		t.Fatalf("unexpected running shell title: %q", got)
+	}
+}
+
 func TestSummarizeToolResultForChat_ShellRunDiagnosis(t *testing.T) {
 	raw := `{"success":true,"code":"ok","data":{"status":"running","metrics":{"duration_ms":15000,"auto_backgrounded":true},"payload":{"task_id":"task-123","command":"go test ./internal/tui","done":false},"diagnosis":{"reason":"build_test_long_running","suggested_next_action":"shell_wait"}}}`
 	role, got := summarizeToolResultForChat("shell_run", raw)
