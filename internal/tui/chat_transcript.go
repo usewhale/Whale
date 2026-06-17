@@ -73,8 +73,26 @@ func (m *model) appendTranscriptMessages(messages []tuirender.UIMessage) {
 		}
 		msg.Streaming = false
 		msg.FullReasoning = false
+		if m.replaceCommittedWorkMessage(msg) {
+			continue
+		}
 		m.transcript = append(m.transcript, msg)
 	}
+}
+
+func (m *model) replaceCommittedWorkMessage(msg tuirender.UIMessage) bool {
+	if strings.TrimSpace(msg.ID) == "" || !tuirender.IsWorkEvent(msg) {
+		return false
+	}
+	for i := len(m.transcript) - 1; i >= 0; i-- {
+		existing := m.transcript[i]
+		if existing.ID != msg.ID || !tuirender.IsWorkEvent(existing) {
+			continue
+		}
+		m.transcript[i] = msg
+		return true
+	}
+	return false
 }
 
 func (m model) liveTranscriptMessages() []tuirender.UIMessage {

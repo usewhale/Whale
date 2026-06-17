@@ -619,6 +619,127 @@ func TestCompletedToolTitle_ShellRunRunningStaysRunning(t *testing.T) {
 	}
 }
 
+func TestStructuredRunningShellResultKeepsRunningTitle(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 30}
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolCall,
+		ToolCallID: "tc-shell",
+		ToolName:   "shell_run",
+		Text:       `shell_run: {"command":"sleep 120"}`,
+	}))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:        protocol.EventToolResult,
+		ToolCallID:  "tc-shell",
+		ToolName:    "shell_run",
+		Text:        "running in background (task_id=task-123)",
+		ToolOutcome: "success",
+		ToolCode:    "ok",
+		ToolPayload: map[string]any{
+			"status": "running",
+			"metrics": map[string]any{
+				"duration_ms":       float64(1900),
+				"auto_backgrounded": true,
+			},
+			"payload": map[string]any{
+				"task_id": "task-123",
+				"command": "sleep 120",
+				"done":    false,
+			},
+		},
+	}))
+	m = next.(model)
+	messages := append([]tuirender.UIMessage{}, m.transcript...)
+	messages = append(messages, m.liveTranscriptMessages()...)
+	rendered := strings.Join(tuirender.ChatLines(messages, 100), "\n")
+	if !strings.Contains(rendered, "Running sleep 120") || !strings.Contains(rendered, "running · 1.9s") {
+		t.Fatalf("expected running shell card in visible transcript:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "Ran shell command") {
+		t.Fatalf("running shell result should not render completed fallback title:\n%s", rendered)
+	}
+}
+
+func TestStructuredRunningShellResultUsesPayloadCommandWithoutToolCall(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 30}
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:        protocol.EventToolResult,
+		ToolCallID:  "tc-shell",
+		ToolName:    "shell_run",
+		Text:        "running in background (task_id=task-123)",
+		ToolOutcome: "success",
+		ToolCode:    "ok",
+		ToolPayload: map[string]any{
+			"status": "running",
+			"metrics": map[string]any{
+				"duration_ms":       float64(8000),
+				"auto_backgrounded": true,
+			},
+			"payload": map[string]any{
+				"task_id": "task-123",
+				"command": "sleep 120",
+				"done":    false,
+			},
+		},
+	}))
+	m = next.(model)
+	messages := append([]tuirender.UIMessage{}, m.transcript...)
+	messages = append(messages, m.liveTranscriptMessages()...)
+	rendered := strings.Join(tuirender.ChatLines(messages, 100), "\n")
+	if !strings.Contains(rendered, "Running sleep 120") || !strings.Contains(rendered, "running · 8.0s") {
+		t.Fatalf("expected running shell card to use payload command:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "Running shell command") || strings.Contains(rendered, "Ran shell command") {
+		t.Fatalf("running shell result should not render generic shell title:\n%s", rendered)
+	}
+}
+
+func TestInterruptedRunningShellResultReplacesPendingToolCard(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, width: 100, height: 30, busy: true}
+	next, _ := m.Update(svcMsg(protocol.Event{
+		Kind:       protocol.EventToolCall,
+		ToolCallID: "tc-shell",
+		ToolName:   "shell_run",
+		Text:       `shell_run: {"command":"sleep 200"}`,
+	}))
+	m = next.(model)
+	next, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(model)
+	next, _ = m.Update(svcMsg(protocol.Event{
+		Kind:        protocol.EventToolResult,
+		ToolCallID:  "tc-shell",
+		ToolName:    "shell_run",
+		Text:        "running in background (task_id=task-123)",
+		ToolOutcome: "success",
+		ToolCode:    "ok",
+		ToolPayload: map[string]any{
+			"status": "running",
+			"metrics": map[string]any{
+				"duration_ms":       float64(3100),
+				"auto_backgrounded": true,
+			},
+			"payload": map[string]any{
+				"task_id": "task-123",
+				"command": "sleep 200",
+				"done":    false,
+			},
+		},
+	}))
+	m = next.(model)
+	rendered := strings.Join(tuirender.ChatLines(m.transcript, 100), "\n")
+	if strings.Count(rendered, "Running sleep 200") != 1 {
+		t.Fatalf("expected one running shell card after interrupt/result merge:\n%s", rendered)
+	}
+	for _, want := range []string{"Conversation interrupted", "Running sleep 200", "running · 3.1s"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("expected transcript to contain %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "Ran shell command") || strings.Contains(rendered, "Running shell command") {
+		t.Fatalf("running shell result should not render generic/completed duplicate:\n%s", rendered)
+	}
+}
+
 func TestSummarizeToolResultForChat_ShellRunDiagnosis(t *testing.T) {
 	raw := `{"success":true,"code":"ok","data":{"status":"running","metrics":{"duration_ms":15000,"auto_backgrounded":true},"payload":{"task_id":"task-123","command":"go test ./internal/tui","done":false},"diagnosis":{"reason":"build_test_long_running","suggested_next_action":"shell_wait"}}}`
 	role, got := summarizeToolResultForChat("shell_run", raw)

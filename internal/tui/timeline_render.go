@@ -186,6 +186,9 @@ func timelineCompletedToolTitle(toolName, summary, role string, item timeline.It
 	raw := lastToolResultText(item)
 	previous := firstToolCallTitle(toolName, item)
 	title := completedToolTitle(toolName, raw, previous)
+	if toolDisplayKind(toolName) == "shell" && strings.TrimSpace(role) == "result_running" {
+		title = runningShellTitle(item, previous)
+	}
 	if summary != "" && summary != "✓" {
 		title += "\n" + summary
 	}
@@ -193,6 +196,39 @@ func timelineCompletedToolTitle(toolName, summary, role string, item timeline.It
 		title += "\n\n" + diff
 	}
 	return title
+}
+
+func runningShellTitle(item timeline.Item, previous string) string {
+	title := strings.TrimSpace(previous)
+	if title != "" {
+		return title
+	}
+	for i := len(item.Events) - 1; i >= 0; i-- {
+		ev := item.Events[i]
+		if ev.Kind != protocol.EventToolResult {
+			continue
+		}
+		if cmd := shellCommandFromToolPayload(ev.ToolPayload); cmd != "" {
+			return "Running " + cmd
+		}
+		if cmd := shellCommandFromResultText(ev.Text); cmd != "" {
+			return "Running " + cmd
+		}
+	}
+	return "Running shell command"
+}
+
+func shellCommandFromToolPayload(payload map[string]any) string {
+	if payload == nil {
+		return ""
+	}
+	inner, _ := payload["payload"].(map[string]any)
+	return strings.TrimSpace(core.AsString(inner["command"]))
+}
+
+func shellCommandFromResultText(text string) string {
+	env := parseToolEnvelope(text)
+	return strings.TrimSpace(core.AsString(env.payload["command"]))
 }
 
 func firstToolCallTitle(toolName string, item timeline.Item) string {
