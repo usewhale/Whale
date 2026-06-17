@@ -27,17 +27,36 @@ func TestRepairTruncatedJSON_LeavesValidJSONUntouched(t *testing.T) {
 	}
 }
 
-func TestRepairTruncatedJSON_SalvagesTopLevelPairs(t *testing.T) {
+func TestRepairTruncatedJSON_FillsTruncatedKeyValueWithNull(t *testing.T) {
 	in := `{"file_path":"README.md","offset":0,"limit":`
 	res := repairTruncatedJSON(in)
 	if !res.changed {
 		t.Fatalf("expected changed=true")
 	}
-	if res.repaired == "{}" {
-		t.Fatalf("expected salvaged object, got fallback")
+	if res.repaired != `{"file_path":"README.md","offset":0,"limit": null}` {
+		t.Fatalf("unexpected repaired input: %s", res.repaired)
+	}
+}
+
+func TestRepairTruncatedJSON_RemovesTrailingCommaAtStructuralBoundary(t *testing.T) {
+	in := `{"file_path":"README.md","offset":0,`
+	res := repairTruncatedJSON(in)
+	if !res.changed {
+		t.Fatalf("expected changed=true")
 	}
 	if res.repaired != `{"file_path":"README.md","offset":0}` {
 		t.Fatalf("unexpected repaired input: %s", res.repaired)
+	}
+}
+
+func TestRepairTruncatedJSON_DoesNotSalvageMalformedPrefix(t *testing.T) {
+	in := `{"edits":[{"replace":"(check that nono can read this file)","search":"(check that nono can read this file)"},{"replace":""security add-generic-password -s \"nono\" -a","search":"security add-generic-password -s \"nono\" -a"}],"file_path":"veto/veto-proxy/src/route.rs"}`
+	res := repairTruncatedJSON(in)
+	if res.changed {
+		t.Fatalf("expected changed=false")
+	}
+	if res.repaired != in {
+		t.Fatalf("expected malformed input to be preserved, got: %s", res.repaired)
 	}
 }
 

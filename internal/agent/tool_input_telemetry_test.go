@@ -241,6 +241,24 @@ func TestToolInputTelemetryRecordsInvalidInput(t *testing.T) {
 	assertToolInputEvent(t, events, "tool_input_invalid", "", "invalid_input")
 }
 
+func TestToolInputTelemetryDoesNotSalvageMalformedPrefix(t *testing.T) {
+	dir := t.TempDir()
+	input := `{"edits":[{"replace":"ok","search":"ok"},{"replace":""security add-generic-password -s \"nono\" -a","search":"security add-generic-password -s \"nono\" -a"}],"file_path":"veto/veto-proxy/src/route.rs"}`
+	a := NewAgentWithRegistry(
+		&telemetryToolProvider{tool: "needs_path", input: input},
+		NewInMemoryStore(),
+		NewToolRegistry([]Tool{requiredPathTool{}}),
+		WithSessionsDir(dir),
+		WithToolPolicy(policyNever()),
+		WithRecoveryPolicy(RecoveryPolicy{Enabled: false}),
+	)
+	drainAgentEvents(t, a, "s-malformed-prefix")
+
+	events := readToolInputEvents(t, dir, "s-malformed-prefix")
+	assertNoToolInputRepairedEvent(t, events)
+	assertToolInputEvent(t, events, "tool_input_invalid", "", "invalid_input")
+}
+
 func TestToolInputTelemetryRecordsInvalidArgs(t *testing.T) {
 	dir := t.TempDir()
 	a := NewAgentWithRegistry(
@@ -406,6 +424,15 @@ func assertNoToolInputInvalidEvent(t *testing.T, events []telemetry.ToolInputEve
 	for _, ev := range events {
 		if ev.Event == "tool_input_invalid" {
 			t.Fatalf("unexpected invalid event after repair: %+v", ev)
+		}
+	}
+}
+
+func assertNoToolInputRepairedEvent(t *testing.T, events []telemetry.ToolInputEvent) {
+	t.Helper()
+	for _, ev := range events {
+		if ev.Event == "tool_input_repaired" {
+			t.Fatalf("unexpected repair event for malformed input: %+v", ev)
 		}
 	}
 }
