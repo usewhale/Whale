@@ -12,7 +12,6 @@ import (
 var (
 	trailingCommaBeforeCloser = regexp.MustCompile(`,(\s*[}\]])`)
 	truncatedJSONColonEnding  = regexp.MustCompile(`"\s*:\s*$`)
-	topLevelJSONPair          = regexp.MustCompile(`"([A-Za-z0-9_\-\.]+)"\s*:\s*("([^"\\]|\\.)*"|-?\d+(\.\d+)?|true|false|null)`)
 )
 
 type stormConfig struct {
@@ -117,25 +116,17 @@ func repairTruncatedJSON(raw string) truncationRepairResult {
 		return truncationRepairResult{repaired: raw, changed: false}
 	}
 	candidate := raw
-	if s, ok := closeLikelyJSON(candidate); ok {
-		candidate = s
-	}
 	if truncatedJSONColonEnding.MatchString(candidate) {
 		candidate += " null"
+	}
+	if s, ok := closeLikelyJSON(candidate); ok {
+		candidate = s
 	}
 	candidate = trailingCommaBeforeCloser.ReplaceAllString(candidate, "$1")
 	if json.Valid([]byte(candidate)) {
 		return truncationRepairResult{repaired: candidate, changed: true, notes: []string{"truncation repaired"}}
 	}
-	// Salvage minimal object from recoverable prefix before hard fallback.
-	if obj, ok := salvageJSONObjectPrefix(candidate); ok {
-		return truncationRepairResult{repaired: obj, changed: true, notes: []string{"salvaged prefix object"}}
-	}
-	// If we can extract at least one k:v pair, preserve it instead of dropping all args.
-	if kv, ok := salvageTopLevelPairs(candidate); ok {
-		return truncationRepairResult{repaired: kv, changed: true, notes: []string{"salvaged top-level pairs"}}
-	}
-	return truncationRepairResult{repaired: "{}", changed: true, notes: []string{"fallback -> {}"}}
+	return truncationRepairResult{repaired: raw, changed: false, notes: []string{"unrepairable invalid JSON"}}
 }
 
 func closeLikelyJSON(raw string) (string, bool) {
@@ -306,61 +297,6 @@ func marshalArgsPayload(v any) ([]byte, error) {
 	default:
 		return json.Marshal(v)
 	}
-}
-
-func salvageJSONObjectPrefix(raw string) (string, bool) {
-	start := strings.Index(raw, "{")
-	if start < 0 {
-		return "", false
-	}
-	for end := len(raw); end > start; end-- {
-		candidate := strings.TrimSpace(raw[start:end])
-		if !strings.HasPrefix(candidate, "{") {
-			continue
-		}
-		closed, ok := closeLikelyJSON(candidate)
-		if !ok {
-			continue
-		}
-		closed = trailingCommaBeforeCloser.ReplaceAllString(closed, "$1")
-		if json.Valid([]byte(closed)) {
-			return closed, true
-		}
-	}
-	return "", false
-}
-
-func salvageTopLevelPairs(raw string) (string, bool) {
-	r := strings.TrimSpace(raw)
-	if r == "" {
-		return "", false
-	}
-	start := strings.Index(r, "{")
-	if start >= 0 {
-		r = r[start+1:]
-	}
-	matches := topLevelJSONPair.FindAllStringSubmatch(r, 12)
-	if len(matches) == 0 {
-		return "", false
-	}
-	out := map[string]any{}
-	for _, m := range matches {
-		k := m[1]
-		lit := m[2]
-		var v any
-		if err := json.Unmarshal([]byte(lit), &v); err != nil {
-			continue
-		}
-		out[k] = v
-	}
-	if len(out) == 0 {
-		return "", false
-	}
-	b, err := json.Marshal(out)
-	if err != nil {
-		return "", false
-	}
-	return string(b), true
 }
 
 type stormVerdict struct {
