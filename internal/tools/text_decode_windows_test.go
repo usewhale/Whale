@@ -182,7 +182,7 @@ func TestWindowsGoSearchFallbackDecodesGB18030Text(t *testing.T) {
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	matches, byFile, _, err := searchWithGo("中文目标", dir, "*.txt", true, defaultGrepLimit, func(path string) string {
+	matches, byFile, _, err := searchWithGo("中文目标", dir, "*.txt", defaultGrepLimit, func(path string) string {
 		return filepath.Base(path)
 	})
 	if err != nil {

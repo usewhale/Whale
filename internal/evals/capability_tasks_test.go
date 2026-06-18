@@ -174,7 +174,7 @@ func TestTaskGrepReadEditFlow(t *testing.T) {
 			Turns: []TurnSpec{
 				{
 					Steps: []StepSpec{
-						{ID: "grep", ToolName: "grep", Input: `{"pattern":"hello whale","path":".","literal_text":true}`},
+						{ID: "grep", ToolName: "grep", Input: `{"pattern":"hello whale","path":"."}`},
 						{ID: "read", ToolName: "read_file", Input: `{"file_path":"pkg/banner.go"}`},
 					},
 				},

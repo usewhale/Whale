@@ -49,17 +49,16 @@ func (b *Toolset) searchContent(ctx context.Context, call core.ToolCall) (core.T
 }
 
 type grepInput struct {
-	Path        string `json:"path"`
-	Pattern     string `json:"pattern"`
-	Include     string `json:"include"`
-	LiteralText bool   `json:"literal_text"`
-	Limit       int    `json:"limit"`
+	Path    string `json:"path"`
+	Pattern string `json:"pattern"`
+	Include string `json:"include"`
+	Limit   int    `json:"limit"`
 }
 
 func (b *Toolset) runContentSearch(in grepInput, abs string, limit int) ([]matchRow, map[string]int, grepMeta, error) {
-	matches, byFile, meta, searchErr := searchWithRipgrep(in.Pattern, abs, in.Include, in.LiteralText, limit, b.displayPath)
+	matches, byFile, meta, searchErr := searchWithRipgrep(in.Pattern, abs, in.Include, limit, b.displayPath)
 	if searchErr != nil {
-		matches, byFile, meta, searchErr = searchWithGo(in.Pattern, abs, in.Include, in.LiteralText, limit, b.displayPath)
+		matches, byFile, meta, searchErr = searchWithGo(in.Pattern, abs, in.Include, limit, b.displayPath)
 		if searchErr != nil {
 			return nil, nil, grepMeta{}, searchErr
 		}
@@ -82,11 +81,8 @@ func grepInvalidPatternRecovery() toolRecoveryHint {
 	return toolRecoveryHint{
 		Code:                "grep_invalid_pattern",
 		RecommendedNextTool: "grep",
-		RecommendedInputPatch: map[string]any{
-			"literal_text": true,
-		},
-		Retryable: true,
-		Reason:    "grep pattern is parsed as a regular expression; retry with literal_text=true for plain text or escape regexp metacharacters",
+		Retryable:           true,
+		Reason:              "grep pattern is parsed as a regular expression (RE2/ripgrep syntax); escape regexp metacharacters to match them literally (e.g. interface\\{\\} to find interface{})",
 	}
 }
 
@@ -168,15 +164,12 @@ type matchRow struct {
 
 // searchWithRipgrep tries to use ripgrep (rg) for fast searching.
 // Returns an error if rg is not available or fails.
-func searchWithRipgrep(pattern, path, include string, literal bool, limit int, displayPath func(string) string) ([]matchRow, map[string]int, grepMeta, error) {
+func searchWithRipgrep(pattern, path, include string, limit int, displayPath func(string) string) ([]matchRow, map[string]int, grepMeta, error) {
 	if _, err := exec.LookPath("rg"); err != nil {
 		return nil, nil, grepMeta{}, fmt.Errorf("rg not found: %w", err)
 	}
 
 	args := []string{"-n", "--no-heading", "--json"}
-	if literal {
-		args = append(args, "-F")
-	}
 	if strings.TrimSpace(include) != "" {
 		args = append(args, "-g", include)
 	}
@@ -278,12 +271,8 @@ func searchWithRipgrep(pattern, path, include string, literal bool, limit int, d
 
 // searchWithGo is a pure-Go fallback when ripgrep is not available.
 // It walks the directory tree and searches file contents with Go's regexp.
-func searchWithGo(pattern, path, include string, literal bool, limit int, displayPath func(string) string) ([]matchRow, map[string]int, grepMeta, error) {
-	searchPattern := pattern
-	if literal {
-		searchPattern = regexp.QuoteMeta(pattern)
-	}
-	re, err := regexp.Compile(searchPattern)
+func searchWithGo(pattern, path, include string, limit int, displayPath func(string) string) ([]matchRow, map[string]int, grepMeta, error) {
+	re, err := regexp.Compile(pattern)
 	if err != nil {
 		return nil, nil, grepMeta{}, fmt.Errorf("invalid pattern: %w", err)
 	}

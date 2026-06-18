@@ -6,16 +6,15 @@ func (b *Toolset) searchTools() []core.Tool {
 	return []core.Tool{
 		toolFn{
 			name:        "grep",
-			description: "Search file contents recursively. Workspace, git worktree, and discovered local skill paths are read directly; external paths request file access approval before searching. Omit path or pass an empty path to search the workspace root. Use for symbol/reference discovery before read_file/edit. For literal matching set literal_text=true; use include to narrow file patterns. Output is capped by limit, default 100 matches.",
+			description: "Search file contents recursively. Workspace, git worktree, and discovered local skill paths are read directly; external paths request file access approval before searching. Omit path or pass an empty path to search the workspace root. Use for symbol/reference discovery before read_file/edit. The pattern is a regular expression (RE2/ripgrep syntax); to match text literally, escape regex metacharacters (e.g. interface\\{\\} to find interface{}). Use include to narrow file patterns. Output is capped by limit, default 100 matches.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
 				"properties": map[string]any{
-					"pattern":      map[string]any{"type": "string", "description": "Pattern or literal query"},
-					"path":         map[string]any{"type": "string", "description": "Optional search root. Omit or pass an empty string to search the workspace root. External paths may require file access approval."},
-					"include":      map[string]any{"type": "string", "description": "Glob include filter, e.g. *.go"},
-					"literal_text": map[string]any{"type": "boolean", "description": "When true, treat pattern as plain text"},
-					"limit":        map[string]any{"type": "integer", "minimum": 1, "maximum": 2000, "description": "Maximum matches to return, default 100"},
+					"pattern": map[string]any{"type": "string", "description": "Regular expression to search for (RE2/ripgrep syntax). Escape metacharacters to match literally."},
+					"path":    map[string]any{"type": "string", "description": "Optional search root. Omit or pass an empty string to search the workspace root. External paths may require file access approval."},
+					"include": map[string]any{"type": "string", "description": "Glob include filter, e.g. *.go"},
+					"limit":   map[string]any{"type": "integer", "minimum": 1, "maximum": 2000, "description": "Maximum matches to return, default 100"},
 				},
 				"required": []string{"pattern"},
 			},

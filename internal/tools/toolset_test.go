@@ -1999,7 +1999,6 @@ func TestReadOnlyToolsCanReadDiscoveredGlobalSkillReferences(t *testing.T) {
 	grepRes, err := ts.searchContent(context.Background(), tc("grep", map[string]any{
 		"path":         skillDir,
 		"pattern":      "reference marker",
-		"literal_text": true,
 	}))
 	if err != nil || grepRes.IsError() || !strings.Contains(grepRes.ModelText, "$global-skill/references/guide.md") {
 		t.Fatalf("expected grep to search global skill dir: err=%v res=%+v", err, grepRes)
@@ -2619,7 +2618,7 @@ func TestGrepDefaultsAndClampsLimit(t *testing.T) {
 	}
 }
 
-func TestGrepInvalidPatternIncludesLiteralRecovery(t *testing.T) {
+func TestGrepInvalidPatternIncludesEscapeRecovery(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("needle\n"), 0o644); err != nil {
 		t.Fatalf("write fixture: %v", err)
@@ -2645,9 +2644,14 @@ func TestGrepInvalidPatternIncludesLiteralRecovery(t *testing.T) {
 	if got := recovery["recommended_next_tool"]; got != "grep" {
 		t.Fatalf("recommended_next_tool = %#v, want grep", got)
 	}
-	patch := recovery["recommended_input_patch"].(map[string]any)
-	if got := patch["literal_text"]; got != true {
-		t.Fatalf("literal_text patch = %#v, want true", got)
+	// The literal-search flag is gone: recovery now points at escaping the
+	// regex metacharacters, matching the regex-only pattern contract.
+	if _, ok := recovery["recommended_input_patch"]; ok {
+		t.Fatalf("recovery should not carry an input patch anymore: %#v", recovery)
+	}
+	reason, _ := recovery["reason"].(string)
+	if !strings.Contains(reason, "escape") || !strings.Contains(reason, "regular expression") {
+		t.Fatalf("recovery reason should mention escaping the regular expression, got %q", reason)
 	}
 }
 
@@ -2770,7 +2774,7 @@ func TestGoSearchFallbackDoesNotMatchSyntheticFinalLine(t *testing.T) {
 		t.Fatalf("write empty fixture: %v", err)
 	}
 
-	matches, _, _, err := searchWithGo("^$", dir, "*.txt", false, defaultGrepLimit, nil)
+	matches, _, _, err := searchWithGo("^$", dir, "*.txt", defaultGrepLimit, nil)
 	if err != nil {
 		t.Fatalf("searchWithGo: %v", err)
 	}
@@ -2785,7 +2789,7 @@ func TestGoSearchFallbackMatchesRealEmptyLine(t *testing.T) {
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	matches, _, _, err := searchWithGo("^$", dir, "*.txt", false, defaultGrepLimit, nil)
+	matches, _, _, err := searchWithGo("^$", dir, "*.txt", defaultGrepLimit, nil)
 	if err != nil {
 		t.Fatalf("searchWithGo: %v", err)
 	}
@@ -2810,7 +2814,6 @@ func TestGrepTruncatesLongLinesAroundMatch(t *testing.T) {
 
 	res, err := ts.searchContent(context.Background(), tc("grep", map[string]any{
 		"pattern":      "needle",
-		"literal_text": true,
 	}))
 	if err != nil || res.IsError() {
 		t.Fatalf("grep failed: err=%v res=%+v", err, res)
@@ -2858,7 +2861,6 @@ func TestGrepTruncatesUnicodeLongLinesAroundByteOffset(t *testing.T) {
 
 	res, err := ts.searchContent(context.Background(), tc("grep", map[string]any{
 		"pattern":      "needle",
-		"literal_text": true,
 	}))
 	if err != nil || res.IsError() {
 		t.Fatalf("grep failed: err=%v res=%+v", err, res)
@@ -2905,7 +2907,6 @@ func TestGrepDoesNotTruncateUnicodeLineUnderCharacterLimit(t *testing.T) {
 
 	res, err := ts.searchContent(context.Background(), tc("grep", map[string]any{
 		"pattern":      "needle",
-		"literal_text": true,
 	}))
 	if err != nil || res.IsError() {
 		t.Fatalf("grep failed: err=%v res=%+v", err, res)
@@ -2999,7 +3000,7 @@ func TestGoSearchCapsOversizedMatchLine(t *testing.T) {
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	matches, _, _, err := searchWithGo(".+", dir, "", false, defaultGrepLimit, nil)
+	matches, _, _, err := searchWithGo(".+", dir, "", defaultGrepLimit, nil)
 	if err != nil {
 		t.Fatalf("searchWithGo failed: %v", err)
 	}
@@ -3025,7 +3026,7 @@ func TestGoSearchTruncatesLongLinesAroundMatch(t *testing.T) {
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	matches, _, _, err := searchWithGo("needle", dir, "", true, defaultGrepLimit, nil)
+	matches, _, _, err := searchWithGo("needle", dir, "", defaultGrepLimit, nil)
 	if err != nil {
 		t.Fatalf("searchWithGo failed: %v", err)
 	}
@@ -3059,7 +3060,7 @@ func TestGoSearchTruncatesLongLinesBothEnds(t *testing.T) {
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	matches, _, _, err := searchWithGo("ZmiddleZ", dir, "", true, defaultGrepLimit, nil)
+	matches, _, _, err := searchWithGo("ZmiddleZ", dir, "", defaultGrepLimit, nil)
 	if err != nil {
 		t.Fatalf("searchWithGo failed: %v", err)
 	}

@@ -766,7 +766,7 @@ func (p *externalReadToolsApprovalProvider) StreamResponse(_ context.Context, _ 
 	case 1:
 		return eventStream(toolUseEvent(toolCall("tc-read", "read_file", `{"file_path":`+strconv.Quote(p.file)+`}`)))
 	case 2:
-		return eventStream(toolUseEvent(toolCall("tc-grep", "grep", `{"path":`+strconv.Quote(p.dir)+`,"pattern":"approved","literal_text":true}`)))
+		return eventStream(toolUseEvent(toolCall("tc-grep", "grep", `{"path":`+strconv.Quote(p.dir)+`,"pattern":"approved"}`)))
 	case 3:
 		return eventStream(toolUseEvent(toolCall("tc-search", "search_files", `{"path":`+strconv.Quote(p.dir)+`,"pattern":"guide"}`)))
 	case 4:
