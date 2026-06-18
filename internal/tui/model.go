@@ -105,6 +105,7 @@ type model struct {
 	btwPanel               btwPanelState
 	deferredPlanPicker     bool
 	stopping               bool
+	stoppingInterruptCount int
 	sidebar                bool
 	model                  string
 	effort                 string

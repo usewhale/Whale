@@ -7,6 +7,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// stuckQuitInterruptThreshold is how many Ctrl+C presses while already stopping
+// must accumulate before the quit escape hatch arms. The early presses are
+// absorbed so a normally-stopping turn is not accidentally quit; sustained
+// presses indicate a wedged turn that must remain escapable.
+const stuckQuitInterruptThreshold = 3
+
 func (m *model) handleKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
 	if !m.quitArmedUntil.IsZero() && time.Now().After(m.quitArmedUntil) {
 		m.quitArmedUntil = time.Time{}
@@ -136,22 +142,47 @@ func (m model) shouldRouteWindowsPasteFallbackBeforeLayout(msg tea.KeyMsg) bool 
 }
 
 func (m *model) interruptBusyTurn() tea.Cmd {
-	m.quitArmedUntil = time.Time{}
 	alreadyStopping := m.stopping
 	m.cancelBlockingModalForInterrupt(!alreadyStopping)
-	if !alreadyStopping {
-		if m.runtime != nil {
-			m.dispatchIntent(protocol.Intent{Kind: protocol.IntentShutdown})
+	if alreadyStopping {
+		m.stoppingInterruptCount++
+		// A genuinely-stopping turn clears via EventTurnDone shortly, so the
+		// first interrupts after the stop request are absorbed (no quit arming,
+		// no extra intent) — the normal interrupt debounce. But a hung provider
+		// can leave the turn wedged with no EventTurnDone, so m.busy never
+		// clears and the user used to be trapped ("关不掉，没法输入任何指令").
+		// Once Ctrl+C persists past the threshold the turn looks wedged, so we
+		// expose the same arm-then-quit escape hatch as the idle composer.
+		if m.stoppingInterruptCount < stuckQuitInterruptThreshold {
+			m.commitLiveTranscript(false)
+			return m.flushNativeScrollbackCmd()
 		}
-		m.status = "stopping"
-		m.stopping = true
-		m.markWindowsBusyInputStopped()
-		m.cancelWindowsDeferredEnter()
-		if m.submitQueuedPromptAfterInterrupt {
-			m.appendNotice(m.turnInterruptedForQueuedPromptNoticeText())
-		} else {
-			m.appendNotice(m.turnInterruptedNoticeText())
+		now := time.Now()
+		if !m.quitArmedUntil.IsZero() && now.Before(m.quitArmedUntil) {
+			m.quitArmedUntil = time.Time{}
+			m.dispatchIntent(protocol.Intent{Kind: protocol.IntentRequestExit})
+			m.status = "exiting"
+			m.commitLiveTranscript(false)
+			return m.flushNativeScrollbackCmd()
 		}
+		m.quitArmedUntil = now.Add(2 * time.Second)
+		m.status = "Press Ctrl+C again to quit"
+		m.commitLiveTranscript(false)
+		return tea.Batch(armQuitCmd(2*time.Second), m.flushNativeScrollbackCmd())
+	}
+	m.stoppingInterruptCount = 0
+	m.quitArmedUntil = time.Time{}
+	if m.runtime != nil {
+		m.dispatchIntent(protocol.Intent{Kind: protocol.IntentShutdown})
+	}
+	m.status = "stopping"
+	m.stopping = true
+	m.markWindowsBusyInputStopped()
+	m.cancelWindowsDeferredEnter()
+	if m.submitQueuedPromptAfterInterrupt {
+		m.appendNotice(m.turnInterruptedForQueuedPromptNoticeText())
+	} else {
+		m.appendNotice(m.turnInterruptedNoticeText())
 	}
 	m.commitLiveTranscript(false)
 	return m.flushNativeScrollbackCmd()

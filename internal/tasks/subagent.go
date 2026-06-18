@@ -344,7 +344,23 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 			return SpawnSubagentResponse{}, &SpawnSubagentError{SessionID: sessionID, Code: code, Message: msg, Err: err}
 		}
 		drainEvents := func(events <-chan agent.AgentEvent) (string, error) {
-			for ev := range events {
+			for {
+				var ev agent.AgentEvent
+				var ok bool
+				select {
+				case ev, ok = <-events:
+					if !ok {
+						// Child closed its event stream: normal completion.
+						return "", nil
+					}
+				case <-runCtx.Done():
+					// The child's stream hung without closing (e.g. a provider
+					// that returns no data and ignores ctx). Stop waiting so the
+					// parent turn can unwind instead of deadlocking here ("关不
+					// 掉"); the abandoned child goroutine is left to exit on its
+					// own if its provider ever unblocks.
+					return "cancelled", runCtx.Err()
+				}
 				switch ev.Type {
 				case agent.AgentEventTypeToolCall:
 					if ev.ToolCall != nil {
@@ -443,7 +459,6 @@ func (r *Runner) SpawnSubagentWithProgress(ctx context.Context, req SpawnSubagen
 					return "cancelled", err
 				}
 			}
-			return "", nil
 		}
 		if code, err := drainEvents(events); err != nil {
 			return fail(code, err)

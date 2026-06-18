@@ -725,7 +725,10 @@ func parseSSEData(data, model string, out chan<- llm.ProviderEvent, acc *streamA
 			st.id = tc.ID
 		}
 		if tc.Function.Name != "" {
-			st.name = tc.Function.Name
+			// Normalize the model-facing name (conventional names like "Bash"/
+			// "Read" plus invented CLI aliases) back to whale's internal tool
+			// name before it reaches the registry, routing, policy, or storage.
+			st.name = core.CanonicalToolName(tc.Function.Name)
 		}
 		if tc.Function.Arguments != "" {
 			st.arguments.WriteString(tc.Function.Arguments)
@@ -963,7 +966,9 @@ func toDeepSeekMessages(history []core.Message) []map[string]any {
 						"id":   tc.ID,
 						"type": "function",
 						"function": map[string]any{
-							"name":      tc.Name,
+							// Replay prior tool calls under the model-facing name
+							// so history stays consistent with the tool schema.
+							"name":      core.DisplayToolName(tc.Name),
 							"arguments": tc.Input,
 						},
 					})

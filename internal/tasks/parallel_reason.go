@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/llm"
@@ -51,22 +50,79 @@ func (r *Runner) ParallelReason(ctx context.Context, req ParallelReasonRequest) 
 		maxTokens = r.defaultMaxTokens
 	}
 	results := make([]ParallelReasonResult, len(prompts))
-	var wg sync.WaitGroup
+	for i, prompt := range prompts {
+		results[i] = ParallelReasonResult{Index: i, Prompt: prompt}
+	}
+
+	// Workers report through a buffered channel (one slot per prompt) instead of
+	// writing the shared results slice. The buffer guarantees a worker can always
+	// send without blocking — even one whose provider stream hangs and ignores
+	// ctx will not wedge on send — and confining all writes to results[] to this
+	// goroutine keeps the collection data-race free. We then wait on the channel
+	// with a ctx.Done() escape so a single hung worker can no longer deadlock the
+	// whole call (the user's "关不掉"); the hung worker goroutine is abandoned.
+	type workerResult struct {
+		index  int
+		output string
+		usage  llm.Usage
+		err    error
+	}
+	resCh := make(chan workerResult, len(prompts))
 	for i, prompt := range prompts {
 		i, prompt := i, prompt
-		results[i] = ParallelReasonResult{Index: i, Prompt: prompt}
-		wg.Add(1)
 		go func() {
-			defer wg.Done()
 			output, usage, err := r.runOneReasoningQuery(ctx, model, maxTokens, prompt)
-			results[i].Output = output
-			results[i].Usage = usage
-			if err != nil {
-				results[i].Error = err.Error()
-			}
+			resCh <- workerResult{index: i, output: output, usage: usage, err: err}
 		}()
 	}
-	wg.Wait()
+
+	done := make([]bool, len(prompts))
+	collected := 0
+	apply := func(res workerResult) {
+		if done[res.index] {
+			return
+		}
+		results[res.index].Output = res.output
+		results[res.index].Usage = res.usage
+		if res.err != nil {
+			results[res.index].Error = res.err.Error()
+		}
+		done[res.index] = true
+		collected++
+	}
+
+waitLoop:
+	for collected < len(prompts) {
+		select {
+		case res := <-resCh:
+			apply(res)
+		case <-ctx.Done():
+			break waitLoop
+		}
+	}
+	// If ctx fired with workers still outstanding, take any results already
+	// produced without blocking, then record per-result cancellation for the
+	// rest. ParallelReason still returns a nil top-level error: cancellation is
+	// reported per result, matching the existing contract.
+	for collected < len(prompts) {
+		select {
+		case res := <-resCh:
+			apply(res)
+		default:
+			msg := "canceled"
+			if cerr := ctx.Err(); cerr != nil {
+				msg = cerr.Error()
+			}
+			for i := range results {
+				if !done[i] {
+					results[i].Error = msg
+					done[i] = true
+					collected++
+				}
+			}
+		}
+	}
+
 	var usage llm.Usage
 	for _, res := range results {
 		usage = addUsage(usage, res.Usage)

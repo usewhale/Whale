@@ -148,7 +148,9 @@ func toOpenAICompatibleMessages(history []core.Message) ([]map[string]any, error
 						"id":   tc.ID,
 						"type": "function",
 						"function": map[string]any{
-							"name":      tc.Name,
+							// Replay prior tool calls under the model-facing name
+							// so history stays consistent with the tool schema.
+							"name":      core.DisplayToolName(tc.Name),
 							"arguments": tc.Input,
 						},
 					})

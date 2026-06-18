@@ -22,7 +22,7 @@ func TestRuntimeEnvironmentBlockIncludesWorkspaceAndShellRunCWD(t *testing.T) {
 		"Current Whale workspace root: /repo",
 		"Shell: /bin/sh (/bin/sh -lc)",
 		"Shell commands run from the current Whale workspace by default",
-		"shell_run cwd parameter",
+		"Bash cwd parameter",
 		"request file access approval for external read paths",
 		"do not retry the same external operation through another tool",
 	} {
@@ -72,8 +72,8 @@ func TestRuntimeSystemBlocksIncludeRuntimeEnvironment(t *testing.T) {
 	if !strings.Contains(joined, "Current Whale workspace root: /repo") {
 		t.Fatalf("runtime system blocks missing workspace root:\n%s", joined)
 	}
-	if !strings.Contains(joined, "shell_run cwd parameter") {
-		t.Fatalf("runtime system blocks missing shell_run cwd guidance:\n%s", joined)
+	if !strings.Contains(joined, "Bash cwd parameter") {
+		t.Fatalf("runtime system blocks missing Bash cwd guidance:\n%s", joined)
 	}
 }
 
@@ -441,10 +441,10 @@ func TestImmutableSystemPromptUsesStableToolPolicyWithoutToolCatalog(t *testing.
 		"Choose tools by exact name and schema",
 		"do not invent tools",
 		"Prefer read-only inspection tools",
-		"read_file, list_dir, grep, search_files",
+		"Read, list_dir, grep, search_files",
 		"Mutating tools such as multi_edit, edit, write",
 		"may be blocked by mode, policy, or user approval",
-		"shell_run can be read-only only for safe inspection commands accepted by policy",
+		"Bash can be read-only only for safe inspection commands accepted by policy",
 		"do not retry the same action through another tool",
 	} {
 		if !strings.Contains(joined, want) {

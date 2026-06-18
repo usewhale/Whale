@@ -60,8 +60,8 @@ func providerToolShapeFromSpec(spec ToolSpec) providerToolSchemaShape {
 	return providerToolSchemaShape{
 		Type: "function",
 		Function: providerToolFunctionShape{
-			Name:        spec.Name,
-			Description: spec.Description,
+			Name:        DisplayToolName(spec.Name),
+			Description: ApplyDisplayToolNames(spec.Description),
 			Parameters:  FlattenSchemaForModel(spec.Parameters),
 		},
 	}

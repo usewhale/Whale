@@ -232,7 +232,7 @@ func (b *Toolset) pathDiagnosticMessage(raw, resolved, reason string) string {
 		requested = "."
 	}
 	if strings.TrimSpace(resolved) == "" {
-		resolved = cleanTargetPath(requested, b.root)
+		resolved = cleanTargetPath(expandHomePath(requested), b.root)
 	}
 	var parts []string
 	if strings.TrimSpace(reason) != "" {
@@ -280,6 +280,11 @@ func (b *Toolset) safeReadPath(ctx context.Context, raw string) (string, error) 
 		target := cleanTargetPath(expanded, b.root)
 		if target == "" {
 			return "", fmt.Errorf("path escapes workspace: %s", raw)
+		}
+		// A ~/-prefixed path may still resolve inside the workspace root;
+		// honor it the same way a relative/absolute in-workspace path is honored.
+		if abs, err := b.safeWorkspacePath(expanded); err == nil {
+			return abs, nil
 		}
 		if b.isProjectReadPath(target) || b.isApprovedExternalReadPath(ctx, target) || b.isDiscoveredSkillReadPath(target) {
 			return target, nil

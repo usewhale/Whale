@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/usewhale/whale/internal/core"
@@ -157,7 +158,7 @@ func renderRuntimeBlock(workspaceRoot string, worktree runtimeWorktreeContext, r
 	b.WriteString("- Shell: ")
 	b.WriteString(rt.ShellSummary())
 	b.WriteString("\n")
-	b.WriteString("Shell commands run from the current Whale workspace by default. Do not assume a synthetic path such as /workspace; use relative paths or the shell_run cwd parameter for subdirectories. Filesystem tools resolve relative paths from the current workspace and can request file access approval for external read paths when the user asks to inspect files outside the workspace. If access or execution is denied, do not retry the same external operation through another tool unless the user explicitly asks again.")
+	b.WriteString(fmt.Sprintf("Shell commands run from the current Whale workspace by default. Do not assume a synthetic path such as /workspace; use relative paths or the %s cwd parameter for subdirectories. Filesystem tools resolve relative paths from the current workspace and can request file access approval for external read paths when the user asks to inspect files outside the workspace. If access or execution is denied, do not retry the same external operation through another tool unless the user explicitly asks again.", core.DisplayToolName("shell_run")))
 	if strings.TrimSpace(worktree.WorktreeRoot) != "" && strings.TrimSpace(worktree.OriginalWorkspace) != "" {
 		b.WriteString("\n")
 		b.WriteString("This session is running in a git worktree. Treat the original workspace as reference-only; do not cd to it, run git -C against it, or make changes there unless the user explicitly asks you to work in the original workspace.")
@@ -185,13 +186,21 @@ Delegation policy.
 }
 
 func renderToolPolicyBlock() string {
-	return strings.TrimSpace(`
+	// Tool names are rendered through DisplayToolName so the prose always
+	// matches the model-facing names in the provider tool schema. The mapping
+	// is static, so this output is byte-stable and does not affect prompt cache.
+	return strings.TrimSpace(fmt.Sprintf(`
 Tool use policy.
 
 - Tools are provided through the provider tool schema. Choose tools by exact name and schema; do not invent tools that are not present in the schema.
-- Prefer read-only inspection tools for exploration: read_file, list_dir, grep, search_files, web_search, web_fetch, and clearly read-only MCP tools when available.
-- Mutating tools such as multi_edit, edit, write, shell_run with non-read-only commands, workflow launches, and writable subagents may be blocked by mode, policy, or user approval. In read-only modes, use read-only alternatives and do not request writes.
-- shell_run can be read-only only for safe inspection commands accepted by policy; build, test, install, start, and file-changing shell commands may require approval or be denied.
+- Prefer read-only inspection tools for exploration: %s, %s, %s, %s, %s, %s, and clearly read-only MCP tools when available.
+- Mutating tools such as %s, %s, %s, %s with non-read-only commands, workflow launches, and writable subagents may be blocked by mode, policy, or user approval. In read-only modes, use read-only alternatives and do not request writes.
+- %s can be read-only only for safe inspection commands accepted by policy; build, test, install, start, and file-changing shell commands may require approval or be denied.
 - If a tool call is blocked, denied, rejected, or returns a permission/mode error, do not retry the same action through another tool unless the user explicitly asks.
-`)
+`,
+		core.DisplayToolName("read_file"), core.DisplayToolName("list_dir"), core.DisplayToolName("grep"),
+		core.DisplayToolName("search_files"), core.DisplayToolName("web_search"), core.DisplayToolName("web_fetch"),
+		core.DisplayToolName("multi_edit"), core.DisplayToolName("edit"), core.DisplayToolName("write"), core.DisplayToolName("shell_run"),
+		core.DisplayToolName("shell_run"),
+	))
 }
