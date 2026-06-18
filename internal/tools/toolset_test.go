@@ -1997,8 +1997,8 @@ func TestReadOnlyToolsCanReadDiscoveredGlobalSkillReferences(t *testing.T) {
 	}
 
 	grepRes, err := ts.searchContent(context.Background(), tc("grep", map[string]any{
-		"path":         skillDir,
-		"pattern":      "reference marker",
+		"path":    skillDir,
+		"pattern": "reference marker",
 	}))
 	if err != nil || grepRes.IsError() || !strings.Contains(grepRes.ModelText, "$global-skill/references/guide.md") {
 		t.Fatalf("expected grep to search global skill dir: err=%v res=%+v", err, grepRes)
@@ -2813,7 +2813,7 @@ func TestGrepTruncatesLongLinesAroundMatch(t *testing.T) {
 	}
 
 	res, err := ts.searchContent(context.Background(), tc("grep", map[string]any{
-		"pattern":      "needle",
+		"pattern": "needle",
 	}))
 	if err != nil || res.IsError() {
 		t.Fatalf("grep failed: err=%v res=%+v", err, res)
@@ -2860,7 +2860,7 @@ func TestGrepTruncatesUnicodeLongLinesAroundByteOffset(t *testing.T) {
 	}
 
 	res, err := ts.searchContent(context.Background(), tc("grep", map[string]any{
-		"pattern":      "needle",
+		"pattern": "needle",
 	}))
 	if err != nil || res.IsError() {
 		t.Fatalf("grep failed: err=%v res=%+v", err, res)
@@ -2906,7 +2906,7 @@ func TestGrepDoesNotTruncateUnicodeLineUnderCharacterLimit(t *testing.T) {
 	}
 
 	res, err := ts.searchContent(context.Background(), tc("grep", map[string]any{
-		"pattern":      "needle",
+		"pattern": "needle",
 	}))
 	if err != nil || res.IsError() {
 		t.Fatalf("grep failed: err=%v res=%+v", err, res)
