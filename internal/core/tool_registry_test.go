@@ -266,6 +266,45 @@ func TestSearchFilesMissingPatternReturnsRecoveryHint(t *testing.T) {
 	}
 }
 
+func TestGrepMissingPatternReturnsRecoveryHint(t *testing.T) {
+	reg := NewToolRegistry([]Tool{snapshotTestTool{
+		name: "grep",
+		params: map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"pattern": map[string]any{"type": "string"},
+				"include": map[string]any{"type": "string"},
+				"limit":   map[string]any{"type": "integer"},
+			},
+			"required": []string{"pattern"},
+		},
+		content: `{"ok":true}`,
+	}})
+
+	res, err := reg.Dispatch(context.Background(), ToolCall{
+		ID:    "tc-grep",
+		Name:  "grep",
+		Input: `{"limit":20}`,
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if !res.IsError() {
+		t.Fatalf("expected invalid input error, got %+v", res)
+	}
+	for _, want := range []string{
+		`error (invalid_input)`,
+		`missing required field "pattern"`,
+		"grep requires pattern (a regex); provide pattern and optionally include/path, or use search_files to find file names.",
+		`recovery:`,
+	} {
+		if !strings.Contains(res.ModelText, want) {
+			t.Fatalf("result missing %q:\n%s", want, res.ModelText)
+		}
+	}
+}
+
 func TestWebFetchMaxResultsReturnsRecoveryHint(t *testing.T) {
 	reg := NewToolRegistry([]Tool{snapshotTestTool{
 		name: "web_fetch",

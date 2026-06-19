@@ -342,6 +342,8 @@ func ToolInputRecoveryHint(toolName, msg string) (string, bool) {
 		return "search_files does not support include; retry with grep for content search or remove include.", true
 	case toolName == "search_files" && msg == `missing required field "pattern"`:
 		return "search_files requires pattern; provide pattern and path, or use grep for content search.", true
+	case (toolName == "grep" || toolName == "search_content") && msg == `missing required field "pattern"`:
+		return "grep requires pattern (a regex); provide pattern and optionally include/path, or use search_files to find file names.", true
 	case (toolName == "fetch" || toolName == "web_fetch") && msg == `unknown field "max_results"`:
 		return toolName + " does not support max_results; remove it or use web_search when you need multiple search results.", true
 	case (toolName == "fetch" || toolName == "web_fetch") && msg == `unknown field "format"`:
