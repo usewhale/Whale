@@ -224,6 +224,7 @@ func canonicalAccessPath(path string) string {
 		cur = parent
 	}
 }
+
 // shellFileCommandWord reports whether word names a built-in file command whose
 // operands should be checked against the external_directory rules. When
 // programPathTrusted is set the word is a resolved program path (exec boundary)
