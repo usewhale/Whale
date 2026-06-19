@@ -58,13 +58,7 @@ func formatStoppedBackgroundTasks(tasks []tools.BackgroundShellTask) string {
 	}
 	for _, task := range tasks {
 		b.WriteString("\n\n")
-		b.WriteString(taskDisplayName(task))
-		b.WriteString("\nstatus:  ")
-		b.WriteString(task.Status)
-		if task.CWD != "" {
-			b.WriteString("\ncwd:     ")
-			b.WriteString(task.CWD)
-		}
+		writeCompactTaskLine(&b, task)
 	}
 	return b.String()
 }
@@ -78,25 +72,25 @@ func formatBackgroundTasks(tasks []tools.BackgroundShellTask) string {
 	}
 	for _, task := range tasks {
 		b.WriteString("\n\n")
-		b.WriteString(taskDisplayName(task))
-		b.WriteString("\nstatus:  ")
-		b.WriteString(task.Status)
-		if task.CWD != "" {
-			b.WriteString("\ncwd:     ")
-			b.WriteString(task.CWD)
-		}
-		b.WriteString("\nage:     ")
-		b.WriteString(formatTaskAge(task.StartedAt))
+		writeCompactTaskLine(&b, task)
 		if task.LastOutput != nil {
-			b.WriteString("\noutput:  ")
+			b.WriteString("   ·   output ")
 			b.WriteString(formatTaskAge(*task.LastOutput))
 			b.WriteString(" ago")
 		}
-		if task.ExitCode != nil {
-			b.WriteString(fmt.Sprintf("\nexit:    %d", *task.ExitCode))
-		}
 	}
 	return b.String()
+}
+
+func writeCompactTaskLine(b *strings.Builder, task tools.BackgroundShellTask) {
+	b.WriteString(task.Status)
+	b.WriteString("   ·   ")
+	b.WriteString(strings.TrimSpace(task.Command))
+	b.WriteString("   ·   ")
+	b.WriteString(formatTaskAge(task.StartedAt))
+	if task.ExitCode != nil {
+		b.WriteString(fmt.Sprintf("   ·   exit %d", *task.ExitCode))
+	}
 }
 
 func buildBackgroundTasksLocalResult(tasks []tools.BackgroundShellTask, text string) *LocalResult {
@@ -110,11 +104,15 @@ func buildStoppedBackgroundTasksLocalResult(tasks []tools.BackgroundShellTask, t
 func buildBackgroundTasksLocalResultWithTitle(title string, tasks []tools.BackgroundShellTask, text string) *LocalResult {
 	fields := make([]LocalResultField, 0, len(tasks))
 	for _, task := range tasks {
-		value := task.Status
-		if task.CWD != "" {
-			value += " · " + task.CWD
+		value := strings.TrimSpace(task.Command)
+		age := formatTaskAge(task.StartedAt)
+		if age != "" {
+			value += "   ·   " + age
 		}
-		fields = append(fields, LocalResultField{Label: taskDisplayName(task), Value: value})
+		if task.ExitCode != nil {
+			value += fmt.Sprintf("   ·   exit %d", *task.ExitCode)
+		}
+		fields = append(fields, LocalResultField{Label: task.Status, Value: value})
 	}
 	if len(fields) == 0 {
 		fields = append(fields, LocalResultField{Label: "running", Value: "none"})
@@ -125,14 +123,6 @@ func buildBackgroundTasksLocalResultWithTitle(title string, tasks []tools.Backgr
 		Fields:    fields,
 		PlainText: text,
 	}
-}
-
-func taskDisplayName(task tools.BackgroundShellTask) string {
-	command := strings.TrimSpace(task.Command)
-	if command == "" {
-		return "background shell task"
-	}
-	return command
 }
 
 func formatTaskAge(t time.Time) string {
