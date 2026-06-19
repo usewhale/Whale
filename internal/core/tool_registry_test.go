@@ -305,6 +305,45 @@ func TestGrepMissingPatternReturnsRecoveryHint(t *testing.T) {
 	}
 }
 
+func TestShellRunUnknownDescriptionReturnsRecoveryHint(t *testing.T) {
+	reg := NewToolRegistry([]Tool{snapshotTestTool{
+		name: "shell_run",
+		params: map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"command":    map[string]any{"type": "string"},
+				"cwd":        map[string]any{"type": "string"},
+				"background": map[string]any{"type": "boolean"},
+			},
+			"required": []string{"command"},
+		},
+		content: `{"ok":true}`,
+	}})
+
+	res, err := reg.Dispatch(context.Background(), ToolCall{
+		ID:    "tc-shell",
+		Name:  "shell_run",
+		Input: `{"command":"git status","description":"Show working tree status"}`,
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if !res.IsError() {
+		t.Fatalf("expected invalid input error, got %+v", res)
+	}
+	for _, want := range []string{
+		`error (invalid_input)`,
+		`unknown field "description"`,
+		"shell_run does not accept description; pass only command (plus optional cwd/background/timeout fields).",
+		`recovery:`,
+	} {
+		if !strings.Contains(res.ModelText, want) {
+			t.Fatalf("result missing %q:\n%s", want, res.ModelText)
+		}
+	}
+}
+
 func TestWebFetchMaxResultsReturnsRecoveryHint(t *testing.T) {
 	reg := NewToolRegistry([]Tool{snapshotTestTool{
 		name: "web_fetch",
