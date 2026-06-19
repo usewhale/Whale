@@ -123,12 +123,27 @@ func TestRulePolicyExternalDirectory(t *testing.T) {
 		"cat /etc/hosts",
 		"stat /etc/hosts",
 		"du -sh /etc",
-		"/bin/cat /etc/hosts",
 	} {
 		got := p.Decide(core.ToolSpec{Name: "shell_run"}, core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`})
 		if !got.Allow || !got.RequiresApproval || got.MatchedRule != "external_directory:*=ask" {
 			t.Fatalf("external dir decision for %q = %+v, want external_directory approval", command, got)
 		}
+	}
+
+	// Intentional (aligns with opencode's command-string permission model): a
+	// path-qualified file command is not treated as a file command at the model
+	// command-string layer, so it does not trigger external_directory here. The
+	// exec boundary (PTY transport) still gates it by basename. This is a known,
+	// accepted trade-off, not an oversight — command-string rules are inherently
+	// evadable by path-qualifying.
+	pathQualified := p.Decide(core.ToolSpec{Name: "shell_run"}, core.ToolCall{Name: "shell_run", Input: `{"command":"/bin/cat /etc/hosts"}`})
+	if pathQualified.RequiresApproval && pathQualified.Permission == "external_directory" {
+		t.Fatalf("path-qualified command should not trigger external_directory at the command-string layer: %+v", pathQualified)
+	}
+
+	boundary := p.DecideExecBoundary(ExecBoundaryRequest{Program: "/bin/cat", Argv: []string{"/bin/cat", "/etc/hosts"}, CWD: "/repo"})
+	if !boundary.Allow || !boundary.RequiresApproval || boundary.Permission != "external_directory" {
+		t.Fatalf("exec boundary should still gate /bin/cat into an external dir: %+v", boundary)
 	}
 }
 
@@ -658,31 +673,6 @@ func TestRulePolicyExternalDirectoryDenyOverridesShellApproval(t *testing.T) {
 	}
 }
 
-func TestRulePolicyExternalDirectoryScansRedirections(t *testing.T) {
-	rules := append(DefaultRules(), PermissionRule{Permission: "external_directory", Pattern: "*", Action: PermissionDeny})
-	p := RulePolicy{Default: PermissionAllow, Rules: rules, WorkspaceRoot: "/repo"}
-	spec := core.ToolSpec{Name: "shell_run"}
-
-	for _, command := range []string{
-		"echo x >/etc/whale-test",
-		"echo x >>/etc/whale-test",
-		"cat </etc/passwd",
-		"echo x 2>/etc/whale-test",
-		"cat foo>/etc/whale-test",
-		"echo x >| /etc/whale-test",
-	} {
-		got := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`})
-		if got.Allow || got.Code != "permission_denied" {
-			t.Fatalf("redirection %q = %+v, want external_directory deny", command, got)
-		}
-	}
-
-	inside := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":"echo x >./out.txt"}`})
-	if !inside.Allow || inside.Code == "permission_denied" {
-		t.Fatalf("workspace-relative redirection should not be denied: %+v", inside)
-	}
-}
-
 func TestRulePolicyExternalDirectoryIgnoresQuotedRedirectionCharacters(t *testing.T) {
 	rules := append(DefaultRules(), PermissionRule{Permission: "external_directory", Pattern: "*", Action: PermissionDeny})
 	p := RulePolicy{Default: PermissionAllow, Rules: rules, WorkspaceRoot: "/repo"}
@@ -701,54 +691,22 @@ func TestRulePolicyExternalDirectoryIgnoresQuotedRedirectionCharacters(t *testin
 	}
 }
 
-func TestRulePolicyExternalDirectoryRedirectionRequiresApprovalByDefault(t *testing.T) {
-	home, err := os.MkdirTemp(".", "whale-ext-redir-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	home, err = filepath.Abs(home)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.RemoveAll(home) })
-
-	root := filepath.Join(home, "repo")
-	external := filepath.Join(home, "external")
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(external, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	p := RulePolicy{Default: PermissionAllow, Rules: DefaultRules(), WorkspaceRoot: root}
-	got := p.Decide(core.ToolSpec{Name: "shell_run"}, core.ToolCall{Name: "shell_run", Input: `{"command":"echo hello > ` + external + `/whale-test.txt"}`})
-	if !got.Allow || !got.RequiresApproval || got.Permission != "external_directory" {
-		t.Fatalf("external redirection = %+v, want external_directory approval", got)
-	}
-}
-
-func TestRulePolicyTempRedirectionRequiresApprovalByDefault(t *testing.T) {
-	p := RulePolicy{Default: PermissionAllow, Rules: DefaultRules(), WorkspaceRoot: "/repo"}
-	got := p.Decide(core.ToolSpec{Name: "shell_run"}, core.ToolCall{Name: "shell_run", Input: `{"command":"echo hello > /tmp/whale-test.txt"}`})
-	if !got.Allow || !got.RequiresApproval || got.Permission != "external_directory" || got.Pattern != "/tmp" {
-		t.Fatalf("temp redirection = %+v, want external_directory /tmp approval", got)
-	}
-}
-
-func TestRulePolicyDynamicRedirectionRequiresApproval(t *testing.T) {
+// Aligns with opencode: redirection targets are not scanned, so a redirect
+// write to an outside path (or a dynamic target) is not gated by
+// external_directory. Operands before an attached redirection are still
+// scanned — see TestRulePolicyExternalDirectoryKeepsOperandsBeforeAttachedRedirections.
+func TestRulePolicyRedirectionTargetsAreNotGated(t *testing.T) {
 	p := RulePolicy{Default: PermissionAllow, Rules: DefaultRules(), WorkspaceRoot: "/repo"}
 	spec := core.ToolSpec{Name: "shell_run"}
-
 	for _, command := range []string{
-		`echo hello > "$(dirname "$(pwd)")/opencode-dev/whale-test.txt"`,
-		`printf hello > "$OUT_FILE"`,
+		"echo hello > /tmp/whale-test.txt",
+		"echo hello > /etc/whale-test",
 		`printf hello > ~/whale-test.txt`,
-		"printf hello > `pwd`/out.txt",
+		`printf hello > "$OUT_FILE"`,
 	} {
 		got := p.Decide(spec, core.ToolCall{Name: "shell_run", Input: `{"command":` + strconv.Quote(command) + `}`})
-		if !got.Allow || !got.RequiresApproval || got.Permission != "external_directory" || got.Pattern != dynamicShellRedirectionTarget {
-			t.Fatalf("dynamic redirection %q = %+v, want external_directory approval for dynamic target", command, got)
+		if !got.Allow || got.RequiresApproval || got.Permission == "external_directory" {
+			t.Fatalf("redirection target %q = %+v, want allowed without external_directory approval", command, got)
 		}
 	}
 }

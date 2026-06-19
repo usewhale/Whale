@@ -205,7 +205,7 @@ func ApprovalKeys(call core.ToolCall) []string {
 }
 
 func ApprovalKeysForDecision(call core.ToolCall, decision PolicyDecision) []string {
-	if !readOnlyFilesystemTool(call.Name) {
+	if !externalDirectoryGrantEligible(call) {
 		return ApprovalKeys(call)
 	}
 	var keys []string
@@ -269,6 +269,26 @@ func readOnlyFilesystemTool(name string) bool {
 	default:
 		return false
 	}
+}
+
+// externalDirectoryGrantEligible reports whether a tool call may have its
+// external_directory approval satisfied by a directory-scoped grant
+// (grant:external_directory:<dir>), so that approving a directory once widens
+// to its subtree across calls.
+//
+// Read-only file tools and shell commands qualify: an external_directory grant
+// is path-scoped ("you may access this directory"), so once a directory is
+// approved it is reused for any later access to that subtree, regardless of the
+// command's shape (cat, `ls || echo`, a for-loop, ...). This mirrors how the
+// permission ruleset evaluates a directory glob uniformly.
+//
+// Mutation protection is not the job of this check — it lives in the shell
+// permission rules. A command that independently requires approval (e.g.
+// rm */curl * ask rules) still contributes a non-external requirement, so
+// ApprovalKeysForDecision appends its command-scoped key and the directory
+// grant alone cannot approve it (see decisionRequiresNonExternalApproval).
+func externalDirectoryGrantEligible(call core.ToolCall) bool {
+	return readOnlyFilesystemTool(call.Name) || call.Name == "shell_run"
 }
 
 func externalDirectoryGrantKey(path string) string {

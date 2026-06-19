@@ -12,10 +12,22 @@ import (
 )
 
 func (p RulePolicy) externalDirs(command string) []string {
-	return p.externalDirsFromRoot(command, p.WorkspaceRoot)
+	return p.externalDirsFromRoot(command, p.WorkspaceRoot, false)
 }
 
-func (p RulePolicy) externalDirsFromRoot(command, pathRoot string) []string {
+// externalDirsFromRoot extracts outside-workspace directories a command would
+// touch. programPathTrusted reports whether the command word is a resolved
+// program path (as seen at the exec boundary, e.g. /bin/cat) — only then is it
+// matched by basename.
+//
+// For a model-authored command string it is false, so a path-qualified
+// invocation like /bin/cat is NOT treated as a file command. This is an
+// intentional alignment with opencode's command-string permission model, and a
+// deliberate trade-off: command-string rules are inherently evadable by
+// path-qualifying (e.g. /bin/rm sidesteps the rm deny rules too), so on pipe
+// transport a path-qualified file command is not gated by external_directory.
+// The exec boundary (PTY transport) still basename-matches and gates it.
+func (p RulePolicy) externalDirsFromRoot(command, pathRoot string, programPathTrusted bool) []string {
 	root := cleanAbs(pathRoot)
 	if command == "" || root == "" {
 		return nil
@@ -23,19 +35,12 @@ func (p RulePolicy) externalDirsFromRoot(command, pathRoot string) []string {
 	projectRoots := p.projectRoots()
 	var out []string
 	for _, segment := range expandShellRuleSegments(command) {
-		for _, token := range shellRedirectionPathTokens(segment) {
-			if token == dynamicShellRedirectionTarget {
-				out = append(out, dynamicShellRedirectionTarget)
-				continue
-			}
-			clean := p.resolveShellPathToken(root, token)
-			if clean == "" || pathInsideAny(clean, projectRoots) || pathInsideTrustedShellPath(clean) {
-				continue
-			}
-			out = append(out, externalDirForToken(clean))
-		}
+		// Redirection targets are intentionally not scanned (aligns with
+		// opencode, which skips redirection nodes). A shell redirect write such
+		// as `echo x > /path` is therefore not gated by external_directory; only
+		// file-command operands below are checked.
 		argv := strings.Fields(segment)
-		if len(argv) == 0 || !shellFileCommand(argv[0]) {
+		if len(argv) == 0 || !shellFileCommandWord(argv[0], programPathTrusted) {
 			continue
 		}
 		for _, arg := range argv[1:] {
@@ -219,11 +224,18 @@ func canonicalAccessPath(path string) string {
 		cur = parent
 	}
 }
-func shellFileCommand(command string) bool {
-	// Normalize with filepath.Base so a tool invoked by path, e.g. /bin/cat,
-	// still matches and its outside-workspace operands are checked against the
-	// external_directory rules.
-	switch strings.ToLower(filepath.Base(strings.TrimSpace(command))) {
+// shellFileCommandWord reports whether word names a built-in file command whose
+// operands should be checked against the external_directory rules. When
+// programPathTrusted is set the word is a resolved program path (exec boundary)
+// and is matched by basename, so /bin/cat still counts; otherwise only a bare
+// command name matches, mirroring how shell permission rules and shellrisk treat
+// the command word (see externalDirsFromRoot for the rationale and trade-off).
+func shellFileCommandWord(word string, programPathTrusted bool) bool {
+	name := strings.TrimSpace(word)
+	if programPathTrusted {
+		name = filepath.Base(name)
+	}
+	switch strings.ToLower(name) {
 	case "cat", "ls", "cp", "mv", "rm", "mkdir", "rmdir", "touch", "chmod", "chown", "readlink", "realpath", "stat", "du", "head", "tail", "wc":
 		return true
 	default:
@@ -237,7 +249,7 @@ func execBoundaryFileCommandUsesImplicitCWD(req ExecBoundaryRequest) bool {
 	if len(argv) == 0 {
 		argv = []string{program}
 	}
-	if !shellFileCommand(program) && !shellFileCommand(argv[0]) {
+	if !shellFileCommandWord(program, true) && !shellFileCommandWord(argv[0], true) {
 		return false
 	}
 	for _, arg := range argv[1:] {
@@ -265,134 +277,6 @@ func shellPathArgBeforeRedirection(arg string) string {
 		return arg
 	}
 	return arg[:idx]
-}
-func shellRedirectionPathTokens(segment string) []string {
-	var out []string
-	runes := []rune(segment)
-	var quote rune
-	for i := 0; i < len(runes); i++ {
-		r := runes[i]
-		if quote != 0 {
-			if r == quote {
-				quote = 0
-			}
-			continue
-		}
-		if r == '\'' || r == '"' {
-			quote = r
-			continue
-		}
-		if r == '\\' {
-			i++
-			continue
-		}
-		if r != '>' && r != '<' && !(r == '&' && i+1 < len(runes) && runes[i+1] == '>') {
-			continue
-		}
-		if r == '<' && i+1 < len(runes) && runes[i+1] == '<' {
-			for i+1 < len(runes) && runes[i+1] == '<' {
-				i++
-			}
-			continue
-		}
-		if token, next := shellRedirectionTargetAfter(runes, i); token != "" {
-			out = append(out, token)
-			i = next
-		}
-	}
-	return uniqueStrings(out)
-}
-func shellRedirectionTargetAfter(runes []rune, op int) (string, int) {
-	i := op
-	if runes[i] == '&' && i+1 < len(runes) && runes[i+1] == '>' {
-		i += 2
-	} else {
-		i++
-		for i < len(runes) && (runes[i] == '>' || runes[i] == '|' || runes[i] == '&') {
-			i++
-		}
-	}
-	for i < len(runes) && (runes[i] == ' ' || runes[i] == '\t') {
-		i++
-	}
-	var b strings.Builder
-	var quote rune
-	for ; i < len(runes); i++ {
-		r := runes[i]
-		if quote != 0 {
-			if r == quote {
-				quote = 0
-				continue
-			}
-			b.WriteRune(r)
-			continue
-		}
-		if r == '\'' || r == '"' {
-			quote = r
-			continue
-		}
-		if r == ' ' || r == '\t' || r == ';' || r == '|' || r == '&' {
-			break
-		}
-		b.WriteRune(r)
-	}
-	return cleanShellRedirectionPathToken(b.String()), i
-}
-func shellRedirectionOperatorNeedsPath(field string) bool {
-	if strings.HasPrefix(field, "<<") || strings.HasSuffix(field, "<<") {
-		return false
-	}
-	switch field {
-	case ">", ">>", "<", ">|", "&>", "&>>":
-		return true
-	}
-	if len(field) >= 2 && allDigits(field[:len(field)-1]) && (strings.HasSuffix(field, ">") || strings.HasSuffix(field, "<")) {
-		return true
-	}
-	if len(field) >= 3 && allDigits(field[:len(field)-2]) && strings.HasSuffix(field, ">>") {
-		return true
-	}
-	return false
-}
-func attachedShellRedirectionPath(field string) string {
-	if strings.Contains(field, "<<") {
-		return ""
-	}
-	for i, r := range field {
-		if r != '>' && r != '<' {
-			continue
-		}
-		j := i + 1
-		for j < len(field) && (field[j] == '>' || field[j] == '|' || field[j] == '&') {
-			j++
-		}
-		return cleanShellRedirectionPathToken(field[j:])
-	}
-	return ""
-}
-func cleanShellRedirectionPathToken(token string) string {
-	token = strings.Trim(strings.TrimSpace(token), `"'`)
-	if token == "" || strings.HasPrefix(token, "&") || strings.Contains(token, "://") {
-		return ""
-	}
-	if shellPathTokenIsDynamic(token) {
-		return dynamicShellRedirectionTarget
-	}
-	return token
-}
-func shellPathTokenIsDynamic(token string) bool {
-	return strings.ContainsAny(token, "<>$`") || strings.Contains(token, "$(") || strings.Contains(token, "${") || strings.HasPrefix(token, "~")
-}
-func allDigits(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
 }
 func pathInsideTrustedTemp(clean string) bool {
 	if clean == "" {

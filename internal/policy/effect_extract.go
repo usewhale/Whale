@@ -31,7 +31,7 @@ func (p RulePolicy) shellExecutionEffectPlan(req ShellExecutionRequest, pathRoot
 		}
 	}
 	add(effects.ShellExecEffect(req.Command))
-	for _, dir := range p.externalDirsFromRoot(req.Command, pathRoot) {
+	for _, dir := range p.externalDirsFromRoot(req.Command, pathRoot, req.Source == "exec_boundary") {
 		add(effects.ExternalDirectoryEffect(dir))
 	}
 	return finalizeEffectPlan(plan)

@@ -192,21 +192,35 @@ func TestApprovalKeysForDecisionUseExternalReadDirectoryScope(t *testing.T) {
 	}
 }
 
-func TestApprovalKeysForDecisionDoNotReuseExternalDirectoryGrantForShell(t *testing.T) {
-	command := "echo x >/tmp/a"
+func TestApprovalKeysForDecisionKeepCommandKeyWhenShellRuleAlsoAsks(t *testing.T) {
+	// A shell command into an external dir is path-eligible, so its
+	// external_directory requirement is satisfied by a directory grant. But when
+	// the command independently requires approval via a shell rule (the rm ask
+	// rule here), ApprovalKeysForDecision must also keep the command-scoped key,
+	// so the directory grant alone cannot approve it. Mutation protection lives
+	// in the shell rules, not in external-directory eligibility.
+	command := "rm /tmp/a"
 	call := core.ToolCall{Name: "shell_run", Input: `{"command":"` + command + `"}`}
-	decision := PolicyDecision{Permission: "external_directory", Pattern: "/tmp", RequiresApproval: true}
-
-	keys := ApprovalKeysForDecision(call, decision)
-	want := ShellApprovalKeys(command)
-	if !reflect.DeepEqual(keys, want) {
-		t.Fatalf("shell external directory keys = %v, want command-specific keys %v", keys, want)
+	decision := PolicyDecision{
+		Permission:       "external_directory",
+		Pattern:          "/tmp",
+		RequiresApproval: true,
+		ApprovalRequirements: []ApprovalRequirement{
+			{Permission: "shell", Pattern: command},
+			{Permission: "external_directory", Pattern: "/tmp"},
+		},
 	}
 
+	keys := ApprovalKeysForDecision(call, decision)
 	cache := NewSessionApprovalCache()
 	cache.Grant("s", "grant:external_directory:/tmp")
 	if cache.HasAll("s", keys) {
-		t.Fatal("external directory grant must not approve shell commands")
+		t.Fatalf("directory grant alone must not approve a command that also has a shell ask rule; keys=%v", keys)
+	}
+	// Granting the command key too lets it through.
+	cache.GrantAll("s", ShellApprovalKeys(command))
+	if !cache.HasAll("s", keys) {
+		t.Fatalf("expected approval once both the directory grant and the command key are granted; keys=%v", keys)
 	}
 }
 

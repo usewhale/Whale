@@ -172,8 +172,6 @@ type permissionRequest struct {
 	Pattern string
 }
 
-const dynamicShellRedirectionTarget = "dynamic redirection target"
-
 func (p RulePolicy) requestsFor(spec core.ToolSpec, call core.ToolCall) []permissionRequest {
 	kind := permissionKind(spec.Name)
 	target := permissionTarget(call)
