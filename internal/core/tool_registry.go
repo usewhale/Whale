@@ -344,7 +344,7 @@ func ToolInputRecoveryHint(toolName, msg string) (string, bool) {
 	msg = strings.TrimSpace(msg)
 	switch {
 	case toolName == "search_files" && msg == `unknown field "include"`:
-		return "search_files does not support include; retry with grep for content search or remove include.", true
+		return "search_files has no include field; put the glob directly in pattern (e.g. pattern=**/*.go), or use grep with include to search file contents.", true
 	case toolName == "search_files" && msg == `missing required field "pattern"`:
 		return "search_files requires pattern; provide pattern and path, or use grep for content search.", true
 	case (toolName == "grep" || toolName == "search_content") && msg == `missing required field "pattern"`:

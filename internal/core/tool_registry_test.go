@@ -219,7 +219,7 @@ func TestSearchFilesUnknownIncludeReturnsRecoveryHint(t *testing.T) {
 	for _, want := range []string{
 		`error (invalid_input)`,
 		`unknown field "include"`,
-		"search_files does not support include; retry with grep for content search or remove include.",
+		"search_files has no include field; put the glob directly in pattern (e.g. pattern=**/*.go), or use grep with include to search file contents.",
 		`recovery:`,
 	} {
 		if !strings.Contains(res.ModelText, want) {

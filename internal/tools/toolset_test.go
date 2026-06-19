@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -2354,8 +2355,9 @@ func TestSearchFilesSchemaDocumentsIncludeIsUnsupported(t *testing.T) {
 		}
 		spec := core.DescribeTool(tool)
 		for _, want := range []string{
-			"Does not support include",
-			"use grep with include",
+			"put a glob directly in pattern",
+			"does not support include",
+			"use grep",
 		} {
 			if !strings.Contains(spec.Description, want) {
 				t.Fatalf("search_files description missing %q: %s", want, spec.Description)
@@ -2406,6 +2408,49 @@ func TestSearchFiles(t *testing.T) {
 	}
 	if !strings.Contains(res.ModelText, "alpha.go") {
 		t.Fatalf("expected alpha.go in result: %s", res.ModelText)
+	}
+}
+
+func TestSearchFilesGlobPatternFiltersByExtension(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	for name, body := range map[string]string{
+		"version.go":      "package main",
+		"sub/alpha.go":    "package sub",
+		"notes.md":        "# notes",
+		"sub/config.json": "{}",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	res, err := ts.searchFiles(context.Background(), tc("search_files", map[string]any{
+		"pattern": "**/*.go",
+	}))
+	if err != nil || res.IsError() {
+		t.Fatalf("search_files failed: err=%v res=%+v", err, res)
+	}
+	data := readFileData(t, res)
+	items := searchFileItems(t, data)
+	joined := ""
+	for _, it := range items {
+		joined += fmt.Sprint(it) + "\n"
+	}
+	for _, want := range []string{"version.go", "alpha.go"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected %q in glob results: %#v", want, items)
+		}
+	}
+	for _, unwanted := range []string{"notes.md", "config.json"} {
+		if strings.Contains(joined, unwanted) {
+			t.Fatalf("did not expect %q in glob results: %#v", unwanted, items)
+		}
 	}
 }
 
@@ -2477,6 +2522,247 @@ func TestSearchFilesFallsBackWhenRipgrepUnavailable(t *testing.T) {
 	}
 	if summary, _ := data["summary"].(string); !strings.Contains(summary, "ripgrep unavailable") {
 		t.Fatalf("missing fallback summary: %q", summary)
+	}
+}
+
+func TestSearchFilesGlobExcludesIgnoredDirs(t *testing.T) {
+	if _, err := exec.LookPath("rg"); err != nil {
+		t.Skip("ripgrep not installed")
+	}
+	dir := t.TempDir()
+	for _, sub := range []string{"src", "node_modules", "vendor"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", sub, err)
+		}
+	}
+	for name, body := range map[string]string{
+		"root.go":             "package main",
+		"src/app.go":          "package src",
+		"node_modules/dep.go": "package dep",
+		"vendor/lib.go":       "package lib",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	res, err := ts.searchFiles(context.Background(), tc("search_files", map[string]any{
+		"pattern": "**/*.go",
+	}))
+	if err != nil || res.IsError() {
+		t.Fatalf("search_files failed: err=%v res=%+v", err, res)
+	}
+	data := readFileData(t, res)
+	joined := ""
+	for _, it := range searchFileItems(t, data) {
+		joined += fmt.Sprint(it) + "\n"
+	}
+	for _, want := range []string{"root.go", "app.go"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected %q in results: %s", want, joined)
+		}
+	}
+	for _, unwanted := range []string{"node_modules", "vendor"} {
+		if strings.Contains(joined, unwanted) {
+			t.Fatalf("ignored dir %q leaked into glob results: %s", unwanted, joined)
+		}
+	}
+}
+
+func TestSearchFilesScopedGlobUsesRipgrep(t *testing.T) {
+	if _, err := exec.LookPath("rg"); err != nil {
+		t.Skip("ripgrep not installed")
+	}
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"src/app.ts":      "x",
+		"src/sub/deep.ts": "x",
+		"other/x.ts":      "x",
+		"root.ts":         "x",
+	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	res, err := ts.searchFiles(context.Background(), tc("search_files", map[string]any{
+		"pattern": "src/**/*.ts",
+	}))
+	if err != nil || res.IsError() {
+		t.Fatalf("search_files failed: err=%v res=%+v", err, res)
+	}
+	data := readFileData(t, res)
+	// Scoped glob must run on ripgrep, not silently fall back to the Go walker.
+	if summary, _ := data["summary"].(string); strings.Contains(summary, "ripgrep unavailable") {
+		t.Fatalf("scoped glob fell back to Go walker: %q", summary)
+	}
+	joined := ""
+	for _, it := range searchFileItems(t, data) {
+		joined += fmt.Sprint(it) + "\n"
+	}
+	for _, want := range []string{"src/app.ts", "src/sub/deep.ts"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("scoped glob missed %q: %s", want, joined)
+		}
+	}
+	for _, unwanted := range []string{"other/x.ts", "root.ts"} {
+		if strings.Contains(joined, unwanted) {
+			t.Fatalf("scoped glob over-matched %q: %s", unwanted, joined)
+		}
+	}
+}
+
+func TestSearchFilesNoMatchGlobStaysOnRipgrep(t *testing.T) {
+	if _, err := exec.LookPath("rg"); err != nil {
+		t.Skip("ripgrep not installed")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	res, err := ts.searchFiles(context.Background(), tc("search_files", map[string]any{
+		"pattern": "*.nomatch",
+	}))
+	if err != nil || res.IsError() {
+		t.Fatalf("search_files failed: err=%v res=%+v", err, res)
+	}
+	data := readFileData(t, res)
+	// A no-match glob is a successful empty result; rg exits 1 but must NOT trigger
+	// the Go-walker fallback (a second full scan reported as "ripgrep unavailable").
+	if summary, _ := data["summary"].(string); strings.Contains(summary, "ripgrep unavailable") {
+		t.Fatalf("no-match glob fell back to Go walker: %q", summary)
+	}
+	if items := searchFileItems(t, data); len(items) != 0 {
+		t.Fatalf("expected no matches, got %#v", items)
+	}
+}
+
+func TestSearchFilesLiteralBracketsStaySubstring(t *testing.T) {
+	if patternIsGlob("app/users/[id]/page.tsx") {
+		t.Fatal("a bracket-only pattern must not be treated as a glob")
+	}
+	dir := t.TempDir()
+	target := filepath.Join("app", "users", "[id]", "page.tsx")
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, target)), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, target), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	res, err := ts.searchFiles(context.Background(), tc("search_files", map[string]any{
+		"pattern": "[id]",
+	}))
+	if err != nil || res.IsError() {
+		t.Fatalf("search_files failed: err=%v res=%+v", err, res)
+	}
+	data := readFileData(t, res)
+	joined := ""
+	for _, it := range searchFileItems(t, data) {
+		joined += fmt.Sprint(it) + "\n"
+	}
+	if !strings.Contains(joined, "[id]") {
+		t.Fatalf("literal [id] path not found via substring search: %s", joined)
+	}
+}
+
+func TestSearchFilesGlobBracketClassInGoFallback(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a.js", "b.ts", "c.tsx", "d.css"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	// Force the pure-Go fallback so we exercise compileSearchFilesGlob directly.
+	t.Setenv("PATH", t.TempDir())
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	res, err := ts.searchFiles(context.Background(), tc("search_files", map[string]any{
+		"pattern": "*.[jt]s",
+	}))
+	if err != nil || res.IsError() {
+		t.Fatalf("search_files failed: err=%v res=%+v", err, res)
+	}
+	data := readFileData(t, res)
+	if summary, _ := data["summary"].(string); !strings.Contains(summary, "ripgrep unavailable") {
+		t.Fatalf("expected Go fallback, summary=%q", summary)
+	}
+	joined := ""
+	for _, it := range searchFileItems(t, data) {
+		joined += fmt.Sprint(it) + "\n"
+	}
+	for _, want := range []string{"a.js", "b.ts"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("bracket class missed %q (escaped instead of translated): %s", want, joined)
+		}
+	}
+	for _, unwanted := range []string{"c.tsx", "d.css"} {
+		if strings.Contains(joined, unwanted) {
+			t.Fatalf("bracket class over-matched %q: %s", unwanted, joined)
+		}
+	}
+}
+
+func TestSearchFilesGlobMatchesRootFilesInGoFallback(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	for name, body := range map[string]string{
+		"version.go":   "package main",
+		"sub/alpha.go": "package sub",
+		"notes.md":     "# notes",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	// Force the pure-Go fallback by hiding ripgrep from PATH.
+	t.Setenv("PATH", t.TempDir())
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	res, err := ts.searchFiles(context.Background(), tc("search_files", map[string]any{
+		"pattern": "**/*.go",
+	}))
+	if err != nil || res.IsError() {
+		t.Fatalf("search_files failed: err=%v res=%+v", err, res)
+	}
+	data := readFileData(t, res)
+	if summary, _ := data["summary"].(string); !strings.Contains(summary, "ripgrep unavailable") {
+		t.Fatalf("expected Go fallback, summary=%q", summary)
+	}
+	items := searchFileItems(t, data)
+	joined := ""
+	for _, it := range items {
+		joined += fmt.Sprint(it) + "\n"
+	}
+	for _, want := range []string{"version.go", "alpha.go"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected %q in fallback glob results (root file regression): %#v", want, items)
+		}
+	}
+	if strings.Contains(joined, "notes.md") {
+		t.Fatalf("did not expect notes.md in glob results: %#v", items)
 	}
 }
 
@@ -2552,7 +2838,7 @@ func TestSearchFileNamesWithGoFallbackCancels(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	matches, meta, err := searchFileNamesWithGo(ctx, dir, "alpha", 10, func(path string) string {
+	matches, meta, err := searchFileNamesWithGo(ctx, dir, "alpha", false, 10, func(path string) string {
 		rel, relErr := filepath.Rel(dir, path)
 		if relErr != nil {
 			return filepath.ToSlash(path)

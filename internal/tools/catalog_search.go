@@ -24,13 +24,13 @@ func (b *Toolset) searchTools() []core.Tool {
 		},
 		toolFn{
 			name:        "search_files",
-			description: "Search file names and relative paths recursively. Workspace, git worktree, and discovered local skill paths are read directly; external paths request file access approval before searching. Omit path or pass an empty path to search the workspace root. Best for locating candidate files before read_file. Does not support include; use grep with include to search content by file glob. Output is capped by limit; if results are truncated, refine path/pattern before retrying broad searches.",
+			description: "Search file names and relative paths recursively. Workspace, git worktree, and discovered local skill paths are read directly; external paths request file access approval before searching. Omit path or pass an empty path to search the workspace root. Best for locating candidate files before read_file. To filter by file type or layout, put a glob directly in pattern (e.g. **/*.go, *.test.js, src/**/*.ts); a pattern with no glob metacharacters is matched as a case-insensitive substring of the path. This tool matches names only and does not support include; use grep (which has include) to search file contents. Output is capped by limit; if results are truncated, refine path/pattern before retrying broad searches.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
 				"properties": map[string]any{
 					"path":    map[string]any{"type": "string", "description": "Optional search root. Omit or pass an empty string to search the workspace root. External paths may require file access approval."},
-					"pattern": map[string]any{"type": "string", "description": "Case-insensitive file/path pattern"},
+					"pattern": map[string]any{"type": "string", "description": "Glob pattern (e.g. **/*.go, *.test.js) when it contains glob metacharacters, otherwise a case-insensitive substring of the file path."},
 					"limit":   map[string]any{"type": "integer", "minimum": 1, "maximum": 2000},
 				},
 				"required": []string{"pattern"},
