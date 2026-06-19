@@ -99,7 +99,7 @@ func TestNormalizeToolContentGolden(t *testing.T) {
 }
 
 func TestInvalidToolInputContentGolden(t *testing.T) {
-	assertGolden(t, "invalid_input_plain", invalidToolInputContent("read_file", errMessage("input did not match schema: missing file_path")))
+	assertGolden(t, "invalid_input_plain", invalidToolInputContent("read_file", nil, errMessage("input did not match schema: missing file_path")))
 }
 
 type errMessage string

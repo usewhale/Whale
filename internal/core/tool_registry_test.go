@@ -305,7 +305,7 @@ func TestGrepMissingPatternReturnsRecoveryHint(t *testing.T) {
 	}
 }
 
-func TestShellRunUnknownDescriptionReturnsRecoveryHint(t *testing.T) {
+func TestUnknownFieldReturnsSchemaDerivedRecoveryHint(t *testing.T) {
 	reg := NewToolRegistry([]Tool{snapshotTestTool{
 		name: "shell_run",
 		params: map[string]any{
@@ -335,12 +335,51 @@ func TestShellRunUnknownDescriptionReturnsRecoveryHint(t *testing.T) {
 	for _, want := range []string{
 		`error (invalid_input)`,
 		`unknown field "description"`,
-		"shell_run does not accept description; pass only command (plus optional cwd/background/timeout fields).",
+		// Hint is derived from the tool's own schema, with fields sorted.
+		"description is not a parameter of shell_run; supported parameters: background, command, cwd.",
 		`recovery:`,
 	} {
 		if !strings.Contains(res.ModelText, want) {
 			t.Fatalf("result missing %q:\n%s", want, res.ModelText)
 		}
+	}
+}
+
+func TestSchemaFieldRecoveryHintGeneric(t *testing.T) {
+	params := map[string]any{
+		"properties": map[string]any{
+			"alpha": map[string]any{"type": "string"},
+			"beta":  map[string]any{"type": "string"},
+		},
+	}
+	got, ok := schemaFieldRecoveryHint("mytool", `missing required field "alpha"`, params)
+	if !ok {
+		t.Fatalf("expected hint for missing required field")
+	}
+	if want := "mytool requires the alpha field; supported parameters: alpha, beta."; got != want {
+		t.Fatalf("missing-field hint = %q, want %q", got, want)
+	}
+
+	got, ok = schemaFieldRecoveryHint("mytool", `unknown field "gamma"`, params)
+	if !ok {
+		t.Fatalf("expected hint for unknown field")
+	}
+	if want := "gamma is not a parameter of mytool; supported parameters: alpha, beta."; got != want {
+		t.Fatalf("unknown-field hint = %q, want %q", got, want)
+	}
+
+	// No schema properties: still names the offending field without a list.
+	got, ok = schemaFieldRecoveryHint("mytool", `unknown field "gamma"`, nil)
+	if !ok {
+		t.Fatalf("expected hint without schema properties")
+	}
+	if want := "gamma is not a parameter of mytool; remove it."; got != want {
+		t.Fatalf("no-props hint = %q, want %q", got, want)
+	}
+
+	// Unrelated messages do not produce a generic hint.
+	if _, ok := schemaFieldRecoveryHint("mytool", "input must be valid JSON object", params); ok {
+		t.Fatalf("did not expect hint for unrelated message")
 	}
 }
 
@@ -427,7 +466,7 @@ func TestFetchFileURLReturnsRecoveryHint(t *testing.T) {
 		`url scheme must be http or https`,
 		`valid url is required`,
 	} {
-		content := invalidToolInputContent("fetch", errString(msg))
+		content := invalidToolInputContent("fetch", nil, errString(msg))
 		for _, want := range []string{
 			`"code":"invalid_input"`,
 			msg,

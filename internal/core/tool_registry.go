@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -285,7 +286,7 @@ func (r *ToolRegistry) DispatchWithProgress(ctx context.Context, call ToolCall, 
 			return normalizeRegistryResult(ctx, call, ToolResult{
 				ToolCallID: call.ID,
 				Name:       call.Name,
-				ModelText:  invalidToolInputContent(call.Name, err),
+				ModelText:  invalidToolInputContent(call.Name, spec.Parameters, err),
 				Code:       "invalid_input",
 			}, maxResultChars, time.Since(start).Milliseconds()), nil
 		}
@@ -312,7 +313,7 @@ func (r *ToolRegistry) DispatchWithProgress(ctx context.Context, call ToolCall, 
 	return normalizeRegistryResult(ctx, call, res, maxResultChars, time.Since(start).Milliseconds()), nil
 }
 
-func invalidToolInputContent(toolName string, err error) string {
+func invalidToolInputContent(toolName string, parameters map[string]any, err error) string {
 	msg := ""
 	if err != nil {
 		msg = err.Error()
@@ -323,7 +324,11 @@ func invalidToolInputContent(toolName string, err error) string {
 		Code:    "invalid_input",
 		Error:   msg,
 	}
-	if hint, ok := ToolInputRecoveryHint(toolName, msg); ok {
+	hint, ok := ToolInputRecoveryHint(toolName, msg)
+	if !ok {
+		hint, ok = schemaFieldRecoveryHint(toolName, msg, parameters)
+	}
+	if ok {
 		env.Summary = hint
 		env.Data = map[string]any{"recovery": hint}
 	}
@@ -344,8 +349,6 @@ func ToolInputRecoveryHint(toolName, msg string) (string, bool) {
 		return "search_files requires pattern; provide pattern and path, or use grep for content search.", true
 	case (toolName == "grep" || toolName == "search_content") && msg == `missing required field "pattern"`:
 		return "grep requires pattern (a regex); provide pattern and optionally include/path, or use search_files to find file names.", true
-	case toolName == "shell_run" && msg == `unknown field "description"`:
-		return "shell_run does not accept description; pass only command (plus optional cwd/background/timeout fields).", true
 	case (toolName == "fetch" || toolName == "web_fetch") && msg == `unknown field "max_results"`:
 		return toolName + " does not support max_results; remove it or use web_search when you need multiple search results.", true
 	case (toolName == "fetch" || toolName == "web_fetch") && msg == `unknown field "format"`:
@@ -354,6 +357,65 @@ func ToolInputRecoveryHint(toolName, msg string) (string, bool) {
 		return toolName + " only supports http/https URLs; use read_file for local file paths or tool result files.", true
 	}
 	return "", false
+}
+
+// schemaFieldRecoveryHint derives a recovery hint from the tool's own schema for
+// the generic "unknown field"/"missing required field" validation errors, so any
+// tool gets actionable guidance (the wrong field plus the list of valid ones)
+// without needing a hand-written entry in ToolInputRecoveryHint.
+func schemaFieldRecoveryHint(toolName, msg string, parameters map[string]any) (string, bool) {
+	tool := strings.TrimSpace(toolName)
+	if tool == "" {
+		tool = "this tool"
+	}
+	if field, ok := quotedFieldAfter(msg, "unknown field "); ok {
+		if names := schemaParameterNames(parameters); len(names) > 0 {
+			return fmt.Sprintf("%s is not a parameter of %s; supported parameters: %s.", field, tool, strings.Join(names, ", ")), true
+		}
+		return fmt.Sprintf("%s is not a parameter of %s; remove it.", field, tool), true
+	}
+	if field, ok := quotedFieldAfter(msg, "missing required field "); ok {
+		if names := schemaParameterNames(parameters); len(names) > 0 {
+			return fmt.Sprintf("%s requires the %s field; supported parameters: %s.", tool, field, strings.Join(names, ", ")), true
+		}
+		return fmt.Sprintf("%s requires the %s field.", tool, field), true
+	}
+	return "", false
+}
+
+// schemaParameterNames returns the sorted property names declared by a tool
+// schema, or nil when the schema declares none. Sorting keeps the hint stable
+// across runs (Go map iteration order is randomized).
+func schemaParameterNames(parameters map[string]any) []string {
+	props, _ := parameters["properties"].(map[string]any)
+	if len(props) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(props))
+	for k := range props {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// quotedFieldAfter extracts the double-quoted field name immediately following
+// prefix in msg (e.g. `unknown field "foo"` -> "foo").
+func quotedFieldAfter(msg, prefix string) (string, bool) {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(msg), prefix)
+	if !ok {
+		return "", false
+	}
+	rest = strings.TrimSpace(rest)
+	if len(rest) < 2 || rest[0] != '"' {
+		return "", false
+	}
+	rest = rest[1:]
+	end := strings.IndexByte(rest, '"')
+	if end <= 0 {
+		return "", false
+	}
+	return rest[:end], true
 }
 
 func normalizeRegistryResult(ctx context.Context, call ToolCall, res ToolResult, maxResultChars int, durationMS int64) ToolResult {
