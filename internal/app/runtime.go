@@ -217,13 +217,10 @@ func (a *App) applyRunOptionsDefaults(opts agent.RunOptions) agent.RunOptions {
 
 func (a *App) workflowDynamicSystemBlock(opts agent.RunOptions) string {
 	if !a.cfg.WorkflowsEnabled {
-		return strings.TrimSpace(`
-Workflow runtime.
-
-- Dynamic workflows are disabled in Whale.
-- If the user asks to list, resolve, run, create, or inspect workflows, call the workflow tool for the current status instead of answering from prior workflow_disabled results.
-- Do not inspect workflow directories, read configuration, edit configuration, auto-enable workflows, retry within the same turn, or offer shell/manual substitutes.
-`)
+		// Disabled means the workflow feature is invisible to the agent: the
+		// workflow tool is not registered, and we inject no guidance about it.
+		// The model treats "workflow" as an ordinary word and answers normally.
+		return ""
 	}
 	blocks := []string{strings.TrimSpace(`
 Workflow runtime.

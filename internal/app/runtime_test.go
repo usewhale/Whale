@@ -216,16 +216,8 @@ func TestRuntimeRespectsWorkflowToggles(t *testing.T) {
 		t.Fatalf("New disabled workflows: %v", err)
 	}
 	defer app.Close()
-	workflowTool := app.toolRegistry.Get("workflow")
-	if workflowTool == nil {
-		t.Fatal("workflow status tool should remain registered when workflows are disabled")
-	}
-	res, err := workflowTool.Run(t.Context(), core.ToolCall{ID: "wf-disabled", Name: "workflow", Input: `{"action":"list"}`})
-	if err != nil {
-		t.Fatalf("disabled workflow tool Run: %v", err)
-	}
-	if !res.IsError() || !strings.Contains(res.ModelText, "workflow_disabled") {
-		t.Fatalf("disabled workflow tool should return workflow_disabled, got error=%v content=%s", res.IsError(), res.ModelText)
+	if app.toolRegistry.Get("workflow") != nil {
+		t.Fatal("workflow tool must not be registered when workflows are disabled")
 	}
 
 	cfg = DefaultConfig()
@@ -279,16 +271,8 @@ func TestTurnReloadsWorkflowConfigChanges(t *testing.T) {
 	}
 	defer app.Close()
 
-	workflowTool := app.toolRegistry.Get("workflow")
-	if workflowTool == nil {
-		t.Fatal("workflow tool should be registered")
-	}
-	res, err := workflowTool.Run(t.Context(), core.ToolCall{ID: "wf-disabled", Name: "workflow", Input: `{"action":"run","name":"dead-code-scan"}`})
-	if err != nil {
-		t.Fatalf("disabled workflow Run: %v", err)
-	}
-	if !res.IsError() || !strings.Contains(res.ModelText, "workflow_disabled") {
-		t.Fatalf("expected disabled workflow result, got error=%v content=%s", res.IsError(), res.ModelText)
+	if app.toolRegistry.Get("workflow") != nil {
+		t.Fatal("workflow tool must not be registered while workflows are disabled")
 	}
 
 	enabled := true
@@ -301,11 +285,11 @@ func TestTurnReloadsWorkflowConfigChanges(t *testing.T) {
 	if !app.cfg.WorkflowsEnabled {
 		t.Fatal("expected workflows enabled after turn reload")
 	}
-	workflowTool = app.toolRegistry.Get("workflow")
+	workflowTool := app.toolRegistry.Get("workflow")
 	if workflowTool == nil {
-		t.Fatal("workflow tool should remain registered")
+		t.Fatal("workflow tool should be registered after enabling via turn reload")
 	}
-	res, err = workflowTool.Run(t.Context(), core.ToolCall{ID: "wf-enabled", Name: "workflow", Input: `{"action":"list"}`})
+	res, err := workflowTool.Run(t.Context(), core.ToolCall{ID: "wf-enabled", Name: "workflow", Input: `{"action":"list"}`})
 	if err != nil {
 		t.Fatalf("enabled workflow Run: %v", err)
 	}
@@ -412,11 +396,8 @@ func TestTurnReloadDoesNotFreezeLoadedWorkflowConfig(t *testing.T) {
 func TestWorkflowAuthoringPromptIsTurnScoped(t *testing.T) {
 	a := &App{cfg: DefaultConfig()}
 	disabledBlock := a.workflowDynamicSystemBlock(agent.RunOptions{})
-	if !strings.Contains(disabledBlock, "Dynamic workflows are disabled in Whale.") {
-		t.Fatalf("disabled workflow runtime block missing status: %s", disabledBlock)
-	}
-	if !strings.Contains(disabledBlock, "call the workflow tool for the current status") {
-		t.Fatalf("disabled workflow runtime should require fresh tool status: %s", disabledBlock)
+	if strings.TrimSpace(disabledBlock) != "" {
+		t.Fatalf("disabled workflow runtime block must be empty so the feature stays invisible: %q", disabledBlock)
 	}
 
 	a.cfg.WorkflowsEnabled = true

@@ -147,12 +147,17 @@ func initAppRuntime(cfg Config, sessionInit appSessionInit, toolInit appToolInit
 		workflowRunner = workflow.NewScriptRunner(cfg.DataDir, workflowManager)
 		workflowRunner.Library = workflowLibrary
 	}
-	workflowTools := []core.Tool{workflow.NewToolWithOptions(workflowRunner, workflow.ToolOptions{
-		ParentSessionIDFunc:   parentSessionIDFunc,
-		KeywordTriggerEnabled: cfg.WorkflowKeywordTrigger,
-		Enabled:               cfg.WorkflowsEnabled,
-		Library:               workflowLibrary,
-	})}
+	// Only expose the workflow tool when dynamic workflows are enabled. When
+	// disabled, the tool must not appear in the schema at all so the agent never
+	// queries or mentions workflow functionality (regardless of keyword trigger).
+	var workflowTools []core.Tool
+	if cfg.WorkflowsEnabled {
+		workflowTools = []core.Tool{workflow.NewToolWithOptions(workflowRunner, workflow.ToolOptions{
+			ParentSessionIDFunc: parentSessionIDFunc,
+			Enabled:             true,
+			Library:             workflowLibrary,
+		})}
+	}
 	registeredTools := append([]core.Tool{}, toolInit.baseTools...)
 	registeredTools = append(registeredTools, toolInit.pluginTools...)
 	registeredTools = append(registeredTools, taskTools...)
