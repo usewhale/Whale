@@ -357,11 +357,24 @@ func summarizeFailedResult(env toolResultEnvelope, fallback string) (string, str
 		return "result_failed", summarizeReplanRequired(env)
 	case "ask_mode_blocked", "plan_mode_blocked", "mode_blocked":
 		return "result_mode_hint", summarizeModeBlocked(env, false)
-	case "fetch_failed", "web_fetch_failed":
+	case "fetch_failed", "web_fetch_failed", "web_search_failed", "search_timeout":
+		// web_fetch/web_search report timeouts under a generic failure code with
+		// the timeout signal only in the message/recovery text (e.g. web_search
+		// returns "duckduckgo failed: timeout; bing failed: timeout"). Detect it
+		// here, where the detail is a network error string (never a parameter
+		// list), so the TIMEOUT rendering survives without the broad detail scan
+		// below that would false-match on tools listing a timeout_ms parameter.
+		// Non-timeout failures fall through to the generic failure rendering.
+		if detailIndicatesTimeout(detail) {
+			if duration != "" {
+				return "result_timeout", "TIMEOUT · " + duration
+			}
+			return "result_timeout", "TIMEOUT"
+		}
 		if status := httpStatusSummary(env); status != "" {
 			return "result_http_error", status
 		}
-	case "invalid_args":
+	case "invalid_args", "invalid_input":
 		return "result_usage_hint", summarizeInvalidArgs(detail)
 	case "not_file":
 		return "result_blocked", summarizePathIsDirectory(env, detail)
@@ -402,13 +415,18 @@ func summarizeFailedResult(env toolResultEnvelope, fallback string) (string, str
 	if strings.Contains(lower, "denied") || strings.Contains(lower, "approval") || strings.Contains(lower, "policy") {
 		return "result_denied", "DENIED · " + detail
 	}
-	if strings.Contains(lower, "timeout") {
+	// The timeout/cancel fallbacks key off the error code only, never the
+	// free-text detail: a recovery hint that merely lists timeout_ms as a
+	// valid parameter (e.g. an invalid_input on shell_run) must not be
+	// misclassified as a TIMEOUT.
+	codeLower := strings.ToLower(env.code)
+	if strings.Contains(codeLower, "timeout") {
 		if duration != "" {
 			return "result_timeout", "TIMEOUT · " + duration
 		}
 		return "result_timeout", "TIMEOUT"
 	}
-	if strings.Contains(lower, "cancel") {
+	if strings.Contains(codeLower, "cancel") {
 		return "result_canceled", "CANCELED"
 	}
 
@@ -420,6 +438,16 @@ func summarizeFailedResult(env toolResultEnvelope, fallback string) (string, str
 		return "result_failed", fmt.Sprintf("%s · %s · %s", prefix, duration, detail)
 	}
 	return "result_failed", fmt.Sprintf("%s · %s", prefix, detail)
+}
+
+// detailIndicatesTimeout reports whether a network error detail describes a
+// timeout. Used only for fetch failures, whose detail is an error string, so
+// matching on phrases here cannot misfire on parameter-list hints.
+func detailIndicatesTimeout(detail string) bool {
+	lower := strings.ToLower(detail)
+	return strings.Contains(lower, "timeout") ||
+		strings.Contains(lower, "timed out") ||
+		strings.Contains(lower, "deadline exceeded")
 }
 
 func isModeBlockedCode(code string) bool {

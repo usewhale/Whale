@@ -575,6 +575,32 @@ func TestSummarizeToolResultForChat_PlanShellModeBlockedIsConcise(t *testing.T) 
 		}
 	}
 }
+func TestSummarizeToolResultForChat_FetchTimeoutShowsTimeout(t *testing.T) {
+	// web_fetch timeouts surface under the generic fetch_failed code with the
+	// timeout signal only in the message — must still render as TIMEOUT.
+	raw := `{"success":false,"code":"fetch_failed","message":"Get \"https://example.com\": context deadline exceeded"}`
+	role, got := summarizeToolResultForChat("fetch", raw)
+	if role != "result_timeout" || got != "TIMEOUT" {
+		t.Fatalf("unexpected fetch timeout summary: role=%q text=%q", role, got)
+	}
+}
+func TestSummarizeToolResultForChat_WebSearchTimeoutShowsTimeout(t *testing.T) {
+	// Both backends timing out surfaces under web_search_failed with the timeout
+	// signal only in the detail — must still render as TIMEOUT.
+	raw := `{"success":false,"code":"web_search_failed","message":"duckduckgo failed: timeout; bing failed: timeout"}`
+	role, got := summarizeToolResultForChat("web_search", raw)
+	if role != "result_timeout" || got != "TIMEOUT" {
+		t.Fatalf("unexpected web_search timeout summary: role=%q text=%q", role, got)
+	}
+}
+func TestSummarizeToolResultForChat_WebSearchNonTimeoutStaysFailure(t *testing.T) {
+	// A non-timeout web_search failure must not be mislabeled as TIMEOUT.
+	raw := `{"success":false,"code":"web_search_failed","message":"duckduckgo returned a bot challenge and bing fallback failed: blocked"}`
+	role, _ := summarizeToolResultForChat("web_search", raw)
+	if role == "result_timeout" {
+		t.Fatalf("non-timeout web_search failure should not render as TIMEOUT")
+	}
+}
 func TestSummarizeToolResultForChat_FetchHTTPStatusShowsHTTPError(t *testing.T) {
 	raw := `{"success":false,"code":"fetch_failed","message":"http 403"}`
 	role, got := summarizeToolResultForChat("fetch", raw)
@@ -594,6 +620,19 @@ func TestSummarizeToolResultForChat_InvalidArgsShowsUsageHint(t *testing.T) {
 	role, got := summarizeToolResultForChat("grep", raw)
 	if role != "result_usage_hint" || got != "Invalid tool input · literal_text must be bool" {
 		t.Fatalf("unexpected invalid args summary: role=%q text=%q", role, got)
+	}
+}
+func TestSummarizeToolResultForChat_InvalidInputUnknownFieldNotTimeout(t *testing.T) {
+	// Regression: shell_run rejecting an unknown "description" field produces a
+	// recovery hint that lists timeout_ms among the valid parameters. The TUI
+	// must show a usage hint, not mislabel it as TIMEOUT.
+	raw := `{"success":false,"code":"invalid_input","error":"unknown field \"description\"","summary":"description is not a parameter of shell_run; supported parameters: background, command, cwd, max_runtime_ms, mode, timeout_ms, yield_time_ms.","data":{"recovery":"description is not a parameter of shell_run; supported parameters: background, command, cwd, max_runtime_ms, mode, timeout_ms, yield_time_ms."}}`
+	role, got := summarizeToolResultForChat("shell_run", raw)
+	if role != "result_usage_hint" {
+		t.Fatalf("expected usage hint, got role=%q text=%q", role, got)
+	}
+	if !strings.HasPrefix(got, "Invalid tool input · ") {
+		t.Fatalf("expected invalid-input summary, got %q", got)
 	}
 }
 func TestSummarizeToolResultForChat_Timeout(t *testing.T) {

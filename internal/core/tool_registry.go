@@ -706,13 +706,27 @@ func validateToolInput(parameters map[string]any, raw string) error {
 	ap, hasAP := parameters["additionalProperties"].(bool)
 	if hasAP && !ap {
 		for k := range input {
-			if _, ok := props[k]; !ok {
-				return fmt.Errorf("unknown field %q", k)
+			if _, ok := props[k]; ok {
+				continue
 			}
+			// "description" is a reserved, benign metadata field: models
+			// routinely attach a human-readable label to tool calls (a habit
+			// from other harnesses). Tolerate it on any tool instead of
+			// failing the call, even when the tool does not declare it.
+			if k == reservedDescriptionField {
+				continue
+			}
+			return fmt.Errorf("unknown field %q", k)
 		}
 	}
 	return nil
 }
+
+// reservedDescriptionField is accepted on every tool call and ignored by
+// execution. Models routinely attach this human-readable label to tool calls
+// (a habit from other harnesses), so we tolerate it on every tool instead of
+// failing the call, even when the tool does not declare it in its schema.
+const reservedDescriptionField = "description"
 
 func normalizeToolSchema(parameters map[string]any) map[string]any {
 	if parameters == nil {

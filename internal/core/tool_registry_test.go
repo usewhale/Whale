@@ -324,7 +324,7 @@ func TestUnknownFieldReturnsSchemaDerivedRecoveryHint(t *testing.T) {
 	res, err := reg.Dispatch(context.Background(), ToolCall{
 		ID:    "tc-shell",
 		Name:  "shell_run",
-		Input: `{"command":"git status","description":"Show working tree status"}`,
+		Input: `{"command":"git status","verbose":true}`,
 	})
 	if err != nil {
 		t.Fatalf("dispatch: %v", err)
@@ -334,14 +334,43 @@ func TestUnknownFieldReturnsSchemaDerivedRecoveryHint(t *testing.T) {
 	}
 	for _, want := range []string{
 		`error (invalid_input)`,
-		`unknown field "description"`,
+		`unknown field "verbose"`,
 		// Hint is derived from the tool's own schema, with fields sorted.
-		"description is not a parameter of shell_run; supported parameters: background, command, cwd.",
+		"verbose is not a parameter of shell_run; supported parameters: background, command, cwd.",
 		`recovery:`,
 	} {
 		if !strings.Contains(res.ModelText, want) {
 			t.Fatalf("result missing %q:\n%s", want, res.ModelText)
 		}
+	}
+}
+
+// A stray "description" field is a benign model habit and must be tolerated on
+// any tool (not just shell_run), never producing invalid_input.
+func TestDescriptionFieldToleratedOnAnyTool(t *testing.T) {
+	reg := NewToolRegistry([]Tool{snapshotTestTool{
+		name: "shell_run",
+		params: map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties": map[string]any{
+				"command": map[string]any{"type": "string"},
+			},
+			"required": []string{"command"},
+		},
+		content: `{"ok":true}`,
+	}})
+
+	res, err := reg.Dispatch(context.Background(), ToolCall{
+		ID:    "tc-shell",
+		Name:  "shell_run",
+		Input: `{"command":"git status","description":"Show working tree status"}`,
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if res.IsError() {
+		t.Fatalf("description field should be tolerated, got error:\n%s", res.ModelText)
 	}
 }
 
