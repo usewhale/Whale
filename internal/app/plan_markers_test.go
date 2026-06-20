@@ -34,6 +34,9 @@ func TestEnsureCurrentModeMarkerRecordsInitialModeAndDeduplicates(t *testing.T) 
 	if got := msgs[0]; !got.Hidden || got.Role != "user" || !strings.Contains(got.Text, "active session mode is now agent") || !strings.Contains(got.Text, "Agent mode instruction") {
 		t.Fatalf("unexpected initial mode marker: %+v", got)
 	}
+	if got := msgs[0].Text; !strings.Contains(got, "execute the user's current request") || strings.Contains(got, "current goal") {
+		t.Fatalf("agent marker should describe the current request without goal wording: %q", got)
+	}
 
 	if err := app.ensureCurrentModeMarker(); err != nil {
 		t.Fatalf("ensureCurrentModeMarker duplicate: %v", err)

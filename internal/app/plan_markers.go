@@ -43,7 +43,7 @@ func modeChangedInstruction(mode string) string {
 	case "plan":
 		return "Plan mode instruction: design the work before implementation. Treat execution requests such as implement, fix, publish, create a branch, or open a worktree as requests to plan that execution. Explore with non-mutating tools when helpful, but do not edit, write, patch, format, migrate, create branches or worktrees, or run commands whose purpose is to carry out the plan. When the plan is decision-complete, output exactly one <proposed_plan> block with concise Markdown inside it, and do not ask whether to proceed after the block."
 	default:
-		return "Agent mode instruction: execute the user's current goal using available read-only and mutating tools as appropriate, subject to policy, mode restrictions, tool results, and user approval."
+		return "Agent mode instruction: execute the user's current request using available read-only and mutating tools as appropriate, subject to policy, mode restrictions, tool results, and user approval."
 	}
 }
 

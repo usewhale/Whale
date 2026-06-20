@@ -1598,7 +1598,7 @@ func TestModeSwitchPersistsHiddenModeChangedMarker(t *testing.T) {
 					t.Fatalf("plan marker missing mode instruction: %q", got.Text)
 				}
 			case session.ModeAgent:
-				if !strings.Contains(got.Text, "Agent mode instruction") || !strings.Contains(got.Text, "execute the user's current goal") {
+				if !strings.Contains(got.Text, "Agent mode instruction") || !strings.Contains(got.Text, "execute the user's current request") || strings.Contains(got.Text, "current goal") {
 					t.Fatalf("agent marker missing mode instruction: %q", got.Text)
 				}
 			}
