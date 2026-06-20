@@ -40,14 +40,19 @@ func (p *updatePlanProvider) StreamResponse(_ context.Context, _ []Message, _ []
 }
 
 type providerToolCaptureProvider struct {
-	names []string
+	names    []string
+	captured bool
 }
 
 func (p *providerToolCaptureProvider) StreamResponse(_ context.Context, _ []Message, tools []Tool) <-chan ProviderEvent {
-	p.names = p.names[:0]
-	for _, tool := range tools {
-		if tool != nil {
-			p.names = append(p.names, tool.Name())
+	// Capture the first request's visible tools only; plan-finalization recovery
+	// may issue a later, tool-suppressed turn that would otherwise clobber this.
+	if !p.captured {
+		p.captured = true
+		for _, tool := range tools {
+			if tool != nil {
+				p.names = append(p.names, tool.Name())
+			}
 		}
 	}
 	return eventStream(endTurnEvent("done"))

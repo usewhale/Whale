@@ -234,7 +234,11 @@ func (c *Client) stream(ctx context.Context, history []core.Message, tools []cor
 }
 
 func (c *Client) streamPrefix(ctx context.Context, history []core.Message, prefix string, stop []string, out chan<- llm.ProviderEvent) error {
-	if latestUserMessageHasAttachments(history) || !c.prefixCompletionEnabled || strings.TrimSpace(prefix) == "" {
+	// An explicit prefix request (non-empty prefix) is honored regardless of the
+	// prefixCompletionEnabled auto-flag: callers that pass a prefix are opting in
+	// directly (e.g. plan-finalization recovery). The flag only governs implicit
+	// use. Endpoint incompatibility still falls back via prefixCompletionBaseURL.
+	if latestUserMessageHasAttachments(history) || strings.TrimSpace(prefix) == "" {
 		return c.stream(ctx, history, nil, out)
 	}
 	requestBaseURL, ok := c.prefixCompletionBaseURL()
@@ -505,6 +509,13 @@ type streamTerminalError struct {
 
 func (e *streamTerminalError) Error() string {
 	return e.msg
+}
+
+// Unwrap exposes ErrEmptyCompletion so callers can recognize a terminal-empty
+// completion (the only condition under which this error is produced) without
+// importing this package's unexported error type.
+func (e *streamTerminalError) Unwrap() error {
+	return llm.ErrEmptyCompletion
 }
 
 func streamError(err error, hadProgress bool) error {
@@ -953,6 +964,14 @@ func toDeepSeekMessages(history []core.Message) []map[string]any {
 			flushPending()
 			out = append(out, map[string]any{"role": "user", "content": core.MessagePlainText(msg)})
 		case core.RoleAssistant:
+			// An assistant turn with no content, tool calls, or reasoning carries
+			// no information (e.g. a recovered empty completion persisted before
+			// plan-finalization recovery). Encoding it as an empty assistant
+			// message is useless and some providers reject it, so drop it from
+			// replayed/resumed history.
+			if strings.TrimSpace(core.MessagePlainText(msg)) == "" && len(msg.ToolCalls) == 0 && strings.TrimSpace(msg.Reasoning) == "" {
+				continue
+			}
 			flushPending()
 			m := map[string]any{
 				"role":              "assistant",

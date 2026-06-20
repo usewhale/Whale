@@ -391,7 +391,10 @@ type modeTailCaptureProvider struct {
 
 func (p *modeTailCaptureProvider) StreamResponse(_ context.Context, history []Message, _ []Tool) <-chan ProviderEvent {
 	p.history = append([]Message(nil), history...)
-	return eventStream(endTurnEvent("ok"))
+	// Return a finalized plan so plan-mode finalization recovery does not fire
+	// and append a recovery turn; this test only inspects the first request's
+	// mode-marker replay, not recovery behavior.
+	return eventStream(endTurnEvent("<proposed_plan>\nok\n</proposed_plan>"))
 }
 
 func TestImmutableSystemPromptStableAcrossSessionModes(t *testing.T) {

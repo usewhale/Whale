@@ -7,6 +7,7 @@ import (
 
 	"github.com/usewhale/whale/internal/compact"
 	"github.com/usewhale/whale/internal/core"
+	"github.com/usewhale/whale/internal/llm"
 	"github.com/usewhale/whale/internal/memory"
 	"github.com/usewhale/whale/internal/policy"
 )
@@ -20,6 +21,10 @@ type RunOptions struct {
 	AssistantPrefix    string
 	PrefixCompletion   bool
 	WorkflowAuthoring  bool
+	// SuppressTools forces the turn to be sent without any tools. Used by plan
+	// finalization recovery so a prefilled <proposed_plan> turn cannot be
+	// escaped by another tool call (prefix completion also requires no tools).
+	SuppressTools bool
 }
 
 func (a *Agent) RunStreamWithOptions(ctx context.Context, sessionID, input string, hiddenInput bool) (<-chan AgentEvent, error) {
@@ -117,6 +122,12 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 		modelTurns := 0
 		toolIters := 0
 		toolCalls := 0
+		// Plan finalization recovery (prefill-first): when a plan-mode turn ends
+		// without a <proposed_plan> block (the model drafted it into reasoning or
+		// wrote an analysis preamble and stopped), re-run once with the plan tag
+		// prefilled and tools suppressed so it is forced to emit the block.
+		planRecovered := false
+		planPrefillPending := false
 		if a.repairer != nil {
 			a.repairer.resetStorm()
 		}
@@ -194,12 +205,32 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 					return
 				}
 			}
-			assistant, toolMsg, usage, modelName, cacheShape, abortTurn, attemptedToolCalls, sErr := a.streamAndHandle(ctx, sessionID, history, rt, out, turnPolicy, toolSnapshot, remainingToolCalls, autoDenyCounts, opts)
+			turnOpts := opts
+			if planPrefillPending {
+				// Recovery turn: force the model to begin inside the plan block
+				// with no tools. This single turn drops tools from the request
+				// (prefix completion requires it), so it is the only turn that
+				// pays a cache miss; surrounding turns keep the cached prefix.
+				turnOpts.AssistantPrefix = planFinalizationPrefix
+				turnOpts.PrefixCompletion = true
+				turnOpts.SuppressTools = true
+				planPrefillPending = false
+				planRecovered = true
+			}
+			assistant, toolMsg, usage, modelName, cacheShape, abortTurn, attemptedToolCalls, sErr := a.streamAndHandle(ctx, sessionID, history, rt, out, turnPolicy, toolSnapshot, remainingToolCalls, autoDenyCounts, turnOpts)
 			if sErr != nil {
 				if errors.Is(sErr, context.Canceled) {
 					a.persistInterruptedTurnMarker(sessionID)
 					emit(AgentEvent{Type: AgentEventTypeTurnCancelled, Content: "turn cancelled"})
 					return
+				}
+				// A reasoning-only / empty completion in Plan mode is the worst
+				// form of the missing-plan failure (the model put everything in
+				// reasoning). Recover via prefill instead of aborting the turn.
+				if a.inPlanMode() && !planRecovered && errors.Is(sErr, llm.ErrEmptyCompletion) {
+					a.hideRecoveredEmptyAssistant(ctx, sessionID)
+					planPrefillPending = true
+					continue
 				}
 				// A deadline is a timeout, not a user act — telling the
 				// model "the user interrupted on purpose" would misstate
@@ -320,6 +351,16 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 				if !emit(AgentEvent{Type: AgentEventTypeResponseReset}) {
 					return
 				}
+				continue
+			}
+			// Plan finalization recovery: the turn ended with content but no
+			// <proposed_plan> block. Re-run once with the plan tag prefilled
+			// (tools suppressed) so the model is forced to emit the block, rather
+			// than leaving the user to re-ask. Bounded by planRecovered.
+			if a.planFinalizationNeeded(assistant) && !planRecovered {
+				planPrefillPending = true
+				rt.Log.Append(assistant)
+				history = append(history, assistant)
 				continue
 			}
 			emit(AgentEvent{Type: AgentEventTypeDone, Message: &assistant})

@@ -1418,6 +1418,33 @@ func TestToDeepSeekMessagesRecoversMissingToolResults(t *testing.T) {
 	}
 }
 
+func TestToDeepSeekMessagesDropsEmptyAssistant(t *testing.T) {
+	history := []core.Message{
+		{Role: core.RoleUser, Text: "plan it"},
+		// Empty assistant turn (e.g. a recovered empty completion) must not be
+		// encoded as an empty assistant message on replay/resume.
+		{Role: core.RoleAssistant, Hidden: true, FinishReason: core.FinishReasonCanceled},
+		{Role: core.RoleAssistant, Text: "the plan"},
+	}
+	out := toDeepSeekMessages(history)
+	if len(out) != 2 {
+		t.Fatalf("expected empty assistant dropped (2 msgs), got %d: %+v", len(out), out)
+	}
+	for _, m := range out {
+		if m["role"] == "assistant" && strings.TrimSpace(fmt.Sprint(m["content"])) == "" {
+			t.Fatalf("empty assistant message should not be encoded: %+v", m)
+		}
+	}
+	// A reasoning-only assistant turn is still meaningful and must be kept.
+	out2 := toDeepSeekMessages([]core.Message{
+		{Role: core.RoleUser, Text: "x"},
+		{Role: core.RoleAssistant, Reasoning: "thinking"},
+	})
+	if len(out2) != 2 {
+		t.Fatalf("reasoning-only assistant should be kept, got %d", len(out2))
+	}
+}
+
 func TestToDeepSeekMessagesDropsStrayToolResults(t *testing.T) {
 	history := []core.Message{
 		{Role: core.RoleUser, Text: "hi"},

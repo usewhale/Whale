@@ -1,9 +1,16 @@
 package llm
 
 import "context"
+import "errors"
 
 import "github.com/usewhale/whale/internal/core"
 import llmretry "github.com/usewhale/whale/internal/llm/retry"
+
+// ErrEmptyCompletion marks a terminal completion that carried no assistant
+// content and no tool calls (e.g. a reasoning-only response). Providers wrap
+// their terminal-empty errors with this so callers can recognize the case
+// without depending on provider-internal error types.
+var ErrEmptyCompletion = errors.New("provider returned no assistant content or tool calls")
 
 type EventType string
 

@@ -29,6 +29,9 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 
 	history := a.buildTurnProviderHistory(sessionID, rt)
 	toolList := providerVisibleToolsForMode(a.mode, tools)
+	if opts.SuppressTools {
+		toolList = nil
+	}
 	var ch <-chan llm.ProviderEvent
 	requestedAssistantPrefix := ""
 	if opts.PrefixCompletion && strings.TrimSpace(opts.AssistantPrefix) != "" && len(toolList) == 0 {
