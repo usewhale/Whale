@@ -28,7 +28,7 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 	}
 
 	history := a.buildTurnProviderHistory(sessionID, rt)
-	toolList := tools.Tools()
+	toolList := providerVisibleToolsForMode(a.mode, tools)
 	var ch <-chan llm.ProviderEvent
 	requestedAssistantPrefix := ""
 	if opts.PrefixCompletion && strings.TrimSpace(opts.AssistantPrefix) != "" && len(toolList) == 0 {
@@ -208,6 +208,24 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 	}
 	cacheShape := buildCacheShapeForRequestWithRuntime(cacheShapeRequestAgent, history, toolList, assistantPrefix, rt.Prefix.SystemBlocks(), rt.RuntimeBlocks())
 	return assistant, lastUsage, lastModel, cacheShape, nil
+}
+
+func providerVisibleToolsForMode(mode session.Mode, tools *core.ToolRegistry) []core.Tool {
+	if tools == nil {
+		return nil
+	}
+	toolList := tools.Tools()
+	if mode != session.ModePlan {
+		return toolList
+	}
+	out := toolList[:0]
+	for _, tool := range toolList {
+		if tool == nil || tool.Name() == "update_plan" {
+			continue
+		}
+		out = append(out, tool)
+	}
+	return out
 }
 
 // messageUsageFrom converts provider usage into the persisted form,

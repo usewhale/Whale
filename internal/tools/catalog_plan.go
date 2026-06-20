@@ -10,7 +10,7 @@ func (b *Toolset) planRuntimeTools() []core.Tool {
 	return []core.Tool{
 		toolFn{
 			name:        "update_plan",
-			description: "Update the execution checklist with pending, in_progress, and completed steps.",
+			description: "Update the execution checklist with pending, in_progress, and completed steps. This is not a Plan-mode proposal tool; Plan mode proposals must be emitted as a <proposed_plan> block.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,

@@ -84,6 +84,7 @@ Mode contract.
 - If any tool result has code ask_mode_blocked or plan_mode_blocked, do not retry the same tool call or the same shell operation with another shell command or another tool. Continue only with clearly allowed read-only alternatives, or explain the block.
 - Only the user or UI can switch modes. Do not output slash commands such as /agent, /ask, or /plan as assistant text to switch modes.
 - When the current mode is Plan and the plan is decision-complete, output exactly one <proposed_plan> block with a concise Markdown plan inside it. Put the opening and closing tags on their own lines and do not ask "should I proceed?" after the block.
+- The update_plan tool is a TODO/checklist tool for tracking execution progress; it is not the Plan-mode proposal channel and is unavailable in Plan mode. Do not confuse the two: never use update_plan to present a Plan-mode proposal. Emit the proposal as a <proposed_plan> block instead, even if a plan feels like a checklist of steps.
 `)
 }
 

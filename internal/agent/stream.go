@@ -359,6 +359,17 @@ func modeBlockedDetailsForCall(mode session.Mode, call core.ToolCall) (code, mes
 				"suggested_modes": []string{"/agent", "/plan", "Shift+Tab"},
 			}
 	case session.ModePlan:
+		if call.Name == "update_plan" {
+			return "plan_mode_blocked",
+				"update_plan is a TODO/checklist tool and is not allowed in Plan mode",
+				"update_plan only tracks implementation checklist progress after a plan has been accepted. In Plan mode, do not retry update_plan; output the decision-complete plan as exactly one <proposed_plan> block instead.",
+				map[string]any{
+					"current_mode": "plan",
+					"tool":         call.Name,
+					"action":       "emit_proposed_plan_block",
+					"retryable":    false,
+				}
+		}
 		if call.Name == "shell_run" {
 			return "plan_mode_blocked",
 				"shell command not confirmed read-only in plan mode",

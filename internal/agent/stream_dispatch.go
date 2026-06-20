@@ -43,6 +43,9 @@ func (a *Agent) prepareToolDispatches(ctx context.Context, sessionID, model stri
 	}
 	allowed := map[string]bool{}
 	for _, spec := range tools.Specs() {
+		if !a.toolVisibleForRepairScavenge(spec.Name) {
+			continue
+		}
 		allowed[spec.Name] = true
 	}
 	isMutating := func(c core.ToolCall) bool {
@@ -74,6 +77,13 @@ func (a *Agent) prepareToolDispatches(ctx context.Context, sessionID, model stri
 		}
 	}
 	return dispatchCalls, blocked, nil
+}
+
+func (a *Agent) toolVisibleForRepairScavenge(name string) bool {
+	if a == nil || a.mode != session.ModePlan {
+		return true
+	}
+	return name != "update_plan"
 }
 
 func (a *Agent) dispatchToolCalls(ctx context.Context, sc streamDispatchContext, dispatchCalls []core.ToolCall, blocked []core.ToolResult) (*core.Message, bool, error) {

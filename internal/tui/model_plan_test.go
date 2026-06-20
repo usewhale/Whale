@@ -385,6 +385,32 @@ func TestPlanUpdateEventRendersUpdatedPlan(t *testing.T) {
 		t.Fatalf("expected rendered updated plan, got %q", rendered)
 	}
 }
+
+func TestPlanUpdateInPlanModeDoesNotOpenImplementationPicker(t *testing.T) {
+	m := model{
+		assembler: tuirender.NewAssembler(),
+		mode:      modeChat,
+		chatMode:  "plan",
+		busy:      true,
+		status:    "working",
+	}
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventPlanUpdate, Text: "[~] Draft checklist"}))
+	m = next.(model)
+	if m.sawPlanThisTurn {
+		t.Fatal("plan_update must not count as a proposed plan")
+	}
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventToolResult, ToolCallID: "plan-1", ToolName: "update_plan", Text: `{"success":true}`}))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone, LastResponse: "done"}))
+	m = next.(model)
+	if m.mode == modePlanImplementation {
+		t.Fatal("plan_update should not open the implementation picker")
+	}
+	if m.chatMode != "plan" {
+		t.Fatalf("expected to stay in plan mode, got %q", m.chatMode)
+	}
+}
+
 func TestPlanUpdateDoesNotClearPendingToolCallsBeforeResult(t *testing.T) {
 	m := model{
 		assembler: tuirender.NewAssembler(),
