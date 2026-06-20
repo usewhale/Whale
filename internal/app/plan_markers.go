@@ -41,7 +41,7 @@ func modeChangedInstruction(mode string) string {
 	case "ask":
 		return "Ask mode instruction: answer the user's question directly. Use read-only inspection tools when useful, but do not modify files, launch writable workflows, create branches, or act as though you are implementing changes. If implementation is needed, explain the change or outline it instead."
 	case "plan":
-		return "Plan mode instruction: design the work before implementation. Treat execution requests such as implement, fix, publish, create a branch, or open a worktree as requests to plan that execution. Explore with non-mutating tools when helpful, but do not edit, write, patch, format, migrate, create branches or worktrees, or run commands whose purpose is to carry out the plan. When the plan is decision-complete, output exactly one <proposed_plan> block with concise Markdown inside it, and do not ask whether to proceed after the block."
+		return "Plan mode instruction:\n\n" + session.PlanModeInstruction()
 	default:
 		return "Agent mode instruction: execute the user's current request using available read-only and mutating tools as appropriate, subject to policy, mode restrictions, tool results, and user approval."
 	}
@@ -98,11 +98,21 @@ const planModeReminderFullEvery = 5
 
 const planModeReminderOpenTag = "<plan_mode_reminder>"
 
+func hasCurrentPlanModeFullInstruction(text string) bool {
+	return strings.Contains(text, "Finalization rule") && strings.Contains(text, "<proposed_plan>")
+}
+
+func hasCurrentPlanModeReminderInstruction(text string) bool {
+	lower := strings.ToLower(text)
+	return strings.Contains(text, "<proposed_plan>") &&
+		(strings.Contains(text, "Finalization rule") || strings.Contains(lower, "do not ask whether to proceed"))
+}
+
 func planModeReminderText(full bool) string {
 	if full {
-		return planModeReminderOpenTag + "\nPlan mode is still active. " + modeChangedInstruction(string(session.ModePlan)) + " If the user requests an action that plan mode does not allow, incorporate it as a step in the plan instead of performing it, and do not suggest switching modes.\n</plan_mode_reminder>"
+		return planModeReminderOpenTag + "\nPlan mode is still active.\n\n" + modeChangedInstruction(string(session.ModePlan)) + "\n\nIf the user requests an action that plan mode does not allow, incorporate it as a step in the plan instead of performing it, and do not suggest switching modes.\n</plan_mode_reminder>"
 	}
-	return planModeReminderOpenTag + "\nPlan mode is still active (full instruction in the earlier <mode_changed> marker). Treat the user's next message, including execution requests such as create a branch, implement, or fix, as plan input: fold it into the plan as steps instead of performing it, and do not suggest switching modes.\n</plan_mode_reminder>"
+	return planModeReminderOpenTag + "\nPlan mode is still active (full instruction in the earlier <mode_changed> marker). Treat the user's next message, including execution requests such as create a branch, implement, or fix, as plan input: fold it into the plan as steps instead of performing it. If the plan is ready, output exactly one <proposed_plan> block and do not ask whether to proceed.\n</plan_mode_reminder>"
 }
 
 // maybeRecordPlanModeReminder appends a plan-mode reminder ahead of the
@@ -116,6 +126,7 @@ func (a *App) maybeRecordPlanModeReminder(messages []core.Message, current sessi
 		return nil
 	}
 	reminders := 0
+	forceFull := false
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
 		if !msg.Hidden {
@@ -126,19 +137,30 @@ func (a *App) maybeRecordPlanModeReminder(messages []core.Message, current sessi
 		// mode marker and reset the throttle count.
 		if strings.Contains(msg.Text, planModeReminderOpenTag) {
 			if i == len(messages)-1 {
-				return nil
+				if hasCurrentPlanModeReminderInstruction(msg.Text) {
+					return nil
+				}
+				forceFull = true
+				break
 			}
 			reminders++
 			continue
 		}
 		if strings.Contains(msg.Text, "<mode_changed>") {
 			if i == len(messages)-1 {
-				return nil
+				if hasCurrentPlanModeFullInstruction(msg.Text) {
+					return nil
+				}
+				forceFull = true
+				break
+			}
+			if !hasCurrentPlanModeFullInstruction(msg.Text) {
+				forceFull = true
 			}
 			break
 		}
 	}
-	full := (reminders+1)%planModeReminderFullEvery == 0
+	full := forceFull || (reminders+1)%planModeReminderFullEvery == 0
 	_, err := a.msgStore.Create(context.Background(), core.Message{
 		SessionID:    a.sessionID,
 		Role:         core.RoleUser,

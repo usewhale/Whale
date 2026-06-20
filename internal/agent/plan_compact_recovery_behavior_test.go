@@ -154,7 +154,9 @@ func TestPlanModeInjectsSystemPrompt(t *testing.T) {
 			joinedSystem.WriteString("\n\n")
 		}
 	}
-	if !strings.Contains(joinedSystem.String(), "Plan mode is read-only collaboration mode") {
+	if !strings.Contains(joinedSystem.String(), "Plan Mode is a collaboration mode for designing the work before implementation") ||
+		!strings.Contains(joinedSystem.String(), "Finalization rule") ||
+		!strings.Contains(joinedSystem.String(), "<proposed_plan>") {
 		t.Fatalf("unexpected system prompt: %s", joinedSystem.String())
 	}
 }
@@ -169,6 +171,25 @@ func (p *finalPlanOnlyProvider) StreamResponse(_ context.Context, _ []Message, _
 		Response: &ProviderResponse{
 			FinishReason: FinishReasonEndTurn,
 			Content:      "drafting...\n<proposed_plan>\n# Plan\n- Implement final-content fallback\n</proposed_plan>",
+		},
+	}
+	close(out)
+	return out
+}
+
+type proposedPlanToolCallProvider struct{}
+
+func (p *proposedPlanToolCallProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	out := make(chan ProviderEvent, 1)
+	out <- ProviderEvent{
+		Type: EventComplete,
+		Response: &ProviderResponse{
+			FinishReason: FinishReasonToolUse,
+			ToolCalls: []ToolCall{{
+				ID:    "call-plan",
+				Name:  "proposed_plan",
+				Input: `{"plan":"# Plan\n- Recover fake proposed_plan tool call"}`,
+			}},
 		},
 	}
 	close(out)
@@ -255,6 +276,60 @@ func TestPlanModeEmitsPlanCompletedFromFinalContentFallback(t *testing.T) {
 	}
 	if !strings.Contains(plan, "Implement final-content fallback") {
 		t.Fatalf("expected structured plan part, parts=%+v", assistant.Parts)
+	}
+}
+
+func TestPlanModeRecoversProposedPlanToolCall(t *testing.T) {
+	store := NewInMemoryStore()
+	a := NewAgentWithRegistry(
+		&proposedPlanToolCallProvider{},
+		store,
+		NewToolRegistry(nil),
+		WithSessionMode(session.ModePlan),
+	)
+	events, err := a.RunStream(context.Background(), "s-proposed-plan-tool-call", "plan")
+	if err != nil {
+		t.Fatalf("run stream failed: %v", err)
+	}
+	var completed string
+	for ev := range events {
+		if ev.Type == AgentEventTypeToolCall {
+			t.Fatalf("proposed_plan fake tool should not be emitted as a tool call: %+v", ev)
+		}
+		if ev.Type == AgentEventTypeToolResult {
+			t.Fatalf("proposed_plan fake tool should not dispatch a tool result: %+v", ev)
+		}
+		if ev.Type == AgentEventTypePlanCompleted {
+			completed = ev.Content
+		}
+	}
+	if !strings.Contains(completed, "Recover fake proposed_plan tool call") {
+		t.Fatalf("expected recovered proposed plan, got %q", completed)
+	}
+	msgs, err := store.List(context.Background(), "s-proposed-plan-tool-call")
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	var assistant Message
+	for _, msg := range msgs {
+		if msg.Role == RoleAssistant {
+			assistant = msg
+		}
+	}
+	if assistant.FinishReason != FinishReasonEndTurn {
+		t.Fatalf("assistant finish reason = %q, want end_turn", assistant.FinishReason)
+	}
+	if len(assistant.ToolCalls) != 0 {
+		t.Fatalf("fake proposed_plan tool call should be cleared, got %+v", assistant.ToolCalls)
+	}
+	var plan string
+	for _, part := range assistant.Parts {
+		if part.Type == core.MessagePartPlan {
+			plan = part.Text
+		}
+	}
+	if !strings.Contains(plan, "Recover fake proposed_plan tool call") {
+		t.Fatalf("expected structured recovered plan part, parts=%+v", assistant.Parts)
 	}
 }
 

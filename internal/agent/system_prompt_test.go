@@ -245,7 +245,7 @@ func TestRuntimeSystemBlocksDeclareCurrentModeAuthoritatively(t *testing.T) {
 		"Mode contract.",
 		"Agent mode is the execution mode.",
 		"Ask mode is read-only answer mode.",
-		"Plan mode is read-only collaboration mode",
+		"Plan Mode is a collaboration mode for designing the work before implementation",
 		"ask_mode_blocked or plan_mode_blocked",
 	} {
 		if !strings.Contains(immutable, want) {
@@ -274,14 +274,16 @@ func TestPlanModeInstructionsTreatExecutionRequestsAsPlanning(t *testing.T) {
 	for _, want := range []string{
 		"User intent, imperative wording",
 		"create a branch",
-		"Treat execution requests in Plan mode as requests to plan the execution",
+		"Treat execution requests in Plan mode as requests to plan that execution",
 		"do not retry the same tool call or the same shell operation with another shell command",
-		"Do not run side-effectful commands",
-		"Do not output slash commands such as /agent",
-		"Only the user or UI can switch modes",
+		"Running side-effectful commands whose purpose is to carry out the plan",
+		"Outputting slash commands such as /agent",
+		"The session remains in Plan mode until the user or UI explicitly changes modes",
+		"Ground the plan in the actual environment",
+		"Finalization rule",
 		"<proposed_plan>",
-		"The update_plan tool is a TODO/checklist tool",
-		"never use update_plan to present a Plan-mode proposal",
+		"update_plan is a TODO/checklist/progress tool",
+		"The UI owns the implementation confirmation",
 	} {
 		if !strings.Contains(immutable, want) {
 			t.Fatalf("immutable plan mode contract missing %q:\n%s", want, immutable)
@@ -289,7 +291,7 @@ func TestPlanModeInstructionsTreatExecutionRequestsAsPlanning(t *testing.T) {
 	}
 
 	joined := strings.Join(a.buildRuntimeSystemBlocks(), "\n\n")
-	if strings.Contains(joined, "User intent, imperative wording") || strings.Contains(joined, "Do not run side-effectful commands") {
+	if strings.Contains(joined, "User intent, imperative wording") || strings.Contains(joined, "Running side-effectful commands whose purpose is to carry out the plan") {
 		t.Fatalf("runtime should not include long plan mode instructions:\n%s", joined)
 	}
 	if strings.Contains(joined, "Current session mode:") {

@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestPlanTurnDoneWithAssistantButNoProposedPlanDoesNotShowNotice(t *testing.T) {
+func TestPlanTurnDoneWithAssistantButNoProposedPlanShowsRecoveryNotice(t *testing.T) {
 	m := model{
 		assembler: tuirender.NewAssembler(),
 		mode:      modeChat,
@@ -33,8 +33,8 @@ func TestPlanTurnDoneWithAssistantButNoProposedPlanDoesNotShowNotice(t *testing.
 	if !strings.Contains(got, "Here is the test execution plan") {
 		t.Fatalf("expected assistant text to remain visible:\n%s", got)
 	}
-	if strings.Contains(got, "No proposed plan was produced") || strings.Contains(got, "<proposed_plan>") {
-		t.Fatalf("did not expect missing proposed plan notice in transcript:\n%s", got)
+	if !strings.Contains(got, "No proposed plan was produced") || !strings.Contains(got, "<proposed_plan>") {
+		t.Fatalf("expected missing proposed plan recovery notice in transcript:\n%s", got)
 	}
 	if m.sawAssistantThisTurn || m.sawPlanThisTurn {
 		t.Fatal("expected turn tracking flags to reset")
@@ -85,7 +85,7 @@ func TestMarkNoFinalAnswerIfNeededAddsPlanNotice(t *testing.T) {
 		t.Fatalf("expected reasoning-only plan status, got %q", snap[0].Text)
 	}
 }
-func TestMarkMissingProposedPlanIfNeededLogsOnly(t *testing.T) {
+func TestMarkMissingProposedPlanIfNeededAddsRecoveryNotice(t *testing.T) {
 	m := model{
 		assembler:            tuirender.NewAssembler(),
 		chatMode:             "plan",
@@ -95,8 +95,11 @@ func TestMarkMissingProposedPlanIfNeededLogsOnly(t *testing.T) {
 		t.Fatal("expected missing proposed plan to be marked")
 	}
 	snap := m.assembler.Snapshot()
-	if len(snap) != 0 {
-		t.Fatalf("expected no user-visible notice entry, got %+v", snap)
+	if len(snap) != 1 {
+		t.Fatalf("expected one user-visible notice entry, got %+v", snap)
+	}
+	if snap[0].Kind != tuirender.KindStatus || !strings.Contains(snap[0].Text, "No proposed plan was produced") || !strings.Contains(snap[0].Text, "<proposed_plan>") {
+		t.Fatalf("expected missing proposed plan recovery notice, got %+v", snap[0])
 	}
 	if len(m.logs) != 1 || m.logs[0].Kind != "missing_proposed_plan" {
 		t.Fatalf("expected diagnostic log entry, got %+v", m.logs)

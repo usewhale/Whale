@@ -266,6 +266,7 @@ func (m *model) markMissingProposedPlanIfNeeded(wasBusy bool) bool {
 	if !wasBusy || m.chatMode != "plan" || m.sawPlanThisTurn || !m.sawAssistantThisTurn {
 		return false
 	}
+	m.appendStatus("No proposed plan was produced. Stay in Plan mode and ask the model to output the final plan as exactly one <proposed_plan> block.")
 	m.addLog(logEntry{
 		Kind:    "missing_proposed_plan",
 		Source:  "assistant",

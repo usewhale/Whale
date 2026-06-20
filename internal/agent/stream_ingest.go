@@ -119,15 +119,23 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 				}
 				if len(ev.Response.ToolCalls) > 0 {
 					assistant.ToolCalls = ev.Response.ToolCalls
-					// Emit tool call events now that Input is fully populated.
-					for i := range ev.Response.ToolCalls {
-						tc := ev.Response.ToolCalls[i]
-						if !emit(AgentEvent{Type: AgentEventTypeToolCall, ToolCall: &tc}) {
-							return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
-						}
-						if taskEvent, ok := taskStartedEvent(tc); ok {
-							if !emit(taskEvent) {
+					recoveredPlanToolCall := a.recoverProposedPlanToolCall(ctx, &assistant, &ps, events)
+					if ctx.Err() != nil {
+						return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
+					}
+					if recoveredPlanToolCall {
+						ev.Response.ToolCalls = nil
+					} else {
+						// Emit tool call events now that Input is fully populated.
+						for i := range ev.Response.ToolCalls {
+							tc := ev.Response.ToolCalls[i]
+							if !emit(AgentEvent{Type: AgentEventTypeToolCall, ToolCall: &tc}) {
 								return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
+							}
+							if taskEvent, ok := taskStartedEvent(tc); ok {
+								if !emit(taskEvent) {
+									return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
+								}
 							}
 						}
 					}

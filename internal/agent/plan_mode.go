@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	"github.com/usewhale/whale/internal/core"
@@ -82,6 +83,49 @@ func finalizeAssistantPlanParts(msg *core.Message, ps *planState) {
 		msg.Parts = append([]core.MessagePart{{Type: core.MessagePartText, Text: msg.Text}}, msg.Parts...)
 	}
 	msg.Parts = append(msg.Parts, core.MessagePart{Type: core.MessagePartPlan, Text: ps.text.String()})
+}
+
+func (a *Agent) recoverProposedPlanToolCall(ctx context.Context, msg *core.Message, ps *planState, events chan<- AgentEvent) bool {
+	if a == nil || a.mode != session.ModePlan || msg == nil || len(msg.ToolCalls) == 0 {
+		return false
+	}
+	for _, call := range msg.ToolCalls {
+		if call.Name != "proposed_plan" {
+			continue
+		}
+		plan := proposedPlanToolCallText(call.Input)
+		if strings.TrimSpace(plan) == "" {
+			continue
+		}
+		ps.started = true
+		ps.completed = true
+		ps.text.Reset()
+		ps.text.WriteString(plan)
+		if !sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypePlanDelta, Content: plan}) {
+			return false
+		}
+		if !sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypePlanCompleted, Content: plan}) {
+			return false
+		}
+		msg.ToolCalls = nil
+		msg.FinishReason = core.FinishReasonEndTurn
+		finalizeAssistantPlanParts(msg, ps)
+		return true
+	}
+	return false
+}
+
+func proposedPlanToolCallText(input string) string {
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(input), &payload); err != nil {
+		return ""
+	}
+	for _, key := range []string{"plan", "content", "text"} {
+		if value, ok := payload[key].(string); ok && strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func removeAssistantTextPlanParts(parts []core.MessagePart) []core.MessagePart {

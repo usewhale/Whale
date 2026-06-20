@@ -60,7 +60,7 @@ func TestEnsureCurrentModeMarkerRecordsInitialModeAndDeduplicates(t *testing.T) 
 	if len(msgs) != 2 {
 		t.Fatalf("messages after mode change = %d, want 2: %+v", len(msgs), msgs)
 	}
-	if got := msgs[1]; !got.Hidden || !strings.Contains(got.Text, "active session mode is now plan") || !strings.Contains(got.Text, "changed from agent") || !strings.Contains(got.Text, "<proposed_plan>") {
+	if got := msgs[1]; !got.Hidden || !strings.Contains(got.Text, "active session mode is now plan") || !strings.Contains(got.Text, "changed from agent") || !strings.Contains(got.Text, "Finalization rule") || !strings.Contains(got.Text, "<proposed_plan>") {
 		t.Fatalf("unexpected plan mode marker: %+v", got)
 	}
 }
@@ -147,5 +147,101 @@ func TestEnsureCurrentModeMarkerAppendsPlanReminderPerTurn(t *testing.T) {
 	got := msgs[len(msgs)-1]
 	if strings.Contains(got.Text, planModeReminderOpenTag) {
 		t.Fatalf("agent mode turn appended a plan reminder: %+v", got)
+	}
+}
+
+func TestEnsureCurrentModeMarkerRefreshesStalePlanInstructionAtTail(t *testing.T) {
+	msgStore, err := store.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	app := &App{
+		msgStore:    msgStore,
+		sessionID:   "s-plan-stale-instruction",
+		currentMode: session.ModePlan,
+	}
+	ctx := context.Background()
+
+	staleMarker := "<mode_changed>\nThe active session mode is now plan, changed from agent.\n\nPlan mode instruction: prepare a plan and wait.\n</mode_changed>"
+	if _, err := msgStore.Create(ctx, core.Message{
+		SessionID:    app.sessionID,
+		Role:         core.RoleUser,
+		Text:         staleMarker,
+		Hidden:       true,
+		FinishReason: core.FinishReasonEndTurn,
+	}); err != nil {
+		t.Fatalf("Create stale marker: %v", err)
+	}
+
+	if err := app.ensureCurrentModeMarker(); err != nil {
+		t.Fatalf("ensureCurrentModeMarker stale marker: %v", err)
+	}
+	msgs, err := msgStore.List(ctx, app.sessionID)
+	if err != nil {
+		t.Fatalf("List stale marker: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("messages after stale marker refresh = %d, want 2: %+v", len(msgs), msgs)
+	}
+	got := msgs[1]
+	if !got.Hidden || !strings.Contains(got.Text, planModeReminderOpenTag) || !strings.Contains(got.Text, "Finalization rule") || !strings.Contains(got.Text, "<proposed_plan>") {
+		t.Fatalf("stale marker should be followed by current full reminder: %+v", got)
+	}
+
+	if err := app.ensureCurrentModeMarker(); err != nil {
+		t.Fatalf("ensureCurrentModeMarker retry: %v", err)
+	}
+	after, err := msgStore.List(ctx, app.sessionID)
+	if err != nil {
+		t.Fatalf("List retry: %v", err)
+	}
+	if len(after) != len(msgs) {
+		t.Fatalf("retry after current reminder appended duplicate, got %d messages", len(after))
+	}
+}
+
+func TestEnsureCurrentModeMarkerRefreshesStalePlanInstructionBehindVisibleMessages(t *testing.T) {
+	msgStore, err := store.NewJSONLStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewJSONLStore: %v", err)
+	}
+	app := &App{
+		msgStore:    msgStore,
+		sessionID:   "s-plan-stale-instruction-behind-visible",
+		currentMode: session.ModePlan,
+	}
+	ctx := context.Background()
+
+	staleMarker := "<mode_changed>\nThe active session mode is now plan, changed from agent.\n\nPlan mode instruction: prepare a plan and wait.\n</mode_changed>"
+	if _, err := msgStore.Create(ctx, core.Message{
+		SessionID:    app.sessionID,
+		Role:         core.RoleUser,
+		Text:         staleMarker,
+		Hidden:       true,
+		FinishReason: core.FinishReasonEndTurn,
+	}); err != nil {
+		t.Fatalf("Create stale marker: %v", err)
+	}
+	if _, err := msgStore.Create(ctx, core.Message{
+		SessionID: app.sessionID,
+		Role:      core.RoleUser,
+		Text:      "continue planning",
+	}); err != nil {
+		t.Fatalf("Create visible user message: %v", err)
+	}
+
+	if err := app.ensureCurrentModeMarker(); err != nil {
+		t.Fatalf("ensureCurrentModeMarker stale marker behind visible: %v", err)
+	}
+	msgs, err := msgStore.List(ctx, app.sessionID)
+	if err != nil {
+		t.Fatalf("List stale marker behind visible: %v", err)
+	}
+	if len(msgs) != 3 {
+		t.Fatalf("messages after stale marker refresh = %d, want 3: %+v", len(msgs), msgs)
+	}
+	got := msgs[2]
+	if !got.Hidden || !strings.Contains(got.Text, planModeReminderOpenTag) || !strings.Contains(got.Text, "Finalization rule") || !strings.Contains(got.Text, "<proposed_plan>") {
+		t.Fatalf("stale non-tail marker should force current full reminder: %+v", got)
 	}
 }
