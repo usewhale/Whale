@@ -143,11 +143,6 @@ func renderRuntimeBlock(workspaceRoot string, worktree runtimeWorktreeContext, r
 		b.WriteString(strings.TrimSpace(worktree.WorktreeRoot))
 		b.WriteString("\n")
 	}
-	if strings.TrimSpace(worktree.OriginalWorkspace) != "" {
-		b.WriteString("- Original workspace: ")
-		b.WriteString(strings.TrimSpace(worktree.OriginalWorkspace))
-		b.WriteString("\n")
-	}
 	if strings.TrimSpace(rt.GOOS) != "" {
 		b.WriteString("- OS: ")
 		b.WriteString(strings.TrimSpace(rt.GOOS))
@@ -159,7 +154,7 @@ func renderRuntimeBlock(workspaceRoot string, worktree runtimeWorktreeContext, r
 	b.WriteString(fmt.Sprintf("Shell commands run from the current Whale workspace by default. Do not assume a synthetic path such as /workspace; use relative paths or the %s cwd parameter for subdirectories. Filesystem tools resolve relative paths from the current workspace and can request file access approval for external read paths when the user asks to inspect files outside the workspace. If access or execution is denied, do not retry the same external operation through another tool unless the user explicitly asks again.", core.DisplayToolName("shell_run")))
 	if strings.TrimSpace(worktree.WorktreeRoot) != "" && strings.TrimSpace(worktree.OriginalWorkspace) != "" {
 		b.WriteString("\n")
-		b.WriteString("This session is running in a git worktree. Treat the original workspace as reference-only; do not cd to it, run git -C against it, or make changes there unless the user explicitly asks you to work in the original workspace.")
+		b.WriteString("This session is running in a git worktree, which is the project for this session. Keep all work inside the current worktree and resolve paths against it; do not switch to, read from, or modify the parent checkout it was created from unless the user explicitly asks you to.")
 	}
 	if guidance := rt.CommandGuidance(); strings.TrimSpace(guidance) != "" {
 		b.WriteString("\n")
