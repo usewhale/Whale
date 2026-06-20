@@ -221,20 +221,46 @@ func TestRuntimeEnvironmentBlockIncludesWorktreeContext(t *testing.T) {
 	})
 
 	for _, want := range []string{
-		"Current worktree root: /repo/.whale/worktrees/feature",
-		"running in a git worktree, which is the project for this session",
-		"Keep all work inside the current worktree",
-		"do not switch to, read from, or modify the parent checkout",
+		"Current Whale workspace root: /repo/.whale/worktrees/feature",
+		"This is a git worktree, an isolated copy of the repository",
+		"Run all commands and resolve all paths from this directory",
+		"do not cd to, read from, or modify the parent checkout",
 	} {
 		if !strings.Contains(block, want) {
 			t.Fatalf("worktree runtime block missing %q:\n%s", want, block)
 		}
+	}
+	// The worktree root equals the workspace root here, so it must not be printed
+	// a second time: the duplicate path line is noise that dilutes the single-path
+	// signal src relies on.
+	if strings.Contains(block, "Current worktree root:") {
+		t.Fatalf("worktree runtime block duplicated the worktree path:\n%s", block)
 	}
 	// The original checkout's absolute path must never be surfaced to the model:
 	// doing so invites it to read/grep the parent repo and trip per-directory
 	// external-directory approvals (mirrors src, which drops the path entirely).
 	if strings.Contains(block, "Original workspace: /repo") {
 		t.Fatalf("worktree runtime block leaked original workspace path:\n%s", block)
+	}
+}
+
+func TestRuntimeEnvironmentBlockShowsWorktreeRootWhenStartedFromSubdir(t *testing.T) {
+	block := renderRuntimeBlock("/repo/.whale/worktrees/feature/sub", runtimeWorktreeContext{
+		WorktreeRoot:      "/repo/.whale/worktrees/feature",
+		OriginalWorkspace: "/repo",
+	}, shell.RuntimeDescription{
+		GOOS: "linux",
+		Spec: shell.Spec{Kind: shell.KindPOSIX, DisplayName: "/bin/sh"},
+	})
+
+	for _, want := range []string{
+		"Current Whale workspace root: /repo/.whale/worktrees/feature/sub",
+		"Current worktree root: /repo/.whale/worktrees/feature",
+		"This is a git worktree, an isolated copy of the repository",
+	} {
+		if !strings.Contains(block, want) {
+			t.Fatalf("worktree runtime block missing %q:\n%s", want, block)
+		}
 	}
 }
 

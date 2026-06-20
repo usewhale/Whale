@@ -138,10 +138,22 @@ func renderRuntimeBlock(workspaceRoot string, worktree runtimeWorktreeContext, r
 		b.WriteString(workspaceRoot)
 		b.WriteString("\n")
 	}
-	if strings.TrimSpace(worktree.WorktreeRoot) != "" {
+	// Only surface the worktree root as its own line when it differs from the
+	// workspace root (i.e. the session was started from a subdirectory). When
+	// they are equal, printing it twice is noise that dilutes the single-path
+	// signal src relies on.
+	worktreeRoot := strings.TrimSpace(worktree.WorktreeRoot)
+	if worktreeRoot != "" && worktreeRoot != strings.TrimSpace(workspaceRoot) {
 		b.WriteString("- Current worktree root: ")
-		b.WriteString(strings.TrimSpace(worktree.WorktreeRoot))
+		b.WriteString(worktreeRoot)
 		b.WriteString("\n")
+	}
+	if worktreeRoot != "" && strings.TrimSpace(worktree.OriginalWorkspace) != "" {
+		// Co-locate the isolation rule with the path lines and keep it a single
+		// concrete instruction (mirrors src). Do NOT name the parent checkout's
+		// path: the worktree root already embeds it, and repeating it only invites
+		// the model to strip the suffix and operate on the parent.
+		b.WriteString("- This is a git worktree, an isolated copy of the repository and the project for this session. Run all commands and resolve all paths from this directory; do not cd to, read from, or modify the parent checkout it was created from unless the user explicitly asks.\n")
 	}
 	if strings.TrimSpace(rt.GOOS) != "" {
 		b.WriteString("- OS: ")
@@ -152,10 +164,6 @@ func renderRuntimeBlock(workspaceRoot string, worktree runtimeWorktreeContext, r
 	b.WriteString(rt.ShellSummary())
 	b.WriteString("\n")
 	b.WriteString(fmt.Sprintf("Shell commands run from the current Whale workspace by default. Do not assume a synthetic path such as /workspace; use relative paths or the %s cwd parameter for subdirectories. Filesystem tools resolve relative paths from the current workspace and can request file access approval for external read paths when the user asks to inspect files outside the workspace. If access or execution is denied, do not retry the same external operation through another tool unless the user explicitly asks again.", core.DisplayToolName("shell_run")))
-	if strings.TrimSpace(worktree.WorktreeRoot) != "" && strings.TrimSpace(worktree.OriginalWorkspace) != "" {
-		b.WriteString("\n")
-		b.WriteString("This session is running in a git worktree, which is the project for this session. Keep all work inside the current worktree and resolve paths against it; do not switch to, read from, or modify the parent checkout it was created from unless the user explicitly asks you to.")
-	}
 	if guidance := rt.CommandGuidance(); strings.TrimSpace(guidance) != "" {
 		b.WriteString("\n")
 		b.WriteString(strings.TrimSpace(guidance))

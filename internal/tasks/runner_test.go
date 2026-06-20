@@ -1922,10 +1922,10 @@ func TestSpawnSubagentWorktreeIsolationUsesIsolatedWorkspace(t *testing.T) {
 		t.Fatalf("unexpected worktree meta: %+v workspace=%+v", meta, toolWorkspace)
 	}
 	for _, want := range []string{
-		"Current worktree root: " + toolWorkspace.WorktreeRoot,
-		"running in a git worktree, which is the project for this session",
-		"Keep all work inside the current worktree",
-		"do not switch to, read from, or modify the parent checkout",
+		"Current Whale workspace root: " + toolWorkspace.WorkspaceRoot,
+		"This is a git worktree, an isolated copy of the repository",
+		"Run all commands and resolve all paths from this directory",
+		"do not cd to, read from, or modify the parent checkout",
 	} {
 		if !strings.Contains(capturedPrompt, want) {
 			t.Fatalf("child prompt missing %q:\n%s", want, capturedPrompt)
