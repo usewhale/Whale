@@ -1845,13 +1845,13 @@ func TestToDeepSeekToolsIncludesMultiEditSchema(t *testing.T) {
 	var fn map[string]any
 	for _, tool := range out {
 		candidate, _ := tool["function"].(map[string]any)
-		if candidate["name"] == "multi_edit" {
+		if candidate["name"] == "MultiEdit" {
 			fn = candidate
 			break
 		}
 	}
 	if fn == nil {
-		t.Fatal("multi_edit tool not sent to provider")
+		t.Fatal("MultiEdit tool not sent to provider")
 	}
 	desc, _ := fn["description"].(string)
 	for _, want := range []string{

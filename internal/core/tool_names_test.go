@@ -4,11 +4,16 @@ import "testing"
 
 func TestDisplayToolName(t *testing.T) {
 	cases := map[string]string{
-		"shell_run":  "Bash",
-		"read_file":  "Read",
-		"grep":       "grep", // unmapped passes through
-		"web_search": "web_search",
-		"":           "",
+		"shell_run":    "Bash",
+		"read_file":    "Read",
+		"grep":         "Grep",
+		"search_files": "Glob",
+		"edit":         "Edit",
+		"multi_edit":   "MultiEdit",
+		"write":        "Write",
+		"web_search":   "WebSearch",
+		"frobnicate":   "frobnicate", // unmapped passes through
+		"":             "",
 	}
 	for in, want := range cases {
 		if got := DisplayToolName(in); got != want {
@@ -25,10 +30,22 @@ func TestCanonicalToolName(t *testing.T) {
 		"BASH": "shell_run",
 		"Read": "read_file",
 		"read": "read_file",
+		// other conventional names, any case
+		"Grep":      "grep",
+		"GREP":      "grep",
+		"Glob":      "search_files",
+		"Edit":      "edit",
+		"MultiEdit": "multi_edit",
+		"multiedit": "multi_edit",
+		"Write":     "write",
+		"LS":        "list_dir",
+		"WebSearch": "web_search",
+		"WebFetch":  "web_fetch",
 		// invented CLI aliases
 		"head": "read_file",
 		"cat":  "read_file",
 		"sh":   "shell_run",
+		"rg":   "grep",
 		// whitespace tolerated
 		" Bash ": "shell_run",
 		// unknown passes through (still surfaces as tool-not-found later)
@@ -44,11 +61,18 @@ func TestCanonicalToolName(t *testing.T) {
 func TestApplyDisplayToolNames(t *testing.T) {
 	cases := map[string]string{
 		"use read_file first, then shell_run": "use Read first, then Bash",
-		"prefer grep and search_files":        "prefer grep and search_files", // unmapped untouched
+		"prefer search_files over web_search": "prefer Glob over WebSearch",
 		"set the shell_run cwd parameter":     "set the Bash cwd parameter",
 		"the read_file content":               "the Read content",
-		"":                                    "",
-		"no tool names here":                  "no tool names here",
+		// snake_case is matched with word boundaries
+		"read_file/list_dir": "Read/LS",
+		// single English-word names are NOT rewritten in prose: they collide
+		// with ordinary verbs and capability literals.
+		"edit the file then write output": "edit the file then write output",
+		"requires workspace.write access": "requires workspace.write access",
+		"use grep to search":              "use grep to search",
+		"":                                "",
+		"no tool names here":              "no tool names here",
 	}
 	for in, want := range cases {
 		if got := ApplyDisplayToolNames(in); got != want {
