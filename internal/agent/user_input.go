@@ -39,11 +39,17 @@ func validateUserInputRequest(req core.UserInputRequest) error {
 func (a *Agent) handleRequestUserInput(ctx context.Context, call core.ToolCall, sessionID string, events chan<- AgentEvent) (core.ToolResult, error) {
 	var in core.UserInputRequest
 	if err := json.Unmarshal([]byte(call.Input), &in); err != nil {
+		// Surface the concrete parse error (position + reason) so the model can
+		// self-correct on its retry instead of guessing. Malformed JSON cannot be
+		// repaired upstream, so an actionable message is the only recovery path.
 		return core.ToolResult{
 			ToolCallID: call.ID,
 			Name:       call.Name,
-			ModelText:  `{"success":false,"error":"invalid request_user_input input","code":"invalid_request_user_input"}`,
-			Code:       "invalid_request_user_input",
+			ModelText: fmt.Sprintf(
+				`{"success":false,"error":%q,"code":"invalid_request_user_input"}`,
+				fmt.Sprintf("failed to parse request_user_input arguments as JSON: %s", err.Error()),
+			),
+			Code: "invalid_request_user_input",
 		}, nil
 	}
 	if err := validateUserInputRequest(in); err != nil {
