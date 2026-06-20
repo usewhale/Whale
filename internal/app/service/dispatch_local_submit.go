@@ -175,7 +175,7 @@ func (s *Service) handleLocalSubmit(line string) {
 		return
 	}
 	if appcommands.LooksLikeSlashCommand(line) {
-		s.emit(localSubmitResultEvent("error", fmt.Sprintf("• Unrecognized command %q. Type \"/\" for a list of supported commands.", line)))
+		s.emit(localSubmitResultEvent("error", fmt.Sprintf("• Unrecognized command %s. Type \"/\" for a list of supported commands.", firstCommandWord(line))))
 		return
 	}
 }
@@ -187,7 +187,7 @@ func (s *Service) handleHooksLocalSubmit(line string) {
 		return
 	}
 	if !cmd.Handled {
-		s.emit(localSubmitResultEvent("error", fmt.Sprintf("• Unrecognized command %q. Type \"/\" for a list of supported commands.", line)))
+		s.emit(localSubmitResultEvent("error", fmt.Sprintf("• Unrecognized command %s. Type \"/\" for a list of supported commands.", firstCommandWord(line))))
 		return
 	}
 	if cmd.Text != "" {

@@ -217,7 +217,7 @@ func (s *Service) handleSubmitLocalCommand(state *submitState) bool {
 		state.skipSkillInjection = cmd.Turn.SkipSkillInjection
 	}
 	if !cmd.Handled && appcommands.LooksLikeSlashCommand(state.line) {
-		s.emit(Event{Kind: EventError, Text: fmt.Sprintf("• Unrecognized command %q. Type \"/\" for a list of supported commands.", state.line)})
+		s.emit(Event{Kind: EventError, Text: fmt.Sprintf("• Unrecognized command %s. Type \"/\" for a list of supported commands.", firstCommandWord(state.line))})
 		s.emit(Event{Kind: EventTurnDone})
 		return true
 	}
@@ -318,4 +318,12 @@ func (s *Service) prepareAttachmentParts(line string, inputs []AttachmentInput) 
 		WorkspaceRoot: s.app.WorkspaceRoot(),
 	})
 	return parts, err
+}
+
+func firstCommandWord(line string) string {
+	line = strings.TrimSpace(line)
+	if idx := strings.IndexAny(line, " \t\n"); idx > 0 {
+		return line[:idx]
+	}
+	return line
 }
