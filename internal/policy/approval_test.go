@@ -115,29 +115,48 @@ func TestApprovalKeysUseWebCommandAndHostScopes(t *testing.T) {
 	}
 }
 
-func TestApprovalKeysKeepExactScopeForUnclassifiedShellCommand(t *testing.T) {
+func TestApprovalKeysGroupUnclassifiedShellCommandByArityFamily(t *testing.T) {
 	call := core.ToolCall{ID: "shell-1", Name: "shell_run", Input: `{"command":"npm install lodash"}`}
 
-	if got, want := ApprovalKeys(call), []string{"shell_run|cmd:npm install lodash"}; !reflect.DeepEqual(got, want) {
+	if got, want := ApprovalKeys(call), []string{"shell_run|cmd:npm install"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("shell keys = %v, want %v", got, want)
 	}
-	if got := ApprovalSessionScope(call); got != "this shell command" {
+	if got := ApprovalSessionScope(call); got != "npm install *" {
 		t.Fatalf("session scope = %q", got)
+	}
+	// A later sibling invocation in the same family shares the key, so an
+	// allow-for-session grant covers it without re-prompting.
+	sibling := core.ToolCall{ID: "shell-2", Name: "shell_run", Input: `{"command":"npm install react react-dom"}`}
+	if got, want := ApprovalKeys(sibling), []string{"shell_run|cmd:npm install"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sibling shell keys = %v, want %v", got, want)
 	}
 }
 
-func TestApprovalKeysKeepExactScopeForGoBinaryOutputs(t *testing.T) {
+func TestApprovalKeysGroupGoCommandsByArityFamily(t *testing.T) {
 	tests := map[string][]string{
-		"go test -c ./pkg":               {"shell_run|cmd:go test -c ./pkg"},
-		"go test -exec ./wrapper ./pkg":  {"shell_run|cmd:go test -exec ./wrapper ./pkg"},
-		"go test -toolexec ./wrap ./pkg": {"shell_run|cmd:go test -toolexec ./wrap ./pkg"},
-		"go build ./cmd/app":             {"shell_run|cmd:go build ./cmd/app"},
+		"go test -c ./pkg":               {"shell_run|cmd:go test"},
+		"go test -exec ./wrapper ./pkg":  {"shell_run|cmd:go test"},
+		"go test -toolexec ./wrap ./pkg": {"shell_run|cmd:go test"},
+		"go build ./cmd/app":             {"shell_run|cmd:go build"},
 	}
 	for command, want := range tests {
 		call := core.ToolCall{ID: "shell-1", Name: "shell_run", Input: `{"command":"` + command + `"}`}
 		if got := ApprovalKeys(call); !reflect.DeepEqual(got, want) {
 			t.Fatalf("ApprovalKeys(%q) = %v, want %v", command, got, want)
 		}
+	}
+}
+
+func TestApprovalKeysKeepExactScopeForCompoundShellCommand(t *testing.T) {
+	// Compound commands (lists, pipelines, substitutions) do not reduce to a
+	// single arity family, so they keep their exact-command approval key.
+	call := core.ToolCall{ID: "shell-1", Name: "shell_run", Input: `{"command":"npm install && curl https://example.com"}`}
+
+	if got, want := ApprovalKeys(call), []string{"shell_run|cmd:npm install && curl https://example.com"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("shell keys = %v, want %v", got, want)
+	}
+	if got := ApprovalSessionScope(call); got != "this shell command" {
+		t.Fatalf("session scope = %q", got)
 	}
 }
 

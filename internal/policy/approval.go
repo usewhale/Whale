@@ -402,6 +402,11 @@ func ApprovalSessionScope(call core.ToolCall) string {
 			if decision := ShellRiskDecision(call); strings.TrimSpace(decision.SessionScope) != "" {
 				return decision.SessionScope
 			}
+			if command := shellCommandFromCall(call); command != "" {
+				if family, ok := shellrisk.ArityFamily(command); ok {
+					return family + " *"
+				}
+			}
 			return "this shell command"
 		}
 		if call.Name == "write_stdin" {
@@ -433,7 +438,30 @@ func ShellApprovalKeys(command string) []string {
 	if len(decision.ApprovalKeys) > 0 && decision.Level != shellrisk.LevelNeedsApproval {
 		return compactApprovalKeys(decision.ApprovalKeys)
 	}
+	// For a single simple command, key the approval by its command family
+	// (arity prefix) so that allow-for-session covers the whole family rather
+	// than the exact argument list. Compound commands keep the exact key.
+	//
+	// This intentionally mirrors opencode's arity model uniformly: it applies
+	// even to commands that shellrisk routes to LevelNeedsApproval with an
+	// "exact approval" rationale (e.g. go test -exec, go build). Those still
+	// require an explicit prompt the first time, but an allow-for-session grant
+	// widens to the family (go test *, go build *) just as opencode's `go: 2`
+	// arity does. Keeping exact scope here would diverge from opencode; that
+	// trade-off was chosen deliberately.
+	if family, ok := shellrisk.ArityFamily(command); ok {
+		return []string{"shell_run|cmd:" + family}
+	}
 	return []string{"shell_run|cmd:" + NormalizeShellApprovalCommand(command)}
+}
+
+func shellCommandFromCall(call core.ToolCall) string {
+	var body map[string]any
+	if err := json.Unmarshal([]byte(call.Input), &body); err != nil {
+		return ""
+	}
+	command, _ := body["command"].(string)
+	return strings.TrimSpace(command)
 }
 
 func WriteStdinApprovalKey(body map[string]any) string {
