@@ -27,10 +27,9 @@ func NewTool(runner *ScriptRunner, parentSessionIDFunc ...func() string) Tool {
 }
 
 type ToolOptions struct {
-	ParentSessionIDFunc   func() string
-	KeywordTriggerEnabled bool
-	Enabled               bool
-	Library               *Library
+	ParentSessionIDFunc func() string
+	Enabled             bool
+	Library             *Library
 }
 
 func NewToolWithOptions(runner *ScriptRunner, opts ToolOptions) Tool {

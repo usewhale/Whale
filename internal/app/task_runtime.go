@@ -141,12 +141,14 @@ func (a *App) rebuildTaskRuntimeLocked() error {
 		a.workflowRunner = workflow.NewScriptRunner(cfg.DataDir, a.workflowManager)
 		a.workflowRunner.Library = workflowLibrary
 	}
-	a.workflowTools = []core.Tool{workflow.NewToolWithOptions(a.workflowRunner, workflow.ToolOptions{
-		ParentSessionIDFunc:   func() string { return a.sessionID },
-		KeywordTriggerEnabled: cfg.WorkflowKeywordTrigger,
-		Enabled:               cfg.WorkflowsEnabled,
-		Library:               workflowLibrary,
-	})}
+	a.workflowTools = nil
+	if cfg.WorkflowsEnabled {
+		a.workflowTools = []core.Tool{workflow.NewToolWithOptions(a.workflowRunner, workflow.ToolOptions{
+			ParentSessionIDFunc: func() string { return a.sessionID },
+			Enabled:             true,
+			Library:             workflowLibrary,
+		})}
+	}
 	return nil
 }
 
