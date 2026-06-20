@@ -222,14 +222,19 @@ func TestRuntimeEnvironmentBlockIncludesWorktreeContext(t *testing.T) {
 
 	for _, want := range []string{
 		"Current worktree root: /repo/.whale/worktrees/feature",
-		"Original workspace: /repo",
-		"original workspace as reference-only",
-		"do not cd to it",
-		"run git -C against it",
+		"running in a git worktree, which is the project for this session",
+		"Keep all work inside the current worktree",
+		"do not switch to, read from, or modify the parent checkout",
 	} {
 		if !strings.Contains(block, want) {
 			t.Fatalf("worktree runtime block missing %q:\n%s", want, block)
 		}
+	}
+	// The original checkout's absolute path must never be surfaced to the model:
+	// doing so invites it to read/grep the parent repo and trip per-directory
+	// external-directory approvals (mirrors src, which drops the path entirely).
+	if strings.Contains(block, "Original workspace: /repo") {
+		t.Fatalf("worktree runtime block leaked original workspace path:\n%s", block)
 	}
 }
 
