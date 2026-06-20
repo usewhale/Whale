@@ -286,7 +286,7 @@ func TestGoalStatusRefreshesTokenUsageAndBudgetLimit(t *testing.T) {
 	if _, err := app.ExecuteLocalCommand("/goal --tokens 100 ship the goal command"); err != nil {
 		t.Fatalf("set goal: %v", err)
 	}
-	writeUsageRecord(t, filepath.Join(app.cfg.DataDir, "usage.jsonl"), telemetry.UsageRecord{
+	writeUsageRecord(t, filepath.Join(app.cfg.DataDir, "usage"), telemetry.UsageRecord{
 		TS:               time.Now().UnixMilli(),
 		Session:          app.sessionID,
 		Model:            "deepseek-v4-flash",
@@ -348,7 +348,7 @@ func TestGoalBudgetExcludesPausedSessionUsage(t *testing.T) {
 	if _, err := app.ExecuteLocalCommand("/goal --tokens 100 ship the goal command"); err != nil {
 		t.Fatalf("set goal: %v", err)
 	}
-	writeUsageRecord(t, filepath.Join(app.cfg.DataDir, "usage.jsonl"), telemetry.UsageRecord{
+	writeUsageRecord(t, filepath.Join(app.cfg.DataDir, "usage"), telemetry.UsageRecord{
 		TS:               time.Now().UnixMilli(),
 		Session:          app.sessionID,
 		Model:            "deepseek-v4-flash",
@@ -359,7 +359,7 @@ func TestGoalBudgetExcludesPausedSessionUsage(t *testing.T) {
 		t.Fatalf("pause goal: %v", err)
 	}
 
-	writeUsageRecord(t, filepath.Join(app.cfg.DataDir, "usage.jsonl"), telemetry.UsageRecord{
+	writeUsageRecord(t, filepath.Join(app.cfg.DataDir, "usage"), telemetry.UsageRecord{
 		TS:               time.Now().UnixMilli(),
 		Session:          app.sessionID,
 		Model:            "deepseek-v4-flash",
@@ -469,7 +469,7 @@ func TestGoalStatusDoesNotAccrueTokensAfterComplete(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("save completed goal: %v", err)
 	}
-	writeUsageRecord(t, filepath.Join(app.cfg.DataDir, "usage.jsonl"), telemetry.UsageRecord{
+	writeUsageRecord(t, filepath.Join(app.cfg.DataDir, "usage"), telemetry.UsageRecord{
 		TS:               now.Add(time.Minute).UnixMilli(),
 		Session:          app.sessionID,
 		Model:            "deepseek-v4-flash",

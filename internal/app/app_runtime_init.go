@@ -129,7 +129,7 @@ func initAppRuntime(cfg Config, sessionInit appSessionInit, toolInit appToolInit
 		DefaultMaxTokens:           tasks.DefaultMaxTokens,
 		DefaultMaxToolIters:        tasks.DefaultMaxToolIters,
 		SummaryMaxChars:            tasks.DefaultSummaryMaxChar,
-		UsageLogPath:               filepath.Join(cfg.DataDir, "usage.jsonl"),
+		UsageLogPath:               filepath.Join(cfg.DataDir, "usage"),
 		ApprovalFunc:               approvalFunc,
 	})
 	taskTools := tasks.NewTools(taskRunner)

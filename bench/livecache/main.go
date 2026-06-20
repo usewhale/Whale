@@ -254,7 +254,7 @@ func runTask(parent context.Context, args cliArgs, task taskSpec, mode string, r
 		result.Error = err.Error()
 		return result
 	}
-	usagePath := filepath.Join(dataDir, "usage.jsonl")
+	usagePath := filepath.Join(dataDir, "usage")
 	options := []agent.AgentOption{
 		agent.WithToolPolicy(policy.RulePolicy{Default: policy.PermissionAllow}),
 		agent.WithUsageLogPath(usagePath),
@@ -415,29 +415,39 @@ func recordAgentEvent(turn int, ev agent.AgentEvent) (transcriptRecord, bool) {
 	return rec, true
 }
 
-func readUsageTotals(path string) (usageTotals, error) {
-	f, err := os.Open(path)
+func readUsageTotals(dir string) (usageTotals, error) {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return usageTotals{}, err
 	}
-	defer f.Close()
 	totals := usageTotals{PrefixFingerprints: map[string]bool{}}
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		var rec telemetry.UsageRecord
-		if err := json.Unmarshal(sc.Bytes(), &rec); err != nil {
-			return totals, err
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
 		}
-		totals.PromptTokens += rec.PromptTokens
-		totals.CompletionTokens += rec.CompletionTokens
-		totals.CacheHitTokens += rec.PromptCacheHit
-		totals.CacheMissTokens += rec.PromptCacheMiss
-		totals.CostUSD += rec.CostUSD
-		if fp := strings.TrimSpace(rec.PrefixFingerprint); fp != "" {
-			totals.PrefixFingerprints[fp] = true
+		f, err := os.Open(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			continue
 		}
+		sc := bufio.NewScanner(f)
+		for sc.Scan() {
+			var rec telemetry.UsageRecord
+			if err := json.Unmarshal(sc.Bytes(), &rec); err != nil {
+				f.Close()
+				return totals, err
+			}
+			totals.PromptTokens += rec.PromptTokens
+			totals.CompletionTokens += rec.CompletionTokens
+			totals.CacheHitTokens += rec.PromptCacheHit
+			totals.CacheMissTokens += rec.PromptCacheMiss
+			totals.CostUSD += rec.CostUSD
+			if fp := strings.TrimSpace(rec.PrefixFingerprint); fp != "" {
+				totals.PrefixFingerprints[fp] = true
+			}
+		}
+		f.Close()
 	}
-	return totals, sc.Err()
+	return totals, nil
 }
 
 type transcriptWriter struct {

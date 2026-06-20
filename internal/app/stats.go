@@ -15,7 +15,7 @@ func (a *App) buildStatsView(view string) string {
 }
 
 func (a *App) buildStatsViewAt(view string, now time.Time) string {
-	usage := readUsageStats(filepath.Join(a.cfg.DataDir, "usage.jsonl"), now)
+	usage := readUsageStats(filepath.Join(a.cfg.DataDir, "usage"), now)
 	toolInput := readToolInputStats(a.sessionsDir)
 
 	var lines []string
@@ -33,7 +33,7 @@ func (a *App) buildStatsViewAt(view string, now time.Time) string {
 		lines = []string{"Stats"}
 		lines = append(lines, formatRecentStats(usage, toolInput)...)
 	case "profile":
-		profile := readProfileStats(a.sessionsDir, filepath.Join(a.cfg.DataDir, "usage.jsonl"), statsProfileSessionLimit)
+		profile := readProfileStats(a.sessionsDir, filepath.Join(a.cfg.DataDir, "usage"), statsProfileSessionLimit)
 		lines = []string{"Stats", "", "Profile"}
 		lines = append(lines, formatProfileStats(profile)...)
 	case "all":

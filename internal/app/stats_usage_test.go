@@ -12,7 +12,7 @@ import (
 
 func TestSessionUsageSummaryReportsSubagentShapeDriftOnlyWhenHashesChange(t *testing.T) {
 	dir := t.TempDir()
-	usagePath := filepath.Join(dir, "usage.jsonl")
+	usagePath := filepath.Join(dir, "usage")
 	parentID := "parent-session"
 
 	writeUsageRecord(t, usagePath, telemetry.UsageRecord{
@@ -79,7 +79,7 @@ func TestSessionUsageSummaryReportsSubagentShapeDriftOnlyWhenHashesChange(t *tes
 
 func TestUsageStatsCacheDiagnosticsReportsToolShapeBreak(t *testing.T) {
 	dir := t.TempDir()
-	usagePath := filepath.Join(dir, "usage.jsonl")
+	usagePath := filepath.Join(dir, "usage")
 	ts := time.Date(2026, 5, 12, 10, 0, 0, 0, time.Local)
 
 	writeUsageRecord(t, usagePath, telemetry.UsageRecord{

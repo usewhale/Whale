@@ -259,61 +259,70 @@ func readProfileSessionFile(path, id string, modTime time.Time) profileSessionSt
 	return stats
 }
 
-func readProfileUsage(path string, sessionIndex map[string]int, childSessionIndex map[string]int, stats *profileStats) {
-	f, err := os.Open(path)
+func readProfileUsage(dir string, sessionIndex map[string]int, childSessionIndex map[string]int, stats *profileStats) {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		var rec telemetry.UsageRecord
-		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
 			continue
 		}
-		if !isSupportedUsageModel(rec.Model) {
+		f, err := os.Open(filepath.Join(dir, entry.Name()))
+		if err != nil {
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(rec.Kind), "subagent") && strings.TrimSpace(rec.ParentSessionID) != "" {
-			if idx, ok := sessionIndex[strings.TrimSpace(rec.ParentSessionID)]; ok {
-				addProfileSubagentUsage(&stats.Sessions[idx], stats, rec)
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			var rec telemetry.UsageRecord
+			if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
 				continue
 			}
-		}
-		if idx, ok := sessionIndex[rec.Session]; ok {
-			cost := telemetry.EstimateUsageRecordUSD(rec)
-			sp := &stats.Sessions[idx]
-			sp.PromptTokens += rec.PromptTokens
-			sp.CompletionTokens += rec.CompletionTokens
-			sp.CacheHit += rec.PromptCacheHit
-			sp.CacheMiss += rec.PromptCacheMiss
-			sp.ReasoningReplayTokens += rec.ReasoningReplayTok
-			stats.ReasoningReplayTokens += rec.ReasoningReplayTok
-			sp.ToolResultRawChars += rec.ToolResultRawChars
-			sp.ToolResultReplayChars += rec.ToolResultReplayChars
-			sp.ToolResultRawTokens += rec.ToolResultRawTokens
-			sp.ToolResultReplayTokens += rec.ToolResultReplayTokens
-			sp.ToolResultTokensSaved += rec.ToolResultTokensSaved
-			sp.ToolResultsCompacted += rec.ToolResultsCompacted
-			stats.ToolResultRawChars += rec.ToolResultRawChars
-			stats.ToolResultReplayChars += rec.ToolResultReplayChars
-			stats.ToolResultRawTokens += rec.ToolResultRawTokens
-			stats.ToolResultReplayTokens += rec.ToolResultReplayTokens
-			stats.ToolResultTokensSaved += rec.ToolResultTokensSaved
-			stats.ToolResultsCompacted += rec.ToolResultsCompacted
-			sp.CostUSD += cost
-			if rec.PromptTokens > sp.MaxPromptTokens {
-				sp.MaxPromptTokens = rec.PromptTokens
+			if !isSupportedUsageModel(rec.Model) {
+				continue
 			}
-			if fp := strings.TrimSpace(rec.PrefixFingerprint); fp != "" {
-				sp.PrefixFingerprints[fp] = true
+			if strings.EqualFold(strings.TrimSpace(rec.Kind), "subagent") && strings.TrimSpace(rec.ParentSessionID) != "" {
+				if idx, ok := sessionIndex[strings.TrimSpace(rec.ParentSessionID)]; ok {
+					addProfileSubagentUsage(&stats.Sessions[idx], stats, rec)
+					continue
+				}
 			}
-			addProfileCacheShape(sp, rec.CacheShape)
-			continue
+			if idx, ok := sessionIndex[rec.Session]; ok {
+				cost := telemetry.EstimateUsageRecordUSD(rec)
+				sp := &stats.Sessions[idx]
+				sp.PromptTokens += rec.PromptTokens
+				sp.CompletionTokens += rec.CompletionTokens
+				sp.CacheHit += rec.PromptCacheHit
+				sp.CacheMiss += rec.PromptCacheMiss
+				sp.ReasoningReplayTokens += rec.ReasoningReplayTok
+				stats.ReasoningReplayTokens += rec.ReasoningReplayTok
+				sp.ToolResultRawChars += rec.ToolResultRawChars
+				sp.ToolResultReplayChars += rec.ToolResultReplayChars
+				sp.ToolResultRawTokens += rec.ToolResultRawTokens
+				sp.ToolResultReplayTokens += rec.ToolResultReplayTokens
+				sp.ToolResultTokensSaved += rec.ToolResultTokensSaved
+				sp.ToolResultsCompacted += rec.ToolResultsCompacted
+				stats.ToolResultRawChars += rec.ToolResultRawChars
+				stats.ToolResultReplayChars += rec.ToolResultReplayChars
+				stats.ToolResultRawTokens += rec.ToolResultRawTokens
+				stats.ToolResultReplayTokens += rec.ToolResultReplayTokens
+				stats.ToolResultTokensSaved += rec.ToolResultTokensSaved
+				stats.ToolResultsCompacted += rec.ToolResultsCompacted
+				sp.CostUSD += cost
+				if rec.PromptTokens > sp.MaxPromptTokens {
+					sp.MaxPromptTokens = rec.PromptTokens
+				}
+				if fp := strings.TrimSpace(rec.PrefixFingerprint); fp != "" {
+					sp.PrefixFingerprints[fp] = true
+				}
+				addProfileCacheShape(sp, rec.CacheShape)
+				continue
+			}
+			if idx, ok := childSessionIndex[rec.Session]; ok {
+				addProfileSubagentUsage(&stats.Sessions[idx], stats, rec)
+			}
 		}
-		if idx, ok := childSessionIndex[rec.Session]; ok {
-			addProfileSubagentUsage(&stats.Sessions[idx], stats, rec)
-		}
+		_ = f.Close()
 	}
 }
 
@@ -505,7 +514,7 @@ func addProfileShapeSegments(dst map[string]map[string]bool, family string, segm
 func profileUsagePaths(primary string) []string {
 	paths := make([]string, 0, 2)
 	seen := map[string]bool{}
-	for _, path := range []string{primary, telemetry.DefaultUsageLogPath()} {
+	for _, path := range []string{primary, telemetry.DefaultUsageLogDir()} {
 		path = strings.TrimSpace(path)
 		if path == "" {
 			continue

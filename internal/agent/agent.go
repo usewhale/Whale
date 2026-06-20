@@ -357,8 +357,8 @@ func NewAgent(provider llm.Provider, store store.MessageStore, tools []core.Tool
 		projectMemoryMaxChars:  defaults.DefaultMemoryMaxChars,
 		projectMemoryFileOrder: defaults.DefaultMemoryFileOrder(),
 		sessionRuntime:         memory.NewSessionRuntime(""),
-		usageLogPath:           telemetry.DefaultUsageLogPath(),
-		toolResultArchiveDir:   defaultToolResultArchiveDir(telemetry.DefaultUsageLogPath()),
+		usageLogPath:           telemetry.DefaultUsageLogDir(),
+		toolResultArchiveDir:   defaultToolResultArchiveDir(telemetry.DefaultUsageLogDir()),
 		maxToolIters:           64,
 		maxParallelSubagents:   defaultMaxParallelSubagents(),
 	}
@@ -385,8 +385,8 @@ func NewAgentWithRegistry(provider llm.Provider, store store.MessageStore, tools
 		projectMemoryMaxChars:  defaults.DefaultMemoryMaxChars,
 		projectMemoryFileOrder: defaults.DefaultMemoryFileOrder(),
 		sessionRuntime:         memory.NewSessionRuntime(""),
-		usageLogPath:           telemetry.DefaultUsageLogPath(),
-		toolResultArchiveDir:   defaultToolResultArchiveDir(telemetry.DefaultUsageLogPath()),
+		usageLogPath:           telemetry.DefaultUsageLogDir(),
+		toolResultArchiveDir:   defaultToolResultArchiveDir(telemetry.DefaultUsageLogDir()),
 		maxToolIters:           64,
 		maxParallelSubagents:   defaultMaxParallelSubagents(),
 	}
@@ -471,9 +471,9 @@ func WithUsageLogPath(path string) AgentOption {
 func defaultToolResultArchiveDir(usageLogPath string) string {
 	usageLogPath = strings.TrimSpace(usageLogPath)
 	if usageLogPath == "" {
-		usageLogPath = telemetry.DefaultUsageLogPath()
+		usageLogPath = telemetry.DefaultUsageLogDir()
 	}
-	return filepath.Join(filepath.Dir(usageLogPath), "tool-results")
+	return filepath.Join(filepath.Dir(filepath.Clean(usageLogPath)), "tool-results")
 }
 
 func WithRecoveryPolicy(r RecoveryPolicy) AgentOption {

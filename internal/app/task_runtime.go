@@ -117,7 +117,7 @@ func (a *App) rebuildTaskRuntimeLocked() error {
 		DefaultMaxTokens:           tasks.DefaultMaxTokens,
 		DefaultMaxToolIters:        tasks.DefaultMaxToolIters,
 		SummaryMaxChars:            tasks.DefaultSummaryMaxChar,
-		UsageLogPath:               filepath.Join(cfg.DataDir, "usage.jsonl"),
+		UsageLogPath:               filepath.Join(cfg.DataDir, "usage"),
 		ApprovalFunc: func(req policy.ApprovalRequest) policy.ApprovalDecision {
 			a.approvalMu.Lock()
 			defer a.approvalMu.Unlock()

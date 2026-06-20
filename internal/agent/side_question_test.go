@@ -146,7 +146,7 @@ func TestRunSideQuestionToolUseWithoutTextReturnsWarning(t *testing.T) {
 
 func TestRunSideQuestionRecordsUsageCost(t *testing.T) {
 	st := store.NewInMemoryStore()
-	usagePath := filepath.Join(t.TempDir(), "usage.jsonl")
+	usagePath := filepath.Join(t.TempDir(), "usage")
 	provider := &sideQuestionCaptureProvider{events: []ProviderEvent{{
 		Type: EventComplete,
 		Response: &ProviderResponse{
@@ -164,10 +164,10 @@ func TestRunSideQuestionRecordsUsageCost(t *testing.T) {
 	}
 	for range events {
 	}
-	if _, err := os.Stat(usagePath); err != nil {
+	if _, err := os.Stat(filepath.Join(usagePath, "s-btw.jsonl")); err != nil {
 		t.Fatalf("usage log missing: %v", err)
 	}
-	b, err := os.ReadFile(usagePath)
+	b, err := os.ReadFile(filepath.Join(usagePath, "s-btw.jsonl"))
 	if err != nil {
 		t.Fatalf("read usage log: %v", err)
 	}

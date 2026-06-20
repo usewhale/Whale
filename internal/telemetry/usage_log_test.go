@@ -1,7 +1,6 @@
 package telemetry
 
 import (
-	"bufio"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -15,8 +14,7 @@ import (
 
 func TestAppendUsage_WritesJSONL(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "usage.jsonl")
-	err := AppendUsage(path, "s1", "deepseek-v4-flash", "abc123", llm.Usage{
+	err := AppendUsage(dir, "s1", "deepseek-v4-flash", "abc123", llm.Usage{
 		PromptTokens:           12,
 		CompletionTokens:       3,
 		PromptCacheHitTokens:   5,
@@ -50,7 +48,7 @@ func TestAppendUsage_WritesJSONL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("append usage failed: %v", err)
 	}
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(filepath.Join(dir, "s1.jsonl"))
 	if err != nil {
 		t.Fatalf("read usage log failed: %v", err)
 	}
@@ -89,8 +87,7 @@ func TestAppendUsage_WritesJSONL(t *testing.T) {
 
 func TestAppendUsage_WritesSubagentMetadata(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "usage.jsonl")
-	err := AppendUsage(path, "child", "deepseek-v4-flash", "", llm.Usage{PromptTokens: 100}, 0.0001, time.UnixMilli(1000), nil, UsageMetadata{
+	err := AppendUsage(dir, "child", "deepseek-v4-flash", "", llm.Usage{PromptTokens: 100}, 0.0001, time.UnixMilli(1000), nil, UsageMetadata{
 		Kind:                "subagent",
 		ParentSessionID:     "parent",
 		SubagentRole:        "reviewer",
@@ -99,7 +96,7 @@ func TestAppendUsage_WritesSubagentMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("append usage failed: %v", err)
 	}
-	b, err := os.ReadFile(path)
+	b, err := os.ReadFile(filepath.Join(dir, "parent.jsonl"))
 	if err != nil {
 		t.Fatalf("read usage log failed: %v", err)
 	}
@@ -118,30 +115,29 @@ func TestAppendUsage_WritesSubagentMetadata(t *testing.T) {
 
 func TestAppendUsage_CompactionSerializesConcurrentAppends(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "usage.jsonl")
-	now := time.UnixMilli(2_000_000_000_000)
-	old := UsageRecord{
-		TS:                  now.AddDate(0, 0, -usageLogRetentionDays-1).UnixMilli(),
-		Session:             strings.Repeat("x", 1024),
-		Model:               "deepseek-v4-flash",
-		SubagentTaskPreview: strings.Repeat("y", 256),
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		t.Fatalf("seed usage log: %v", err)
-	}
-	for i := 0; i < 4500; i++ {
-		old.Session = strings.Repeat("x", 1024) + string(rune('a'+i%26))
+	now := time.Now()
+	oldTime := now.AddDate(0, 0, -usageLogRetentionDays-1)
+
+	// Create several old session files with old mtime.
+	oldSessions := []string{"old-a", "old-b", "old-c"}
+	for _, sid := range oldSessions {
+		old := UsageRecord{
+			TS:                  oldTime.UnixMilli(),
+			Session:             sid,
+			Model:               "deepseek-v4-flash",
+			SubagentTaskPreview: strings.Repeat("y", 256),
+		}
 		b, err := json.Marshal(old)
 		if err != nil {
 			t.Fatalf("marshal old record: %v", err)
 		}
-		if _, err := f.Write(append(b, '\n')); err != nil {
-			t.Fatalf("write old record: %v", err)
+		oldPath := filepath.Join(dir, sid+".jsonl")
+		if err := os.WriteFile(oldPath, append(b, '\n'), 0o600); err != nil {
+			t.Fatalf("write old file: %v", err)
 		}
-	}
-	if err := f.Close(); err != nil {
-		t.Fatalf("close seed log: %v", err)
+		if err := os.Chtimes(oldPath, oldTime, oldTime); err != nil {
+			t.Fatalf("chtimes old file: %v", err)
+		}
 	}
 
 	const writers = 24
@@ -152,7 +148,7 @@ func TestAppendUsage_CompactionSerializesConcurrentAppends(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs <- AppendUsage(path, "recent-"+string(rune('a'+i)), "deepseek-v4-flash", "", llm.Usage{PromptTokens: 10}, 0.0001, now.Add(time.Duration(i)*time.Millisecond), nil)
+			errs <- AppendUsage(dir, "recent-"+string(rune('a'+i)), "deepseek-v4-flash", "", llm.Usage{PromptTokens: 10}, 0.0001, now.Add(time.Duration(i)*time.Millisecond), nil)
 		}()
 	}
 	wg.Wait()
@@ -163,33 +159,19 @@ func TestAppendUsage_CompactionSerializesConcurrentAppends(t *testing.T) {
 		}
 	}
 
-	f, err = os.Open(path)
-	if err != nil {
-		t.Fatalf("open compacted log: %v", err)
-	}
-	defer f.Close()
-	scanner := bufio.NewScanner(f)
-	gotRecent := map[string]bool{}
-	var oldLines int
-	for scanner.Scan() {
-		var rec UsageRecord
-		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
-			t.Fatalf("unmarshal compacted record: %v", err)
-		}
-		if strings.HasPrefix(rec.Session, "recent-") {
-			gotRecent[rec.Session] = true
-		}
-		if rec.TS < now.AddDate(0, 0, -usageLogRetentionDays).UnixMilli() {
-			oldLines++
+	// Old session files should have been compacted away.
+	for _, sid := range oldSessions {
+		oldPath := filepath.Join(dir, sid+".jsonl")
+		if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+			t.Fatalf("old session file should have been compacted away: %s", oldPath)
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		t.Fatalf("scan compacted log: %v", err)
-	}
-	if len(gotRecent) != writers {
-		t.Fatalf("lost recent appends: got %d want %d (%v)", len(gotRecent), writers, gotRecent)
-	}
-	if oldLines != 0 {
-		t.Fatalf("expected old lines compacted away, got %d", oldLines)
+
+	// All recent session files should exist.
+	for i := 0; i < writers; i++ {
+		recentPath := filepath.Join(dir, "recent-"+string(rune('a'+i))+".jsonl")
+		if _, err := os.Stat(recentPath); err != nil {
+			t.Fatalf("recent session file missing: %s (%v)", recentPath, err)
+		}
 	}
 }

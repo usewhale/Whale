@@ -237,7 +237,7 @@ func runTask(parent context.Context, args cliArgs, task taskSpec, mode string, r
 		result.Error = err.Error()
 		return result
 	}
-	usagePath := filepath.Join(dataDir, "usage.jsonl")
+	usagePath := filepath.Join(dataDir, "usage")
 	options := []agent.AgentOption{
 		agent.WithExtraSystemBlocks(retailSystemPrompt),
 		agent.WithToolPolicy(policy.RulePolicy{Default: policy.PermissionAllow}),
@@ -461,37 +461,47 @@ func recordAgentEvent(turn int, ev agent.AgentEvent) (transcriptRecord, bool) {
 	return rec, true
 }
 
-func readUsageTotals(path string) (usageTotals, error) {
-	f, err := os.Open(path)
+func readUsageTotals(dir string) (usageTotals, error) {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return usageTotals{}, err
 	}
-	defer f.Close()
 	totals := newUsageTotals()
 	lineNo := 0
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		lineNo++
-		var rec telemetry.UsageRecord
-		if err := json.Unmarshal(sc.Bytes(), &rec); err != nil {
-			return totals, err
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
 		}
-		totals.PromptTokens += rec.PromptTokens
-		totals.CompletionTokens += rec.CompletionTokens
-		totals.CacheHitTokens += rec.PromptCacheHit
-		totals.CacheMissTokens += rec.PromptCacheMiss
-		if lineNo > 1 {
-			totals.WarmCacheHitTokens += rec.PromptCacheHit
-			totals.WarmCacheMissTokens += rec.PromptCacheMiss
+		f, err := os.Open(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			continue
 		}
-		totals.CostUSD += rec.CostUSD
-		totals.CacheSavingsUSD += rec.CacheSavingsUSD
-		if fp := strings.TrimSpace(rec.PrefixFingerprint); fp != "" {
-			totals.PrefixFingerprints[fp] = true
+		sc := bufio.NewScanner(f)
+		for sc.Scan() {
+			lineNo++
+			var rec telemetry.UsageRecord
+			if err := json.Unmarshal(sc.Bytes(), &rec); err != nil {
+				f.Close()
+				return totals, err
+			}
+			totals.PromptTokens += rec.PromptTokens
+			totals.CompletionTokens += rec.CompletionTokens
+			totals.CacheHitTokens += rec.PromptCacheHit
+			totals.CacheMissTokens += rec.PromptCacheMiss
+			if lineNo > 1 {
+				totals.WarmCacheHitTokens += rec.PromptCacheHit
+				totals.WarmCacheMissTokens += rec.PromptCacheMiss
+			}
+			totals.CostUSD += rec.CostUSD
+			totals.CacheSavingsUSD += rec.CacheSavingsUSD
+			if fp := strings.TrimSpace(rec.PrefixFingerprint); fp != "" {
+				totals.PrefixFingerprints[fp] = true
+			}
+			recordCacheShapeHashes(&totals, rec.CacheShape)
 		}
-		recordCacheShapeHashes(&totals, rec.CacheShape)
+		f.Close()
 	}
-	return totals, sc.Err()
+	return totals, nil
 }
 
 func newUsageTotals() usageTotals {

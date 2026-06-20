@@ -306,7 +306,7 @@ func currentSessionGoalTokens(dataDir, sessionID string) int {
 	if strings.TrimSpace(dataDir) == "" || strings.TrimSpace(sessionID) == "" {
 		return 0
 	}
-	summary := readSessionUsageSummary(filepath.Join(dataDir, "usage.jsonl"), sessionID)
+	summary := readSessionUsageSummary(filepath.Join(dataDir, "usage"), sessionID)
 	return summary.PromptTokens + summary.CompletionTokens
 }
 

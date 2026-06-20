@@ -99,7 +99,7 @@ func (a *App) ensureAgent() (*agent.Agent, error) {
 			agent.WithSessionMode(a.currentMode),
 			agent.WithSessionsDir(a.sessionsDir),
 			agent.WithBudgetWarningUSD(a.budgetWarningUSD),
-			agent.WithUsageLogPath(filepath.Join(a.cfg.DataDir, "usage.jsonl")),
+			agent.WithUsageLogPath(filepath.Join(a.cfg.DataDir, "usage")),
 			agent.WithAutoCompact(a.cfg.AutoCompact, a.cfg.AutoCompactThreshold, a.contextWindow),
 			agent.WithToolPolicy(a.permissionPolicy),
 			agent.WithToolRefresh(func(context.Context) error {

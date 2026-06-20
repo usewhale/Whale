@@ -113,16 +113,16 @@ func TestUserSimulatorStopParsing(t *testing.T) {
 }
 
 func TestReadUsageTotalsCountsDistinctPrefixFingerprints(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "usage.jsonl")
+	dir := t.TempDir()
 	data := strings.Join([]string{
 		`{"prompt_tokens":10,"completion_tokens":2,"prompt_cache_hit_tokens":8,"prompt_cache_miss_tokens":2,"cost_usd":0.1,"cache_savings_usd":0.01,"prefix_fingerprint":"fp-a","cache_shape":{"prefix_hash":"shape-a","runtime_hash":"rt-a","tools_hash":"tools-a","request_hash":"req-a"}}`,
 		`{"prompt_tokens":20,"completion_tokens":3,"prompt_cache_hit_tokens":10,"prompt_cache_miss_tokens":10,"cost_usd":0.2,"cache_savings_usd":0.02,"prefix_fingerprint":"fp-a","cache_shape":{"prefix_hash":"shape-b","runtime_hash":"rt-b","tools_hash":"tools-a","request_hash":"req-b"}}`,
 		`{"prompt_tokens":30,"completion_tokens":4,"prompt_cache_hit_tokens":15,"prompt_cache_miss_tokens":15,"cost_usd":0.3,"cache_savings_usd":0.03,"prefix_fingerprint":"fp-b","cache_shape":{"prefix_hash":"shape-b","runtime_hash":"rt-b","tools_hash":"tools-b","request_hash":"req-c"}}`,
 	}, "\n") + "\n"
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "test.jsonl"), []byte(data), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	totals, err := readUsageTotals(path)
+	totals, err := readUsageTotals(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

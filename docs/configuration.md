@@ -224,7 +224,7 @@ whale exec --worktree
 ├── config.toml         # 全局配置
 ├── mcp.json            # MCP 服务器配置
 ├── sessions/           # 会话历史
-└── usage.jsonl         # 使用量日志
+└── usage/         # 使用量日志
 ```
 
 不要提交这些文件。

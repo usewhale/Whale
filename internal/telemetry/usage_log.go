@@ -1,10 +1,10 @@
 package telemetry
 
 import (
-	"bufio"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -79,32 +79,30 @@ type UsageMetadata struct {
 }
 
 const (
-	usageLogCompactionThresholdBytes = 5 * 1024 * 1024
-	usageLogRetentionDays            = 365
+	usageLogRetentionDays = 365
 )
 
 var usageLogLocks sync.Map
 
-func DefaultUsageLogPath() string {
+func DefaultUsageLogDir() string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
-		return "usage.jsonl"
+		return "usage"
 	}
-	return filepath.Join(home, ".whale", "usage.jsonl")
+	return filepath.Join(home, ".whale", "usage")
 }
 
-func AppendUsage(path, sessionID, model, prefixFingerprint string, usage llm.Usage, cost float64, now time.Time, cacheShape *CacheShape, metadata ...UsageMetadata) error {
-	if path == "" {
-		path = DefaultUsageLogPath()
+func AppendUsage(dir, sessionID, model, prefixFingerprint string, usage llm.Usage, cost float64, now time.Time, cacheShape *CacheShape, metadata ...UsageMetadata) error {
+	if dir == "" {
+		dir = DefaultUsageLogDir()
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	unlock, err := lockUsageLogPath(path)
-	if err != nil {
-		return err
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil
 	}
-	defer unlock()
 
 	rec := UsageRecord{
 		TS:                       now.UnixMilli(),
@@ -134,11 +132,26 @@ func AppendUsage(path, sessionID, model, prefixFingerprint string, usage llm.Usa
 		rec.SubagentRole = metadata[0].SubagentRole
 		rec.SubagentTaskPreview = metadata[0].SubagentTaskPreview
 	}
+
+	// Co-locate subagent records in the parent session's file so that
+	// /status on the parent reads a single per-session file.
+	fileSessionID := sessionID
+	if strings.EqualFold(strings.TrimSpace(rec.Kind), "subagent") {
+		if pid := strings.TrimSpace(rec.ParentSessionID); pid != "" {
+			fileSessionID = pid
+		}
+	}
+	filePath := filepath.Join(dir, fileSessionID+".jsonl")
+	unlock, err := lockUsageLogPath(filePath)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	b, err := json.Marshal(rec)
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(filePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
@@ -149,7 +162,7 @@ func AppendUsage(path, sessionID, model, prefixFingerprint string, usage llm.Usa
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return compactUsageLogIfLarge(path, now)
+	return compactUsageDir(dir, now)
 }
 
 func CloneCacheShape(in *CacheShape) *CacheShape {
@@ -190,63 +203,23 @@ func cacheHitRatio(usage llm.Usage) float64 {
 	return float64(hit) / float64(denom)
 }
 
-func compactUsageLogIfLarge(path string, now time.Time) error {
-	info, err := os.Stat(path)
-	if err != nil || info.Size() < usageLogCompactionThresholdBytes {
-		return err
-	}
-	f, err := os.Open(path)
+func compactUsageDir(dir string, now time.Time) error {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
 	}
-
-	cutoff := now.AddDate(0, 0, -usageLogRetentionDays).UnixMilli()
-	tmp := path + ".tmp"
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
-	if err != nil {
-		_ = f.Close()
-		return err
-	}
-	cleanupTmp := true
-	defer func() {
-		if cleanupTmp {
-			_ = os.Remove(tmp)
-		}
-	}()
-
-	scanner := bufio.NewScanner(f)
-	buf := make([]byte, 0, 64*1024)
-	scanner.Buffer(buf, 2*1024*1024)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		var rec UsageRecord
-		if err := json.Unmarshal(line, &rec); err != nil {
+	cutoff := now.AddDate(0, 0, -usageLogRetentionDays)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
 			continue
 		}
-		if rec.TS > 0 && rec.TS < cutoff {
+		info, err := entry.Info()
+		if err != nil {
 			continue
 		}
-		if _, err := out.Write(append(append([]byte(nil), line...), '\n')); err != nil {
-			_ = out.Close()
-			_ = f.Close()
-			return err
+		if info.ModTime().Before(cutoff) {
+			_ = os.Remove(filepath.Join(dir, entry.Name()))
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		_ = out.Close()
-		_ = f.Close()
-		return err
-	}
-	if err := out.Close(); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return err
-	}
-	cleanupTmp = false
 	return nil
 }

@@ -141,7 +141,7 @@ func TestRunStreamEmitsPrefixCacheMetrics(t *testing.T) {
 		&cacheMetricsProvider{},
 		store,
 		core.NewToolRegistry(nil),
-		WithUsageLogPath(filepath.Join(t.TempDir(), "usage.jsonl")),
+		WithUsageLogPath(filepath.Join(t.TempDir(), "usage")),
 	)
 
 	events, err := a.RunStream(context.Background(), "s-cache-metrics", "hi")
@@ -174,7 +174,7 @@ func TestRunStreamCacheShapeOmitsFallbackAssistantPrefix(t *testing.T) {
 		&prefixCacheShapeProvider{prefixRequests: 0},
 		store,
 		core.NewToolRegistry(nil),
-		WithUsageLogPath(filepath.Join(t.TempDir(), "usage.jsonl")),
+		WithUsageLogPath(filepath.Join(t.TempDir(), "usage")),
 	)
 
 	events, err := a.RunStreamWithTurnOptions(context.Background(), "s-prefix-fallback", "hi", RunOptions{
@@ -207,7 +207,7 @@ func TestRunStreamCacheShapeIncludesUsedAssistantPrefix(t *testing.T) {
 		&prefixCacheShapeProvider{prefixRequests: 1},
 		store,
 		core.NewToolRegistry(nil),
-		WithUsageLogPath(filepath.Join(t.TempDir(), "usage.jsonl")),
+		WithUsageLogPath(filepath.Join(t.TempDir(), "usage")),
 	)
 
 	events, err := a.RunStreamWithTurnOptions(context.Background(), "s-prefix-used", "hi", RunOptions{

@@ -4,92 +4,104 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"github.com/usewhale/whale/internal/telemetry"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/usewhale/whale/internal/telemetry"
 )
 
-func readUsageStats(path string, now time.Time) usageStats {
+func readUsageStats(dir string, now time.Time) usageStats {
 	stats := usageStats{
 		Sessions: map[string]bool{},
 		ByModel:  map[string]*usageModelStats{},
 		Buckets:  usageBuckets(now),
 	}
 	cacheBreaks := newCacheBreakDetector()
-	f, err := os.Open(path)
+
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return stats
 	}
-	defer f.Close()
 
 	cutoff := now.Add(-7 * 24 * time.Hour).UnixMilli()
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		var rec telemetry.UsageRecord
-		if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
 			continue
 		}
-		if !isSupportedUsageModel(rec.Model) {
+		f, err := os.Open(filepath.Join(dir, entry.Name()))
+		if err != nil {
 			continue
 		}
-		cacheBreaks.Add(rec)
-		stats.Turns++
-		if rec.Session != "" {
-			stats.Sessions[rec.Session] = true
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			var rec telemetry.UsageRecord
+			if err := json.Unmarshal(scanner.Bytes(), &rec); err != nil {
+				continue
+			}
+			if !isSupportedUsageModel(rec.Model) {
+				continue
+			}
+			cacheBreaks.Add(rec)
+			stats.Turns++
+			if rec.Session != "" {
+				stats.Sessions[rec.Session] = true
+			}
+			stats.PromptTokens += rec.PromptTokens
+			stats.CompletionTokens += rec.CompletionTokens
+			stats.CacheHit += rec.PromptCacheHit
+			stats.CacheMiss += rec.PromptCacheMiss
+			stats.PrefixCompletionRequests += rec.PrefixCompletionRequests
+			stats.ReasoningReplayTokens += rec.ReasoningReplayTok
+			cost := telemetry.EstimateUsageRecordUSD(rec)
+			cacheSavings := telemetry.EstimateUsageRecordCacheSavingsUSD(rec)
+			stats.CostUSD += cost
+			stats.CacheSavingsUSD += cacheSavings
+			if rec.TS >= cutoff {
+				stats.Last7CostUSD += cost
+			}
+			if isUsageSubagentRecord(rec) {
+				stats.SubagentTurns++
+				stats.SubagentCostUSD += cost
+				stats.SubagentPromptTokens += rec.PromptTokens
+				stats.SubagentOutputTokens += rec.CompletionTokens
+			}
+			addUsageBuckets(stats.Buckets, rec, cost, cacheSavings)
+			model := strings.TrimSpace(rec.Model)
+			if model == "" {
+				model = "(unknown)"
+			}
+			ms := stats.ByModel[model]
+			if ms == nil {
+				ms = &usageModelStats{Model: model}
+				stats.ByModel[model] = ms
+			}
+			ms.Turns++
+			ms.PromptTokens += rec.PromptTokens
+			ms.CompletionTokens += rec.CompletionTokens
+			ms.Tokens += rec.PromptTokens + rec.CompletionTokens
+			ms.PrefixCompletionRequests += rec.PrefixCompletionRequests
+			ms.ReasoningReplayTokens += rec.ReasoningReplayTok
+			ms.CostUSD += cost
+			ms.CacheHit += rec.PromptCacheHit
+			ms.CacheMiss += rec.PromptCacheMiss
+			rec.CostUSD = cost
+			stats.Recent = appendRecentUsage(stats.Recent, rec)
 		}
-		stats.PromptTokens += rec.PromptTokens
-		stats.CompletionTokens += rec.CompletionTokens
-		stats.CacheHit += rec.PromptCacheHit
-		stats.CacheMiss += rec.PromptCacheMiss
-		stats.PrefixCompletionRequests += rec.PrefixCompletionRequests
-		stats.ReasoningReplayTokens += rec.ReasoningReplayTok
-		cost := telemetry.EstimateUsageRecordUSD(rec)
-		cacheSavings := telemetry.EstimateUsageRecordCacheSavingsUSD(rec)
-		stats.CostUSD += cost
-		stats.CacheSavingsUSD += cacheSavings
-		if rec.TS >= cutoff {
-			stats.Last7CostUSD += cost
-		}
-		if isUsageSubagentRecord(rec) {
-			stats.SubagentTurns++
-			stats.SubagentCostUSD += cost
-			stats.SubagentPromptTokens += rec.PromptTokens
-			stats.SubagentOutputTokens += rec.CompletionTokens
-		}
-		addUsageBuckets(stats.Buckets, rec, cost, cacheSavings)
-		model := strings.TrimSpace(rec.Model)
-		if model == "" {
-			model = "(unknown)"
-		}
-		ms := stats.ByModel[model]
-		if ms == nil {
-			ms = &usageModelStats{Model: model}
-			stats.ByModel[model] = ms
-		}
-		ms.Turns++
-		ms.PromptTokens += rec.PromptTokens
-		ms.CompletionTokens += rec.CompletionTokens
-		ms.Tokens += rec.PromptTokens + rec.CompletionTokens
-		ms.PrefixCompletionRequests += rec.PrefixCompletionRequests
-		ms.ReasoningReplayTokens += rec.ReasoningReplayTok
-		ms.CostUSD += cost
-		ms.CacheHit += rec.PromptCacheHit
-		ms.CacheMiss += rec.PromptCacheMiss
-		rec.CostUSD = cost
-		stats.Recent = appendRecentUsage(stats.Recent, rec)
+		_ = f.Close()
 	}
 	stats.CacheDiagnostics = cacheBreaks.Diagnostics()
 	return stats
 }
 
-func readSessionUsageSummary(path, sessionID string) sessionUsageSummary {
+func readSessionUsageSummary(dir, sessionID string) sessionUsageSummary {
 	var out sessionUsageSummary
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		return out
 	}
-	f, err := os.Open(path)
+	f, err := os.Open(filepath.Join(dir, sessionID+".jsonl"))
 	if err != nil {
 		return out
 	}

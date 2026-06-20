@@ -23,7 +23,7 @@ func TestGoalToolsGetActiveGoal(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("save goal: %v", err)
 	}
-	writeUsageRecord(t, filepath.Join(app.cfg.DataDir, "usage.jsonl"), telemetry.UsageRecord{
+	writeUsageRecord(t, filepath.Join(app.cfg.DataDir, "usage"), telemetry.UsageRecord{
 		TS:               time.Now().UnixMilli(),
 		Session:          app.sessionID,
 		Model:            "deepseek-v4-flash",
@@ -68,7 +68,7 @@ func TestGetGoalToolDoesNotPersistRefreshedBudgetState(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("save goal: %v", err)
 	}
-	writeUsageRecord(t, filepath.Join(app.cfg.DataDir, "usage.jsonl"), telemetry.UsageRecord{
+	writeUsageRecord(t, filepath.Join(app.cfg.DataDir, "usage"), telemetry.UsageRecord{
 		TS:               time.Now().UnixMilli(),
 		Session:          app.sessionID,
 		Model:            "deepseek-v4-flash",
@@ -116,7 +116,7 @@ func TestGoalToolCompleteSettlesUsageAndDoesNotReopen(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("save goal: %v", err)
 	}
-	writeUsageRecord(t, filepath.Join(app.cfg.DataDir, "usage.jsonl"), telemetry.UsageRecord{
+	writeUsageRecord(t, filepath.Join(app.cfg.DataDir, "usage"), telemetry.UsageRecord{
 		TS:               time.Now().UnixMilli(),
 		Session:          app.sessionID,
 		Model:            "deepseek-v4-flash",

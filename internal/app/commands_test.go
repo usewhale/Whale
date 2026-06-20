@@ -461,7 +461,7 @@ func TestHandleLocalCommandStats(t *testing.T) {
 	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
 		t.Fatalf("mkdir sessions: %v", err)
 	}
-	writeUsageRecord(t, filepath.Join(dir, "usage.jsonl"), telemetry.UsageRecord{
+	writeUsageRecord(t, filepath.Join(dir, "usage"), telemetry.UsageRecord{
 		TS:                       time.Date(2026, 5, 12, 10, 0, 0, 0, time.Local).UnixMilli(),
 		Session:                  "s1",
 		Model:                    "deepseek-v4-flash",
@@ -493,7 +493,7 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		},
 		CostUSD: 0.0123,
 	})
-	writeUsageRecord(t, filepath.Join(dir, "usage.jsonl"), telemetry.UsageRecord{
+	writeUsageRecord(t, filepath.Join(dir, "usage"), telemetry.UsageRecord{
 		TS:                 time.Date(2026, 5, 12, 10, 3, 0, 0, time.Local).UnixMilli(),
 		Session:            "s2",
 		Model:              "deepseek-v4-flash",
@@ -518,7 +518,7 @@ func TestHandleLocalCommandStats(t *testing.T) {
 		},
 		CostUSD: 0.0456,
 	})
-	writeUsageRecord(t, filepath.Join(dir, "usage.jsonl"), telemetry.UsageRecord{
+	writeUsageRecord(t, filepath.Join(dir, "usage"), telemetry.UsageRecord{
 		TS:               time.Date(2026, 5, 12, 10, 4, 0, 0, time.Local).UnixMilli(),
 		Session:          "legacy-chat",
 		Model:            "deepseek-chat",
@@ -820,7 +820,7 @@ func TestProfileSessionHiddenTaskDoesNotPreviewGreeting(t *testing.T) {
 func TestProfileStatsIncludesSubagentUsage(t *testing.T) {
 	dir := t.TempDir()
 	sessionsDir := filepath.Join(dir, "sessions")
-	usagePath := filepath.Join(dir, "usage.jsonl")
+	usagePath := filepath.Join(dir, "usage")
 	parentID := "parent"
 	namedChildID := parentID + "--subagent-call_00"
 	metaChildID := "metadata-child"
@@ -927,7 +927,7 @@ func TestProfileStatsIncludesSubagentUsage(t *testing.T) {
 
 func TestUsageStatsCountsLegacySubagentSessionIDs(t *testing.T) {
 	dir := t.TempDir()
-	usagePath := filepath.Join(dir, "usage.jsonl")
+	usagePath := filepath.Join(dir, "usage")
 	now := time.Date(2026, 5, 12, 10, 0, 0, 0, time.Local)
 	writeUsageRecord(t, usagePath, telemetry.UsageRecord{
 		TS:               now.UnixMilli(),
@@ -1029,7 +1029,7 @@ func TestProfileStatsIncludesSubagentUsageFromDefaultLogForCustomDataDir(t *test
 	dir := t.TempDir()
 	t.Setenv("HOME", filepath.Join(dir, "home"))
 	sessionsDir := filepath.Join(dir, "custom", "sessions")
-	usagePath := filepath.Join(dir, "custom", "usage.jsonl")
+	usagePath := filepath.Join(dir, "custom", "usage")
 	parentID := "parent-" + strings.ReplaceAll(uuid.NewString(), "-", "")
 	childID := parentID + "--subagent-call_00"
 
@@ -1047,7 +1047,7 @@ func TestProfileStatsIncludesSubagentUsageFromDefaultLogForCustomDataDir(t *test
 		CompletionTokens: 10,
 		CostUSD:          0.0010,
 	})
-	writeUsageRecord(t, telemetry.DefaultUsageLogPath(), telemetry.UsageRecord{
+	writeUsageRecord(t, telemetry.DefaultUsageLogDir(), telemetry.UsageRecord{
 		Session:          childID,
 		Model:            "deepseek-v4-flash",
 		PromptTokens:     200,
@@ -1073,7 +1073,7 @@ func TestProfileStatsIncludesSubagentUsageFromDefaultLogForCustomDataDir(t *test
 func TestProfileStatsSeparatesApprovalPromptsFromAuditEvents(t *testing.T) {
 	dir := t.TempDir()
 	sessionsDir := filepath.Join(dir, "sessions")
-	usagePath := filepath.Join(dir, "usage.jsonl")
+	usagePath := filepath.Join(dir, "usage")
 	parentID := "approval-parent"
 	childID := parentID + "--subagent-worker"
 
@@ -1511,7 +1511,7 @@ func TestBuildStatusIncludesContextAndBudget(t *testing.T) {
 		contextWindow: 1000,
 		cfg:           Config{DataDir: dir},
 	}
-	writeUsageRecord(t, filepath.Join(dir, "usage.jsonl"), telemetry.UsageRecord{
+	writeUsageRecord(t, filepath.Join(dir, "usage"), telemetry.UsageRecord{
 		Session:          "sess-1",
 		Model:            "deepseek-v4-flash",
 		PromptTokens:     1000,
@@ -1557,7 +1557,7 @@ func TestBuildStatusLocalResultIncludesStructuredFields(t *testing.T) {
 		budgetWarningUSD: 0,
 		cfg:              Config{DataDir: dir},
 	}
-	writeUsageRecord(t, filepath.Join(dir, "usage.jsonl"), telemetry.UsageRecord{
+	writeUsageRecord(t, filepath.Join(dir, "usage"), telemetry.UsageRecord{
 		Session:          "sess-1",
 		Model:            "deepseek-v4-flash",
 		PromptTokens:     1000,
@@ -3831,15 +3831,26 @@ func writeAppSkillWithFrontmatter(t *testing.T, dir, content string) {
 	}
 }
 
-func writeUsageRecord(t *testing.T, path string, rec telemetry.UsageRecord) {
+func writeUsageRecord(t *testing.T, dir string, rec telemetry.UsageRecord) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir usage dir: %v", err)
+	}
+	// Co-locate subagent records in the parent session's file to match AppendUsage behavior.
+	fileSessionID := strings.TrimSpace(rec.Session)
+	if strings.EqualFold(strings.TrimSpace(rec.Kind), "subagent") {
+		if pid := strings.TrimSpace(rec.ParentSessionID); pid != "" {
+			fileSessionID = pid
+		}
+	}
+	if fileSessionID == "" {
+		t.Fatalf("usage record has empty session")
 	}
 	b, err := json.Marshal(rec)
 	if err != nil {
 		t.Fatalf("marshal usage record: %v", err)
 	}
+	path := filepath.Join(dir, fileSessionID+".jsonl")
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		t.Fatalf("open usage log: %v", err)

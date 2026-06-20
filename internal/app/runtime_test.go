@@ -581,7 +581,7 @@ func TestFinalizeTurnRefreshesCompletedGoalUsage(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("save goal: %v", err)
 	}
-	writeUsageRecord(t, filepath.Join(dir, "usage.jsonl"), telemetry.UsageRecord{
+	writeUsageRecord(t, filepath.Join(dir, "usage"), telemetry.UsageRecord{
 		Session:          "goal-session",
 		Model:            "deepseek-v4-flash",
 		PromptTokens:     50,

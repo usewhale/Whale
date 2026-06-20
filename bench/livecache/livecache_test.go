@@ -42,16 +42,16 @@ func TestUsageTotalsCacheHitRatioUsesHitPlusMiss(t *testing.T) {
 }
 
 func TestReadUsageTotalsCountsDistinctPrefixFingerprints(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "usage.jsonl")
+	dir := t.TempDir()
 	data := strings.Join([]string{
 		`{"prompt_tokens":10,"completion_tokens":2,"prompt_cache_hit_tokens":8,"prompt_cache_miss_tokens":2,"cost_usd":0.1,"prefix_fingerprint":"fp-a"}`,
 		`{"prompt_tokens":20,"completion_tokens":3,"prompt_cache_hit_tokens":10,"prompt_cache_miss_tokens":10,"cost_usd":0.2,"prefix_fingerprint":"fp-a"}`,
 		`{"prompt_tokens":30,"completion_tokens":4,"prompt_cache_hit_tokens":15,"prompt_cache_miss_tokens":15,"cost_usd":0.3,"prefix_fingerprint":"fp-b"}`,
 	}, "\n") + "\n"
-	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "test.jsonl"), []byte(data), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	totals, err := readUsageTotals(path)
+	totals, err := readUsageTotals(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

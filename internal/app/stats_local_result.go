@@ -14,7 +14,7 @@ func (a *App) buildStatsLocalResult(view string) *LocalResult {
 func (a *App) buildStatsLocalResultAt(view string, now time.Time) *LocalResult {
 	view = normalizeStatsView(view)
 	plain := a.buildStatsViewAt(view, now)
-	usage := readUsageStats(filepath.Join(a.cfg.DataDir, "usage.jsonl"), now)
+	usage := readUsageStats(filepath.Join(a.cfg.DataDir, "usage"), now)
 	toolInput := readToolInputStats(a.sessionsDir)
 	result := &LocalResult{
 		Kind:      "stats",
@@ -32,7 +32,7 @@ func (a *App) buildStatsLocalResultAt(view string, now time.Time) *LocalResult {
 	case "recent":
 		result.Sections = append(result.Sections, recentStatsSections(usage, toolInput)...)
 	case "profile":
-		profile := readProfileStats(a.sessionsDir, filepath.Join(a.cfg.DataDir, "usage.jsonl"), statsProfileSessionLimit)
+		profile := readProfileStats(a.sessionsDir, filepath.Join(a.cfg.DataDir, "usage"), statsProfileSessionLimit)
 		result.Fields = append(result.Fields, profileSummaryFields(profile)...)
 		result.Sections = append(result.Sections, profileStatsSections(profile)...)
 	case "all":

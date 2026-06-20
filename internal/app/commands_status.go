@@ -98,5 +98,5 @@ func (a *App) sessionUsageStatusValue() string {
 	if dataDir == "" {
 		return "none"
 	}
-	return formatSessionUsageSummary(readSessionUsageSummary(filepath.Join(dataDir, "usage.jsonl"), a.sessionID))
+	return formatSessionUsageSummary(readSessionUsageSummary(filepath.Join(dataDir, "usage"), a.sessionID))
 }

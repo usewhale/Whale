@@ -225,7 +225,7 @@ prompt you to keep or remove.
 ├── config.toml         # global config
 ├── mcp.json            # MCP server config
 ├── sessions/           # session history
-└── usage.jsonl         # usage logs
+└── usage/         # usage logs
 ```
 
 Do not commit these files.

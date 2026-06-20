@@ -273,7 +273,7 @@ func Greeting() string {
 
 func runLiveProfile(ctx context.Context, args cliArgs, workspace string, profile toolProfile, repeat int) liveRunReport {
 	dataDir := filepath.Join(args.outDir, "live", sanitizeName(profile.name), fmt.Sprintf("r%d", repeat))
-	usagePath := filepath.Join(dataDir, "usage.jsonl")
+	usagePath := filepath.Join(dataDir, "usage")
 	report := liveRunReport{
 		Profile:     profile.name,
 		Repeat:      repeat,
@@ -375,38 +375,45 @@ type liveUsageTotals struct {
 	RequestHash      string
 }
 
-func readLiveUsageTotals(path string) (liveUsageTotals, error) {
-	f, err := os.Open(path)
+func readLiveUsageTotals(dir string) (liveUsageTotals, error) {
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return liveUsageTotals{}, err
 	}
-	defer f.Close()
 	var totals liveUsageTotals
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
 			continue
 		}
-		var rec telemetry.UsageRecord
-		if err := json.Unmarshal([]byte(line), &rec); err != nil {
-			return liveUsageTotals{}, err
+		f, err := os.Open(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			continue
 		}
-		totals.PromptTokens += rec.PromptTokens
-		totals.CompletionTokens += rec.CompletionTokens
-		totals.CacheHitTokens += rec.PromptCacheHit
-		totals.CacheMissTokens += rec.PromptCacheMiss
-		totals.CostUSD += rec.CostUSD
-		if rec.CacheShape != nil {
-			totals.ToolsBytes = rec.CacheShape.ToolsBytes
-			totals.SystemBytes = rec.CacheShape.SystemBytes
-			totals.RuntimeBytes = rec.CacheShape.RuntimeBytes
-			totals.ToolsHash = rec.CacheShape.ToolsHash
-			totals.RequestHash = rec.CacheShape.RequestHash
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+			var rec telemetry.UsageRecord
+			if err := json.Unmarshal([]byte(line), &rec); err != nil {
+				f.Close()
+				return liveUsageTotals{}, err
+			}
+			totals.PromptTokens += rec.PromptTokens
+			totals.CompletionTokens += rec.CompletionTokens
+			totals.CacheHitTokens += rec.PromptCacheHit
+			totals.CacheMissTokens += rec.PromptCacheMiss
+			totals.CostUSD += rec.CostUSD
+			if rec.CacheShape != nil {
+				totals.ToolsBytes = rec.CacheShape.ToolsBytes
+				totals.SystemBytes = rec.CacheShape.SystemBytes
+				totals.RuntimeBytes = rec.CacheShape.RuntimeBytes
+				totals.ToolsHash = rec.CacheShape.ToolsHash
+				totals.RequestHash = rec.CacheShape.RequestHash
+			}
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return liveUsageTotals{}, err
+		f.Close()
 	}
 	return totals, nil
 }

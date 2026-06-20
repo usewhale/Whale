@@ -35,7 +35,7 @@ func (p *usageLogProvider) StreamResponse(_ context.Context, _ []core.Message, _
 
 func TestRecordTurnCostWritesSubagentUsageMetadata(t *testing.T) {
 	sessionsDir := t.TempDir()
-	usagePath := filepath.Join(t.TempDir(), "usage.jsonl")
+	usagePath := filepath.Join(t.TempDir(), "usage")
 	a := NewAgentWithRegistry(&usageLogProvider{}, store.NewInMemoryStore(), nil,
 		WithSessionsDir(sessionsDir),
 		WithUsageLogPath(usagePath),
@@ -50,7 +50,7 @@ func TestRecordTurnCostWritesSubagentUsageMetadata(t *testing.T) {
 	}
 	a.recordTurnCost("child", llm.Usage{PromptTokens: 100, PromptCacheHitTokens: 50, PromptCacheMissTokens: 50}, "deepseek-v4-flash", "fp", nil)
 
-	b, err := os.ReadFile(usagePath)
+	b, err := os.ReadFile(filepath.Join(usagePath, "parent.jsonl"))
 	if err != nil {
 		t.Fatalf("read usage log: %v", err)
 	}
@@ -65,21 +65,21 @@ func TestRecordTurnCostWritesSubagentUsageMetadata(t *testing.T) {
 
 func TestRecordTurnCostWritesUsageLogWithoutSessionRuntime(t *testing.T) {
 	tmp := t.TempDir()
-	usagePath := filepath.Join(tmp, "usage.jsonl")
+	usagePath := filepath.Join(tmp, "usage")
 	provider := &usageLogProvider{}
 
 	a := NewAgentWithRegistry(provider, store.NewInMemoryStore(), nil, WithUsageLogPath(usagePath))
 	if _, err := a.RunSession(context.Background(), "usage-log-no-runtime", "hi"); err != nil {
 		t.Fatalf("run failed: %v", err)
 	}
-	if _, err := os.Stat(usagePath); err != nil {
+	if _, err := os.Stat(filepath.Join(usagePath, "usage-log-no-runtime.jsonl")); err != nil {
 		t.Fatalf("usage log missing: %v", err)
 	}
 }
 
 func TestRecordTurnCostSerializesConcurrentSessionMetaUpdates(t *testing.T) {
 	sessionsDir := t.TempDir()
-	usagePath := filepath.Join(t.TempDir(), "usage.jsonl")
+	usagePath := filepath.Join(t.TempDir(), "usage")
 	a := NewAgentWithRegistry(&usageLogProvider{}, store.NewInMemoryStore(), nil,
 		WithSessionsDir(sessionsDir),
 		WithUsageLogPath(usagePath),

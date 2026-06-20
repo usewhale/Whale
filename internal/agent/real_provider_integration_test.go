@@ -48,7 +48,7 @@ func TestRealDeepSeekCacheMetricsSmoke(t *testing.T) {
 		t.Fatalf("init deepseek: %v", err)
 	}
 	tmp := t.TempDir()
-	usagePath := filepath.Join(tmp, "usage.jsonl")
+	usagePath := filepath.Join(tmp, "usage")
 	a := NewAgentWithRegistry(
 		provider,
 		store.NewInMemoryStore(),

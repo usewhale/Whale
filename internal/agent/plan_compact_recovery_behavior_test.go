@@ -535,13 +535,13 @@ func TestCompactSessionRewritesToSummaryOnly(t *testing.T) {
 func TestCompactSessionRecordsCacheShapeRequestKind(t *testing.T) {
 	store := NewInMemoryStore()
 	_, _ = store.Create(context.Background(), Message{SessionID: "s-compact-usage", Role: RoleUser, Text: "keep this"})
-	usagePath := filepath.Join(t.TempDir(), "usage.jsonl")
+	usagePath := filepath.Join(t.TempDir(), "usage")
 	a := NewAgentWithRegistry(&compactUsageProvider{}, store, NewToolRegistry([]Tool{readOnlyViewTool{}}), WithUsageLogPath(usagePath))
 
 	if _, err := a.CompactSession(context.Background(), "s-compact-usage"); err != nil {
 		t.Fatalf("compact failed: %v", err)
 	}
-	b, err := os.ReadFile(usagePath)
+	b, err := os.ReadFile(filepath.Join(usagePath, "s-compact-usage.jsonl"))
 	if err != nil {
 		t.Fatalf("read usage log: %v", err)
 	}
@@ -592,7 +592,7 @@ func TestCompactSessionDoesNotAdvertiseToolsThatItCannotDispatch(t *testing.T) {
 
 func TestForceSummaryRecordsCacheShapeRequestKind(t *testing.T) {
 	store := NewInMemoryStore()
-	usagePath := filepath.Join(t.TempDir(), "usage.jsonl")
+	usagePath := filepath.Join(t.TempDir(), "usage")
 	a := NewAgentWithRegistry(&compactUsageProvider{}, store, NewToolRegistry(nil), WithUsageLogPath(usagePath))
 
 	reqCtx, err := a.buildSummaryRequestContext(context.Background(), RunOptions{})
@@ -603,7 +603,7 @@ func TestForceSummaryRecordsCacheShapeRequestKind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("force summary failed: %v", err)
 	}
-	b, err := os.ReadFile(usagePath)
+	b, err := os.ReadFile(filepath.Join(usagePath, "s-force-summary.jsonl"))
 	if err != nil {
 		t.Fatalf("read usage log: %v", err)
 	}
