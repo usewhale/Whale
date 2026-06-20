@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -10,18 +11,20 @@ import (
 	"github.com/usewhale/whale/internal/session"
 )
 
-// prefillPlanProvider reproduces the observed deepseek failure: the first
-// plan-mode turn ends with an analysis preamble (and reasoning) but no
-// <proposed_plan> block; once the turn loop re-runs with the plan tag prefilled,
-// StreamResponseWithPrefix returns the real block.
-type prefillPlanProvider struct {
+// missingPlanPrefixCapableProvider reproduces the important DeepSeek shape:
+// the model has already used tools earlier in the turn/history, then ends Plan
+// mode with assistant text but no <proposed_plan> block. The long-term behavior
+// is Codex-style: do not issue a provider prefix-completion repair request.
+type missingPlanPrefixCapableProvider struct {
 	calls       int
 	prefixCalls int
-	prefix      string
 }
 
-func (p *prefillPlanProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+func (p *missingPlanPrefixCapableProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
 	p.calls++
+	if p.calls == 1 {
+		return eventStream(toolUseEvent(toolCall("call-read", "read_file", `{"file_path":"release.md"}`)))
+	}
 	return eventStream(ProviderEvent{
 		Type: EventComplete,
 		Response: &ProviderResponse{
@@ -32,103 +35,89 @@ func (p *prefillPlanProvider) StreamResponse(_ context.Context, _ []Message, _ [
 	})
 }
 
-func (p *prefillPlanProvider) StreamResponseWithPrefix(_ context.Context, _ []Message, prefix string, _ []string) <-chan ProviderEvent {
+func (p *missingPlanPrefixCapableProvider) StreamResponseWithPrefix(_ context.Context, _ []Message, _ string, _ []string) <-chan ProviderEvent {
 	p.prefixCalls++
-	p.prefix = prefix
-	// The provider is responsible for emitting the prefix; mimic the real client.
-	return eventStream(endTurnEvent(prefix + "## Release v0.1.51\n- tag and release\n</proposed_plan>"))
+	return eventStream(endTurnEvent("<proposed_plan>\nshould not be requested\n</proposed_plan>"))
 }
 
-func TestPlanFinalizationRecoversViaPrefill(t *testing.T) {
+func TestPlanFinalizationDoesNotRecoverViaProviderPrefix(t *testing.T) {
 	store := NewInMemoryStore()
-	prov := &prefillPlanProvider{}
-	a := NewAgentWithRegistry(prov, store, NewToolRegistry([]Tool{viewLikeTool{}}), WithSessionMode(session.ModePlan))
+	prov := &missingPlanPrefixCapableProvider{}
+	a := NewAgentWithRegistry(prov, store, NewToolRegistry([]Tool{readOnlyViewTool{}}), WithSessionMode(session.ModePlan))
 
-	events, err := a.RunStream(context.Background(), "s-plan-prefill", "release the next version")
+	events, err := a.RunStream(context.Background(), "s-plan-no-prefix", "release the next version")
 	if err != nil {
 		t.Fatalf("run stream failed: %v", err)
 	}
-	var planContent string
-	var sawPlanCompleted bool
+	var sawDone, sawPlanCompleted bool
+	var done *core.Message
 	for ev := range events {
 		if ev.Type == AgentEventTypePlanCompleted {
 			sawPlanCompleted = true
-			planContent = ev.Content
+		}
+		if ev.Type == AgentEventTypeDone {
+			sawDone = true
+			done = ev.Message
 		}
 	}
-	if prov.prefixCalls != 1 {
-		t.Fatalf("expected exactly one prefill (StreamResponseWithPrefix) call, got %d", prov.prefixCalls)
+	if prov.calls != 2 {
+		t.Fatalf("expected tool-use turn plus final assistant turn, got %d provider calls", prov.calls)
 	}
-	if prov.prefix != planFinalizationPrefix {
-		t.Fatalf("expected prefill with %q, got %q", planFinalizationPrefix, prov.prefix)
+	if prov.prefixCalls != 0 {
+		t.Fatalf("missing plan must not trigger provider prefix completion, got %d calls", prov.prefixCalls)
 	}
-	if !sawPlanCompleted {
-		t.Fatal("expected a plan_completed event after prefill recovery")
+	if !sawDone {
+		t.Fatal("expected the original assistant turn to complete")
 	}
-	if !strings.Contains(planContent, "Release v0.1.51") {
-		t.Fatalf("recovered plan missing expected content: %q", planContent)
+	if sawPlanCompleted {
+		t.Fatal("did not expect a structured plan without a proposed_plan block")
+	}
+	if done == nil || !strings.Contains(done.Text, "present the plan") {
+		t.Fatalf("expected original assistant text to remain visible, got %+v", done)
 	}
 }
 
-// emptyThenPrefillProvider reproduces the reasoning-only / empty-completion
-// terminal error: recovery must escalate to prefill rather than aborting.
-type emptyThenPrefillProvider struct {
+type emptyPlanProvider struct {
 	calls       int
 	prefixCalls int
 }
 
-func (p *emptyThenPrefillProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+func (p *emptyPlanProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
 	p.calls++
 	return eventStream(ProviderEvent{Type: EventError, Err: llm.ErrEmptyCompletion})
 }
 
-func (p *emptyThenPrefillProvider) StreamResponseWithPrefix(_ context.Context, _ []Message, prefix string, _ []string) <-chan ProviderEvent {
+func (p *emptyPlanProvider) StreamResponseWithPrefix(_ context.Context, _ []Message, _ string, _ []string) <-chan ProviderEvent {
 	p.prefixCalls++
-	return eventStream(endTurnEvent(prefix + "## Release plan\n- ship it\n</proposed_plan>"))
+	return eventStream(endTurnEvent("<proposed_plan>\nshould not be requested\n</proposed_plan>"))
 }
 
-func TestPlanFinalizationRecoversFromEmptyCompletion(t *testing.T) {
+func TestPlanFinalizationEmptyCompletionDoesNotRecoverViaProviderPrefix(t *testing.T) {
 	store := NewInMemoryStore()
-	prov := &emptyThenPrefillProvider{}
+	prov := &emptyPlanProvider{}
 	a := NewAgentWithRegistry(prov, store, NewToolRegistry([]Tool{viewLikeTool{}}), WithSessionMode(session.ModePlan))
 
-	events, err := a.RunStream(context.Background(), "s-plan-empty", "release")
+	events, err := a.RunStream(context.Background(), "s-plan-empty-no-prefix", "release")
 	if err != nil {
 		t.Fatalf("run stream failed: %v", err)
 	}
-	var sawError, sawPlanCompleted bool
-	var planContent string
+	var gotErr error
 	for ev := range events {
 		if ev.Type == AgentEventTypeError {
-			sawError = true
+			gotErr = ev.Err
 		}
 		if ev.Type == AgentEventTypePlanCompleted {
-			sawPlanCompleted = true
-			planContent = ev.Content
+			t.Fatal("did not expect a structured plan after an empty provider error")
 		}
 	}
-	if sawError {
-		t.Fatal("empty completion in plan mode should be recovered, not surfaced as an error")
+	if !errors.Is(gotErr, llm.ErrEmptyCompletion) {
+		t.Fatalf("expected empty completion error event, got %v", gotErr)
 	}
-	if prov.prefixCalls != 1 {
-		t.Fatalf("expected one prefill call after empty completion, got %d", prov.prefixCalls)
-	}
-	if !sawPlanCompleted || !strings.Contains(planContent, "Release plan") {
-		t.Fatalf("expected recovered plan, completed=%v content=%q", sawPlanCompleted, planContent)
-	}
-	// The empty assistant turn that the provider failed on must not linger as a
-	// visible failed turn in the store (it would pollute replay/resume).
-	msgs, _ := store.List(context.Background(), "s-plan-empty")
-	for _, m := range msgs {
-		if m.Role == core.RoleAssistant && strings.TrimSpace(m.Text) == "" && len(m.Parts) == 0 && !m.Hidden {
-			t.Fatalf("empty recovered assistant turn should be hidden, got visible: %+v", m)
-		}
+	if prov.prefixCalls != 0 {
+		t.Fatalf("empty completion must not trigger provider prefix completion, got %d calls", prov.prefixCalls)
 	}
 }
 
-// inlineTagMentionProvider returns visible text that merely *mentions* the tag
-// (not a real block on its own line), so no plan part is produced. Recovery must
-// still fire — the raw mention must not be mistaken for a real plan.
 type inlineTagMentionProvider struct {
 	calls       int
 	prefixCalls int
@@ -139,64 +128,37 @@ func (p *inlineTagMentionProvider) StreamResponse(_ context.Context, _ []Message
 	return eventStream(endTurnEvent("I will now output the final plan in a <proposed_plan> block."))
 }
 
-func (p *inlineTagMentionProvider) StreamResponseWithPrefix(_ context.Context, _ []Message, prefix string, _ []string) <-chan ProviderEvent {
+func (p *inlineTagMentionProvider) StreamResponseWithPrefix(_ context.Context, _ []Message, _ string, _ []string) <-chan ProviderEvent {
 	p.prefixCalls++
-	return eventStream(endTurnEvent(prefix + "## Release plan\n- ship it\n</proposed_plan>"))
+	return eventStream(endTurnEvent("<proposed_plan>\nshould not be requested\n</proposed_plan>"))
 }
 
-func TestPlanFinalizationFiresOnInlineTagMention(t *testing.T) {
+func TestPlanFinalizationInlineTagMentionDoesNotTriggerPrefix(t *testing.T) {
 	store := NewInMemoryStore()
 	prov := &inlineTagMentionProvider{}
 	a := NewAgentWithRegistry(prov, store, NewToolRegistry([]Tool{viewLikeTool{}}), WithSessionMode(session.ModePlan))
 
-	events, err := a.RunStream(context.Background(), "s-plan-inline", "release")
+	events, err := a.RunStream(context.Background(), "s-plan-inline-no-prefix", "release")
 	if err != nil {
 		t.Fatalf("run stream failed: %v", err)
 	}
-	var sawPlanCompleted bool
-	for ev := range events {
-		if ev.Type == AgentEventTypePlanCompleted {
-			sawPlanCompleted = true
-		}
-	}
-	if prov.prefixCalls != 1 {
-		t.Fatalf("expected recovery to fire despite inline tag mention, prefixCalls=%d", prov.prefixCalls)
-	}
-	if !sawPlanCompleted {
-		t.Fatal("expected a plan_completed event after recovery")
-	}
-}
-
-// stubbornProvider never emits a plan and is not prefix-capable, to prove the
-// recovery is bounded: one original turn + one (tool-suppressed) recovery turn.
-type stubbornProvider struct{ calls int }
-
-func (p *stubbornProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
-	p.calls++
-	return eventStream(endTurnEvent("analysis only, no plan block"))
-}
-
-func TestPlanFinalizationRecoveryIsBounded(t *testing.T) {
-	store := NewInMemoryStore()
-	prov := &stubbornProvider{}
-	a := NewAgentWithRegistry(prov, store, NewToolRegistry([]Tool{viewLikeTool{}}), WithSessionMode(session.ModePlan))
-
-	events, err := a.RunStream(context.Background(), "s-plan-bounded", "release")
-	if err != nil {
-		t.Fatalf("run stream failed: %v", err)
-	}
-	var sawDone bool
+	var sawDone, sawPlanCompleted bool
 	for ev := range events {
 		if ev.Type == AgentEventTypeDone {
 			sawDone = true
 		}
+		if ev.Type == AgentEventTypePlanCompleted {
+			sawPlanCompleted = true
+		}
+	}
+	if prov.prefixCalls != 0 {
+		t.Fatalf("inline tag mention must not trigger provider prefix completion, got %d calls", prov.prefixCalls)
 	}
 	if !sawDone {
-		t.Fatal("expected the turn to terminate with a done event")
+		t.Fatal("expected original assistant turn to complete")
 	}
-	// Bounded: original turn + exactly one recovery turn.
-	if prov.calls != 2 {
-		t.Fatalf("expected exactly 2 provider calls (bounded), got %d", prov.calls)
+	if sawPlanCompleted {
+		t.Fatal("did not expect quoted/inline tag mention to become a structured plan")
 	}
 }
 
@@ -216,9 +178,16 @@ func TestPlanFinalizationSkippedWhenPlanPresent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run stream failed: %v", err)
 	}
-	for range events {
+	var sawPlanCompleted bool
+	for ev := range events {
+		if ev.Type == AgentEventTypePlanCompleted {
+			sawPlanCompleted = true
+		}
 	}
 	if prov.calls != 1 {
 		t.Fatalf("expected a single provider call when the plan is already tagged, got %d", prov.calls)
+	}
+	if !sawPlanCompleted {
+		t.Fatal("expected structured plan when proposed_plan block is present")
 	}
 }
