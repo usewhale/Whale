@@ -359,7 +359,7 @@ func NewAgent(provider llm.Provider, store store.MessageStore, tools []core.Tool
 		sessionRuntime:         memory.NewSessionRuntime(""),
 		usageLogPath:           telemetry.DefaultUsageLogDir(),
 		toolResultArchiveDir:   defaultToolResultArchiveDir(telemetry.DefaultUsageLogDir()),
-		maxToolIters:           64,
+		maxToolIters:           0, // 0 = unlimited: the interactive main agent is bounded by user cancellation, compaction, and the storm loop-guard (see maxConsecutiveStormRounds) — not by a round count. Subagents override via WithMaxToolIters.
 		maxParallelSubagents:   defaultMaxParallelSubagents(),
 	}
 }
@@ -387,7 +387,7 @@ func NewAgentWithRegistry(provider llm.Provider, store store.MessageStore, tools
 		sessionRuntime:         memory.NewSessionRuntime(""),
 		usageLogPath:           telemetry.DefaultUsageLogDir(),
 		toolResultArchiveDir:   defaultToolResultArchiveDir(telemetry.DefaultUsageLogDir()),
-		maxToolIters:           64,
+		maxToolIters:           0, // 0 = unlimited: the interactive main agent is bounded by user cancellation, compaction, and the storm loop-guard (see maxConsecutiveStormRounds) — not by a round count. Subagents override via WithMaxToolIters.
 		maxParallelSubagents:   defaultMaxParallelSubagents(),
 	}
 	for _, opt := range opts {

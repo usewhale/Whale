@@ -212,6 +212,62 @@ func TestAgentMaxTurnsForcesSummaryAfterToolRound(t *testing.T) {
 	}
 }
 
+type stormingProvider struct {
+	calls int
+}
+
+func (p *stormingProvider) StreamResponse(_ context.Context, _ []Message, tools []Tool) <-chan ProviderEvent {
+	p.calls++
+	if len(tools) == 0 {
+		// Forced-summary calls suppress tools; answer them so the turn can end.
+		return eventStream(endTurnEvent("forced summary"))
+	}
+	// Always the same call: it trips the storm breaker and never progresses.
+	return eventStream(toolUseEvent(toolCall("tc-loop", "echo", `{"n":1}`)))
+}
+
+func TestAgentStormLoopForcesSummaryWithoutToolIterCap(t *testing.T) {
+	store := NewInMemoryStore()
+	prov := &stormingProvider{}
+	a := NewAgent(prov, store, []Tool{echoTool{}})
+	// The main agent runs without a tool-iter cap; the storm loop-guard is what
+	// must stop this otherwise-infinite loop.
+	if a.maxToolIters != 0 {
+		t.Fatalf("expected uncapped main agent, got maxToolIters=%d", a.maxToolIters)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	events, err := a.RunStream(ctx, "s-storm", "go")
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+	var forced bool
+	var done *core.Message
+	for ev := range events {
+		switch ev.Type {
+		case AgentEventTypeForcedSummaryStarted:
+			if ev.Content == "repetitive tool-call loop detected" {
+				forced = true
+			}
+		case AgentEventTypeDone:
+			done = ev.Message
+		case AgentEventTypeError:
+			t.Fatalf("unexpected error: %v", ev.Err)
+		}
+	}
+	if !forced {
+		t.Fatal("expected forced summary from the storm loop-guard")
+	}
+	if done == nil || !strings.Contains(done.Text, "auto-interrupted") {
+		t.Fatalf("expected truncation banner in final message, got %+v", done)
+	}
+	// Bounded: a few storm rounds plus the summary, nowhere near a runaway.
+	if prov.calls > 20 {
+		t.Fatalf("provider calls = %d, want a small bounded number", prov.calls)
+	}
+}
+
 func TestAgentLoopWithToolRoundTrip(t *testing.T) {
 	store := NewInMemoryStore()
 	prov := &mockProvider{}
