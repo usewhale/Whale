@@ -209,13 +209,17 @@ func summarizeNonZeroShellResult(env toolResultEnvelope, exitCode int, duration 
 	if output != "" {
 		return "result_nonzero", strings.Join(parts, " · ") + "\n" + output
 	}
+	appendEmptyStreamNotes(&parts, env)
+	return "result_nonzero", strings.Join(parts, " · ")
+}
+
+func appendEmptyStreamNotes(parts *[]string, env toolResultEnvelope) {
 	if strings.TrimSpace(core.AsString(env.payload["stderr"])) == "" {
-		parts = append(parts, "stderr empty")
+		*parts = append(*parts, "stderr empty")
 	}
 	if strings.TrimSpace(core.AsString(env.payload["stdout"])) == "" {
-		parts = append(parts, "stdout empty")
+		*parts = append(*parts, "stdout empty")
 	}
-	return "result_nonzero", strings.Join(parts, " · ")
 }
 
 func summarizeFailedShellResult(env toolResultEnvelope) (string, string) {
@@ -229,6 +233,9 @@ func summarizeFailedShellResult(env toolResultEnvelope) (string, string) {
 		return summarizeFailedResult(env, "command failed")
 	}
 	output := summarizeShellOutput(shellPayloadOutput(env, true))
+	// asInt returns 0 when exit_code is missing from metrics, which is
+	// safe: ShellExitMessage's find/diff/test cases are all exit-1-gated,
+	// so a missing code cannot misfire as a false interpretation.
 	exitMsg := core.ShellExitMessage(
 		core.AsString(env.payload["command"]),
 		asInt(env.metrics["exit_code"]),
@@ -243,12 +250,7 @@ func summarizeFailedShellResult(env toolResultEnvelope) (string, string) {
 		if exitMsg != "" {
 			parts = append(parts, exitMsg)
 		}
-		if strings.TrimSpace(core.AsString(env.payload["stderr"])) == "" {
-			parts = append(parts, "stderr empty")
-		}
-		if strings.TrimSpace(core.AsString(env.payload["stdout"])) == "" {
-			parts = append(parts, "stdout empty")
-		}
+		appendEmptyStreamNotes(&parts, env)
 		return "result_failed", strings.Join(parts, " · ")
 	}
 	duration := formatDurationMS(asInt64(env.metrics["duration_ms"]))

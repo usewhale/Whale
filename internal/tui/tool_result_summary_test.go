@@ -65,6 +65,51 @@ func TestSummarizeShellOutputPreservesColoredHeadTail(t *testing.T) {
 	}
 }
 
+func TestSummarizeFailedShellExecFailedEmptyOutput(t *testing.T) {
+	cases := []struct {
+		name     string
+		json     string
+		wantRole string
+		wantText string
+	}{
+		{
+			name:     "exit 127 command not found",
+			json:     `{"success":false,"code":"exec_failed","data":{"status":"ok","metrics":{"exit_code":127},"payload":{"stdout":"","stderr":"","command":"nonexistent_cmd"}}}`,
+			wantRole: "result_failed",
+			wantText: "Command failed (exit 127) · command not found · stderr empty · stdout empty",
+		},
+		{
+			name:     "exit 126 not executable",
+			json:     `{"success":false,"code":"exec_failed","data":{"status":"ok","metrics":{"exit_code":126},"payload":{"stdout":"","stderr":"","command":"./not_executable"}}}`,
+			wantRole: "result_failed",
+			wantText: "Command failed (exit 126) · not executable · stderr empty · stdout empty",
+		},
+		{
+			name:     "exit 1 no special semantics empty output",
+			json:     `{"success":false,"code":"exec_failed","data":{"status":"ok","metrics":{"exit_code":1},"payload":{"stdout":"","stderr":"","command":"false"}}}`,
+			wantRole: "result_failed",
+			wantText: "Command failed (exit 1) · stderr empty · stdout empty",
+		},
+		{
+			name:     "exit 0 no exit code in metrics",
+			json:     `{"success":false,"code":"exec_failed","data":{"status":"ok","metrics":{},"payload":{"stdout":"","stderr":"","command":"cmd"}}}`,
+			wantRole: "result_failed",
+			wantText: "Command failed · stderr empty · stdout empty",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			role, text := summarizeToolResultForChat("shell_run", tc.json)
+			if role != tc.wantRole {
+				t.Fatalf("role = %q, want %q", role, tc.wantRole)
+			}
+			if text != tc.wantText {
+				t.Fatalf("text = %q, want %q", text, tc.wantText)
+			}
+		})
+	}
+}
+
 func TestSummarizeToolResultForChatIgnoresANSIOnlyShellOutput(t *testing.T) {
 	raw := `{"success":true,"data":{"status":"ok","metrics":{"exit_code":0,"duration_ms":23},"payload":{"stdout":"\u001b[0m\n","stderr":""}}}`
 	role, text := summarizeToolResultForChat("shell_run", raw)
