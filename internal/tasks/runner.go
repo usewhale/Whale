@@ -16,9 +16,12 @@ import (
 )
 
 const (
-	MaxParallelPrompts    = 8
-	DefaultMaxTokens      = 800
-	DefaultMaxToolIters   = 12
+	MaxParallelPrompts = 8
+	DefaultMaxTokens   = 800
+	// DefaultMaxToolIters bounds unattended subagents (no human in the loop to
+	// cancel a runaway). Set high enough that legitimate implementation subtasks
+	// finish well under it, so the cap only ever catches a genuine loop.
+	DefaultMaxToolIters   = 200
 	DefaultSummaryMaxChar = 8 * 1024
 )
 

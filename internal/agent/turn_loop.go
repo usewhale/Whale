@@ -120,6 +120,7 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 		modelTurns := 0
 		toolIters := 0
 		toolCalls := 0
+		consecutiveStormRounds := 0
 		if a.repairer != nil {
 			a.repairer.resetStorm()
 		}
@@ -256,58 +257,31 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 				rt.Log.Append(assistant)
 				rt.Log.Append(*toolMsg)
 				history = append(history, assistant, *toolMsg)
+				// Runaway-loop guard. The main agent runs without a tool-iter
+				// cap, so an infinite loop can't be stopped by a round count.
+				// What it CAN be stopped by is repetition: a round whose every
+				// tool result was storm-blocked is pure spinning (the model keeps
+				// re-issuing identical calls). After a few such rounds in a row,
+				// end the turn with a forced summary instead of looping forever.
+				if isAllStormBlocked(*toolMsg) {
+					consecutiveStormRounds++
+				} else {
+					consecutiveStormRounds = 0
+				}
+				if consecutiveStormRounds >= maxConsecutiveStormRounds {
+					a.forceSummaryAndFinish(ctx, sessionID, history, "repetitive tool-call loop detected", summaryRequestContextFromPrefix(rt.Prefix, rt.RuntimeBlocks()), emit)
+					return
+				}
 				if a.maxTurns > 0 && modelTurns >= a.maxTurns {
-					if !emit(AgentEvent{Type: AgentEventTypeForcedSummaryStarted, Content: "turn cap reached"}) {
-						return
-					}
-					sum, serr := a.forceSummary(ctx, sessionID, history, "turn cap reached", summaryRequestContextFromPrefix(rt.Prefix, rt.RuntimeBlocks()))
-					if serr != nil {
-						if !emit(AgentEvent{Type: AgentEventTypeForcedSummaryFailed, Content: serr.Error()}) {
-							return
-						}
-						emit(AgentEvent{Type: AgentEventTypeError, Err: serr})
-						return
-					}
-					if !emit(AgentEvent{Type: AgentEventTypeForcedSummaryDone, Content: "forced summary completed"}) {
-						return
-					}
-					emit(AgentEvent{Type: AgentEventTypeDone, Message: &sum})
+					a.forceSummaryAndFinish(ctx, sessionID, history, "turn cap reached", summaryRequestContextFromPrefix(rt.Prefix, rt.RuntimeBlocks()), emit)
 					return
 				}
 				if a.maxToolCalls > 0 && toolCalls >= a.maxToolCalls {
-					if !emit(AgentEvent{Type: AgentEventTypeForcedSummaryStarted, Content: "tool call cap reached"}) {
-						return
-					}
-					sum, serr := a.forceSummary(ctx, sessionID, history, "tool call cap reached", summaryRequestContextFromPrefix(rt.Prefix, rt.RuntimeBlocks()))
-					if serr != nil {
-						if !emit(AgentEvent{Type: AgentEventTypeForcedSummaryFailed, Content: serr.Error()}) {
-							return
-						}
-						emit(AgentEvent{Type: AgentEventTypeError, Err: serr})
-						return
-					}
-					if !emit(AgentEvent{Type: AgentEventTypeForcedSummaryDone, Content: "forced summary completed"}) {
-						return
-					}
-					emit(AgentEvent{Type: AgentEventTypeDone, Message: &sum})
+					a.forceSummaryAndFinish(ctx, sessionID, history, "tool call cap reached", summaryRequestContextFromPrefix(rt.Prefix, rt.RuntimeBlocks()), emit)
 					return
 				}
 				if a.maxToolIters > 0 && toolIters >= a.maxToolIters {
-					if !emit(AgentEvent{Type: AgentEventTypeForcedSummaryStarted, Content: "tool iteration cap reached"}) {
-						return
-					}
-					sum, serr := a.forceSummary(ctx, sessionID, history, "tool iteration cap reached", summaryRequestContextFromPrefix(rt.Prefix, rt.RuntimeBlocks()))
-					if serr != nil {
-						if !emit(AgentEvent{Type: AgentEventTypeForcedSummaryFailed, Content: serr.Error()}) {
-							return
-						}
-						emit(AgentEvent{Type: AgentEventTypeError, Err: serr})
-						return
-					}
-					if !emit(AgentEvent{Type: AgentEventTypeForcedSummaryDone, Content: "forced summary completed"}) {
-						return
-					}
-					emit(AgentEvent{Type: AgentEventTypeDone, Message: &sum})
+					a.forceSummaryAndFinish(ctx, sessionID, history, "tool iteration cap reached", summaryRequestContextFromPrefix(rt.Prefix, rt.RuntimeBlocks()), emit)
 					return
 				}
 				if turnState.hasPending() {
