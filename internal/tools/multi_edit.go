@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/usewhale/whale/internal/core"
 )
@@ -140,18 +141,24 @@ func applyMultiEditSteps(before string, edits []multiEditStep) (string, int, []s
 			return "", 0, nil, multiEditSearchError(stepIndex, search, "search text not found")
 		}
 		if !step.All && count != 1 {
+			locations := describeSearchMatches(after, resolved.search)
 			return "", 0, nil, multiEditApplyError{
 				code: "search_not_unique",
 				message: fmt.Sprintf(
-					"edit %d: search text matched %d locations; add surrounding context or set all to true",
+					"edit %d: search text matched %d locations:\n%s\nadd a surrounding line to disambiguate one of them, or set all to true to replace every occurrence",
 					stepIndex,
 					count,
+					locations,
 				),
 				recovery: &toolRecoveryHint{
 					Code:                "multi_edit_search_not_unique",
-					RecommendedNextTool: "read_file",
-					Retryable:           false,
-					Reason:              "multi_edit requires a unique search match for each edit unless all is true",
+					RecommendedNextTool: "multi_edit",
+					Retryable:           true,
+					Reason: fmt.Sprintf(
+						"edit %d search matched %d locations (listed in the error); retry multi_edit with a surrounding line added to the search so it matches exactly one, or set all to true",
+						stepIndex,
+						count,
+					),
 				},
 			}
 		}
@@ -167,6 +174,57 @@ func applyMultiEditSteps(before string, edits []multiEditStep) (string, int, []s
 		}
 	}
 	return after, replacements, repairs, nil
+}
+
+// describeSearchMatches renders the file locations where search occurs, one per
+// line as "  line N: <line text>", so a search_not_unique error tells the model
+// exactly where the ambiguity is and it can add a disambiguating line without
+// re-reading the file. Output is capped so a pathological match count can't
+// flood the error; the cap is reported when hit. Each rendered line is also
+// length-capped so a match on a minified or generated long line cannot embed
+// megabytes of text on this diagnostic path.
+func describeSearchMatches(content, search string) string {
+	const maxShown = 10
+	const maxLineLen = 200
+	var b strings.Builder
+	shown := 0
+	for offset := 0; ; {
+		idx := strings.Index(content[offset:], search)
+		if idx < 0 {
+			break
+		}
+		matchAt := offset + idx
+		if shown < maxShown {
+			line := 1 + strings.Count(content[:matchAt], "\n")
+			lineStart := strings.LastIndexByte(content[:matchAt], '\n') + 1
+			lineEnd := strings.IndexByte(content[matchAt:], '\n')
+			if lineEnd < 0 {
+				lineEnd = len(content)
+			} else {
+				lineEnd += matchAt
+			}
+			text := strings.TrimSpace(content[lineStart:lineEnd])
+			if len(text) > maxLineLen {
+				cut := maxLineLen
+				for cut > 0 && !utf8.RuneStart(text[cut]) {
+					cut--
+				}
+				text = text[:cut] + "… (line truncated)"
+			}
+			fmt.Fprintf(&b, "  line %d: %s\n", line, text)
+			shown++
+		} else {
+			shown++
+		}
+		// Advance past the whole match, mirroring strings.Count/ReplaceAll's
+		// non-overlapping semantics so the listed locations match the reported
+		// count (e.g. "aa" in "aaaa" is 2 matches, not 3).
+		offset = matchAt + len(search)
+	}
+	if shown > maxShown {
+		fmt.Fprintf(&b, "  ... and %d more\n", shown-maxShown)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func multiEditSearchError(stepIndex int, search, message string) multiEditApplyError {

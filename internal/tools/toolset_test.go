@@ -494,6 +494,20 @@ func TestMultiEditRejectsNonUniqueSearchUnlessAllTrue(t *testing.T) {
 	if got := toolErrorCode(t, res); got != "search_not_unique" {
 		t.Fatalf("code = %q, want search_not_unique; content=%s", got, res.ModelText)
 	}
+	// The error must point at the actual match locations so the model can add a
+	// disambiguating line without re-reading the file.
+	for _, want := range []string{"line 1:", "line 2:"} {
+		if !strings.Contains(res.ModelText, want) {
+			t.Fatalf("error missing match location %q; content=%s", want, res.ModelText)
+		}
+	}
+	recovery := toolRecoveryData(t, res)
+	if recovery["recommended_next_tool"] != "multi_edit" {
+		t.Fatalf("recommended_next_tool = %v, want multi_edit", recovery["recommended_next_tool"])
+	}
+	if recovery["retryable"] != true {
+		t.Fatalf("retryable = %v, want true", recovery["retryable"])
+	}
 
 	res, err = ts.multiEditFile(context.Background(), tc("multi_edit", map[string]any{
 		"file_path": "a.txt",
@@ -510,6 +524,78 @@ func TestMultiEditRejectsNonUniqueSearchUnlessAllTrue(t *testing.T) {
 	}
 	if string(got) != "bar\nbar\n" {
 		t.Fatalf("content = %q, want all matches replaced", string(got))
+	}
+}
+
+func TestMultiEditNonUniqueErrorCountsNonOverlappingMatches(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "a.txt")
+	// "aa" overlaps itself: byte offsets 0,1,2 all start an "aa", but
+	// strings.Count reports 2 non-overlapping matches. The listed locations
+	// must agree with that count.
+	if err := os.WriteFile(path, []byte("aaaa"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	readFileFull(t, ts, "a.txt")
+
+	res, err := ts.multiEditFile(context.Background(), tc("multi_edit", map[string]any{
+		"file_path": "a.txt",
+		"edits": []map[string]any{
+			{"search": "aa", "replace": "b"},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("multi_edit returned dispatch error: %v", err)
+	}
+	if got := toolErrorCode(t, res); got != "search_not_unique" {
+		t.Fatalf("code = %q, want search_not_unique; content=%s", got, res.ModelText)
+	}
+	if !strings.Contains(res.ModelText, "matched 2 locations") {
+		t.Fatalf("want count of 2 matches; content=%s", res.ModelText)
+	}
+	// Two non-overlapping matches => exactly two listed "line " entries.
+	if got := strings.Count(res.ModelText, "  line "); got != 2 {
+		t.Fatalf("listed %d locations, want 2; content=%s", got, res.ModelText)
+	}
+}
+
+func TestMultiEditNonUniqueErrorTruncatesLongLines(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "min.js")
+	// A minified-style single line where the ambiguous token repeats. The
+	// error must not embed the whole multi-kilobyte line per match.
+	long := "x=1;" + strings.Repeat("y", 5000) + ";z=1;" + strings.Repeat("y", 5000) + ";z=1;"
+	if err := os.WriteFile(path, []byte(long), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	ts, err := NewToolset(dir)
+	if err != nil {
+		t.Fatalf("new toolset: %v", err)
+	}
+	readFileFull(t, ts, "min.js")
+
+	res, err := ts.multiEditFile(context.Background(), tc("multi_edit", map[string]any{
+		"file_path": "min.js",
+		"edits": []map[string]any{
+			{"search": "z=1;"},
+		},
+	}))
+	if err != nil {
+		t.Fatalf("multi_edit returned dispatch error: %v", err)
+	}
+	if got := toolErrorCode(t, res); got != "search_not_unique" {
+		t.Fatalf("code = %q, want search_not_unique; content=%s", got, res.ModelText)
+	}
+	if !strings.Contains(res.ModelText, "line truncated") {
+		t.Fatalf("want truncation marker; content=%s", res.ModelText)
+	}
+	// The whole error stays far below the raw line size despite two matches.
+	if len(res.ModelText) > 2000 {
+		t.Fatalf("error length %d not bounded; content=%s", len(res.ModelText), res.ModelText)
 	}
 }
 
