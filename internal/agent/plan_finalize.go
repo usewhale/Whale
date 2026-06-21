@@ -31,7 +31,7 @@ const maxMidTurnPlanNudges = 1
 // turn gets a chance to self-correct before the hard progress guard fires.
 const planRedundancyNudgeThreshold = 3
 
-const planProgressNudgeText = "<plan_investigation_stalled>\nYou keep re-reading the same files without moving toward a plan. If you already understand enough, STOP investigating and output your plan now as a single <proposed_plan> block (opening and closing tags each on their own line). If you genuinely need a decision from the user before you can finalize, call request_user_input instead.\n</plan_investigation_stalled>"
+const planProgressNudgeText = "<plan_investigation_stalled>\nYou keep repeating the same tool calls (re-reading files or re-running the same checks) without moving toward a plan. If you already understand enough, STOP investigating and output your plan now as a single <proposed_plan> block (opening and closing tags each on their own line). If you genuinely need a decision from the user before you can finalize, call request_user_input instead.\n</plan_investigation_stalled>"
 
 // assistantProposedPlan reports whether a finalized assistant message carries a
 // plan part — i.e. a <proposed_plan> block was emitted and captured this turn.

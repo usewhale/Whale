@@ -282,11 +282,15 @@ type repairAndStormProvider struct {
 func (p *repairAndStormProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
 	p.calls++
 	if p.calls == 1 {
+		// Six byte-identical (truncated) calls: all are repaired, and the storm
+		// breaker blocks the one that exceeds the threshold (now 5-within-10).
 		return eventStream(toolUseEvent(
 			toolCall("tc-1", "echo_json", `{"x":1`),
 			toolCall("tc-2", "echo_json", `{"x":1`),
 			toolCall("tc-3", "echo_json", `{"x":1`),
 			toolCall("tc-4", "echo_json", `{"x":1`),
+			toolCall("tc-5", "echo_json", `{"x":1`),
+			toolCall("tc-6", "echo_json", `{"x":1`),
 		))
 	}
 	return eventStream(endTurnEvent("ok"))
@@ -324,8 +328,8 @@ func TestRunStreamEmitsRepairAndBlockedEvents(t *testing.T) {
 			t.Fatalf("unexpected error: %v", ev.Err)
 		}
 	}
-	if repaired != 4 {
-		t.Fatalf("expected 4 repaired events, got %d", repaired)
+	if repaired != 6 {
+		t.Fatalf("expected 6 repaired events, got %d", repaired)
 	}
 	if blocked != 1 {
 		t.Fatalf("expected 1 blocked event, got %d", blocked)
