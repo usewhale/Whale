@@ -19,8 +19,15 @@ type stormConfig struct {
 	Threshold  int
 }
 
+// defaultStormConfig blocks a call only after 5 byte-identical repeats within a
+// 10-call window. This used to be 3-within-6, but that false-positived on benign
+// re-checks — e.g. a model re-running a cheap idempotent `git log -1 HEAD` a few
+// times across reasoning steps got its 4th call blocked. The storm breaker no
+// longer has to be the sole loop defense: the progress guard (varying-arg
+// spinning) and the tool-iter backstop bound true loops, which repeat far more
+// than 5 times, so the threshold can be relaxed to spare normal repetition.
 func defaultStormConfig() stormConfig {
-	return stormConfig{WindowSize: 6, Threshold: 3}
+	return stormConfig{WindowSize: 10, Threshold: 5}
 }
 
 type truncationRepairResult struct {

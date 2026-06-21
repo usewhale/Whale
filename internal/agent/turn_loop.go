@@ -262,24 +262,19 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 				rt.Log.Append(assistant)
 				rt.Log.Append(*toolMsg)
 				history = append(history, assistant, *toolMsg)
-				// Runaway-loop guard. The main agent runs without a tool-iter
+				// Runaway-loop guards. The main agent runs without a tool-iter
 				// cap, so an infinite loop can't be stopped by a round count.
-				// What it CAN be stopped by is repetition: a round whose every
-				// tool result was storm-blocked is pure spinning (the model keeps
-				// re-issuing identical calls). After a few such rounds in a row,
-				// end the turn with a forced summary instead of looping forever.
-				if isAllStormBlocked(*toolMsg) {
+				// Two repetition signals bound it instead: a round whose every
+				// result was storm-blocked (the model re-issuing identical calls)
+				// and a "redundant" round flagged by the progress guard (same
+				// target, varying args — e.g. re-reading one file with a stepping
+				// offset, which the storm breaker never sees).
+				stormRound := isAllStormBlocked(*toolMsg)
+				if stormRound {
 					consecutiveStormRounds++
 				} else {
 					consecutiveStormRounds = 0
 				}
-				if consecutiveStormRounds >= maxConsecutiveStormRounds {
-					a.forceSummaryAndFinish(ctx, sessionID, history, "repetitive tool-call loop detected", summaryRequestContextFromPrefix(rt.Prefix, rt.RuntimeBlocks()), emit)
-					return
-				}
-				// Progress guard. Catches "same target, varying args" spinning
-				// (e.g. re-reading one file with a stepping offset) that the
-				// storm breaker — keyed on identical args — never sees.
 				readOnly := func(c core.ToolCall) bool {
 					spec, ok := toolSnapshot.Spec(c.Name)
 					if !ok {
@@ -293,12 +288,20 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 					consecutiveRedundantRounds = 0
 				}
 				// Plan-mode mid-turn intervention: a Plan turn that spins never
-				// ends, so the end-of-turn proposal nudge can't reach it. Nudge
-				// it in-flight to finalize before the hard progress guard fires.
-				if a.mode == session.ModePlan && consecutiveRedundantRounds >= planRedundancyNudgeThreshold && midTurnPlanNudges < maxMidTurnPlanNudges {
+				// ends, so the end-of-turn proposal nudge can't reach it. Either
+				// spinning signal — an identical-call storm or same-target
+				// redundancy — means the model is re-checking instead of
+				// finalizing, so nudge it in-flight to emit the plan before any
+				// hard force-summary fires.
+				if a.mode == session.ModePlan && midTurnPlanNudges < maxMidTurnPlanNudges &&
+					(stormRound || consecutiveRedundantRounds >= planRedundancyNudgeThreshold) {
 					midTurnPlanNudges++
+					consecutiveStormRounds = 0
 					consecutiveRedundantRounds = 0
 					progress.reset()
+					if a.repairer != nil {
+						a.repairer.resetStorm()
+					}
 					nudge, err := a.persistPlanProgressNudge(ctx, sessionID)
 					if err != nil {
 						emit(AgentEvent{Type: AgentEventTypeError, Err: err})
@@ -307,6 +310,10 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 					rt.Log.Append(nudge)
 					history = append(history, nudge)
 					continue
+				}
+				if consecutiveStormRounds >= maxConsecutiveStormRounds {
+					a.forceSummaryAndFinish(ctx, sessionID, history, "repetitive tool-call loop detected", summaryRequestContextFromPrefix(rt.Prefix, rt.RuntimeBlocks()), emit)
+					return
 				}
 				if consecutiveRedundantRounds >= maxConsecutiveRedundantRounds {
 					a.forceSummaryAndFinish(ctx, sessionID, history, "redundant tool-call loop (no progress) detected", summaryRequestContextFromPrefix(rt.Prefix, rt.RuntimeBlocks()), emit)

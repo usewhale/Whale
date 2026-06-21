@@ -408,6 +408,60 @@ func TestPlanModeMidTurnNudgeOnRedundancy(t *testing.T) {
 	}
 }
 
+// roListTool is a read-only non-file tool, used to exercise the storm path
+// (identical args) without tripping the file-coverage progress guard first.
+type roListTool struct{}
+
+func (roListTool) Name() string   { return "list_dir" }
+func (roListTool) ReadOnly() bool { return true }
+func (roListTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "entries"}, nil
+}
+
+// identicalReadProvider re-issues one byte-identical read-only call forever, so
+// the storm breaker (not the progress guard) is the first signal to fire.
+type identicalReadProvider struct{ calls int }
+
+func (p *identicalReadProvider) StreamResponse(_ context.Context, _ []Message, tools []Tool) <-chan ProviderEvent {
+	p.calls++
+	if len(tools) == 0 {
+		return eventStream(endTurnEvent("forced summary"))
+	}
+	return eventStream(toolUseEvent(toolCall(fmt.Sprintf("tc-%d", p.calls), "list_dir", `{"path":"/x"}`)))
+}
+
+func TestPlanModeStormTriggersMidTurnNudge(t *testing.T) {
+	store := NewInMemoryStore()
+	prov := &identicalReadProvider{}
+	a := NewAgent(prov, store, []Tool{roListTool{}})
+	WithSessionMode(session.ModePlan)(a)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	events, err := a.RunStream(ctx, "s-plan-storm", "go")
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+	for ev := range events {
+		if ev.Type == AgentEventTypeError {
+			t.Fatalf("unexpected error: %v", ev.Err)
+		}
+	}
+	all, err := store.List(ctx, "s-plan-storm")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var nudges int
+	for _, m := range all {
+		if m.Hidden && m.Text == planProgressNudgeText {
+			nudges++
+		}
+	}
+	if nudges != maxMidTurnPlanNudges {
+		t.Fatalf("expected exactly %d mid-turn plan nudge(s) from a storm, got %d", maxMidTurnPlanNudges, nudges)
+	}
+}
+
 func TestAgentLoopWithToolRoundTrip(t *testing.T) {
 	store := NewInMemoryStore()
 	prov := &mockProvider{}
