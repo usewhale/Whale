@@ -15,6 +15,16 @@ import (
 // them forever; a few fully-blocked rounds in a row is an unambiguous loop.
 const maxConsecutiveStormRounds = 3
 
+// mainAgentToolIterBackstop is a ceiling on tool iterations for the capless main
+// agent only (maxToolIters == 0). Callers that set an explicit maxToolIters opt
+// into their own ceiling and are not affected by this. The heuristic guards
+// (storm rounds, progress redundancy) catch the common loop shapes early; this
+// is the last line of defense for any pathological loop they miss, so
+// termination is always guaranteed. It is set far above any plausible real turn
+// so it never truncates legitimate long work — if it ever fires, the forced-
+// summary banner makes the truncation explicit and /retry resumes.
+const mainAgentToolIterBackstop = 500
+
 // isAllStormBlocked reports whether a tool-result message represents a round
 // that made no progress: it has at least one result and every one was
 // storm-blocked. A round with any non-blocked result resets the loop guard.

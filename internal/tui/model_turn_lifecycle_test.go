@@ -2,12 +2,14 @@ package tui
 
 import (
 	"fmt"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/usewhale/whale/internal/runtime/protocol"
-	tuirender "github.com/usewhale/whale/internal/tui/render"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/usewhale/whale/internal/runtime/protocol"
+	tuirender "github.com/usewhale/whale/internal/tui/render"
 )
 
 func TestTurnDoneReasoningOnlyCommitsFallback(t *testing.T) {
@@ -382,6 +384,27 @@ func TestChatViewportTurnDoneUnfreezesScrolledLiveOutput(t *testing.T) {
 		t.Fatalf("expected frozen live output to be committed on turn done:\n%s", got)
 	}
 }
+
+// cmdResults unwraps a potentially batched tea.Cmd and returns all sub-results.
+func cmdResults(cmd tea.Cmd) []tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	rv := reflect.ValueOf(msg)
+	if rv.Kind() == reflect.Slice {
+		results := make([]tea.Msg, 0, rv.Len())
+		for i := 0; i < rv.Len(); i++ {
+			subCmd, ok := rv.Index(i).Interface().(tea.Cmd)
+			if ok && subCmd != nil {
+				results = append(results, subCmd())
+			}
+		}
+		return results
+	}
+	return []tea.Msg{msg}
+}
+
 func TestTurnDoneWhileScrolledFlushesNativeScrollbackImmediately(t *testing.T) {
 	m := newModel(nil, "", "", "")
 	m.width = 80
@@ -414,8 +437,15 @@ func TestTurnDoneWhileScrolledFlushesNativeScrollbackImmediately(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected turn completion to return a native-scrollback flush command")
 	}
-	if got := fmt.Sprintf("%#v", cmd()); !strings.Contains(got, "tail while scrolled") {
-		t.Fatalf("expected flushed native scrollback to include turn tail, got %s", got)
+	found := false
+	for _, m := range cmdResults(cmd) {
+		if strings.Contains(fmt.Sprintf("%#v", m), "tail while scrolled") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected flushed native scrollback to include turn tail, got %v", cmdResults(cmd))
 	}
 }
 func TestLongTurnDoneWhileScrolledPreservesViewportButFlushesDurationNotice(t *testing.T) {
@@ -459,8 +489,15 @@ func TestLongTurnDoneWhileScrolledPreservesViewportButFlushesDurationNotice(t *t
 	if cmd == nil {
 		t.Fatal("expected long turn completion to return a native-scrollback flush command")
 	}
-	if got := fmt.Sprintf("%#v", cmd()); !strings.Contains(got, "✻ Worked for 3m ") {
-		t.Fatalf("expected flushed native scrollback to include duration notice, got %s", got)
+	found := false
+	for _, m := range cmdResults(cmd) {
+		if strings.Contains(fmt.Sprintf("%#v", m), "✻ Worked for 3m ") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected flushed native scrollback to include duration notice, got %v", cmdResults(cmd))
 	}
 }
 func TestTurnDoneReconciliationPreservesScrolledPosition(t *testing.T) {
@@ -574,5 +611,40 @@ func TestAuditOnlyToolDeniedDoesNotAddNoFinalAnswerNotice(t *testing.T) {
 		if strings.Contains(entry.Text, "did not produce a visible answer") {
 			t.Fatalf("unexpected reasoning-only status after audit-only tool denial: %+v", snap)
 		}
+	}
+}
+
+func TestTurnDoneRefreshesGitBranch(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	runGit(t, dir, "init")
+	runGit(t, dir, "checkout", "-b", "feat/turn-done-refresh")
+
+	m := newModel(nil, "", "", "")
+	m.cwdPath = dir
+	_, cmd := m.handleServiceUpdate([]protocol.Event{{
+		Kind:         protocol.EventTurnDone,
+		LastResponse: "done",
+	}})
+	if cmd == nil {
+		t.Fatal("expected turn_done to schedule git branch refresh")
+	}
+	// The returned cmd is tea.Batch(sequence, detectGitBranchCmd).
+	// Unwrap to find the git branch update.
+	found := false
+	for _, m := range cmdResults(cmd) {
+		if br, ok := m.(gitBranchUpdatedMsg); ok {
+			if br.branch != "feat/turn-done-refresh" {
+				t.Fatalf("expected branch %q, got %q", "feat/turn-done-refresh", br.branch)
+			}
+			if br.cwd != dir {
+				t.Fatalf("expected cwd %q, got %q", dir, br.cwd)
+			}
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected gitBranchUpdatedMsg, got %v", cmdResults(cmd))
 	}
 }

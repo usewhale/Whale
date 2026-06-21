@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/llm"
 	llmretry "github.com/usewhale/whale/internal/llm/retry"
+	"github.com/usewhale/whale/internal/session"
 )
 
 type mockProvider struct {
@@ -265,6 +267,144 @@ func TestAgentStormLoopForcesSummaryWithoutToolIterCap(t *testing.T) {
 	// Bounded: a few storm rounds plus the summary, nowhere near a runaway.
 	if prov.calls > 20 {
 		t.Fatalf("provider calls = %d, want a small bounded number", prov.calls)
+	}
+}
+
+// readFileTool is a read-only tool keyed on file_path, used to exercise the
+// progress guard (which only counts read-only revisitation).
+type readFileTool struct{}
+
+func (readFileTool) Name() string   { return "read_file" }
+func (readFileTool) ReadOnly() bool { return true }
+func (readFileTool) Run(_ context.Context, call ToolCall) (ToolResult, error) {
+	return ToolResult{ToolCallID: call.ID, Name: call.Name, ModelText: "line:" + call.Input}, nil
+}
+
+// redundantReadProvider re-reads one file forever, stepping the offset each
+// round so every input string differs. This is the real #271 loop shape: the
+// storm breaker (identical-args) never fires, so only the progress guard can
+// stop it.
+type redundantReadProvider struct{ calls int }
+
+func (p *redundantReadProvider) StreamResponse(_ context.Context, _ []Message, tools []Tool) <-chan ProviderEvent {
+	p.calls++
+	if len(tools) == 0 {
+		return eventStream(endTurnEvent("forced summary"))
+	}
+	input := fmt.Sprintf(`{"file_path":"/x/y.go","limit":1,"offset":%d}`, 600-p.calls)
+	return eventStream(toolUseEvent(toolCall(fmt.Sprintf("tc-%d", p.calls), "read_file", input)))
+}
+
+func TestAgentRedundantReadLoopForcesSummary(t *testing.T) {
+	store := NewInMemoryStore()
+	prov := &redundantReadProvider{}
+	a := NewAgent(prov, store, []Tool{readFileTool{}})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	events, err := a.RunStream(ctx, "s-redundant", "go")
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+	var forced bool
+	var done *core.Message
+	for ev := range events {
+		switch ev.Type {
+		case AgentEventTypeForcedSummaryStarted:
+			if ev.Content == "redundant tool-call loop (no progress) detected" {
+				forced = true
+			}
+		case AgentEventTypeDone:
+			done = ev.Message
+		case AgentEventTypeError:
+			t.Fatalf("unexpected error: %v", ev.Err)
+		}
+	}
+	if !forced {
+		t.Fatal("expected forced summary from the progress guard (same-target spinning)")
+	}
+	if done == nil || !strings.Contains(done.Text, "auto-interrupted") {
+		t.Fatalf("expected truncation banner in final message, got %+v", done)
+	}
+	if prov.calls > 40 {
+		t.Fatalf("progress guard did not bound the loop: %d calls", prov.calls)
+	}
+}
+
+// incEchoProvider runs a non-redundant, non-storm tool round forever (fresh
+// args, mutating tool) so only the unconditional backstop can stop it.
+type incEchoProvider struct{ calls int }
+
+func (p *incEchoProvider) StreamResponse(_ context.Context, _ []Message, tools []Tool) <-chan ProviderEvent {
+	p.calls++
+	if len(tools) == 0 {
+		return eventStream(endTurnEvent("forced summary"))
+	}
+	return eventStream(toolUseEvent(toolCall(fmt.Sprintf("tc-%d", p.calls), "echo", fmt.Sprintf(`{"n":%d}`, p.calls))))
+}
+
+func TestAgentToolIterBackstopForcesSummary(t *testing.T) {
+	store := NewInMemoryStore()
+	prov := &incEchoProvider{}
+	a := NewAgent(prov, store, []Tool{echoTool{}})
+	if a.maxToolIters != 0 {
+		t.Fatalf("expected uncapped main agent, got maxToolIters=%d", a.maxToolIters)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	events, err := a.RunStream(ctx, "s-backstop", "go")
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+	var forced bool
+	for ev := range events {
+		switch ev.Type {
+		case AgentEventTypeForcedSummaryStarted:
+			if ev.Content == "tool iteration backstop reached" {
+				forced = true
+			}
+		case AgentEventTypeError:
+			t.Fatalf("unexpected error: %v", ev.Err)
+		}
+	}
+	if !forced {
+		t.Fatal("expected forced summary from the unconditional tool-iter backstop")
+	}
+	if prov.calls < mainAgentToolIterBackstop {
+		t.Fatalf("backstop fired too early at %d calls, want >= %d", prov.calls, mainAgentToolIterBackstop)
+	}
+}
+
+func TestPlanModeMidTurnNudgeOnRedundancy(t *testing.T) {
+	store := NewInMemoryStore()
+	prov := &redundantReadProvider{}
+	a := NewAgent(prov, store, []Tool{readFileTool{}})
+	WithSessionMode(session.ModePlan)(a)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	events, err := a.RunStream(ctx, "s-plan-nudge", "go")
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+	for ev := range events {
+		if ev.Type == AgentEventTypeError {
+			t.Fatalf("unexpected error: %v", ev.Err)
+		}
+	}
+	all, err := store.List(ctx, "s-plan-nudge")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	var nudges int
+	for _, m := range all {
+		if m.Hidden && m.Text == planProgressNudgeText {
+			nudges++
+		}
+	}
+	if nudges != maxMidTurnPlanNudges {
+		t.Fatalf("expected exactly %d mid-turn plan nudge(s), got %d", maxMidTurnPlanNudges, nudges)
 	}
 }
 

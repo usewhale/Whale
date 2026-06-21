@@ -83,7 +83,14 @@ func TestTurnDoneWhileFrozenFlushesFinalToScrollback(t *testing.T) {
 	if cmd == nil {
 		t.Fatalf("turn completion must return a native-scrollback flush command")
 	}
-	if got := fmt.Sprintf("%#v", cmd()); !strings.Contains(got, "要继续完成 planState") {
-		t.Fatalf("flushed native scrollback must contain the final answer, got: %s", got)
+	found := false
+	for _, m := range cmdResults(cmd) {
+		if strings.Contains(fmt.Sprintf("%#v", m), "要继续完成 planState") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("flushed native scrollback must contain the final answer, got: %v", cmdResults(cmd))
 	}
 }

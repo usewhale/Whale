@@ -9,6 +9,7 @@ import (
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/memory"
 	"github.com/usewhale/whale/internal/policy"
+	"github.com/usewhale/whale/internal/session"
 )
 
 type RunOptions struct {
@@ -121,7 +122,10 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 		toolIters := 0
 		toolCalls := 0
 		planProposalNudges := 0
+		midTurnPlanNudges := 0
 		consecutiveStormRounds := 0
+		consecutiveRedundantRounds := 0
+		progress := &progressTracker{}
 		if a.repairer != nil {
 			a.repairer.resetStorm()
 		}
@@ -273,6 +277,41 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 					a.forceSummaryAndFinish(ctx, sessionID, history, "repetitive tool-call loop detected", summaryRequestContextFromPrefix(rt.Prefix, rt.RuntimeBlocks()), emit)
 					return
 				}
+				// Progress guard. Catches "same target, varying args" spinning
+				// (e.g. re-reading one file with a stepping offset) that the
+				// storm breaker — keyed on identical args — never sees.
+				readOnly := func(c core.ToolCall) bool {
+					spec, ok := toolSnapshot.Spec(c.Name)
+					if !ok {
+						return false
+					}
+					return core.IsReadOnlyToolCall(spec, c)
+				}
+				if progress.observe(assistant.ToolCalls, toolMsg.ToolResults, readOnly) {
+					consecutiveRedundantRounds++
+				} else {
+					consecutiveRedundantRounds = 0
+				}
+				// Plan-mode mid-turn intervention: a Plan turn that spins never
+				// ends, so the end-of-turn proposal nudge can't reach it. Nudge
+				// it in-flight to finalize before the hard progress guard fires.
+				if a.mode == session.ModePlan && consecutiveRedundantRounds >= planRedundancyNudgeThreshold && midTurnPlanNudges < maxMidTurnPlanNudges {
+					midTurnPlanNudges++
+					consecutiveRedundantRounds = 0
+					progress.reset()
+					nudge, err := a.persistPlanProgressNudge(ctx, sessionID)
+					if err != nil {
+						emit(AgentEvent{Type: AgentEventTypeError, Err: err})
+						return
+					}
+					rt.Log.Append(nudge)
+					history = append(history, nudge)
+					continue
+				}
+				if consecutiveRedundantRounds >= maxConsecutiveRedundantRounds {
+					a.forceSummaryAndFinish(ctx, sessionID, history, "redundant tool-call loop (no progress) detected", summaryRequestContextFromPrefix(rt.Prefix, rt.RuntimeBlocks()), emit)
+					return
+				}
 				if a.maxTurns > 0 && modelTurns >= a.maxTurns {
 					a.forceSummaryAndFinish(ctx, sessionID, history, "turn cap reached", summaryRequestContextFromPrefix(rt.Prefix, rt.RuntimeBlocks()), emit)
 					return
@@ -283,6 +322,14 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 				}
 				if a.maxToolIters > 0 && toolIters >= a.maxToolIters {
 					a.forceSummaryAndFinish(ctx, sessionID, history, "tool iteration cap reached", summaryRequestContextFromPrefix(rt.Prefix, rt.RuntimeBlocks()), emit)
+					return
+				}
+				// Backstop only the capless main agent (maxToolIters == 0). A
+				// caller that explicitly configured a cap — even one above the
+				// backstop — already opted into its own ceiling above; honor it
+				// rather than truncating their run early at mainAgentToolIterBackstop.
+				if a.maxToolIters == 0 && toolIters >= mainAgentToolIterBackstop {
+					a.forceSummaryAndFinish(ctx, sessionID, history, "tool iteration backstop reached", summaryRequestContextFromPrefix(rt.Prefix, rt.RuntimeBlocks()), emit)
 					return
 				}
 				if turnState.hasPending() {

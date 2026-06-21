@@ -406,3 +406,12 @@ func isAgentTurnDone(ev protocol.Event) bool {
 	agentTurn, ok := ev.Metadata[protocol.EventMetadataAgentTurn].(bool)
 	return ok && agentTurn
 }
+
+func containsTurnDone(events []protocol.Event) bool {
+	for _, ev := range events {
+		if ev.Kind == protocol.EventTurnDone {
+			return true
+		}
+	}
+	return false
+}
