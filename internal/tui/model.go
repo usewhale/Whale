@@ -560,7 +560,11 @@ func (m model) handleServiceUpdate(events []protocol.Event) (tea.Model, tea.Cmd)
 	}
 	headerCmd := m.startupHeaderPrintCmd()
 	scrollbackCmd := m.flushNativeScrollbackCmd()
-	return m, m.sequenceCmds(eventCmd, headerCmd, scrollbackCmd, waitEventCmd(m.runtime))
+	mainCmd := m.sequenceCmds(eventCmd, headerCmd, scrollbackCmd, waitEventCmd(m.runtime))
+	if containsTurnDone(events) {
+		return m, tea.Batch(mainCmd, detectGitBranchCmd(m.cwdPath))
+	}
+	return m, mainCmd
 }
 
 func (m *model) handleUpdateKeyMsg(msg tea.KeyMsg) (tea.Cmd, bool, bool) {
