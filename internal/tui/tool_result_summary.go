@@ -191,6 +191,14 @@ func summarizeShellResult(env toolResultEnvelope, successBySignal bool) (string,
 
 func summarizeNonZeroShellResult(env toolResultEnvelope, exitCode int, duration string) (string, string) {
 	parts := []string{fmt.Sprintf("exit %d", exitCode)}
+	if exitMsg := core.ShellExitMessage(
+		core.AsString(env.payload["command"]),
+		exitCode,
+		core.AsString(env.payload["stdout"]),
+		core.AsString(env.payload["stderr"]),
+	); exitMsg != "" {
+		parts = append(parts, exitMsg)
+	}
 	if duration != "" {
 		parts = append(parts, duration)
 	}
@@ -201,13 +209,17 @@ func summarizeNonZeroShellResult(env toolResultEnvelope, exitCode int, duration 
 	if output != "" {
 		return "result_nonzero", strings.Join(parts, " · ") + "\n" + output
 	}
+	appendEmptyStreamNotes(&parts, env)
+	return "result_nonzero", strings.Join(parts, " · ")
+}
+
+func appendEmptyStreamNotes(parts *[]string, env toolResultEnvelope) {
 	if strings.TrimSpace(core.AsString(env.payload["stderr"])) == "" {
-		parts = append(parts, "stderr empty")
+		*parts = append(*parts, "stderr empty")
 	}
 	if strings.TrimSpace(core.AsString(env.payload["stdout"])) == "" {
-		parts = append(parts, "stdout empty")
+		*parts = append(*parts, "stdout empty")
 	}
-	return "result_nonzero", strings.Join(parts, " · ")
 }
 
 func summarizeFailedShellResult(env toolResultEnvelope) (string, string) {
@@ -221,11 +233,31 @@ func summarizeFailedShellResult(env toolResultEnvelope) (string, string) {
 		return summarizeFailedResult(env, "command failed")
 	}
 	output := summarizeShellOutput(shellPayloadOutput(env, true))
+	// asInt returns 0 when exit_code is missing from metrics, which is
+	// safe: ShellExitMessage's find/diff/test cases are all exit-1-gated,
+	// so a missing code cannot misfire as a false interpretation.
+	exitMsg := core.ShellExitMessage(
+		core.AsString(env.payload["command"]),
+		asInt(env.metrics["exit_code"]),
+		core.AsString(env.payload["stdout"]),
+		core.AsString(env.payload["stderr"]),
+	)
 	if output == "" {
-		return summarizeFailedResult(env, "command failed")
+		if env.code != "exec_failed" {
+			return summarizeFailedResult(env, "command failed")
+		}
+		parts := []string{shellFailureLabel(env)}
+		if exitMsg != "" {
+			parts = append(parts, exitMsg)
+		}
+		appendEmptyStreamNotes(&parts, env)
+		return "result_failed", strings.Join(parts, " · ")
 	}
 	duration := formatDurationMS(asInt64(env.metrics["duration_ms"]))
 	parts := []string{shellFailureLabel(env)}
+	if exitMsg != "" {
+		parts = append(parts, exitMsg)
+	}
 	if duration != "" {
 		parts = append(parts, duration)
 	}
