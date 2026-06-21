@@ -73,3 +73,42 @@ func TestShellExitMeansNoMatchesBoundaries(t *testing.T) {
 		t.Fatal("dir exit 1 without the File Not Found marker is not provably a no-match")
 	}
 }
+
+func TestShellExitMessage(t *testing.T) {
+	cases := []struct {
+		command  string
+		exitCode int
+		stderr   string
+		want     string
+	}{
+		// find exit 1 + Permission denied = inaccessible directories.
+		{`find /tmp -name "x"`, 1, "find: /tmp/foo: Permission denied", "find: some directories were inaccessible"},
+		{`echo setup && find /x -name y`, 1, "find: /x: Permission denied", "find: some directories were inaccessible"},
+		// find exit 1 without evidence — must return "".
+		{`find . -bad`, 1, "find: unknown predicate '-bad'", ""},
+		{`find /nonexistent -name x`, 1, "find: /nonexistent: No such file or directory", ""},
+		{`find /tmp -name "x"`, 1, "", ""},
+		// diff exit 1 = differences found.
+		{`diff a.txt b.txt`, 1, "", "diff: files differ"},
+		// test exit 1 = condition false.
+		{`test -f missing`, 1, "", "test: condition is false"},
+		// [ alias for test.
+		{`[ -f missing ]`, 1, "", "test: condition is false"},
+		// Universal exit codes.
+		{`nonexistent_cmd`, 127, "", "command not found"},
+		{`./not_executable`, 126, "", "not executable"},
+		// No semantics for these — must return "".
+		{`ls x`, 2, "ls: cannot access x: No such file or directory", ""},
+		{`false`, 1, "", ""},
+		{`grep pattern file`, 1, "", ""},
+		{`true`, 0, "", ""},
+		{"", 1, "", ""},
+	}
+	for _, tc := range cases {
+		got := ShellExitMessage(tc.command, tc.exitCode, "", tc.stderr)
+		if got != tc.want {
+			t.Errorf("ShellExitMessage(%q, %d) = %q, want %q",
+				tc.command, tc.exitCode, got, tc.want)
+		}
+	}
+}

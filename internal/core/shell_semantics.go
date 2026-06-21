@@ -45,6 +45,43 @@ func ShellExitMeansNoMatches(command string, exitCode int, stdout, stderr string
 	return false
 }
 
+// ShellExitMessage returns a human-readable interpretation of a non-zero
+// exit code for the final command in a pipe/&&/; chain. It keys on the last
+// command segment because that is what determines the exit code.
+//
+// Commands already classified by ShellExitMeansNoMatches (grep, rg, git grep,
+// where, findstr, dir) are excluded here — their exit-1 semantics are handled
+// by the no-match rendering path. This function covers commands whose non-zero
+// exit codes have well-documented meanings beyond "no matches".
+//
+// Returns "" when no specific interpretation exists.
+func ShellExitMessage(command string, exitCode int, stdout, stderr string) string {
+	base := ShellSegmentBaseCommand(LastShellCommandSegment(command))
+	switch base {
+	case "find":
+		// exit 1 is a catch-all error for find (permission, syntax, path).
+		// Only diagnose as "inaccessible" when stderr confirms it.
+		if exitCode == 1 && containsFold(stderr+stdout, "Permission denied") {
+			return "find: some directories were inaccessible"
+		}
+	case "diff":
+		if exitCode == 1 {
+			return "diff: files differ"
+		}
+	case "test", "[":
+		if exitCode == 1 {
+			return "test: condition is false"
+		}
+	}
+	switch exitCode {
+	case 127:
+		return "command not found"
+	case 126:
+		return "not executable"
+	}
+	return ""
+}
+
 func containsFold(haystack, needle string) bool {
 	return strings.Contains(strings.ToLower(haystack), strings.ToLower(needle))
 }
