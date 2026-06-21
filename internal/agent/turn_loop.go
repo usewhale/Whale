@@ -120,6 +120,7 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 		modelTurns := 0
 		toolIters := 0
 		toolCalls := 0
+		planProposalNudges := 0
 		consecutiveStormRounds := 0
 		if a.repairer != nil {
 			a.repairer.resetStorm()
@@ -297,6 +298,23 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 				if !emit(AgentEvent{Type: AgentEventTypeResponseReset}) {
 					return
 				}
+				continue
+			}
+			// Plan mode finished without a <proposed_plan> block (e.g. the model
+			// stopped right after a "Here's the plan:" preamble). Re-prompt it to
+			// emit the block so the turn yields an approvable plan instead of a
+			// dead end. Bounded; on exhaustion fall through and surface the answer.
+			if a.planProposalMissing(assistant) && planProposalNudges < maxPlanProposalNudges {
+				planProposalNudges++
+				rt.Log.Append(assistant)
+				history = append(history, assistant)
+				nudge, err := a.persistPlanProposalNudge(ctx, sessionID)
+				if err != nil {
+					emit(AgentEvent{Type: AgentEventTypeError, Err: err})
+					return
+				}
+				rt.Log.Append(nudge)
+				history = append(history, nudge)
 				continue
 			}
 			emit(AgentEvent{Type: AgentEventTypeDone, Message: &assistant})
