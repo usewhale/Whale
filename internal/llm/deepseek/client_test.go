@@ -544,25 +544,44 @@ func TestStreamResponseDoesNotRetryIdleSSEAfterReasoning(t *testing.T) {
 	}
 }
 
-func TestStreamResponseRejectsReasoningOnlyComplete(t *testing.T) {
+// A reasoning-only completion (no assistant content, no tool calls) is a
+// DeepSeek-side empty body. It is retried — in Plan mode this is the "couldn't
+// make plan" failure, where the turn would otherwise die before the
+// <proposed_plan> block is emitted. When every attempt keeps returning empty,
+// the error is surfaced only after the retry budget is exhausted.
+func TestStreamResponseRetriesReasoningOnlyThenExhausts(t *testing.T) {
+	var requests int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Let\"}}]}\n\n")
 		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 	}))
 	defer srv.Close()
 
-	c, err := New(WithAPIKey("test-key"), WithBaseURL(srv.URL), WithHTTPClient(srv.Client()))
+	policy := llmretry.DefaultPolicy()
+	policy.Jitter = 0
+	c, err := New(
+		WithAPIKey("test-key"),
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+		WithRetryPolicy(policy),
+		WithStreamMaxAttempts(3),
+		withRetrySleeper(func(_ context.Context, _ time.Duration) error { return nil }),
+	)
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
 
 	var sawComplete bool
+	var retryEvents int
 	var gotErr error
 	for ev := range c.StreamResponse(context.Background(), []core.Message{{Role: core.RoleUser, Text: "hi"}}, nil) {
 		switch ev.Type {
 		case llm.EventComplete:
 			sawComplete = true
+		case llm.EventRetryScheduled:
+			retryEvents++
 		case llm.EventError:
 			gotErr = ev.Err
 		}
@@ -570,8 +589,81 @@ func TestStreamResponseRejectsReasoningOnlyComplete(t *testing.T) {
 	if sawComplete {
 		t.Fatal("unexpected complete event")
 	}
-	if gotErr == nil || !strings.Contains(gotErr.Error(), "reasoning") {
-		t.Fatalf("error: want reasoning-only response, got %v", gotErr)
+	if requests != 3 {
+		t.Fatalf("requests: want 3 (initial + 2 retries), got %d", requests)
+	}
+	if retryEvents != 2 {
+		t.Fatalf("retry events: want 2, got %d", retryEvents)
+	}
+	if !errors.Is(gotErr, llm.ErrEmptyCompletion) {
+		t.Fatalf("error: want empty-completion, got %v", gotErr)
+	}
+}
+
+// The common case: an empty completion on the first attempt, real content on
+// the retry. The turn recovers transparently instead of hard-failing.
+func TestStreamResponseRetriesReasoningOnlyThenRecovers(t *testing.T) {
+	var requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "text/event-stream")
+		if requests == 1 {
+			_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"The plan is simple\"}}]}\n\n")
+			_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+			return
+		}
+		_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"here is the plan\"},\"finish_reason\":\"stop\"}]}\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+
+	policy := llmretry.DefaultPolicy()
+	policy.Jitter = 0
+	c, err := New(
+		WithAPIKey("test-key"),
+		WithBaseURL(srv.URL),
+		WithHTTPClient(srv.Client()),
+		WithRetryPolicy(policy),
+		WithStreamMaxAttempts(3),
+		withRetrySleeper(func(_ context.Context, _ time.Duration) error { return nil }),
+	)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	var content string
+	var retryEvents int
+	var streamReset bool
+	var gotErr error
+	for ev := range c.StreamResponse(context.Background(), []core.Message{{Role: core.RoleUser, Text: "hi"}}, nil) {
+		switch ev.Type {
+		case llm.EventRetryScheduled:
+			retryEvents++
+			if ev.Retry != nil && ev.Retry.StreamReset {
+				streamReset = true
+			}
+		case llm.EventComplete:
+			if ev.Response != nil {
+				content = ev.Response.Content
+			}
+		case llm.EventError:
+			gotErr = ev.Err
+		}
+	}
+	if gotErr != nil {
+		t.Fatalf("unexpected error: %v", gotErr)
+	}
+	if requests != 2 {
+		t.Fatalf("requests: want 2 (initial + 1 retry), got %d", requests)
+	}
+	if retryEvents != 1 {
+		t.Fatalf("retry events: want 1, got %d", retryEvents)
+	}
+	if !streamReset {
+		t.Fatal("retry should signal StreamReset so accumulated reasoning/text is cleared")
+	}
+	if content != "here is the plan" {
+		t.Fatalf("content: want %q, got %q", "here is the plan", content)
 	}
 }
 

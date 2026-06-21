@@ -463,6 +463,9 @@ func retryScheduledEvent(attempt, maxAttempts int, delay time.Duration, err erro
 
 func retryReason(err error, stage string) string {
 	if stage == "stream" {
+		if errors.Is(err, llm.ErrEmptyCompletion) {
+			return "model returned no content"
+		}
 		return "API stream disconnected"
 	}
 	return llmretry.Reason(err)
@@ -472,11 +475,24 @@ func shouldRetryStreamError(err error) bool {
 	if err == nil {
 		return false
 	}
+	// A reasoning-only empty completion (the model thought but emitted no
+	// assistant content and no tool calls) produced nothing usable and was not
+	// billed for output tokens, so re-issuing the same request is safe and
+	// usually succeeds — the empty body is DeepSeek-side sampling variance, not a
+	// deterministic rejection. This is the "couldn't make plan" failure: in Plan
+	// mode the turn dies before the <proposed_plan> block is emitted. It arrives
+	// wrapped as a progress/terminal error (reasoning deltas mark the stream as
+	// progressed), so check it before the blanket progress/terminal short-circuit
+	// below. The stream-retry path resets accumulated reasoning/text via the
+	// StreamReset event, so re-streaming does not duplicate output.
+	var terminalErr *streamTerminalError
+	if errors.As(err, &terminalErr) && terminalErr.retryable {
+		return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+	}
 	var progressErr *streamProgressError
 	if errors.As(err, &progressErr) {
 		return false
 	}
-	var terminalErr *streamTerminalError
 	if errors.As(err, &terminalErr) {
 		return false
 	}
@@ -505,6 +521,12 @@ func (e *streamStallError) Error() string {
 
 type streamTerminalError struct {
 	msg string
+	// retryable marks the reasoning-only empty completion (the model thought but
+	// emitted no answer) — DeepSeek-side sampling variance that a re-issue of the
+	// same request usually clears. A fully-empty completion (no reasoning either)
+	// is left non-retryable: it signals a malformed/broken stream where a re-issue
+	// would not help.
+	retryable bool
 }
 
 func (e *streamTerminalError) Error() string {
@@ -787,7 +809,7 @@ func emitComplete(out chan<- llm.ProviderEvent, model string, acc *streamAccumul
 	reasoning := acc.reasoning.String()
 	if len(calls) == 0 && strings.TrimSpace(content) == "" {
 		if strings.TrimSpace(reasoning) != "" {
-			return &streamTerminalError{msg: "DeepSeek stream ended with reasoning but no assistant content or tool calls"}
+			return &streamTerminalError{msg: "DeepSeek stream ended with reasoning but no assistant content or tool calls", retryable: true}
 		}
 		return &streamTerminalError{msg: "DeepSeek stream ended without assistant content or tool calls"}
 	}
