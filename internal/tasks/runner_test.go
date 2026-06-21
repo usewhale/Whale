@@ -1638,8 +1638,11 @@ func TestSpawnSubagentMaxTurnsForcesSummary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SpawnSubagentWithProgress: %v", err)
 	}
-	if res.Summary != "forced max turns summary" {
+	if !strings.Contains(res.Summary, "forced max turns summary") {
 		t.Fatalf("summary = %q", res.Summary)
+	}
+	if !strings.Contains(res.Summary, "auto-interrupted") {
+		t.Fatalf("summary missing truncation banner: %q", res.Summary)
 	}
 	if calls != 2 {
 		t.Fatalf("provider calls = %d, want tool turn plus forced summary", calls)
