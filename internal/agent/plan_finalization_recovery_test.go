@@ -13,8 +13,10 @@ import (
 
 // missingPlanPrefixCapableProvider reproduces the important DeepSeek shape:
 // the model has already used tools earlier in the turn/history, then ends Plan
-// mode with assistant text but no <proposed_plan> block. The long-term behavior
-// is Codex-style: do not issue a provider prefix-completion repair request.
+// mode with assistant text but no <proposed_plan> block. A missing plan is
+// nudged (a normal re-prompt) to emit the block — but never via provider
+// prefix-completion, the prefill repair removed in #307. This provider never
+// emits a block, so after the nudges are exhausted the text is surfaced as-is.
 type missingPlanPrefixCapableProvider struct {
 	calls       int
 	prefixCalls int
@@ -60,11 +62,12 @@ func TestPlanFinalizationDoesNotRecoverViaProviderPrefix(t *testing.T) {
 			done = ev.Message
 		}
 	}
-	if prov.calls != 2 {
-		t.Fatalf("expected tool-use turn plus final assistant turn, got %d provider calls", prov.calls)
+	// tool-use turn, then the planless turn plus maxPlanProposalNudges retries.
+	if want := 2 + maxPlanProposalNudges; prov.calls != want {
+		t.Fatalf("expected %d provider calls (tool turn + planless turn + %d nudges), got %d", want, maxPlanProposalNudges, prov.calls)
 	}
 	if prov.prefixCalls != 0 {
-		t.Fatalf("missing plan must not trigger provider prefix completion, got %d calls", prov.prefixCalls)
+		t.Fatalf("missing plan must be nudged, never prefix-completed, got %d prefix calls", prov.prefixCalls)
 	}
 	if !sawDone {
 		t.Fatal("expected the original assistant turn to complete")
