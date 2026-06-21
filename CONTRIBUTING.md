@@ -11,8 +11,8 @@ Whale is still experimental. Small, focused changes are easier to review than br
 ## Getting the code
 
 ```bash
-git clone https://github.com/usewhale/DeepSeek-Code-Whale.git
-cd DeepSeek-Code-Whale
+git clone https://github.com/usewhale/Whale.git
+cd Whale
 make build
 make test
 ```

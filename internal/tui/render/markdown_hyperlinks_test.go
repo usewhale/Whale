@@ -6,9 +6,9 @@ import (
 )
 
 func TestInjectHyperlinks_WrapsFullURLEvenWhenSplitByWrap(t *testing.T) {
-	input := "PR created: https://github.com/usewhale/DeepSeek-Code-Whale/pull/134 — ready."
+	input := "PR created: https://github.com/usewhale/Whale/pull/134 — ready."
 	out := Markdown(input, 40, false)
-	const want = "\x1b]8;;https://github.com/usewhale/DeepSeek-Code-Whale/pull/134\a"
+	const want = "\x1b]8;;https://github.com/usewhale/Whale/pull/134\a"
 	if !strings.Contains(out, want) {
 		t.Fatalf("expected OSC 8 wrapper with full URL\n got: %q", out)
 	}

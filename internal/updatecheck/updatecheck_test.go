@@ -376,7 +376,7 @@ func TestDetectActionResolvesHomebrewSymlink(t *testing.T) {
 func TestActionStringQuotesShellSensitiveArguments(t *testing.T) {
 	action := DetectAction("windows", `C:\Users\me\AppData\Local\Programs\Whale\bin\whale.exe`)
 	got := action.String()
-	want := `powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/usewhale/DeepSeek-Code-Whale/main/scripts/install.ps1 -UseB | iex"`
+	want := `powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/usewhale/Whale/main/scripts/install.ps1 -UseB | iex"`
 	if got != want {
 		t.Fatalf("String()=%q want %q", got, want)
 	}

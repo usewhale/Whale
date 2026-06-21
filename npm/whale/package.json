@@ -4,13 +4,13 @@
   "description": "DeepSeek-native coding agent for the terminal — 1M-token context, thinking-mode, full tool-use.",
   "author": "usewhale",
   "license": "MIT",
-  "homepage": "https://github.com/usewhale/DeepSeek-Code-Whale",
+  "homepage": "https://github.com/usewhale/Whale",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/usewhale/DeepSeek-Code-Whale.git"
+    "url": "git+https://github.com/usewhale/Whale.git"
   },
   "bugs": {
-    "url": "https://github.com/usewhale/DeepSeek-Code-Whale/issues"
+    "url": "https://github.com/usewhale/Whale/issues"
   },
   "keywords": [
     "deepseek",

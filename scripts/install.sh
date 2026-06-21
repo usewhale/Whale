@@ -14,7 +14,7 @@ if [ "${BIN_DIR+x}" = "x" ]; then
   exit 1
 fi
 
-WHALE_REPO="${WHALE_REPO:-usewhale/DeepSeek-Code-Whale}"
+WHALE_REPO="${WHALE_REPO:-usewhale/Whale}"
 REPO_SLUG="$WHALE_REPO"
 WHALE_VERSION="${WHALE_VERSION:-latest}"
 WHALE_INSTALL_DIR="${WHALE_INSTALL_DIR:-}"

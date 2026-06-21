@@ -1204,12 +1204,12 @@ func TestMarkdown_ExplicitLinkShowsTextAndURL(t *testing.T) {
 }
 
 func TestMarkdown_AutolinkDoesNotDuplicate(t *testing.T) {
-	input := "PR 已创建：<https://github.com/usewhale/DeepSeek-Code-Whale/pull/92>"
+	input := "PR 已创建：<https://github.com/usewhale/Whale/pull/92>"
 	got := Markdown(input, 100, false)
-	if strings.Count(xansi.Strip(got), "https://github.com/usewhale/DeepSeek-Code-Whale/pull/92") != 1 {
+	if strings.Count(xansi.Strip(got), "https://github.com/usewhale/Whale/pull/92") != 1 {
 		t.Fatalf("expected autolink URL once, got: %q", got)
 	}
-	if strings.Contains(got, "<https://github.com/usewhale/DeepSeek-Code-Whale/pull/92>") {
+	if strings.Contains(got, "<https://github.com/usewhale/Whale/pull/92>") {
 		t.Fatalf("expected autolink brackets removed, got: %q", got)
 	}
 }

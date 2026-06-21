@@ -6,7 +6,7 @@ import (
 	"runtime"
 )
 
-const FeedbackIssuesURL = "https://github.com/usewhale/DeepSeek-Code-Whale/issues"
+const FeedbackIssuesURL = "https://github.com/usewhale/Whale/issues"
 
 var openFeedbackURL = openURL
 

@@ -9,11 +9,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/usewhale/DeepSeek-Code-Whale/releases"><img src="https://img.shields.io/github/v/release/usewhale/DeepSeek-Code-Whale?label=release" alt="release"></a>
+  <a href="https://github.com/usewhale/Whale/releases"><img src="https://img.shields.io/github/v/release/usewhale/Whale?label=release" alt="release"></a>
   <a href="https://www.npmjs.com/package/@usewhale/whale"><img src="https://img.shields.io/npm/v/@usewhale/whale" alt="npm"></a>
-  <a href="https://github.com/usewhale/DeepSeek-Code-Whale/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/usewhale/DeepSeek-Code-Whale/ci.yml?label=CI" alt="CI"></a>
-  <a href="./LICENSE"><img src="https://img.shields.io/github/license/usewhale/DeepSeek-Code-Whale" alt="license"></a>
-  <a href="https://github.com/usewhale/DeepSeek-Code-Whale/stargazers"><img src="https://img.shields.io/github/stars/usewhale/DeepSeek-Code-Whale?style=flat&logo=github&label=stars" alt="GitHub stars"></a>
+  <a href="https://github.com/usewhale/Whale/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/usewhale/Whale/ci.yml?label=CI" alt="CI"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/github/license/usewhale/Whale" alt="license"></a>
+  <a href="https://github.com/usewhale/Whale/stargazers"><img src="https://img.shields.io/github/stars/usewhale/Whale?style=flat&logo=github&label=stars" alt="GitHub stars"></a>
   <img src="https://img.shields.io/badge/prompt%20cache-98%25-brightgreen" alt="98% prompt cache hit">
 </p>
 
@@ -46,7 +46,7 @@ brew install usewhale/tap/whale
 Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/usewhale/DeepSeek-Code-Whale/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/usewhale/Whale/main/scripts/install.sh | sh
 ```
 
 Windows PowerShell:
@@ -54,13 +54,13 @@ Windows PowerShell:
 Requires Windows 10 or Windows Server 2016 or later.
 
 ```powershell
-irm https://raw.githubusercontent.com/usewhale/DeepSeek-Code-Whale/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/usewhale/Whale/main/scripts/install.ps1 | iex
 ```
 
 Windows CMD:
 
 ```cmd
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/usewhale/DeepSeek-Code-Whale/main/scripts/install.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/usewhale/Whale/main/scripts/install.ps1 | iex"
 ```
 
 ```bash
@@ -163,11 +163,11 @@ Security issues: [SECURITY.md](SECURITY.md).
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=usewhale%2FDeepSeek-Code-Whale&type=date&legend=top-left">
+<a href="https://www.star-history.com/?repos=usewhale%2FWhale&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=usewhale/DeepSeek-Code-Whale&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=usewhale/DeepSeek-Code-Whale&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=usewhale/DeepSeek-Code-Whale&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=usewhale/Whale&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=usewhale/Whale&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=usewhale/Whale&type=date&legend=top-left" />
  </picture>
 </a>
 

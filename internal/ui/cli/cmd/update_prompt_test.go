@@ -76,8 +76,7 @@ func TestUpdatePromptRenderIncludesVersionsAndCommand(t *testing.T) {
 	view := m.View()
 	for _, want := range []string{
 		"Update available! v0.1.15 -> v0.1.16",
-		"Release notes: https://github.com/usewhale/DeepSeek-Code-",
-		"Whale/releases/latest",
+		"Release notes: https://github.com/usewhale/Whale/releases/latest",
 		"brew upgrade usewhale/tap/whale",
 		"Skip until next version",
 	} {

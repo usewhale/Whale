@@ -17,8 +17,8 @@ import (
 
 const (
 	CacheFilename    = "version.json"
-	LatestReleaseURL = "https://api.github.com/repos/usewhale/DeepSeek-Code-Whale/releases/latest"
-	ReleaseNotesURL  = "https://github.com/usewhale/DeepSeek-Code-Whale/releases/latest"
+	LatestReleaseURL = "https://api.github.com/repos/usewhale/Whale/releases/latest"
+	ReleaseNotesURL  = "https://github.com/usewhale/Whale/releases/latest"
 	CheckInterval    = 1 * time.Hour
 )
 
@@ -258,18 +258,18 @@ func DetectAction(goos, executablePath string) Action {
 		return Action{
 			Name:       "Windows installer",
 			Cmd:        "powershell",
-			Args:       []string{"-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "iwr https://raw.githubusercontent.com/usewhale/DeepSeek-Code-Whale/main/scripts/install.ps1 -UseB | iex"},
+			Args:       []string{"-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "iwr https://raw.githubusercontent.com/usewhale/Whale/main/scripts/install.ps1 -UseB | iex"},
 			ManualOnly: true,
 		}
 	case "darwin":
 		if isHomebrewPath(executablePath) {
 			return Action{Name: "Homebrew", Cmd: "brew", Args: []string{"upgrade", "usewhale/tap/whale"}}
 		}
-		return Action{Name: "install script", Cmd: "sh", Args: []string{"-c", "curl -fsSL https://raw.githubusercontent.com/usewhale/DeepSeek-Code-Whale/main/scripts/install.sh | sh"}}
+		return Action{Name: "install script", Cmd: "sh", Args: []string{"-c", "curl -fsSL https://raw.githubusercontent.com/usewhale/Whale/main/scripts/install.sh | sh"}}
 	case "linux":
-		return Action{Name: "install script", Cmd: "sh", Args: []string{"-c", "curl -fsSL https://raw.githubusercontent.com/usewhale/DeepSeek-Code-Whale/main/scripts/install.sh | sh"}}
+		return Action{Name: "install script", Cmd: "sh", Args: []string{"-c", "curl -fsSL https://raw.githubusercontent.com/usewhale/Whale/main/scripts/install.sh | sh"}}
 	default:
-		return Action{Name: "install script", Cmd: "sh", Args: []string{"-c", "curl -fsSL https://raw.githubusercontent.com/usewhale/DeepSeek-Code-Whale/main/scripts/install.sh | sh"}}
+		return Action{Name: "install script", Cmd: "sh", Args: []string{"-c", "curl -fsSL https://raw.githubusercontent.com/usewhale/Whale/main/scripts/install.sh | sh"}}
 	}
 }
 
