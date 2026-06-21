@@ -21,16 +21,6 @@ func (s *Service) requestExit() {
 		s.emit(Event{Kind: EventExitRequested})
 		return
 	}
-	if summary.ChangedFiles == 0 && summary.IgnoredFiles == 0 && summary.Commits == 0 {
-		res, err := s.app.RemoveCurrentWorktree(false)
-		if err != nil {
-			s.emit(Event{Kind: EventError, Text: err.Error()})
-			return
-		}
-		s.emit(Event{Kind: EventInfo, Text: res.Message})
-		s.emit(Event{Kind: EventExitRequested})
-		return
-	}
 	s.emit(Event{Kind: EventWorktreeExitPrompt, WorktreeExit: protocolWorktreeExitSummary(summary)})
 }
 
