@@ -315,6 +315,7 @@ func TestSlashSuggestionPlanAutoRunsWhenSelected(t *testing.T) {
 		t.Fatalf("expected /plan autorun not to start working state, busy=%v busySince=%v", m.busy, m.busySince)
 	}
 }
+
 // A pending plan must be gated: a queued/typed prompt must NOT bypass the picker
 // by running as another model turn (that would let the model misread arbitrary
 // input as approval). The picker opens; the queued text is restored to the
@@ -385,6 +386,7 @@ func TestPlanImplementationPickerDefersUntilLocalSubmitDone(t *testing.T) {
 		t.Fatalf("expected implementation intent after pending local submit clears, got %+v", *intents)
 	}
 }
+
 // Even with a queued prompt, a deferred plan picker (held back by an in-flight
 // local submit) must take priority once the local submit finishes: the picker
 // opens and the queued text is restored to the composer, not run as a model turn.
