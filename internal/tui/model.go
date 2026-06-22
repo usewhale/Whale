@@ -64,13 +64,20 @@ type approvalPromptState struct {
 }
 
 type model struct {
-	runtime                Runtime
-	dispatch               func(protocol.Intent)
-	input                  composer.Composer
-	viewport               viewport.Model
-	chat                   chatList
-	assembler              *tuirender.Assembler
-	timeline               *timeline.TurnTimelineBuilder
+	runtime   Runtime
+	dispatch  func(protocol.Intent)
+	input     composer.Composer
+	viewport  viewport.Model
+	chat      chatList
+	assembler *tuirender.Assembler
+	timeline  *timeline.TurnTimelineBuilder
+	// timelineItemSeq orders timeline (tool) rows against assembler text rows
+	// within the current live turn. Each new timeline item is anchored to the
+	// assembler's SeqFloor at creation time plus a monotonic tiebreak, so a tool
+	// sorts exactly where it was invoked in the text<->tool stream. Both are
+	// reset per turn alongside the assembler/timeline (see resetTimeline).
+	timelineItemSeq        map[string]int
+	timelineSeqTiebreak    int
 	transcript             []tuirender.UIMessage
 	sessionID              string
 	startupHeaderPrinted   bool

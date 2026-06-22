@@ -25,7 +25,7 @@ func (m *model) hydrateSessionMessages(msgs []protocol.Message) {
 		case string(core.RoleUser):
 			if runID, text, ok := hiddenWorkflowResultMarker(msg); ok {
 				m.discardHydratedWorkflowLaunchLifecycle()
-				m.ensureTimeline().HandleEvent(protocol.Event{
+				m.ingestTimelineEvent(protocol.Event{
 					Kind:          protocol.EventWorkflowResult,
 					WorkflowRunID: runID,
 					Text:          text,
@@ -58,7 +58,7 @@ func (m *model) hydrateSessionMessages(msgs []protocol.Message) {
 				}
 				events := timeline.HydrationEventsFromMessage(protocol.Message{ToolCalls: []protocol.ToolCall{tc}, CreatedAt: msg.CreatedAt})
 				for _, ev := range events {
-					m.ensureTimeline().HandleEvent(ev)
+					m.ingestTimelineEvent(ev)
 				}
 			}
 		case string(core.RoleTool):
@@ -81,7 +81,7 @@ func (m *model) hydrateSessionMessages(msgs []protocol.Message) {
 					if strings.TrimSpace(ev.Text) == "" {
 						continue
 					}
-					m.ensureTimeline().HandleEvent(ev)
+					m.ingestTimelineEvent(ev)
 				}
 				m.captureDiffMetadata(tr.Name, tr.Metadata)
 			}

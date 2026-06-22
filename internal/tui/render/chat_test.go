@@ -223,15 +223,19 @@ func TestAssembler_SetPlanReplacesExistingPlanOnly(t *testing.T) {
 
 	a.SetPlan("new plan")
 
+	// SetPlan collapses to a single plan row at the LAST plan position: with
+	// coalescing broken at tool boundaries a turn can hold a pre-tool preamble
+	// plan and a post-tool final plan, and the finalized card must take the later
+	// position so it renders after intervening rows, not before them.
 	snap := a.Snapshot()
 	if len(snap) != 2 {
-		t.Fatalf("expected plan and notice rows, got %+v", snap)
+		t.Fatalf("expected notice and plan rows, got %+v", snap)
 	}
-	if snap[0].Kind != KindPlan || snap[0].Text != "new plan" {
-		t.Fatalf("expected first plan to be replaced, got %+v", snap[0])
+	if snap[0].Kind != KindNotice || snap[0].Text != "keep notice" {
+		t.Fatalf("expected notice to remain before the finalized plan, got %+v", snap[0])
 	}
-	if snap[1].Kind != KindNotice || snap[1].Text != "keep notice" {
-		t.Fatalf("expected notice to remain after plan replacement, got %+v", snap[1])
+	if snap[1].Kind != KindPlan || snap[1].Text != "new plan" {
+		t.Fatalf("expected the last plan position to hold the finalized plan, got %+v", snap[1])
 	}
 }
 

@@ -24,10 +24,16 @@ const (
 )
 
 type UIMessage struct {
-	ID            string
-	Role          string
-	Kind          MessageKind
-	Text          string
+	ID   string
+	Role string
+	Kind MessageKind
+	Text string
+	// Seq orders this message against timeline (tool) rows within a single live
+	// turn so text<->tool interleaving is preserved. Assembler messages are
+	// stamped lazily (see Assembler.ensureSeqs); timeline rows derive their Seq
+	// from Assembler.SeqFloor at the moment the tool is created. Zero means
+	// "unsequenced" (e.g. hydrated/committed rows rendered in slice order).
+	Seq           int
 	ToolName      string
 	ToolIdentity  string
 	Streaming     bool
@@ -121,16 +127,79 @@ func (p FocusSummaryPart) Text() string {
 	return text
 }
 
+// seqStride spaces consecutive assembler-message sequence numbers so that
+// timeline (tool) rows created between two text messages have room to sort
+// strictly between them (SeqFloor + a small per-turn tiebreak). It bounds the
+// number of tool rows that can sit in a single text gap to seqStride-1, far
+// above any real turn.
+const seqStride = 1 << 20
+
 type Assembler struct {
 	messages []UIMessage
+	seqOrd   int // ordinal of the last sequenced message this turn
+	// breakNextCoalesce forces the next AppendDelta/AddPlanDelta to start a new
+	// message instead of merging into the trailing one. The model sets it at tool
+	// boundaries (BreakCoalescing) so same-role text resumed after a tool does not
+	// inherit the pre-tool message's render sequence and float above the tool.
+	breakNextCoalesce bool
 }
 
 func NewAssembler() *Assembler {
 	return &Assembler{}
 }
 
+// Reset clears the live messages but intentionally preserves seqOrd. Some reset
+// paths (EventResponseReset) clear the assembler while KEEPING the timeline's
+// tool rows, so the sequence floor must stay monotonic across the reset or a
+// post-reset delta would reuse a sequence below a retained tool and render above
+// it. ResetSequence — called from resetTimeline, the true turn boundary that
+// also clears the timeline — is what zeroes the floor.
 func (a *Assembler) Reset() {
 	a.messages = nil
+	a.breakNextCoalesce = false
+}
+
+// ResetSequence restarts the per-turn sequence floor. Call it only when the
+// timeline is also being cleared, so no retained tool row outlives the reset.
+func (a *Assembler) ResetSequence() {
+	if a == nil {
+		return
+	}
+	a.seqOrd = 0
+}
+
+// BreakCoalescing marks a tool boundary: the next streamed delta starts a fresh
+// message even if it shares the trailing message's role, so it is sequenced
+// after the intervening tool rather than coalesced onto pre-tool text.
+func (a *Assembler) BreakCoalescing() {
+	if a == nil {
+		return
+	}
+	a.breakNextCoalesce = true
+}
+
+// ensureSeqs assigns a stable, ascending Seq to any message that does not have
+// one yet. New messages always append at the tail, so stamping in slice order
+// keeps Seq monotonic with arrival order; coalesced deltas reuse the existing
+// message's Seq.
+func (a *Assembler) ensureSeqs() {
+	for i := range a.messages {
+		if a.messages[i].Seq == 0 {
+			a.seqOrd++
+			a.messages[i].Seq = a.seqOrd * seqStride
+		}
+	}
+}
+
+// SeqFloor returns the Seq of the most recent assembler message (forcing any
+// pending messages to be sequenced first). A timeline row created now should
+// sort just above this floor, so callers add a small per-turn tiebreak.
+func (a *Assembler) SeqFloor() int {
+	if a == nil {
+		return 0
+	}
+	a.ensureSeqs()
+	return a.seqOrd * seqStride
 }
 
 func (a *Assembler) Len() int {
@@ -195,6 +264,7 @@ func (a *Assembler) ReplaceTrailingAssistantMessages(text string) bool {
 }
 
 func (a *Assembler) Snapshot() []UIMessage {
+	a.ensureSeqs()
 	out := make([]UIMessage, len(a.messages))
 	copy(out, a.messages)
 	return out
@@ -205,7 +275,7 @@ func (a *Assembler) AppendDelta(role, text string) {
 	if t == "" {
 		return
 	}
-	if n := len(a.messages); n > 0 && canCoalesce(role, a.messages[n-1]) {
+	if n := len(a.messages); n > 0 && !a.breakNextCoalesce && canCoalesce(role, a.messages[n-1]) {
 		a.messages[n-1].Text += t
 		if role == "think" {
 			a.messages[n-1].Streaming = true
@@ -215,6 +285,7 @@ func (a *Assembler) AppendDelta(role, text string) {
 	if strings.TrimSpace(t) == "" {
 		return
 	}
+	a.breakNextCoalesce = false
 	a.messages = append(a.messages, UIMessage{
 		Role:      role,
 		Kind:      kindForRole(role),
@@ -309,13 +380,14 @@ func (a *Assembler) AddPlanDelta(text string) {
 	if t == "" {
 		return
 	}
-	if n := len(a.messages); n > 0 && a.messages[n-1].Kind == KindPlan {
+	if n := len(a.messages); n > 0 && !a.breakNextCoalesce && a.messages[n-1].Kind == KindPlan {
 		a.messages[n-1].Text += t
 		return
 	}
 	if strings.TrimSpace(t) == "" {
 		return
 	}
+	a.breakNextCoalesce = false
 	a.messages = append(a.messages, UIMessage{
 		Role: "plan",
 		Kind: KindPlan,
@@ -362,21 +434,32 @@ func (a *Assembler) replacePlanMessages(text string) bool {
 	if a == nil || len(a.messages) == 0 {
 		return false
 	}
-	replaced := false
-	out := a.messages[:0]
-	for _, msg := range a.messages {
+	// Keep the LAST plan row, not the first. With coalescing broken at tool
+	// boundaries a Plan-mode turn can hold several plan rows (pre-tool preamble,
+	// post-tool final); the finalized card must inherit the latest row's Seq so it
+	// renders after the investigation tools rather than at the pre-tool position.
+	last := -1
+	for i, msg := range a.messages {
 		if msg.Kind == KindPlan {
-			if !replaced {
+			last = i
+		}
+	}
+	if last == -1 {
+		return false
+	}
+	out := a.messages[:0]
+	for i, msg := range a.messages {
+		if msg.Kind == KindPlan {
+			if i == last {
 				msg.Text = text
 				out = append(out, msg)
-				replaced = true
 			}
 			continue
 		}
 		out = append(out, msg)
 	}
 	a.messages = out
-	return replaced
+	return true
 }
 
 // DemoteUncompletedPlan converts plan cards built from streamed plan deltas back
