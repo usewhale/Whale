@@ -113,6 +113,11 @@ func (a *App) ExecPromptWithContent(ctx context.Context, parts []core.MessagePar
 		switch ev.Type {
 		case agent.AgentEventTypeAssistantDelta:
 			final.WriteString(ev.Content)
+		case agent.AgentEventTypeResponseReset:
+			// The accumulated text belonged to a response the agent discarded
+			// (injected input restart, or a scrubbed leaked tool-call turn). Drop
+			// it so exec output reflects only the final, real answer.
+			final.Reset()
 		case agent.AgentEventTypeToolResult:
 			if ev.Result != nil {
 				result.Tools = append(result.Tools, ExecToolSummary{

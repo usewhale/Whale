@@ -123,6 +123,7 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 		toolIters := 0
 		toolCalls := 0
 		planLoopNudges := 0
+		leakedToolCallNudges := 0
 		consecutiveStormRounds := 0
 		consecutiveRedundantRounds := 0
 		progress := &progressTracker{}
@@ -348,6 +349,48 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 			if turnState.hasPending() {
 				rt.Log.Append(assistant)
 				history = append(history, assistant)
+				if !emit(AgentEvent{Type: AgentEventTypeResponseReset}) {
+					return
+				}
+				continue
+			}
+			// Leaked-tool-call recovery. A turn can "stop" mid-task when the model
+			// writes its tool calls as plain text (e.g. <tool_calls><read_file .../>
+			// </tool_calls>) instead of using the API tool-call channel: such text
+			// never executes, so the turn reaches here as if the model answered when
+			// it meant to act. Scrub the wrapper from the persisted assistant text —
+			// otherwise it pollutes history and the model keeps copying the format —
+			// and nudge once toward the structured channel rather than finishing
+			// silently. Bounded by maxLeakedToolCallNudges so a real final answer
+			// that merely quotes a wrapper still terminates.
+			if leakedToolCallNudges < maxLeakedToolCallNudges && containsLeakedToolCall(assistant.Text) {
+				leakedToolCallNudges++
+				cleaned := strings.TrimSpace(stripLeakedToolCalls(assistant.Text))
+				assistant.Text = cleaned
+				if cleaned == "" {
+					assistant.Parts = nil
+				} else {
+					assistant.Parts = []core.MessagePart{{Type: core.MessagePartText, Text: cleaned}}
+				}
+				a.bestEffortUpdateAssistant(assistant)
+				nudge, err := a.persistLeakedToolCallNudge(ctx, sessionID)
+				if err != nil {
+					emit(AgentEvent{Type: AgentEventTypeError, Err: err})
+					return
+				}
+				rt.Log.Append(assistant)
+				rt.Log.Append(nudge)
+				history = append(history, assistant, nudge)
+				if !emit(AgentEvent{Type: AgentEventTypeLeakedToolCallScrubbed}) {
+					return
+				}
+				// The leaked wrapper was streamed as assistant content deltas before
+				// it was scrubbed, so downstream text accumulators (the service turn
+				// loop's LastResponse, whale exec output, the TUI live attempt) still
+				// hold the fake tool-call text even though the persisted message was
+				// cleaned. A response reset tells them to drop it; the recovered turn
+				// re-streams the real answer next iteration. Mirrors the pending-input
+				// reset above.
 				if !emit(AgentEvent{Type: AgentEventTypeResponseReset}) {
 					return
 				}

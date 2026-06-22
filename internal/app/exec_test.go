@@ -6,9 +6,53 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 )
+
+// TestRunExecScrubsLeakedToolCallFromOutput verifies that when the model writes
+// a tool call as plain text instead of using the API tool-call channel, the
+// leaked wrapper — already streamed as content deltas into exec's accumulator —
+// is dropped from the final output once the recovery turn re-streams the real
+// answer. Guards the downstream half of the leaked-tool-call fix (the agent
+// emits a response reset; exec must honor it).
+func TestRunExecScrubsLeakedToolCallFromOutput(t *testing.T) {
+	t.Setenv("DEEPSEEK_API_KEY", "sk-1234567890abcdef1234")
+	var mu sync.Mutex
+	reqs := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		reqs++
+		n := reqs
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		usage := `,"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}`
+		if n == 1 {
+			// Tool call forged as text, with a legit prose preamble.
+			_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"On it. <tool_calls> <read_file path=\\\"a.go\\\"> </read_file> </tool_calls>\"},\"finish_reason\":\"stop\"}]"+usage+"}\n\n")
+		} else {
+			_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"delta\":{\"content\":\"a.go has 10 lines.\"},\"finish_reason\":\"stop\"}]"+usage+"}\n\n")
+		}
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer srv.Close()
+	t.Setenv("DEEPSEEK_BASE_URL", srv.URL)
+
+	res, err := RunExec(context.Background(), DefaultConfig(), StartOptions{NewSession: true}, "read a.go")
+	if err != nil {
+		t.Fatalf("RunExec: %v", err)
+	}
+	if strings.Contains(res.Output, "<tool_calls") || strings.Contains(res.Output, "read_file") {
+		t.Fatalf("leaked tool-call text survived in exec output: %q", res.Output)
+	}
+	if !strings.Contains(res.Output, "10 lines") {
+		t.Fatalf("expected recovered answer in output, got %q", res.Output)
+	}
+	if reqs < 2 {
+		t.Fatalf("expected a recovery request after the leak, got %d requests", reqs)
+	}
+}
 
 func TestRunExecReturnsFinalOutput(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "sk-1234567890abcdef1234")
