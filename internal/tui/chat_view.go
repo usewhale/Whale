@@ -166,6 +166,15 @@ func (m *model) reconcileFinalAssistant(lastResponse string) bool {
 	if strings.TrimSpace(final) == "" {
 		return false
 	}
+	// In Plan mode the whole reply streams as plan deltas and is finalized into a
+	// Proposed Plan card (plan_completed → SetPlan), so visibleAssistantThisTurn is
+	// empty and the committed message is KindPlan, not KindText. Without this guard
+	// reconcile would not recognize the plan card as the final answer and would
+	// append the same text again as an assistant bubble — rendering it twice. The
+	// plan card already IS this turn's final answer, so there is nothing to do.
+	if m.sawPlanCompletedThisTurn {
+		return false
+	}
 	visible := strings.TrimRight(m.visibleAssistantThisTurn, "\n")
 	if visible == final {
 		return false
@@ -263,15 +272,28 @@ func (m *model) markNoFinalAnswerIfNeeded() bool {
 }
 
 func (m *model) markMissingProposedPlanIfNeeded(wasBusy bool) bool {
-	if !wasBusy || m.chatMode != "plan" || m.sawPlanThisTurn || !m.sawAssistantThisTurn {
+	// A real plan finalized this turn (plan_completed) — nothing missing.
+	if !wasBusy || m.chatMode != "plan" || m.sawPlanCompletedThisTurn {
 		return false
 	}
-	m.appendStatus("No proposed plan was produced. Stay in Plan mode and ask the model to output the final plan as exactly one <proposed_plan> block.")
+	// Only act when the turn actually streamed plan content that never finalized
+	// (e.g. an investigation preamble before the turn ended via the cap/forced
+	// summary). A turn that produced nothing, or ended on a clarifying question,
+	// is handled elsewhere and must not be flagged as a missing plan here.
+	if !m.sawPlanThisTurn {
+		return false
+	}
+	// The streamed text is investigation, not an approvable plan: demote the
+	// Proposed Plan card to ordinary assistant text so it is not mislabeled.
+	if m.assembler != nil {
+		m.assembler.DemoteUncompletedPlan()
+	}
+	m.appendStatus("No plan was produced. Stay in Plan mode and ask the model to write the final plan as its reply.")
 	m.addLog(logEntry{
 		Kind:    "missing_proposed_plan",
 		Source:  "assistant",
-		Summary: "plan-mode turn completed without a proposed_plan block",
-		Raw:     "The model produced assistant content in Plan mode but did not emit a <proposed_plan> block.",
+		Summary: "plan-mode turn streamed content without finalizing a plan",
+		Raw:     "The model produced Plan-mode content but did not finalize a plan.",
 	})
 	return true
 }

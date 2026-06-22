@@ -115,7 +115,10 @@ func TestUpdatePlanEmitsPlanUpdate(t *testing.T) {
 	}
 }
 
-func TestUpdatePlanHiddenFromProviderToolsInPlanMode(t *testing.T) {
+// The advertised tool set must be identical across modes so an agent<->plan
+// toggle does not invalidate the provider's prefix cache. update_plan stays
+// visible in Plan mode; the plan_mode_blocked gate refuses it at execution time.
+func TestUpdatePlanStaysProviderVisibleInPlanModeForCacheStability(t *testing.T) {
 	provider := &providerToolCaptureProvider{}
 	a := NewAgentWithRegistry(
 		provider,
@@ -135,8 +138,8 @@ func TestUpdatePlanHiddenFromProviderToolsInPlanMode(t *testing.T) {
 	if !stringSliceContains(provider.names, "read_file") {
 		t.Fatalf("expected read_file to remain visible, got %v", provider.names)
 	}
-	if stringSliceContains(provider.names, "update_plan") {
-		t.Fatalf("update_plan should not be provider-visible in plan mode, got %v", provider.names)
+	if !stringSliceContains(provider.names, "update_plan") {
+		t.Fatalf("update_plan must stay provider-visible in plan mode for prefix-cache stability, got %v", provider.names)
 	}
 }
 
@@ -193,12 +196,15 @@ func TestUpdatePlanBlockedInPlanMode(t *testing.T) {
 	for _, want := range []string{
 		"TODO/checklist",
 		"not allowed in Plan mode",
-		"emit_proposed_plan_block",
-		"<proposed_plan>",
+		"write_plan_as_final_reply",
+		"write it as your final reply",
 	} {
 		if !strings.Contains(blocked, want) {
 			t.Fatalf("blocked update_plan result missing %q:\n%s", want, blocked)
 		}
+	}
+	if strings.Contains(blocked, "<proposed_plan>") {
+		t.Fatalf("blocked update_plan guidance must not reference the sentinel:\n%s", blocked)
 	}
 }
 

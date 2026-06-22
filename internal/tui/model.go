@@ -215,6 +215,7 @@ type model struct {
 	}
 	lastProposedPlan                 string
 	sawPlanThisTurn                  bool
+	sawPlanCompletedThisTurn         bool
 	sawAssistantThisTurn             bool
 	sawReasoningThisTurn             bool
 	sawTerminalToolOutcomeThisTurn   bool

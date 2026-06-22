@@ -311,10 +311,10 @@ func TestPlanModeInstructionsTreatExecutionRequestsAsPlanning(t *testing.T) {
 		"Outputting slash commands such as /agent",
 		"The session remains in Plan mode until the user or UI explicitly changes modes",
 		"Ground the plan in the actual environment",
-		"Finalization rule",
-		"<proposed_plan>",
+		"How to present the plan",
+		"taken as your proposed plan",
 		"update_plan is a TODO/checklist/progress tool",
-		"The UI owns the implementation confirmation",
+		"the user is then asked to approve it",
 	} {
 		if !strings.Contains(immutable, want) {
 			t.Fatalf("immutable plan mode contract missing %q:\n%s", want, immutable)

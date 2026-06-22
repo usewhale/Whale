@@ -1173,6 +1173,7 @@ func TestWindowsDeferredBusyEnterSuppressesPlanPickerWhenTurnDoneArrivesFirst(t 
 	m.chatMode = "plan"
 	m.mode = modeChat
 	m.sawPlanThisTurn = true
+	m.sawPlanCompletedThisTurn = true
 	m.input.SetValue("follow up while working")
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -1248,6 +1249,7 @@ func TestWindowsActiveBusyPasteSuppressesPlanPickerWhenTurnDoneArrivesFirst(t *t
 	m.chatMode = "plan"
 	m.mode = modeChat
 	m.sawPlanThisTurn = true
+	m.sawPlanCompletedThisTurn = true
 	m.input.SetValue("line one")
 
 	var cmd tea.Cmd
@@ -1293,6 +1295,7 @@ func TestWindowsActiveBusyPasteSuppressesPlanPickerAfterQuietWindow(t *testing.T
 	m.chatMode = "plan"
 	m.mode = modeChat
 	m.sawPlanThisTurn = true
+	m.sawPlanCompletedThisTurn = true
 	m.input.SetValue("line one")
 
 	var cmd tea.Cmd
@@ -1471,6 +1474,7 @@ func TestWindowsActiveBusyPasteSuppressesDeferredPlanPickerAfterLocalSubmitDone(
 	m.chatMode = "plan"
 	m.mode = modeChat
 	m.sawPlanThisTurn = true
+	m.sawPlanCompletedThisTurn = true
 	m.input.SetValue("line one")
 
 	var cmd tea.Cmd
@@ -1508,6 +1512,7 @@ func TestWindowsDeferredStoppingBusyEnterDoesNotSubmitAfterTurnDoneArrivesFirst(
 	m.chatMode = "plan"
 	m.mode = modeChat
 	m.sawPlanThisTurn = true
+	m.sawPlanCompletedThisTurn = true
 	m.input.SetValue("follow up while stopping")
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -1545,6 +1550,7 @@ func TestWindowsDeferredBusyEnterInterruptedBeforeTickSubmitsAfterInterrupt(t *t
 	m.chatMode = "plan"
 	m.mode = modeChat
 	m.sawPlanThisTurn = true
+	m.sawPlanCompletedThisTurn = true
 	m.input.SetValue("follow up before interrupt")
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})

@@ -72,6 +72,20 @@ func (m *model) finishLocalSubmit() tea.Cmd {
 			m.status = "ready"
 		}
 		pendingWindowsInput := m.snapshotWindowsBusyInput()
+		if m.deferredPlanPicker && m.mode == modeChat {
+			// A plan is pending approval — the picker is the structured gate and
+			// takes priority over any queued/typed prompt. Never run that prompt as
+			// a model turn here (it would bypass the gate and let the model misread
+			// arbitrary input as approval). Preserve queued text in the composer for
+			// after the decision, then open the picker.
+			_, restoreCmd := m.restoreQueuedPromptsToComposerWithWindowsInput(pendingWindowsInput)
+			if m.hasPendingWindowsBusyInput() {
+				m.deferredPlanPicker = false
+			} else {
+				m.openPlanImplementationPicker()
+			}
+			return restoreCmd
+		}
 		if next, ok := m.popQueuedPrompt(); ok {
 			m.deferredPlanPicker = false
 			eventCmd := m.submitPromptWithBindingAndAttachments(next.Text, next.SkillBinding, attachmentInputsFromComposerAttachments(next.Attachments))
@@ -80,13 +94,6 @@ func (m *model) finishLocalSubmit() tea.Cmd {
 		}
 		if restoreCmd := m.restoreWindowsBusyInput(pendingWindowsInput); restoreCmd != nil {
 			return restoreCmd
-		}
-		if m.deferredPlanPicker && m.mode == modeChat {
-			if m.hasPendingWindowsBusyInput() {
-				m.deferredPlanPicker = false
-			} else {
-				m.openPlanImplementationPicker()
-			}
 		}
 	}
 	return nil

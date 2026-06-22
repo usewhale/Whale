@@ -28,7 +28,16 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 	}
 
 	history := a.buildTurnProviderHistory(sessionID, rt)
-	toolList := providerVisibleToolsForMode(a.mode, tools)
+	// Advertise the same tool set in every mode. Plan-mode restrictions (e.g.
+	// update_plan is not a proposal channel) are enforced at execution time via
+	// the plan_mode_blocked gate in stream.go, not by changing the advertised
+	// tools. Keeping the tool schema identical across an agent<->plan toggle keeps
+	// the provider's prefix cache warm — a per-mode tool list invalidates the
+	// whole cached prefix (DeepSeek keys the cache on the tool schema), costing a
+	// full prompt re-bill on every switch. This mirrors reasonix's design: "the
+	// cache-friendly bits — system prompt, tools schema, message history — are
+	// left untouched, so the toggle costs nothing in cache hits."
+	toolList := tools.Tools()
 	if opts.SuppressTools {
 		toolList = nil
 	}
@@ -122,23 +131,15 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 				}
 				if len(ev.Response.ToolCalls) > 0 {
 					assistant.ToolCalls = ev.Response.ToolCalls
-					recoveredPlanToolCall := a.recoverProposedPlanToolCall(ctx, &assistant, &ps, events)
-					if ctx.Err() != nil {
-						return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
-					}
-					if recoveredPlanToolCall {
-						ev.Response.ToolCalls = nil
-					} else {
-						// Emit tool call events now that Input is fully populated.
-						for i := range ev.Response.ToolCalls {
-							tc := ev.Response.ToolCalls[i]
-							if !emit(AgentEvent{Type: AgentEventTypeToolCall, ToolCall: &tc}) {
+					// Emit tool call events now that Input is fully populated.
+					for i := range ev.Response.ToolCalls {
+						tc := ev.Response.ToolCalls[i]
+						if !emit(AgentEvent{Type: AgentEventTypeToolCall, ToolCall: &tc}) {
+							return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
+						}
+						if taskEvent, ok := taskStartedEvent(tc); ok {
+							if !emit(taskEvent) {
 								return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
-							}
-							if taskEvent, ok := taskStartedEvent(tc); ok {
-								if !emit(taskEvent) {
-									return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
-								}
 							}
 						}
 					}
@@ -150,16 +151,19 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 							return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
 						}
 						assistant.Text = visible
-					} else if a.mode == session.ModePlan && !ps.completed {
-						visible, ok := a.emitFinalProposedPlan(ctx, ev.Response.Content, &ps, events)
-						if !ok {
-							return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
-						}
-						assistant.Text = visible
-					} else if a.mode == session.ModePlan {
-						assistant.Text = core.StripProposedPlanBlocks(ev.Response.Content)
 					} else {
+						// EventComplete carries the authoritative full content:
+						// prefix-completion and sparse-stream providers may stream
+						// only a partial prefix and deliver the complete answer here.
+						// Honor it over the accumulated deltas (same as the non-Plan
+						// path). In Plan mode, also sync the accumulated plan text so
+						// the persisted plan part and the plan_completed event carry
+						// the full plan — plan_completed then re-renders it via SetPlan.
 						assistant.Text = ev.Response.Content
+						if a.mode == session.ModePlan {
+							ps.text.Reset()
+							ps.text.WriteString(ev.Response.Content)
+						}
 					}
 				}
 				finalizeAssistantPlanParts(&assistant, &ps)
@@ -189,24 +193,11 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 	// Provider channel can close without a terminal EventComplete/EventError
 	// (e.g. SSE EOF before [DONE], or EventComplete with nil Response). Since
 	// deltas no longer persist, flush any accumulated assistant state so
-	// resume/history doesn't see an empty assistant message.
-	if a.mode == session.ModePlan && !ps.completed {
-		for _, seg := range ps.parser.Finish() {
-			if !a.emitProposedPlanSegment(ctx, seg, &ps, events) {
-				return core.Message{}, llm.Usage{}, "", nil, ctx.Err()
-			}
-		}
-		assistant.Text = ps.visible.String()
-		finalizeAssistantPlanParts(&assistant, &ps)
-		if streamPersisted {
-			if err := a.store.Update(ctx, assistant); err != nil {
-				return core.Message{}, llm.Usage{}, "", nil, err
-			}
-		}
-	}
+	// resume/history doesn't see an empty assistant message. In Plan mode the
+	// accumulated plan text lives in ps; attach it as the message's plan part.
 	if !streamPersisted {
 		if a.mode == session.ModePlan {
-			assistant.Text = ps.visible.String()
+			assistant.Text = strings.TrimSpace(ps.text.String())
 			finalizeAssistantPlanParts(&assistant, &ps)
 		}
 		if assistant.Text != "" || assistant.Reasoning != "" || len(assistant.ToolCalls) > 0 || len(assistant.Parts) > 0 {
@@ -219,24 +210,6 @@ func (a *Agent) collectAssistantStream(ctx context.Context, sessionID string, rt
 	}
 	cacheShape := buildCacheShapeForRequestWithRuntime(cacheShapeRequestAgent, history, toolList, assistantPrefix, rt.Prefix.SystemBlocks(), rt.RuntimeBlocks())
 	return assistant, lastUsage, lastModel, cacheShape, nil
-}
-
-func providerVisibleToolsForMode(mode session.Mode, tools *core.ToolRegistry) []core.Tool {
-	if tools == nil {
-		return nil
-	}
-	toolList := tools.Tools()
-	if mode != session.ModePlan {
-		return toolList
-	}
-	out := toolList[:0]
-	for _, tool := range toolList {
-		if tool == nil || tool.Name() == "update_plan" {
-			continue
-		}
-		out = append(out, tool)
-	}
-	return out
 }
 
 // messageUsageFrom converts provider usage into the persisted form,

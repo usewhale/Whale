@@ -12,7 +12,6 @@ import (
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/llm"
 	llmretry "github.com/usewhale/whale/internal/llm/retry"
-	"github.com/usewhale/whale/internal/session"
 )
 
 type mockProvider struct {
@@ -376,38 +375,6 @@ func TestAgentToolIterBackstopForcesSummary(t *testing.T) {
 	}
 }
 
-func TestPlanModeMidTurnNudgeOnRedundancy(t *testing.T) {
-	store := NewInMemoryStore()
-	prov := &redundantReadProvider{}
-	a := NewAgent(prov, store, []Tool{readFileTool{}})
-	WithSessionMode(session.ModePlan)(a)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	events, err := a.RunStream(ctx, "s-plan-nudge", "go")
-	if err != nil {
-		t.Fatalf("RunStream: %v", err)
-	}
-	for ev := range events {
-		if ev.Type == AgentEventTypeError {
-			t.Fatalf("unexpected error: %v", ev.Err)
-		}
-	}
-	all, err := store.List(ctx, "s-plan-nudge")
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	var nudges int
-	for _, m := range all {
-		if m.Hidden && m.Text == planProgressNudgeText {
-			nudges++
-		}
-	}
-	if nudges != maxMidTurnPlanNudges {
-		t.Fatalf("expected exactly %d mid-turn plan nudge(s), got %d", maxMidTurnPlanNudges, nudges)
-	}
-}
-
 // roListTool is a read-only non-file tool, used to exercise the storm path
 // (identical args) without tripping the file-coverage progress guard first.
 type roListTool struct{}
@@ -428,38 +395,6 @@ func (p *identicalReadProvider) StreamResponse(_ context.Context, _ []Message, t
 		return eventStream(endTurnEvent("forced summary"))
 	}
 	return eventStream(toolUseEvent(toolCall(fmt.Sprintf("tc-%d", p.calls), "list_dir", `{"path":"/x"}`)))
-}
-
-func TestPlanModeStormTriggersMidTurnNudge(t *testing.T) {
-	store := NewInMemoryStore()
-	prov := &identicalReadProvider{}
-	a := NewAgent(prov, store, []Tool{roListTool{}})
-	WithSessionMode(session.ModePlan)(a)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	events, err := a.RunStream(ctx, "s-plan-storm", "go")
-	if err != nil {
-		t.Fatalf("RunStream: %v", err)
-	}
-	for ev := range events {
-		if ev.Type == AgentEventTypeError {
-			t.Fatalf("unexpected error: %v", ev.Err)
-		}
-	}
-	all, err := store.List(ctx, "s-plan-storm")
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	var nudges int
-	for _, m := range all {
-		if m.Hidden && m.Text == planProgressNudgeText {
-			nudges++
-		}
-	}
-	if nudges != maxMidTurnPlanNudges {
-		t.Fatalf("expected exactly %d mid-turn plan nudge(s) from a storm, got %d", maxMidTurnPlanNudges, nudges)
-	}
 }
 
 func TestAgentLoopWithToolRoundTrip(t *testing.T) {

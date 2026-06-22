@@ -479,8 +479,8 @@ func shouldRetryStreamError(err error) bool {
 	// assistant content and no tool calls) produced nothing usable and was not
 	// billed for output tokens, so re-issuing the same request is safe and
 	// usually succeeds — the empty body is DeepSeek-side sampling variance, not a
-	// deterministic rejection. This is the "couldn't make plan" failure: in Plan
-	// mode the turn dies before the <proposed_plan> block is emitted. It arrives
+	// deterministic rejection. In Plan mode this is the "couldn't make plan"
+	// failure: the turn dies before the model writes its plan reply. It arrives
 	// wrapped as a progress/terminal error (reasoning deltas mark the stream as
 	// progressed), so check it before the blanket progress/terminal short-circuit
 	// below. The stream-retry path resets accumulated reasoning/text via the

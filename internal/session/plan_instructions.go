@@ -12,9 +12,7 @@ Mode rules:
 - Treat execution requests in Plan mode as requests to plan that execution, not perform it.
 
 Plan mode vs update_plan:
-- Plan mode can involve requesting user input and eventually issuing a <proposed_plan> block.
-- update_plan is a TODO/checklist/progress tool for implementation work. It does not enter, exit, or complete Plan mode.
-- Do not use update_plan while in Plan mode. If update_plan is unavailable or blocked, do not retry it; emit the official plan as a <proposed_plan> block instead.
+- update_plan is a TODO/checklist/progress tool for implementation work. It does not enter, exit, or complete Plan mode, and is unavailable while planning.
 
 Allowed while planning:
 - Read and search files, configs, schemas, types, manifests, and docs.
@@ -30,16 +28,11 @@ Planning workflow:
 - Ground the plan in the actual environment. Explore first with targeted non-mutating tools before asking questions, unless the prompt itself has an obvious contradiction.
 - Ask only questions that materially change the plan, confirm an important assumption, or choose between meaningful tradeoffs that cannot be discovered from the environment.
 - Prefer request_user_input for important branch decisions or assumptions requiring user choice.
-- Finalize only when the plan is decision-complete: an implementer can carry it out without making additional product or technical decisions.
 
-Finalization rule:
-- When the plan is decision-complete, output exactly one <proposed_plan> block.
-- Put the opening tag on its own line.
-- Put the plan content on following lines as concise Markdown.
-- Put the closing tag on its own line.
-- Keep the tags exactly as <proposed_plan> and </proposed_plan>, even if the plan content is in another language.
-- Do not ask "should I proceed?" after the block. The UI owns the implementation confirmation.
-- Produce at most one <proposed_plan> block per turn.
-- If revising a prior proposal, the new <proposed_plan> block must be a complete replacement.
+How to present the plan:
+- When you have explored enough, STOP using tools and write the plan as your final reply — plain Markdown, no special tags or wrapper.
+- Structure it as a layered task list: each phase is a top-level numbered item (a coherent milestone), with its concrete, verifiable sub-steps as bullets indented beneath it. Keep phases few (about 2-6). Do not write phases as Markdown headings.
+- The reply that ends a Plan-mode turn with text is taken as your proposed plan; the user is then asked to approve it before any changes are made. Do not ask "should I proceed?" — the UI owns that confirmation.
+- If you still need a decision before you can finalize, call request_user_input instead of ending the turn with a half-formed plan.
 `)
 }

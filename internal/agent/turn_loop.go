@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/usewhale/whale/internal/compact"
 	"github.com/usewhale/whale/internal/core"
@@ -121,8 +122,7 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 		modelTurns := 0
 		toolIters := 0
 		toolCalls := 0
-		planProposalNudges := 0
-		midTurnPlanNudges := 0
+		planLoopNudges := 0
 		consecutiveStormRounds := 0
 		consecutiveRedundantRounds := 0
 		progress := &progressTracker{}
@@ -287,22 +287,21 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 				} else {
 					consecutiveRedundantRounds = 0
 				}
-				// Plan-mode mid-turn intervention: a Plan turn that spins never
-				// ends, so the end-of-turn proposal nudge can't reach it. Either
-				// spinning signal — an identical-call storm or same-target
-				// redundancy — means the model is re-checking instead of
-				// finalizing, so nudge it in-flight to emit the plan before any
-				// hard force-summary fires.
-				if a.mode == session.ModePlan && midTurnPlanNudges < maxMidTurnPlanNudges &&
-					(stormRound || consecutiveRedundantRounds >= planRedundancyNudgeThreshold) {
-					midTurnPlanNudges++
+				loopDetected := consecutiveStormRounds >= maxConsecutiveStormRounds ||
+					consecutiveRedundantRounds >= maxConsecutiveRedundantRounds
+				// In Plan mode, a spinning turn never ends on its own, so the
+				// end-of-turn finalization can't reach it. Before the runaway-loop
+				// guard terminates planning with a contentless force-summary, give
+				// the model one chance to stop investigating and write its plan.
+				if loopDetected && a.mode == session.ModePlan && planLoopNudges < maxPlanLoopNudges {
+					planLoopNudges++
 					consecutiveStormRounds = 0
 					consecutiveRedundantRounds = 0
 					progress.reset()
 					if a.repairer != nil {
 						a.repairer.resetStorm()
 					}
-					nudge, err := a.persistPlanProgressNudge(ctx, sessionID)
+					nudge, err := a.persistPlanLoopNudge(ctx, sessionID)
 					if err != nil {
 						emit(AgentEvent{Type: AgentEventTypeError, Err: err})
 						return
@@ -354,22 +353,13 @@ func (a *Agent) runStreamWithNewMessages(ctx context.Context, sessionID string, 
 				}
 				continue
 			}
-			// Plan mode finished without a <proposed_plan> block (e.g. the model
-			// stopped right after a "Here's the plan:" preamble). Re-prompt it to
-			// emit the block so the turn yields an approvable plan instead of a
-			// dead end. Bounded; on exhaustion fall through and surface the answer.
-			if a.planProposalMissing(assistant) && planProposalNudges < maxPlanProposalNudges {
-				planProposalNudges++
-				rt.Log.Append(assistant)
-				history = append(history, assistant)
-				nudge, err := a.persistPlanProposalNudge(ctx, sessionID)
-				if err != nil {
-					emit(AgentEvent{Type: AgentEventTypeError, Err: err})
-					return
-				}
-				rt.Log.Append(nudge)
-				history = append(history, nudge)
-				continue
+			// Plan-as-reply finalization: in Plan mode the assistant's final
+			// answer IS the plan. A turn that ends with text (rather than a tool
+			// call such as request_user_input) is an approvable plan, so emit
+			// PlanCompleted to open the implementation gate. An empty final turn
+			// yields no plan — the user can simply ask again — matching reasonix.
+			if a.mode == session.ModePlan && strings.TrimSpace(assistant.Text) != "" {
+				emit(AgentEvent{Type: AgentEventTypePlanCompleted, Content: assistant.Text})
 			}
 			emit(AgentEvent{Type: AgentEventTypeDone, Message: &assistant})
 			return

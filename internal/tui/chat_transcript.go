@@ -100,6 +100,22 @@ func (m model) liveTranscriptMessages() []tuirender.UIMessage {
 	if m.assembler != nil {
 		assemblerMessages = m.assembler.Snapshot()
 	}
+	// While a Plan-mode turn is still streaming and no plan has been finalized
+	// (plan_completed), render its plan deltas as ordinary assistant text rather
+	// than a Proposed Plan card. The model streams every reply — including any
+	// pre-tool preamble ("let me inspect the file first") — as plan deltas, so
+	// showing the card chrome before finalization makes that interim text flash as
+	// a Proposed Plan and then revert. Snapshot returns a copy, so this is a
+	// display-only reclassification; the assembler keeps KindPlan for SetPlan to
+	// finalize once plan_completed arrives.
+	if m.busy && m.chatMode == "plan" && !m.sawPlanCompletedThisTurn {
+		for i := range assemblerMessages {
+			if assemblerMessages[i].Kind == tuirender.KindPlan {
+				assemblerMessages[i].Kind = tuirender.KindText
+				assemblerMessages[i].Role = "assistant"
+			}
+		}
+	}
 	before, after := splitAssemblerAroundTimeline(assemblerMessages)
 	timelineMessages := m.timelineSnapshotMessages()
 	out := make([]tuirender.UIMessage, 0, len(before)+len(timelineMessages)+len(after))
@@ -129,6 +145,17 @@ func isModelOutputMessage(msg tuirender.UIMessage) bool {
 func (m *model) commitLiveTranscript(forceBottom bool) {
 	if m.assembler == nil && m.timeline == nil {
 		return
+	}
+	// A Plan-mode turn streams its content as plan deltas, including any preamble
+	// the model writes before a tool call ("let me inspect the file first"). When
+	// that turn is committed mid-flight — e.g. a shell_run approval decision
+	// commits the live transcript before the real plan is finalized — the preamble
+	// would freeze into the transcript as a Proposed Plan card that the later
+	// plan_completed can no longer replace. Demote any not-yet-completed plan card
+	// to ordinary assistant text first. Gated on busy so hydrated plan cards from
+	// past completed turns are never demoted.
+	if m.busy && m.chatMode == "plan" && !m.sawPlanCompletedThisTurn && m.assembler != nil {
+		m.assembler.DemoteUncompletedPlan()
 	}
 	if m.assembler != nil {
 		before, after := splitAssemblerAroundTimeline(m.assembler.Snapshot())

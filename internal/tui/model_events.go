@@ -214,8 +214,7 @@ func (m *model) handleTurnDone(ev protocol.Event) tea.Cmd {
 	m.addLog(logEntry{Kind: "turn_done", Source: "assistant", Summary: truncateLine(ev.LastResponse, 120), Raw: ev.LastResponse})
 	m.status = "ready"
 	queuedTurnStarted := false
-	queuedRestored := false
-	shouldOpenPlanPicker := wasBusy && !wasBlockingModal && m.chatMode == "plan" && m.sawPlanThisTurn && m.mode == modeChat
+	shouldOpenPlanPicker := wasBusy && !wasBlockingModal && m.chatMode == "plan" && m.sawPlanCompletedThisTurn && m.mode == modeChat
 	eventCmd := turnScrollbackCmd
 	pendingWindowsInput := m.snapshotWindowsBusyInput()
 	if wasStopping {
@@ -223,11 +222,9 @@ func (m *model) handleTurnDone(ev protocol.Event) tea.Cmd {
 		if m.submitQueuedPromptAfterInterrupt && len(m.queuedPrompts) > 0 {
 			eventCmd = tea.Batch(eventCmd, m.submitQueuedPromptAfterInterruptNow(pendingWindowsInput))
 			queuedTurnStarted = true
-			queuedRestored = true
 		} else {
 			m.submitQueuedPromptAfterInterrupt = false
-			var restoreCmd tea.Cmd
-			queuedRestored, restoreCmd = m.restoreQueuedPromptsToComposerWithWindowsInput(pendingWindowsInput)
+			_, restoreCmd := m.restoreQueuedPromptsToComposerWithWindowsInput(pendingWindowsInput)
 			eventCmd = tea.Batch(eventCmd, restoreCmd)
 		}
 	} else {
@@ -238,6 +235,15 @@ func (m *model) handleTurnDone(ev protocol.Event) tea.Cmd {
 			m.deferredPlanPicker = true
 		}
 		m.status = "wait for command to finish"
+	} else if !wasStopping && shouldOpenPlanPicker {
+		// A proposed plan is pending approval. The implementation picker is the
+		// structured approve/decline gate and must take priority: do NOT submit a
+		// queued or typed prompt as another model turn here — that bypasses the
+		// gate and lets the model (mis)interpret arbitrary input (e.g. a stray "\")
+		// as approval. Preserve any queued text in the composer so it survives for
+		// after the user's decision; the picker opens below.
+		_, restoreCmd := m.restoreQueuedPromptsToComposerWithWindowsInput(pendingWindowsInput)
+		eventCmd = tea.Batch(eventCmd, restoreCmd)
 	} else if !wasStopping {
 		if next, ok := m.popQueuedPrompt(); ok {
 			m.deferredPlanPicker = false
@@ -245,7 +251,11 @@ func (m *model) handleTurnDone(ev protocol.Event) tea.Cmd {
 			queuedTurnStarted = true
 		}
 	}
-	if !queuedTurnStarted && !queuedRestored && m.localSubmitPending == 0 && !m.hasPendingWindowsBusyInput() && shouldOpenPlanPicker {
+	// The plan picker opens even when queued text was just restored to the
+	// composer: the pending plan must still be gated. A wasStopping restore is
+	// mutually exclusive with shouldOpenPlanPicker (it interrupts a turn rather
+	// than completing one), so it never satisfies this condition.
+	if !queuedTurnStarted && m.localSubmitPending == 0 && !m.hasPendingWindowsBusyInput() && shouldOpenPlanPicker {
 		m.openPlanImplementationPicker()
 	}
 	// Desktop notification: only if user has been idle for 6+ seconds.
@@ -369,6 +379,7 @@ func isSessionNotice(text string) bool {
 
 func (m *model) resetTurnVisibility() {
 	m.sawPlanThisTurn = false
+	m.sawPlanCompletedThisTurn = false
 	m.sawAssistantThisTurn = false
 	m.sawReasoningThisTurn = false
 	m.sawTerminalToolOutcomeThisTurn = false

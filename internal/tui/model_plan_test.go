@@ -19,7 +19,7 @@ func TestPlanTurnDoneWithAssistantButNoProposedPlanShowsRecoveryNotice(t *testin
 		busy:      true,
 	}
 	next, _ := m.Update(svcMsg(protocol.Event{
-		Kind: protocol.EventAssistantDelta,
+		Kind: protocol.EventPlanDelta,
 		Text: "Here is the test execution plan:\n\n- Run TUI tests\n- Run full tests",
 	}))
 	m = next.(model)
@@ -27,17 +27,154 @@ func TestPlanTurnDoneWithAssistantButNoProposedPlanShowsRecoveryNotice(t *testin
 	m = next.(model)
 
 	if m.mode == modePlanImplementation {
-		t.Fatal("did not expect implementation picker without a proposed_plan block")
+		t.Fatal("did not expect implementation picker without a completed plan")
 	}
 	got := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
 	if !strings.Contains(got, "Here is the test execution plan") {
-		t.Fatalf("expected assistant text to remain visible:\n%s", got)
+		t.Fatalf("expected investigation text to remain visible:\n%s", got)
 	}
-	if !strings.Contains(got, "No proposed plan was produced") || !strings.Contains(got, "<proposed_plan>") {
-		t.Fatalf("expected missing proposed plan recovery notice in transcript:\n%s", got)
+	if strings.Contains(got, "Proposed Plan") {
+		t.Fatalf("uncompleted investigation text must not render as a Proposed Plan card:\n%s", got)
 	}
-	if m.sawAssistantThisTurn || m.sawPlanThisTurn {
+	if !strings.Contains(got, "No plan was produced") || !strings.Contains(got, "final plan as its reply") {
+		t.Fatalf("expected missing plan recovery notice in transcript:\n%s", got)
+	}
+	if m.sawPlanThisTurn || m.sawPlanCompletedThisTurn {
 		t.Fatal("expected turn tracking flags to reset")
+	}
+}
+
+// A Plan-mode turn that streamed only investigation preamble (plan_delta) but
+// never finalized a plan (no plan_completed — e.g. it ended via a cap/forced
+// summary) must NOT open the implementation picker: there is nothing to approve.
+func TestPlanTurnDoneWithPlanDeltaButNoCompletionDoesNotShowPicker(t *testing.T) {
+	m := model{
+		assembler: tuirender.NewAssembler(),
+		mode:      modeChat,
+		chatMode:  "plan",
+		width:     80,
+		height:    24,
+		busy:      true,
+	}
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventPlanDelta, Text: "Let me inspect the file first."}))
+	m = next.(model)
+	if !m.sawPlanThisTurn {
+		t.Fatal("plan_delta should mark sawPlanThisTurn")
+	}
+	if m.sawPlanCompletedThisTurn {
+		t.Fatal("plan_delta alone must not mark a completed plan")
+	}
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
+	m = next.(model)
+
+	if m.mode == modePlanImplementation {
+		t.Fatal("implementation picker must not open without a completed plan")
+	}
+	if m.deferredPlanPicker {
+		t.Fatal("picker must not be deferred without a completed plan")
+	}
+}
+
+// A Plan-mode preamble streamed as a plan delta must not freeze into the
+// transcript as a Proposed Plan card when the turn is committed mid-flight (e.g.
+// a shell_run approval decision) before the real plan is finalized. It should be
+// demoted to ordinary assistant text; the later finalized plan renders the card.
+func TestPlanModePreambleDemotedOnMidTurnCommit(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, chatMode: "plan", width: 80, height: 24, busy: true}
+
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventPlanDelta, Text: "Let me first explore the file."}))
+	m = next.(model)
+	// Mid-turn commit before the plan is finalized (no plan_completed yet).
+	m.commitLiveTranscript(false)
+
+	for _, msg := range m.transcript {
+		if msg.Kind == tuirender.KindPlan {
+			t.Fatalf("preamble must not be committed as a Proposed Plan card: %+v", msg)
+		}
+	}
+	joined := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
+	if !strings.Contains(joined, "Let me first explore") {
+		t.Fatalf("preamble text should remain visible as assistant text:\n%s", joined)
+	}
+	if strings.Contains(joined, "Proposed Plan") {
+		t.Fatalf("preamble must not render under a Proposed Plan card:\n%s", joined)
+	}
+
+	// The real plan then finalizes and renders as a Proposed Plan card.
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventPlanCompleted, Text: "# Plan\n- do the thing"}))
+	m = next.(model)
+	foundPlan := false
+	for _, msg := range m.transcript {
+		if msg.Kind == tuirender.KindPlan && strings.Contains(msg.Text, "do the thing") {
+			foundPlan = true
+		}
+	}
+	if !foundPlan {
+		t.Fatalf("finalized plan should render as a Proposed Plan card, transcript=%+v", m.transcript)
+	}
+}
+
+// In-progress Plan-mode content (plan deltas before plan_completed) must render
+// in the live view as ordinary assistant text, never as a Proposed Plan card —
+// otherwise interim preamble flashes the card chrome and then reverts.
+func TestPlanModeLiveDeltasRenderAsTextUntilCompleted(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, chatMode: "plan", width: 80, height: 24, busy: true}
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventPlanDelta, Text: "Let me first explore the file."}))
+	m = next.(model)
+
+	live := m.liveTranscriptMessages()
+	for _, msg := range live {
+		if msg.Kind == tuirender.KindPlan {
+			t.Fatalf("in-progress plan delta must not render as a plan card: %+v", msg)
+		}
+	}
+	joined := strings.Join(tuirender.ChatLines(live, 80), "\n")
+	if !strings.Contains(joined, "Let me first explore") {
+		t.Fatalf("plan delta text should be visible as assistant text:\n%s", joined)
+	}
+	if strings.Contains(joined, "Proposed Plan") {
+		t.Fatalf("must not show Proposed Plan card while streaming:\n%s", joined)
+	}
+
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventPlanCompleted, Text: "# Plan\n- do the thing"}))
+	m = next.(model)
+	full := strings.Join(tuirender.ChatLines(m.transcript, 80), "\n")
+	if !strings.Contains(full, "Proposed Plan") || !strings.Contains(full, "do the thing") {
+		t.Fatalf("finalized plan should render as a Proposed Plan card:\n%s", full)
+	}
+}
+
+// A Plan-mode turn that replies directly (no tool rounds) finalizes the plan via
+// plan_completed; the turn-done reconcile must NOT also append the plan text as a
+// separate assistant bubble — otherwise the same content renders twice (once as a
+// Proposed Plan card, once as plain text).
+func TestPlanTurnDoneDoesNotDuplicateCompletedPlanAsAssistantText(t *testing.T) {
+	m := model{assembler: tuirender.NewAssembler(), mode: modeChat, chatMode: "plan", width: 80, height: 24, busy: true}
+	const plan = "I'm in Plan mode, so I can't commit. Switch to Agent mode to proceed."
+
+	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventPlanDelta, Text: plan}))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventPlanCompleted, Text: plan}))
+	m = next.(model)
+	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone, LastResponse: plan, Metadata: agentTurnMetadata()}))
+	m = next.(model)
+
+	plans, texts := 0, 0
+	for _, msg := range m.transcript {
+		switch msg.Kind {
+		case tuirender.KindPlan:
+			plans++
+		case tuirender.KindText:
+			if msg.Role == "assistant" && strings.Contains(msg.Text, "Plan mode") {
+				texts++
+			}
+		}
+	}
+	if plans != 1 {
+		t.Fatalf("expected exactly one Proposed Plan card, got %d (transcript=%+v)", plans, m.transcript)
+	}
+	if texts != 0 {
+		t.Fatalf("plan must not be duplicated as an assistant text bubble, got %d (transcript=%+v)", texts, m.transcript)
 	}
 }
 
@@ -87,19 +224,29 @@ func TestMarkNoFinalAnswerIfNeededAddsPlanNotice(t *testing.T) {
 }
 func TestMarkMissingProposedPlanIfNeededAddsRecoveryNotice(t *testing.T) {
 	m := model{
-		assembler:            tuirender.NewAssembler(),
-		chatMode:             "plan",
-		sawAssistantThisTurn: true,
+		assembler:       tuirender.NewAssembler(),
+		chatMode:        "plan",
+		sawPlanThisTurn: true,
 	}
+	// A streamed-but-uncompleted plan card should be demoted, then flagged.
+	m.assembler.AddPlanDelta("Let me inspect the file first.")
 	if !m.markMissingProposedPlanIfNeeded(true) {
 		t.Fatal("expected missing proposed plan to be marked")
 	}
 	snap := m.assembler.Snapshot()
-	if len(snap) != 1 {
-		t.Fatalf("expected one user-visible notice entry, got %+v", snap)
+	for _, msg := range snap {
+		if msg.Kind == tuirender.KindPlan {
+			t.Fatalf("uncompleted plan card should be demoted, got %+v", msg)
+		}
 	}
-	if snap[0].Kind != tuirender.KindStatus || !strings.Contains(snap[0].Text, "No proposed plan was produced") || !strings.Contains(snap[0].Text, "<proposed_plan>") {
-		t.Fatalf("expected missing proposed plan recovery notice, got %+v", snap[0])
+	var status tuirender.UIMessage
+	for _, msg := range snap {
+		if msg.Kind == tuirender.KindStatus {
+			status = msg
+		}
+	}
+	if !strings.Contains(status.Text, "No plan was produced") || !strings.Contains(status.Text, "final plan as its reply") {
+		t.Fatalf("expected missing plan recovery notice, got %+v", status)
 	}
 	if len(m.logs) != 1 || m.logs[0].Kind != "missing_proposed_plan" {
 		t.Fatalf("expected diagnostic log entry, got %+v", m.logs)
@@ -107,10 +254,10 @@ func TestMarkMissingProposedPlanIfNeededAddsRecoveryNotice(t *testing.T) {
 }
 func TestMarkMissingProposedPlanIfNeededSkippedWithPlan(t *testing.T) {
 	m := model{
-		assembler:            tuirender.NewAssembler(),
-		chatMode:             "plan",
-		sawAssistantThisTurn: true,
-		sawPlanThisTurn:      true,
+		assembler:                tuirender.NewAssembler(),
+		chatMode:                 "plan",
+		sawPlanThisTurn:          true,
+		sawPlanCompletedThisTurn: true,
 	}
 	if m.markMissingProposedPlanIfNeeded(true) {
 		t.Fatal("did not expect missing proposed plan notice after plan completion")
@@ -168,22 +315,32 @@ func TestSlashSuggestionPlanAutoRunsWhenSelected(t *testing.T) {
 		t.Fatalf("expected /plan autorun not to start working state, busy=%v busySince=%v", m.busy, m.busySince)
 	}
 }
-func TestQueuedPromptSuppressesPlanImplementationPicker(t *testing.T) {
+// A pending plan must be gated: a queued/typed prompt must NOT bypass the picker
+// by running as another model turn (that would let the model misread arbitrary
+// input as approval). The picker opens; the queued text is restored to the
+// composer for after the decision, not submitted.
+func TestPlanImplementationPickerTakesPriorityOverQueuedPrompt(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.busy = true
 	m.chatMode = "plan"
 	m.mode = modeChat
 	m.sawPlanThisTurn = true
+	m.sawPlanCompletedThisTurn = true
 	m.queuedPrompts = []queuedPrompt{{Text: "queued follow up"}}
 
 	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
 	m = next.(model)
 
-	if m.mode == modePlanImplementation {
-		t.Fatal("queued prompt should suppress plan implementation picker")
+	if m.mode != modePlanImplementation {
+		t.Fatalf("expected plan implementation picker to take priority, got mode %v", m.mode)
 	}
-	if len(*intents) != 1 || (*intents)[0].Input != "queued follow up" {
-		t.Fatalf("expected queued follow-up submitted, got %+v", *intents)
+	for _, in := range *intents {
+		if in.Input == "queued follow up" {
+			t.Fatalf("queued prompt must not be submitted as a model turn while a plan is pending, got %+v", *intents)
+		}
+	}
+	if !strings.Contains(m.input.Value(), "queued follow up") {
+		t.Fatalf("queued text should be restored to the composer, got %q", m.input.Value())
 	}
 }
 func TestPlanImplementationPickerDefersUntilLocalSubmitDone(t *testing.T) {
@@ -192,6 +349,7 @@ func TestPlanImplementationPickerDefersUntilLocalSubmitDone(t *testing.T) {
 	m.chatMode = "plan"
 	m.mode = modeChat
 	m.sawPlanThisTurn = true
+	m.sawPlanCompletedThisTurn = true
 	m.localSubmitPending = 1
 
 	next, _ := m.Update(svcMsg(protocol.Event{Kind: protocol.EventTurnDone}))
@@ -227,12 +385,16 @@ func TestPlanImplementationPickerDefersUntilLocalSubmitDone(t *testing.T) {
 		t.Fatalf("expected implementation intent after pending local submit clears, got %+v", *intents)
 	}
 }
-func TestQueuedPromptSuppressesDeferredPlanImplementationPicker(t *testing.T) {
+// Even with a queued prompt, a deferred plan picker (held back by an in-flight
+// local submit) must take priority once the local submit finishes: the picker
+// opens and the queued text is restored to the composer, not run as a model turn.
+func TestDeferredPlanImplementationPickerTakesPriorityOverQueuedPrompt(t *testing.T) {
 	m, intents := newModelWithDispatchSpy()
 	m.busy = true
 	m.chatMode = "plan"
 	m.mode = modeChat
 	m.sawPlanThisTurn = true
+	m.sawPlanCompletedThisTurn = true
 	m.localSubmitPending = 1
 	m.queuedPrompts = []queuedPrompt{{Text: "queued follow up"}}
 
@@ -247,14 +409,16 @@ func TestQueuedPromptSuppressesDeferredPlanImplementationPicker(t *testing.T) {
 
 	next, _ = m.Update(svcMsg(protocol.Event{Kind: protocol.EventLocalSubmitDone}))
 	m = next.(model)
-	if m.mode == modePlanImplementation {
-		t.Fatal("queued prompt should suppress deferred implementation picker")
+	if m.mode != modePlanImplementation {
+		t.Fatalf("expected deferred picker to open after local submit done, got mode %v", m.mode)
 	}
-	if m.deferredPlanPicker {
-		t.Fatal("expected queued prompt to clear deferred implementation picker")
+	for _, in := range *intents {
+		if in.Input == "queued follow up" {
+			t.Fatalf("queued prompt must not be submitted while a plan is pending, got %+v", *intents)
+		}
 	}
-	if len(*intents) != 1 || (*intents)[0].Kind != protocol.IntentSubmit || (*intents)[0].Input != "queued follow up" {
-		t.Fatalf("expected queued follow-up submitted after local submit done, got %+v", *intents)
+	if !strings.Contains(m.input.Value(), "queued follow up") {
+		t.Fatalf("queued text should be restored to the composer, got %q", m.input.Value())
 	}
 }
 func TestPlanCompletedReplacesPartialPlanAndTurnDoneShowsPicker(t *testing.T) {
@@ -329,6 +493,7 @@ func TestPlanImplementationNoDeclinesAndClearsPendingPlan(t *testing.T) {
 	m.planImplementation.index = 1
 	m.lastProposedPlan = "# Plan\n- Patch it"
 	m.sawPlanThisTurn = true
+	m.sawPlanCompletedThisTurn = true
 	m.deferredPlanPicker = true
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -353,6 +518,7 @@ func TestPlanImplementationEscDeclinesAndStaysInPlanMode(t *testing.T) {
 	m.chatMode = "plan"
 	m.lastProposedPlan = "# Plan\n- Patch it"
 	m.sawPlanThisTurn = true
+	m.sawPlanCompletedThisTurn = true
 	m.deferredPlanPicker = true
 
 	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
