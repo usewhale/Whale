@@ -116,30 +116,32 @@ func (m model) liveTranscriptMessages() []tuirender.UIMessage {
 			}
 		}
 	}
-	before, after := splitAssemblerAroundTimeline(assemblerMessages)
-	timelineMessages := m.timelineSnapshotMessages()
-	out := make([]tuirender.UIMessage, 0, len(before)+len(timelineMessages)+len(after))
-	out = append(out, m.visibleLiveMessages(before)...)
-	out = append(out, m.visibleLiveMessages(timelineMessages)...)
-	out = append(out, m.visibleLiveMessages(after)...)
+	merged := mergeBySeq(assemblerMessages, m.timelineSnapshotMessages())
+	return m.visibleLiveMessages(merged)
+}
+
+// mergeBySeq interleaves the assembler's text rows with the timeline's tool rows
+// by their render sequence, restoring the true text<->tool ordering that the old
+// before/timeline/after split collapsed. Both inputs are already ascending by
+// Seq (assembler stamps in append order; timeline items are anchored to an
+// ascending SeqFloor), so this is a standard merge of two sorted lists.
+// Unsequenced rows (Seq == 0) sort first, which only happens when neither side
+// carries sequence info — harmless for the empty/degenerate cases.
+func mergeBySeq(assembler, timeline []tuirender.UIMessage) []tuirender.UIMessage {
+	out := make([]tuirender.UIMessage, 0, len(assembler)+len(timeline))
+	i, j := 0, 0
+	for i < len(assembler) && j < len(timeline) {
+		if timeline[j].Seq < assembler[i].Seq {
+			out = append(out, timeline[j])
+			j++
+		} else {
+			out = append(out, assembler[i])
+			i++
+		}
+	}
+	out = append(out, assembler[i:]...)
+	out = append(out, timeline[j:]...)
 	return out
-}
-
-func splitAssemblerAroundTimeline(messages []tuirender.UIMessage) ([]tuirender.UIMessage, []tuirender.UIMessage) {
-	split := 0
-	for split < len(messages) && isModelOutputMessage(messages[split]) {
-		split++
-	}
-	return messages[:split], messages[split:]
-}
-
-func isModelOutputMessage(msg tuirender.UIMessage) bool {
-	switch msg.Role {
-	case "assistant", "think", "plan":
-		return msg.Kind == tuirender.KindText || msg.Kind == tuirender.KindThinking || msg.Kind == tuirender.KindPlan
-	default:
-		return false
-	}
 }
 
 func (m *model) commitLiveTranscript(forceBottom bool) {
@@ -158,10 +160,7 @@ func (m *model) commitLiveTranscript(forceBottom bool) {
 		m.assembler.DemoteUncompletedPlan()
 	}
 	if m.assembler != nil {
-		before, after := splitAssemblerAroundTimeline(m.assembler.Snapshot())
-		m.appendTranscriptMessages(before)
-		m.appendTranscriptMessages(m.timelineSnapshotMessages())
-		m.appendTranscriptMessages(after)
+		m.appendTranscriptMessages(mergeBySeq(m.assembler.Snapshot(), m.timelineSnapshotMessages()))
 		m.assembler.Reset()
 	} else {
 		m.appendTranscriptMessages(m.timelineSnapshotMessages())

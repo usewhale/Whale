@@ -21,6 +21,52 @@ func (m *model) resetTimeline() {
 	if m.timeline != nil {
 		m.timeline.Reset()
 	}
+	m.timelineItemSeq = nil
+	m.timelineSeqTiebreak = 0
+	// The timeline seq map and the assembler's sequence floor are one numbering
+	// space; reset them together. Resetting the timeline alone (while the
+	// assembler keeps streaming) would let new text reuse sequences already taken
+	// by now-discarded tool rows.
+	m.assembler.ResetSequence()
+}
+
+// ingestTimelineEvent feeds an event into the turn timeline and assigns a render
+// sequence to any newly created item, so it interleaves correctly with the
+// assembler's text rows. All timeline event entry points must go through here
+// (rather than ensureTimeline().HandleEvent directly) or the new item renders
+// unsequenced and floats to the top of the live view.
+func (m *model) ingestTimelineEvent(ev protocol.Event) {
+	m.ensureTimeline().HandleEvent(ev)
+	m.assignTimelineSeqs()
+}
+
+// assignTimelineSeqs stamps a render sequence onto timeline items that do not
+// have one yet. The anchor is the assembler's current SeqFloor (text emitted so
+// far this turn); a per-turn tiebreak keeps multiple tools created at the same
+// floor in creation order.
+func (m *model) assignTimelineSeqs() {
+	if m.timeline == nil {
+		return
+	}
+	floor := m.assembler.SeqFloor()
+	added := false
+	for _, item := range m.timeline.Snapshot().Items {
+		if _, ok := m.timelineItemSeq[item.ID]; ok {
+			continue
+		}
+		if m.timelineItemSeq == nil {
+			m.timelineItemSeq = map[string]int{}
+		}
+		m.timelineSeqTiebreak++
+		m.timelineItemSeq[item.ID] = floor + m.timelineSeqTiebreak
+		added = true
+	}
+	// A new tool row is a boundary: stop same-role text that resumes after it from
+	// coalescing onto the pre-tool message (which would inherit the pre-tool Seq
+	// and render above the tool).
+	if added && m.assembler != nil {
+		m.assembler.BreakCoalescing()
+	}
 }
 
 func (m model) timelineSnapshotMessages() []tuirender.UIMessage {
@@ -40,10 +86,13 @@ func (m model) hasPendingLifecycleItems() bool {
 func (m model) renderTimelineMessages(snapshot timeline.Snapshot) []tuirender.UIMessage {
 	out := make([]tuirender.UIMessage, 0, len(snapshot.Items))
 	for _, item := range snapshot.Items {
+		seq := m.timelineItemSeq[item.ID]
 		if msg := m.timelineApprovalNotice(item); msg != nil {
+			msg.Seq = seq
 			out = append(out, *msg)
 		}
 		if msg := m.timelineLifecycleMessage(item); msg != nil {
+			msg.Seq = seq
 			out = append(out, *msg)
 		}
 	}

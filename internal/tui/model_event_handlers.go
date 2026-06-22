@@ -184,7 +184,7 @@ func (m *model) handleWorkflowResultEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.sawTerminalToolOutcomeThisTurn = true
 	m.removeNoFinalAnswerStatusMessages()
-	m.ensureTimeline().HandleEvent(ev)
+	m.ingestTimelineEvent(ev)
 	if !m.hasPendingLifecycleItems() {
 		m.commitLiveTranscript(false)
 	} else {
@@ -257,7 +257,7 @@ func (m *model) handleToolCallEvent(ev protocol.Event) {
 		m.sawTerminalToolOutcomeThisTurn = true
 	}
 	if ev.ToolName != "update_plan" {
-		m.ensureTimeline().HandleEvent(ev)
+		m.ingestTimelineEvent(ev)
 		m.refreshLiveViewportContent()
 	}
 	m.addLog(logEntry{
@@ -277,7 +277,7 @@ func (m *model) handleToolResultEvent(ev protocol.Event) tea.Cmd {
 			m.removeNoFinalAnswerStatusMessages()
 		}
 		if ev.ToolName != "update_plan" {
-			m.ensureTimeline().HandleEvent(ev)
+			m.ingestTimelineEvent(ev)
 		}
 		m.addLog(logEntry{Kind: "tool_result_audit", Source: ev.ToolName, Summary: truncateLine(ev.Text, 120), Raw: ev.Text})
 		m.captureDiffMetadata(ev.ToolName, ev.Metadata)
@@ -289,7 +289,7 @@ func (m *model) handleToolResultEvent(ev protocol.Event) tea.Cmd {
 		m.sawTerminalToolOutcomeThisTurn = true
 	}
 	if ev.ToolName != "update_plan" {
-		m.ensureTimeline().HandleEvent(ev)
+		m.ingestTimelineEvent(ev)
 	}
 	m.addLog(logEntry{Kind: "tool_result", Source: ev.ToolName, Summary: truncateLine(ev.Text, 120), Raw: ev.Text})
 	m.captureDiffMetadata(ev.ToolName, ev.Metadata)
@@ -315,7 +315,7 @@ func auditOnlyToolResultEvent(ev protocol.Event) bool {
 
 func (m *model) handleHookStartedEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
-	m.ensureTimeline().HandleEvent(ev)
+	m.ingestTimelineEvent(ev)
 	m.status = ev.Text
 	m.refreshLiveViewportContent()
 	m.addLog(logEntry{Kind: "hook_started", Source: hookLogSource(ev), Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Hook)})
@@ -323,7 +323,7 @@ func (m *model) handleHookStartedEvent(ev protocol.Event) {
 
 func (m *model) handleHookCompletedEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
-	m.ensureTimeline().HandleEvent(ev)
+	m.ingestTimelineEvent(ev)
 	m.status = ev.Text
 	if !m.hasPendingLifecycleItems() {
 		m.commitLiveTranscript(false)
@@ -353,7 +353,7 @@ func (m *model) handleTaskProgressEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
 	m.status = ev.Text
 	if ev.ToolName != "update_plan" {
-		m.ensureTimeline().HandleEvent(ev)
+		m.ingestTimelineEvent(ev)
 		m.refreshLiveViewportContent()
 	}
 	m.addLog(logEntry{Kind: "task_progress", Source: ev.ToolName, Summary: ev.Text, Raw: fmt.Sprintf("%+v", ev.Metadata)})
@@ -379,7 +379,7 @@ func (m *model) handleMCPCompleteEvent(ev protocol.Event) {
 
 func (m *model) handleApprovalRequiredEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
-	m.ensureTimeline().HandleEvent(ev)
+	m.ingestTimelineEvent(ev)
 	m.refreshLiveViewportContent()
 	if m.stopping {
 		if ev.ToolCallID != "" {
@@ -412,7 +412,7 @@ func (m *model) handleApprovalRequiredEvent(ev protocol.Event) {
 
 func (m *model) handleApprovalDecisionEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
-	m.ensureTimeline().HandleEvent(ev)
+	m.ingestTimelineEvent(ev)
 	if ev.Decision == "cancel" || ev.Decision == "deny" {
 		m.sawTerminalToolOutcomeThisTurn = true
 	}
@@ -425,7 +425,7 @@ func (m *model) handleApprovalDecisionEvent(ev protocol.Event) {
 
 func (m *model) handleUserInputRequiredEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
-	m.ensureTimeline().HandleEvent(ev)
+	m.ingestTimelineEvent(ev)
 	m.refreshLiveViewportContent()
 	if m.stopping {
 		if ev.ToolCallID != "" {
@@ -447,7 +447,7 @@ func (m *model) handleUserInputRequiredEvent(ev protocol.Event) {
 
 func (m *model) handleUserInputDoneEvent(ev protocol.Event) {
 	m.clearProviderRetryStatus()
-	m.ensureTimeline().HandleEvent(ev)
+	m.ingestTimelineEvent(ev)
 	if !m.hasPendingLifecycleItems() {
 		m.commitLiveTranscript(false)
 		return
