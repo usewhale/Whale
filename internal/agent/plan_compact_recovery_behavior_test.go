@@ -2,10 +2,12 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/session"
@@ -155,91 +157,216 @@ func TestPlanModeInjectsSystemPrompt(t *testing.T) {
 		}
 	}
 	if !strings.Contains(joinedSystem.String(), "Plan Mode is a collaboration mode for designing the work before implementation") ||
-		!strings.Contains(joinedSystem.String(), "Finalization rule") ||
-		!strings.Contains(joinedSystem.String(), "<proposed_plan>") {
+		!strings.Contains(joinedSystem.String(), "How to present the plan") ||
+		!strings.Contains(joinedSystem.String(), "taken as your proposed plan") {
 		t.Fatalf("unexpected system prompt: %s", joinedSystem.String())
 	}
 }
 
-type finalPlanOnlyProvider struct{}
+// planReplyProvider streams a plain-Markdown plan as the model's reply (deltas
+// plus a matching terminal EventComplete), with no <proposed_plan> sentinel —
+// the plan-as-reply model treats the whole final answer as the plan.
+type planReplyProvider struct{}
 
-func (p *finalPlanOnlyProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
-	out := make(chan ProviderEvent, 2)
-	out <- ProviderEvent{Type: EventContentDelta, Content: "drafting..."}
-	out <- ProviderEvent{
-		Type: EventComplete,
-		Response: &ProviderResponse{
-			FinishReason: FinishReasonEndTurn,
-			Content:      "drafting...\n<proposed_plan>\n# Plan\n- Implement final-content fallback\n</proposed_plan>",
-		},
-	}
-	close(out)
-	return out
+const planReplyText = "# Plan\n1. Add the feature\n   - wire it up\n2. Test it"
+
+func (p *planReplyProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	return eventStream(
+		ProviderEvent{Type: EventContentDelta, Content: "# Plan\n1. Add the feature\n"},
+		ProviderEvent{Type: EventContentDelta, Content: "   - wire it up\n2. Test it"},
+		ProviderEvent{Type: EventComplete, Response: &ProviderResponse{FinishReason: FinishReasonEndTurn, Content: planReplyText}},
+	)
 }
 
-type proposedPlanToolCallProvider struct{}
-
-func (p *proposedPlanToolCallProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
-	out := make(chan ProviderEvent, 1)
-	out <- ProviderEvent{
-		Type: EventComplete,
-		Response: &ProviderResponse{
-			FinishReason: FinishReasonToolUse,
-			ToolCalls: []ToolCall{{
-				ID:    "call-plan",
-				Name:  "proposed_plan",
-				Input: `{"plan":"# Plan\n- Recover fake proposed_plan tool call"}`,
-			}},
-		},
-	}
-	close(out)
-	return out
-}
-
+// streamedPlanNoCompleteProvider streams the plan but never sends a terminal
+// EventComplete (SSE EOF), exercising the channel-close flush path.
 type streamedPlanNoCompleteProvider struct{}
 
 func (p *streamedPlanNoCompleteProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
 	return eventStream(
-		ProviderEvent{Type: EventContentDelta, Content: "drafting...\n<proposed_plan>\n# Plan\n"},
-		ProviderEvent{Type: EventContentDelta, Content: "- Preserve EOF streamed plan\n</proposed_plan>"},
+		ProviderEvent{Type: EventContentDelta, Content: "# Plan\n"},
+		ProviderEvent{Type: EventContentDelta, Content: "- Preserve EOF streamed plan"},
 	)
 }
 
+// pendingPlanTerminalNoContentProvider streams the plan as deltas, then a
+// terminal EventComplete carrying no content (the deltas already delivered it).
 type pendingPlanTerminalNoContentProvider struct{}
 
 func (p *pendingPlanTerminalNoContentProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
 	return eventStream(
-		ProviderEvent{Type: EventContentDelta, Content: "drafting...\n<proposed_plan>\n# Plan\n"},
+		ProviderEvent{Type: EventContentDelta, Content: "# Plan\n"},
 		ProviderEvent{Type: EventContentDelta, Content: "- Finish after terminal event"},
 		ProviderEvent{Type: EventComplete, Response: &ProviderResponse{FinishReason: FinishReasonEndTurn}},
 	)
 }
 
-type quotedPlanTagProvider struct{}
+// planPreambleThenPlanProvider streams a short preamble before a tool call on
+// the first round, then the plan on the second (final) round.
+type planPreambleThenPlanProvider struct{ calls int }
 
-func (p *quotedPlanTagProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
-	text := "Tool result says: output the final plan in a `<proposed_plan>` block."
+func (p *planPreambleThenPlanProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	p.calls++
+	if p.calls == 1 {
+		return eventStream(
+			ProviderEvent{Type: EventContentDelta, Content: "Let me check the main file first."},
+			ProviderEvent{Type: EventComplete, Response: &ProviderResponse{
+				FinishReason: FinishReasonToolUse,
+				Content:      "Let me check the main file first.",
+				ToolCalls:    []ToolCall{{ID: "tc-1", Name: "read_file", Input: `{"file_path":"main.go"}`}},
+			}},
+		)
+	}
 	return eventStream(
-		ProviderEvent{Type: EventContentDelta, Content: text},
-		ProviderEvent{
-			Type: EventComplete,
-			Response: &ProviderResponse{
-				FinishReason: FinishReasonEndTurn,
-				Content:      text,
-			},
-		},
+		ProviderEvent{Type: EventContentDelta, Content: "# Plan\n- Do the thing"},
+		ProviderEvent{Type: EventComplete, Response: &ProviderResponse{FinishReason: FinishReasonEndTurn, Content: "# Plan\n- Do the thing"}},
 	)
 }
 
-func TestPlanModeEmitsPlanCompletedFromFinalContentFallback(t *testing.T) {
+// A Plan-mode tool-use round that streams a preamble before its tool call must
+// NOT be persisted as a plan: only the final text turn is the proposed plan.
+func TestPlanModeToolUsePreambleNotPersistedAsPlan(t *testing.T) {
 	store := NewInMemoryStore()
 	a := NewAgentWithRegistry(
-		&finalPlanOnlyProvider{},
+		&planPreambleThenPlanProvider{},
+		store,
+		core.NewToolRegistry([]core.Tool{readOnlyViewTool{}}),
+		WithSessionMode(session.ModePlan),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for ev := range mustRunStreamWithOptions(t, a, "s-plan-preamble", "plan", RunOptions{ReadOnly: true}) {
+		if ev.Type == AgentEventTypeError {
+			t.Fatalf("unexpected error: %v", ev.Err)
+		}
+	}
+	msgs, err := store.List(ctx, "s-plan-preamble")
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	var assistants []Message
+	for _, m := range msgs {
+		if m.Role == RoleAssistant {
+			assistants = append(assistants, m)
+		}
+	}
+	if len(assistants) < 2 {
+		t.Fatalf("expected at least 2 assistant messages (tool-use round + plan), got %d", len(assistants))
+	}
+	hasPlanPart := func(m Message) bool {
+		for _, part := range m.Parts {
+			if part.Type == core.MessagePartPlan {
+				return true
+			}
+		}
+		return false
+	}
+	preamble := assistants[0]
+	if len(preamble.ToolCalls) == 0 {
+		t.Fatalf("first assistant message should be the tool-use round, got %+v", preamble)
+	}
+	if hasPlanPart(preamble) {
+		t.Fatalf("tool-use preamble must not be persisted as a plan part: %+v", preamble.Parts)
+	}
+	if !strings.Contains(preamble.Text, "check the main file") {
+		t.Fatalf("preamble text should be preserved as ordinary text, got %q", preamble.Text)
+	}
+	final := assistants[len(assistants)-1]
+	if !hasPlanPart(final) {
+		t.Fatalf("final turn should carry the plan part, got %+v", final.Parts)
+	}
+}
+
+// planSpinThenFinalizeProvider re-reads one file (stepping the offset so the
+// progress guard, not the storm breaker, fires) until it sees the plan-loop
+// nudge, then commits to a plan.
+type planSpinThenFinalizeProvider struct{ calls int }
+
+func (p *planSpinThenFinalizeProvider) StreamResponse(_ context.Context, history []Message, _ []Tool) <-chan ProviderEvent {
+	p.calls++
+	for _, m := range history {
+		if m.Hidden && strings.Contains(m.Text, "plan_investigation_stalled") {
+			return eventStream(
+				ProviderEvent{Type: EventContentDelta, Content: "# Plan\n- Finalized after nudge"},
+				ProviderEvent{Type: EventComplete, Response: &ProviderResponse{FinishReason: FinishReasonEndTurn, Content: "# Plan\n- Finalized after nudge"}},
+			)
+		}
+	}
+	input := fmt.Sprintf(`{"file_path":"/x/y.go","limit":1,"offset":%d}`, 600-p.calls)
+	return eventStream(toolUseEvent(toolCall(fmt.Sprintf("tc-%d", p.calls), "read_file", input)))
+}
+
+// A spinning Plan-mode turn must be nudged to finalize (and then emit a plan)
+// rather than dying as a contentless force-summary with no implementation gate.
+func TestPlanModeLoopNudgeFinalizesInsteadOfForceSummary(t *testing.T) {
+	store := NewInMemoryStore()
+	a := NewAgent(&planSpinThenFinalizeProvider{}, store, []Tool{readFileTool{}})
+	WithSessionMode(session.ModePlan)(a)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	events, err := a.RunStreamWithTurnOptions(ctx, "s-plan-loop-nudge", "go", RunOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatalf("RunStream: %v", err)
+	}
+	var (
+		planCompleted string
+		forced        bool
+	)
+	for ev := range events {
+		switch ev.Type {
+		case AgentEventTypePlanCompleted:
+			planCompleted = ev.Content
+		case AgentEventTypeForcedSummaryStarted:
+			forced = true
+		case AgentEventTypeError:
+			t.Fatalf("unexpected error: %v", ev.Err)
+		}
+	}
+	if forced {
+		t.Fatal("plan turn should be nudged to finalize, not force-summarized")
+	}
+	if !strings.Contains(planCompleted, "Finalized after nudge") {
+		t.Fatalf("expected the nudged plan to complete, got %q", planCompleted)
+	}
+	msgs, err := store.List(ctx, "s-plan-loop-nudge")
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	var nudges int
+	for _, m := range msgs {
+		if m.Hidden && m.Text == planLoopNudgeText {
+			nudges++
+		}
+	}
+	if nudges != 1 {
+		t.Fatalf("expected exactly one plan-loop nudge, got %d", nudges)
+	}
+}
+
+// sparsePlanProvider streams only a partial prefix as a delta, then delivers the
+// authoritative full plan on EventComplete — the prefix-completion / sparse-stream
+// shape where the terminal content is the complete answer.
+type sparsePlanProvider struct{}
+
+const sparseFullPlan = "# Plan\n1. Add the feature\n   - wire it up\n2. Test it"
+
+func (p *sparsePlanProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	return eventStream(
+		ProviderEvent{Type: EventContentDelta, Content: "# Plan\n1. Add"},
+		ProviderEvent{Type: EventComplete, Response: &ProviderResponse{FinishReason: FinishReasonEndTurn, Content: sparseFullPlan}},
+	)
+}
+
+func TestPlanModeHonorsTerminalContentOverStreamedPrefix(t *testing.T) {
+	store := NewInMemoryStore()
+	a := NewAgentWithRegistry(
+		&sparsePlanProvider{},
 		store,
 		NewToolRegistry(nil),
 		WithSessionMode(session.ModePlan),
 	)
-	events, err := a.RunStream(context.Background(), "s-final-plan", "plan")
+	events, err := a.RunStream(context.Background(), "s-sparse-plan", "plan")
 	if err != nil {
 		t.Fatalf("run stream failed: %v", err)
 	}
@@ -249,10 +376,10 @@ func TestPlanModeEmitsPlanCompletedFromFinalContentFallback(t *testing.T) {
 			completed = ev.Content
 		}
 	}
-	if !strings.Contains(completed, "Implement final-content fallback") {
-		t.Fatalf("expected final proposed plan, got %q", completed)
+	if completed != sparseFullPlan {
+		t.Fatalf("plan_completed should carry the full terminal plan, got %q", completed)
 	}
-	msgs, err := store.List(context.Background(), "s-final-plan")
+	msgs, err := store.List(context.Background(), "s-sparse-plan")
 	if err != nil {
 		t.Fatalf("list messages: %v", err)
 	}
@@ -262,11 +389,120 @@ func TestPlanModeEmitsPlanCompletedFromFinalContentFallback(t *testing.T) {
 			assistant = msg
 		}
 	}
-	if strings.Contains(assistant.Text, "<proposed_plan>") || strings.Contains(assistant.Text, "</proposed_plan>") {
-		t.Fatalf("assistant text should not persist proposed_plan tags: %q", assistant.Text)
+	var plan string
+	for _, part := range assistant.Parts {
+		if part.Type == core.MessagePartPlan {
+			plan = part.Text
+		}
 	}
-	if strings.TrimSpace(assistant.Text) != "drafting..." {
-		t.Fatalf("assistant visible text = %q, want drafting...", assistant.Text)
+	if plan != sparseFullPlan {
+		t.Fatalf("persisted plan part should be the full terminal plan, got %q", plan)
+	}
+	if got := core.MessagePlainText(assistant); got != sparseFullPlan {
+		t.Fatalf("provider plain text should be the full plan, got %q", got)
+	}
+}
+
+// terminalOnlyPlanProvider delivers the entire plan in the terminal EventComplete
+// with no preceding content deltas — a short plan that fits one chunk.
+type terminalOnlyPlanProvider struct{}
+
+func (p *terminalOnlyPlanProvider) StreamResponse(_ context.Context, _ []Message, _ []Tool) <-chan ProviderEvent {
+	return eventStream(
+		ProviderEvent{Type: EventComplete, Response: &ProviderResponse{FinishReason: FinishReasonEndTurn, Content: "# Plan\n- single chunk plan"}},
+	)
+}
+
+func TestPlanModePersistsTerminalOnlyPlan(t *testing.T) {
+	store := NewInMemoryStore()
+	a := NewAgentWithRegistry(
+		&terminalOnlyPlanProvider{},
+		store,
+		NewToolRegistry(nil),
+		WithSessionMode(session.ModePlan),
+	)
+	events, err := a.RunStream(context.Background(), "s-terminal-only-plan", "plan")
+	if err != nil {
+		t.Fatalf("run stream failed: %v", err)
+	}
+	var completed string
+	sawPlanDelta := false
+	for ev := range events {
+		switch ev.Type {
+		case AgentEventTypePlanDelta:
+			sawPlanDelta = true
+		case AgentEventTypePlanCompleted:
+			completed = ev.Content
+		}
+	}
+	if !sawPlanDelta {
+		t.Fatal("terminal-only plan content should still be emitted as a plan delta")
+	}
+	if !strings.Contains(completed, "single chunk plan") {
+		t.Fatalf("terminal-only plan should still complete, got %q", completed)
+	}
+	msgs, err := store.List(context.Background(), "s-terminal-only-plan")
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	var plan string
+	for _, msg := range msgs {
+		if msg.Role != RoleAssistant {
+			continue
+		}
+		for _, part := range msg.Parts {
+			if part.Type == core.MessagePartPlan {
+				plan = part.Text
+			}
+		}
+	}
+	if !strings.Contains(plan, "single chunk plan") {
+		t.Fatalf("terminal-only plan should be persisted as a plan part, got %q", plan)
+	}
+}
+
+func TestPlanModeEmitsPlanCompletedFromReply(t *testing.T) {
+	store := NewInMemoryStore()
+	a := NewAgentWithRegistry(
+		&planReplyProvider{},
+		store,
+		NewToolRegistry(nil),
+		WithSessionMode(session.ModePlan),
+	)
+	events, err := a.RunStream(context.Background(), "s-plan-reply", "plan")
+	if err != nil {
+		t.Fatalf("run stream failed: %v", err)
+	}
+	var completed string
+	sawPlanDelta := false
+	for ev := range events {
+		switch ev.Type {
+		case AgentEventTypePlanDelta:
+			sawPlanDelta = true
+		case AgentEventTypePlanCompleted:
+			completed = ev.Content
+		case AgentEventTypeAssistantDelta:
+			t.Fatalf("plan-mode reply should stream as plan deltas, not assistant deltas: %q", ev.Content)
+		}
+	}
+	if !sawPlanDelta {
+		t.Fatal("expected the plan reply to stream as plan deltas")
+	}
+	if !strings.Contains(completed, "Add the feature") {
+		t.Fatalf("expected plan completion text, got %q", completed)
+	}
+	msgs, err := store.List(context.Background(), "s-plan-reply")
+	if err != nil {
+		t.Fatalf("list messages: %v", err)
+	}
+	var assistant Message
+	for _, msg := range msgs {
+		if msg.Role == RoleAssistant {
+			assistant = msg
+		}
+	}
+	if strings.TrimSpace(assistant.Text) != planReplyText {
+		t.Fatalf("assistant text = %q, want the full plan reply", assistant.Text)
 	}
 	var plan string
 	for _, part := range assistant.Parts {
@@ -274,62 +510,8 @@ func TestPlanModeEmitsPlanCompletedFromFinalContentFallback(t *testing.T) {
 			plan = part.Text
 		}
 	}
-	if !strings.Contains(plan, "Implement final-content fallback") {
+	if !strings.Contains(plan, "Add the feature") {
 		t.Fatalf("expected structured plan part, parts=%+v", assistant.Parts)
-	}
-}
-
-func TestPlanModeRecoversProposedPlanToolCall(t *testing.T) {
-	store := NewInMemoryStore()
-	a := NewAgentWithRegistry(
-		&proposedPlanToolCallProvider{},
-		store,
-		NewToolRegistry(nil),
-		WithSessionMode(session.ModePlan),
-	)
-	events, err := a.RunStream(context.Background(), "s-proposed-plan-tool-call", "plan")
-	if err != nil {
-		t.Fatalf("run stream failed: %v", err)
-	}
-	var completed string
-	for ev := range events {
-		if ev.Type == AgentEventTypeToolCall {
-			t.Fatalf("proposed_plan fake tool should not be emitted as a tool call: %+v", ev)
-		}
-		if ev.Type == AgentEventTypeToolResult {
-			t.Fatalf("proposed_plan fake tool should not dispatch a tool result: %+v", ev)
-		}
-		if ev.Type == AgentEventTypePlanCompleted {
-			completed = ev.Content
-		}
-	}
-	if !strings.Contains(completed, "Recover fake proposed_plan tool call") {
-		t.Fatalf("expected recovered proposed plan, got %q", completed)
-	}
-	msgs, err := store.List(context.Background(), "s-proposed-plan-tool-call")
-	if err != nil {
-		t.Fatalf("list messages: %v", err)
-	}
-	var assistant Message
-	for _, msg := range msgs {
-		if msg.Role == RoleAssistant {
-			assistant = msg
-		}
-	}
-	if assistant.FinishReason != FinishReasonEndTurn {
-		t.Fatalf("assistant finish reason = %q, want end_turn", assistant.FinishReason)
-	}
-	if len(assistant.ToolCalls) != 0 {
-		t.Fatalf("fake proposed_plan tool call should be cleared, got %+v", assistant.ToolCalls)
-	}
-	var plan string
-	for _, part := range assistant.Parts {
-		if part.Type == core.MessagePartPlan {
-			plan = part.Text
-		}
-	}
-	if !strings.Contains(plan, "Recover fake proposed_plan tool call") {
-		t.Fatalf("expected structured recovered plan part, parts=%+v", assistant.Parts)
 	}
 }
 
@@ -352,7 +534,7 @@ func TestPlanModePersistsCompletedStreamedPlanWithoutEventComplete(t *testing.T)
 		}
 	}
 	if !strings.Contains(completed, "Preserve EOF streamed plan") {
-		t.Fatalf("expected streamed proposed plan completion, got %q", completed)
+		t.Fatalf("expected streamed plan completion, got %q", completed)
 	}
 	msgs, err := store.List(context.Background(), "s-streamed-plan-eof")
 	if err != nil {
@@ -363,12 +545,6 @@ func TestPlanModePersistsCompletedStreamedPlanWithoutEventComplete(t *testing.T)
 		if msg.Role == RoleAssistant {
 			assistant = msg
 		}
-	}
-	if strings.Contains(assistant.Text, "<proposed_plan>") || strings.Contains(assistant.Text, "</proposed_plan>") {
-		t.Fatalf("assistant text should not persist proposed_plan tags: %q", assistant.Text)
-	}
-	if strings.TrimSpace(assistant.Text) != "drafting..." {
-		t.Fatalf("assistant visible text = %q, want drafting...", assistant.Text)
 	}
 	var plan string
 	for _, part := range assistant.Parts {
@@ -426,32 +602,6 @@ func TestPlanModeFinishesPendingPlanAfterTerminalCompleteWithoutContent(t *testi
 	}
 	if got := core.MessagePlainText(assistant); !strings.Contains(got, "Finish after terminal event") {
 		t.Fatalf("provider plain text should include terminal-completed plan, got %q", got)
-	}
-}
-
-func TestPlanModeQuotedProposedPlanTagDoesNotEmitPlanCompleted(t *testing.T) {
-	store := NewInMemoryStore()
-	a := NewAgentWithRegistry(
-		&quotedPlanTagProvider{},
-		store,
-		NewToolRegistry(nil),
-		WithSessionMode(session.ModePlan),
-	)
-	events, err := a.RunStream(context.Background(), "s-quoted-plan-tag", "plan")
-	if err != nil {
-		t.Fatalf("run stream failed: %v", err)
-	}
-	var sawAssistant bool
-	for ev := range events {
-		if ev.Type == AgentEventTypePlanCompleted || ev.Type == AgentEventTypePlanDelta {
-			t.Fatalf("quoted proposed_plan tag should not emit plan events: %+v", ev)
-		}
-		if ev.Type == AgentEventTypeAssistantDelta && strings.Contains(ev.Content, "<proposed_plan>") {
-			sawAssistant = true
-		}
-	}
-	if !sawAssistant {
-		t.Fatal("expected quoted proposed_plan text to remain assistant text")
 	}
 }
 

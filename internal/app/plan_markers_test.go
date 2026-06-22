@@ -60,7 +60,7 @@ func TestEnsureCurrentModeMarkerRecordsInitialModeAndDeduplicates(t *testing.T) 
 	if len(msgs) != 2 {
 		t.Fatalf("messages after mode change = %d, want 2: %+v", len(msgs), msgs)
 	}
-	if got := msgs[1]; !got.Hidden || !strings.Contains(got.Text, "active session mode is now plan") || !strings.Contains(got.Text, "changed from agent") || !strings.Contains(got.Text, "Finalization rule") || !strings.Contains(got.Text, "<proposed_plan>") {
+	if got := msgs[1]; !got.Hidden || !strings.Contains(got.Text, "active session mode is now plan") || !strings.Contains(got.Text, "changed from agent") || !strings.Contains(got.Text, "How to present the plan") || !strings.Contains(got.Text, "taken as your proposed plan") {
 		t.Fatalf("unexpected plan mode marker: %+v", got)
 	}
 }
@@ -184,7 +184,7 @@ func TestEnsureCurrentModeMarkerRefreshesStalePlanInstructionAtTail(t *testing.T
 		t.Fatalf("messages after stale marker refresh = %d, want 2: %+v", len(msgs), msgs)
 	}
 	got := msgs[1]
-	if !got.Hidden || !strings.Contains(got.Text, planModeReminderOpenTag) || !strings.Contains(got.Text, "Finalization rule") || !strings.Contains(got.Text, "<proposed_plan>") {
+	if !got.Hidden || !strings.Contains(got.Text, planModeReminderOpenTag) || !strings.Contains(got.Text, "How to present the plan") || !strings.Contains(got.Text, "taken as your proposed plan") {
 		t.Fatalf("stale marker should be followed by current full reminder: %+v", got)
 	}
 
@@ -241,7 +241,7 @@ func TestEnsureCurrentModeMarkerRefreshesStalePlanInstructionBehindVisibleMessag
 		t.Fatalf("messages after stale marker refresh = %d, want 3: %+v", len(msgs), msgs)
 	}
 	got := msgs[2]
-	if !got.Hidden || !strings.Contains(got.Text, planModeReminderOpenTag) || !strings.Contains(got.Text, "Finalization rule") || !strings.Contains(got.Text, "<proposed_plan>") {
+	if !got.Hidden || !strings.Contains(got.Text, planModeReminderOpenTag) || !strings.Contains(got.Text, "How to present the plan") || !strings.Contains(got.Text, "taken as your proposed plan") {
 		t.Fatalf("stale non-tail marker should force current full reminder: %+v", got)
 	}
 }

@@ -265,6 +265,7 @@ func (m *model) declinePlanImplementation() {
 	m.status = "plan not approved"
 	m.lastProposedPlan = ""
 	m.sawPlanThisTurn = false
+	m.sawPlanCompletedThisTurn = false
 	m.deferredPlanPicker = false
 	m.planImplementation.index = 0
 	m.dispatchIntent(protocol.Intent{Kind: protocol.IntentDeclinePlan})

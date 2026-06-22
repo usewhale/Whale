@@ -48,7 +48,7 @@ func (m *model) hydrateSessionMessages(msgs []protocol.Message) {
 			if len(msg.Parts) > 0 {
 				m.hydrateAssistantParts(msg.Parts)
 			} else if strings.TrimSpace(msg.Text) != "" && !isEnvironmentInventoryBlock(msg.Text) {
-				m.hydrateLegacyAssistantText(msg.Text)
+				m.append("assistant", msg.Text)
 			} else if isEnvironmentInventoryBlock(msg.Text) {
 				m.addEnvironmentSummaryLog("assistant", msg.Text)
 			}
@@ -99,8 +99,6 @@ func (m *model) hydrateAssistantParts(parts []protocol.MessagePart) {
 		case string(core.MessagePartText):
 			if isEnvironmentInventoryBlock(part.Text) {
 				m.addEnvironmentSummaryLog("assistant", part.Text)
-			} else if _, ok := core.ExtractProposedPlanText(part.Text); ok {
-				m.hydrateLegacyAssistantText(part.Text)
 			} else {
 				m.append("assistant", part.Text)
 			}
@@ -111,21 +109,6 @@ func (m *model) hydrateAssistantParts(parts []protocol.MessagePart) {
 			m.assembler.AddPlan(part.Text)
 		}
 	}
-}
-
-func (m *model) hydrateLegacyAssistantText(text string) {
-	if plan, ok := core.ExtractProposedPlanText(text); ok {
-		normal := strings.TrimSpace(core.StripProposedPlanBlocks(text))
-		if normal != "" {
-			m.append("assistant", normal)
-		}
-		if m.assembler == nil {
-			m.assembler = tuirender.NewAssembler()
-		}
-		m.assembler.AddPlan(plan)
-		return
-	}
-	m.append("assistant", text)
 }
 
 func (m *model) addEnvironmentSummaryLog(source, raw string) {

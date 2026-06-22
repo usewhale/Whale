@@ -2,141 +2,78 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 
 	"github.com/usewhale/whale/internal/core"
 	"github.com/usewhale/whale/internal/session"
 )
 
-// planState groups the plan-tracking vars that would otherwise be scattered
-// as individual locals across streamAndHandle.
-type planState struct {
-	parser    core.ProposedPlanParser
-	text      strings.Builder
-	visible   strings.Builder
-	started   bool
-	completed bool
+// maxPlanLoopNudges bounds how many times a spinning Plan-mode turn is nudged to
+// finalize before the runaway-loop guard ends it. One is enough: a plan turn
+// that keeps re-running the same read-only checks should be told to commit to a
+// plan rather than die as an execution-limit summary with no plan and no gate.
+const maxPlanLoopNudges = 1
+
+const planLoopNudgeText = "<plan_investigation_stalled>\nYou keep repeating the same tool calls without moving toward a plan. If you already understand enough, STOP investigating and write your plan now as your final reply (plain Markdown, no special tags). If you genuinely need a decision from the user before you can finalize, call request_user_input instead.\n</plan_investigation_stalled>"
+
+func (a *Agent) persistPlanLoopNudge(ctx context.Context, sessionID string) (core.Message, error) {
+	return a.store.Create(ctx, core.Message{
+		SessionID:    sessionID,
+		Role:         core.RoleUser,
+		Text:         planLoopNudgeText,
+		Hidden:       true,
+		FinishReason: core.FinishReasonEndTurn,
+	})
 }
 
+// planState accumulates the assistant's reply while in Plan mode.
+//
+// In the plan-as-reply model there is no <proposed_plan> sentinel to parse: the
+// plan is simply the model's final answer. Content streams to the plan pane as
+// it arrives (AgentEventTypePlanDelta) and accumulates into text, which becomes
+// the assistant message's text and plan part. The turn loop decides when the
+// turn has ended with a plan and emits AgentEventTypePlanCompleted.
+type planState struct {
+	text strings.Builder
+}
+
+// emitAssistantContentDelta streams one content delta to the client.
+//
+// Outside Plan mode it is an ordinary assistant delta and the raw delta is
+// returned so the caller can append it to the running message text. In Plan mode
+// the whole reply IS the plan, so the delta streams to the plan pane and is
+// accumulated; the returned string is the full accumulated plan (the caller
+// overwrites the message text with it).
 func (a *Agent) emitAssistantContentDelta(ctx context.Context, delta string, ps *planState, events chan<- AgentEvent) (string, bool) {
 	if a.mode != session.ModePlan {
 		return delta, sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypeAssistantDelta, Content: delta})
 	}
-	for _, seg := range ps.parser.Parse(delta) {
-		if !a.emitProposedPlanSegment(ctx, seg, ps, events) {
-			return "", false
-		}
+	if delta == "" {
+		return ps.text.String(), true
 	}
-	return ps.visible.String(), true
+	ps.text.WriteString(delta)
+	return ps.text.String(), sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypePlanDelta, Content: delta})
 }
 
-func (a *Agent) emitProposedPlanSegment(ctx context.Context, seg core.ProposedPlanSegment, ps *planState, events chan<- AgentEvent) bool {
-	switch seg.Kind {
-	case core.ProposedPlanSegmentNormal:
-		if seg.Text != "" {
-			ps.visible.WriteString(seg.Text)
-			return sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypeAssistantDelta, Content: seg.Text})
-		}
-	case core.ProposedPlanSegmentStart:
-		ps.started = true
-		ps.completed = false
-		ps.text.Reset()
-	case core.ProposedPlanSegmentDelta:
-		if ps.started && seg.Text != "" {
-			ps.text.WriteString(seg.Text)
-			return sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypePlanDelta, Content: seg.Text})
-		}
-	case core.ProposedPlanSegmentEnd:
-		if ps.started && !ps.completed {
-			ps.completed = true
-			return sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypePlanCompleted, Content: ps.text.String()})
-		}
-	}
-	return true
-}
-
-func (a *Agent) emitFinalProposedPlan(ctx context.Context, text string, ps *planState, events chan<- AgentEvent) (string, bool) {
-	visible := core.StripProposedPlanBlocks(text)
-	plan, ok := core.ExtractProposedPlanText(text)
-	if !ok {
-		return visible, true
-	}
-	ps.started = true
-	ps.completed = true
-	ps.text.Reset()
-	ps.text.WriteString(plan)
-	if plan != "" {
-		if !sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypePlanDelta, Content: plan}) {
-			return "", false
-		}
-	}
-	return visible, sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypePlanCompleted, Content: plan})
-}
-
+// finalizeAssistantPlanParts attaches the accumulated plan as a plan part. This
+// makes the message render as a plan on session reload (hydration) and keeps the
+// plan visible to the model in provider history. It is a no-op outside Plan mode
+// (and whenever no plan text was produced), since text is only written while
+// streaming Plan-mode content.
+//
+// Only the final text turn — the one that ends planning with a reply instead of
+// another tool call — is the proposed plan. A round that still finishes in
+// tool_use is an intermediate step (e.g. a short preamble before a read); its
+// text must remain ordinary assistant text. Relabeling such a preamble a plan
+// would pollute the persisted history and hydration with non-final text.
 func finalizeAssistantPlanParts(msg *core.Message, ps *planState) {
-	if msg == nil || strings.TrimSpace(ps.text.String()) == "" {
+	if msg == nil || len(msg.ToolCalls) > 0 {
 		return
 	}
-	msg.Parts = removeAssistantTextPlanParts(msg.Parts)
-	if strings.TrimSpace(msg.Text) != "" {
-		msg.Parts = append([]core.MessagePart{{Type: core.MessagePartText, Text: msg.Text}}, msg.Parts...)
+	plan := strings.TrimSpace(ps.text.String())
+	if plan == "" {
+		return
 	}
-	msg.Parts = append(msg.Parts, core.MessagePart{Type: core.MessagePartPlan, Text: ps.text.String()})
-}
-
-func (a *Agent) recoverProposedPlanToolCall(ctx context.Context, msg *core.Message, ps *planState, events chan<- AgentEvent) bool {
-	if a == nil || a.mode != session.ModePlan || msg == nil || len(msg.ToolCalls) == 0 {
-		return false
-	}
-	for _, call := range msg.ToolCalls {
-		if call.Name != "proposed_plan" {
-			continue
-		}
-		plan := proposedPlanToolCallText(call.Input)
-		if strings.TrimSpace(plan) == "" {
-			continue
-		}
-		ps.started = true
-		ps.completed = true
-		ps.text.Reset()
-		ps.text.WriteString(plan)
-		if !sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypePlanDelta, Content: plan}) {
-			return false
-		}
-		if !sendAgentEvent(ctx, events, AgentEvent{Type: AgentEventTypePlanCompleted, Content: plan}) {
-			return false
-		}
-		msg.ToolCalls = nil
-		msg.FinishReason = core.FinishReasonEndTurn
-		finalizeAssistantPlanParts(msg, ps)
-		return true
-	}
-	return false
-}
-
-func proposedPlanToolCallText(input string) string {
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(input), &payload); err != nil {
-		return ""
-	}
-	for _, key := range []string{"plan", "content", "text"} {
-		if value, ok := payload[key].(string); ok && strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
-}
-
-func removeAssistantTextPlanParts(parts []core.MessagePart) []core.MessagePart {
-	if len(parts) == 0 {
-		return nil
-	}
-	out := parts[:0]
-	for _, part := range parts {
-		if part.Type != core.MessagePartText && part.Type != core.MessagePartPlan {
-			out = append(out, part)
-		}
-	}
-	return out
+	msg.Parts = []core.MessagePart{{Type: core.MessagePartPlan, Text: plan}}
+	msg.Text = plan
 }

@@ -99,20 +99,20 @@ const planModeReminderFullEvery = 5
 const planModeReminderOpenTag = "<plan_mode_reminder>"
 
 func hasCurrentPlanModeFullInstruction(text string) bool {
-	return strings.Contains(text, "Finalization rule") && strings.Contains(text, "<proposed_plan>")
+	return strings.Contains(text, "How to present the plan") && strings.Contains(text, "taken as your proposed plan")
 }
 
 func hasCurrentPlanModeReminderInstruction(text string) bool {
 	lower := strings.ToLower(text)
-	return strings.Contains(text, "<proposed_plan>") &&
-		(strings.Contains(text, "Finalization rule") || strings.Contains(lower, "do not ask whether to proceed"))
+	return strings.Contains(text, "How to present the plan") ||
+		strings.Contains(lower, "as your final reply")
 }
 
 func planModeReminderText(full bool) string {
 	if full {
 		return planModeReminderOpenTag + "\nPlan mode is still active.\n\n" + modeChangedInstruction(string(session.ModePlan)) + "\n\nIf the user requests an action that plan mode does not allow, incorporate it as a step in the plan instead of performing it, and do not suggest switching modes.\n</plan_mode_reminder>"
 	}
-	return planModeReminderOpenTag + "\nPlan mode is still active (full instruction in the earlier <mode_changed> marker). Treat the user's next message, including execution requests such as create a branch, implement, or fix, as plan input: fold it into the plan as steps instead of performing it. If the plan is ready, output exactly one <proposed_plan> block and do not ask whether to proceed.\n</plan_mode_reminder>"
+	return planModeReminderOpenTag + "\nPlan mode is still active (full instruction in the earlier <mode_changed> marker). Treat the user's next message, including execution requests such as create a branch, implement, or fix, as plan input: fold it into the plan as steps instead of performing it. When the plan is ready, write it as your final reply (plain Markdown, no special tags) and do not ask whether to proceed.\n</plan_mode_reminder>"
 }
 
 // maybeRecordPlanModeReminder appends a plan-mode reminder ahead of the

@@ -379,6 +379,26 @@ func (a *Assembler) replacePlanMessages(text string) bool {
 	return replaced
 }
 
+// DemoteUncompletedPlan converts plan cards built from streamed plan deltas back
+// into ordinary assistant text. It is used when a Plan-mode turn streamed plan
+// content but never finalized a plan (e.g. it looped into the cap/forced-summary
+// path): the streamed text was investigation, not an approvable plan, so it must
+// not render as a Proposed Plan card. Returns true if anything was demoted.
+func (a *Assembler) DemoteUncompletedPlan() bool {
+	if a == nil {
+		return false
+	}
+	demoted := false
+	for i := range a.messages {
+		if a.messages[i].Kind == KindPlan {
+			a.messages[i].Kind = KindText
+			a.messages[i].Role = "assistant"
+			demoted = true
+		}
+	}
+	return demoted
+}
+
 func (a *Assembler) AddToolResult(name, text string) {
 	a.AddToolResultWithRole(name, text, "result")
 }

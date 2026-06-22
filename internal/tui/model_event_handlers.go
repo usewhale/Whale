@@ -49,9 +49,16 @@ func (m *model) handlePlanCompletedEvent(ev protocol.Event) {
 		if m.assembler == nil {
 			m.assembler = tuirender.NewAssembler()
 		}
+		m.sawPlanThisTurn = true
+		// Only a completed plan opens the implementation gate. plan_delta alone
+		// (which also fires for non-final tool-use-round preambles) must not, or a
+		// turn that ends via a cap/forced summary without a real plan would still
+		// prompt the user to approve investigation text. Set this BEFORE committing
+		// so commitLiveTranscript's uncompleted-plan demotion does not strip the
+		// real finalized plan card.
+		m.sawPlanCompletedThisTurn = true
 		m.assembler.SetPlan(ev.Text)
 		m.commitLiveTranscript(false)
-		m.sawPlanThisTurn = true
 	}
 	m.addLog(logEntry{Kind: "plan_completed", Source: "plan", Summary: truncateLine(ev.Text, 120), Raw: ev.Text})
 }

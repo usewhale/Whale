@@ -86,11 +86,14 @@ func TestPlanModeBlocksWriteTools(t *testing.T) {
 		"retryable",
 		"false",
 		"do_not_retry_same_call",
-		"<proposed_plan>",
+		"write the final plan as your reply",
 	} {
 		if !strings.Contains(blockedContent, want) {
 			t.Fatalf("plan mode blocked result missing %q:\n%s", want, blockedContent)
 		}
+	}
+	if strings.Contains(blockedContent, "<proposed_plan>") {
+		t.Fatalf("plan mode blocked guidance must not reference the sentinel:\n%s", blockedContent)
 	}
 	for _, forbidden := range []string{"/agent", "Shift+Tab", "suggested_modes", "Only the user or UI can switch modes"} {
 		if strings.Contains(blockedContent, forbidden) {
@@ -119,8 +122,11 @@ func TestPlanModeBlockedDetailsAreConciseAndNonRetryable(t *testing.T) {
 			if tc.call.Name == "shell_run" && !strings.Contains(summary, "same shell operation with another shell command") {
 				t.Fatalf("shell summary missing same-shell-operation retry guidance:\n%s", summary)
 			}
-			if !strings.Contains(summary, "<proposed_plan>") {
-				t.Fatalf("summary missing proposed_plan guidance:\n%s", summary)
+			if !strings.Contains(summary, "write the final plan as your reply") {
+				t.Fatalf("summary missing plan-as-reply guidance:\n%s", summary)
+			}
+			if strings.Contains(summary, "<proposed_plan>") {
+				t.Fatalf("summary must not reference the sentinel:\n%s", summary)
 			}
 			for _, forbidden := range []string{"/agent", "Shift+Tab", "Only the user or UI can switch modes"} {
 				if strings.Contains(summary, forbidden) {

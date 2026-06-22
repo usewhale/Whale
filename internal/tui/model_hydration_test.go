@@ -405,27 +405,6 @@ func TestCrossWorkspaceResumeInfoRendersInTUI(t *testing.T) {
 		t.Fatalf("expected cross-workspace resume message in TUI:\n%s", view)
 	}
 }
-func TestHydrateSessionMessages_RestoresProposedPlanStyle(t *testing.T) {
-	m := &model{assembler: tuirender.NewAssembler()}
-	msgs := []core.Message{
-		{
-			Role: core.RoleAssistant,
-			Text: "drafting...\n<proposed_plan>\n# Plan\n- Patch renderer\n</proposed_plan>",
-		},
-	}
-	hydrateSessionMessagesForTest(m, msgs)
-	snap := m.assembler.Snapshot()
-	if len(snap) != 2 || snap[0].Kind != tuirender.KindText || snap[1].Kind != tuirender.KindPlan {
-		t.Fatalf("expected assistant text and proposed plan, got %+v", snap)
-	}
-	rendered := strings.Join(tuirender.ChatLines(snap, 80), "\n")
-	for _, want := range []string{"drafting", "Proposed Plan", "Patch renderer"} {
-		if !strings.Contains(rendered, want) {
-			t.Fatalf("expected %q in hydrated proposed plan:\n%s", want, rendered)
-		}
-	}
-}
-
 func TestHydrateSessionMessages_RestoresStructuredPlanPart(t *testing.T) {
 	m := &model{assembler: tuirender.NewAssembler()}
 	msgs := []core.Message{
@@ -454,32 +433,6 @@ func TestHydrateSessionMessages_RestoresStructuredPlanPart(t *testing.T) {
 	}
 	if strings.Count(rendered, "Patch renderer") != 1 {
 		t.Fatalf("structured hydration should render plan once, got:\n%s", rendered)
-	}
-}
-
-func TestHydrateSessionMessages_RestoresLegacyProposedPlanFromTextPart(t *testing.T) {
-	m := &model{assembler: tuirender.NewAssembler()}
-	legacy := "drafting...\n<proposed_plan>\n# Plan\n- Patch renderer\n</proposed_plan>"
-	msgs := []core.Message{
-		{
-			Role: core.RoleAssistant,
-			Text: legacy,
-			Parts: []core.MessagePart{
-				{Type: core.MessagePartText, Text: legacy},
-			},
-		},
-	}
-	hydrateSessionMessagesForTest(m, msgs)
-	snap := m.assembler.Snapshot()
-	if len(snap) != 2 || snap[0].Kind != tuirender.KindText || snap[1].Kind != tuirender.KindPlan {
-		t.Fatalf("expected assistant text and legacy proposed plan from text part, got %+v", snap)
-	}
-	rendered := strings.Join(tuirender.ChatLines(snap, 80), "\n")
-	if strings.Contains(rendered, "<proposed_plan>") || strings.Contains(rendered, "</proposed_plan>") {
-		t.Fatalf("legacy text part should not render proposed_plan tags:\n%s", rendered)
-	}
-	if !strings.Contains(rendered, "Patch renderer") {
-		t.Fatalf("expected legacy proposed plan text:\n%s", rendered)
 	}
 }
 
