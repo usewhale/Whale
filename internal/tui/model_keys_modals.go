@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strconv"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -121,6 +122,47 @@ func (m *model) handleUserInputKey(msg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 	q := m.userInput.questions[m.userInput.index]
+
+	// In "Other" free-text editing mode
+	if m.userInput.editingOther {
+		switch msg.String() {
+		case "esc":
+			// Always just exit the text field and return to options;
+			// never interrupt the turn from here — m.busy is true
+			// while request_user_input is waiting.
+			m.userInput.editingOther = false
+			m.userInput.otherInput.SetValue("")
+			return nil
+		case "enter":
+			text := strings.TrimSpace(m.userInput.otherInput.Value())
+			if text == "" {
+				text = "Other"
+			}
+			m.userInput.answers = append(m.userInput.answers, protocol.UserInputAnswer{
+				ID:      q.ID,
+				Label:   "Other",
+				Value:   text,
+				IsOther: true,
+			})
+			m.userInput.editingOther = false
+			m.userInput.otherInput.SetValue("")
+			m.userInput.index++
+			m.userInput.selectedOption = 0
+			if m.userInput.index >= len(m.userInput.questions) {
+				resp := protocol.UserInputResponse{Answers: m.userInput.answers}
+				m.dispatchIntent(protocol.Intent{Kind: protocol.IntentSubmitUserInput, ToolCallID: m.userInput.toolCallID, UserInput: &resp})
+				m.mode = modeChat
+			}
+			return nil
+		default:
+			// Forward typing to the text input
+			var cmd tea.Cmd
+			m.userInput.otherInput, cmd = m.userInput.otherInput.Update(msg)
+			return cmd
+		}
+	}
+
+	totalOptions := len(q.Options) + 1 // +1 for "Other"
 	switch msg.String() {
 	case "esc":
 		if m.busy {
@@ -133,10 +175,16 @@ func (m *model) handleUserInputKey(msg tea.KeyMsg) tea.Cmd {
 			m.userInput.selectedOption--
 		}
 	case "down", "j":
-		if m.userInput.selectedOption < len(q.Options)-1 {
+		if m.userInput.selectedOption < totalOptions-1 {
 			m.userInput.selectedOption++
 		}
 	case "enter":
+		// "Other" selected → switch to free-text input
+		if m.userInput.selectedOption == len(q.Options) {
+			m.userInput.editingOther = true
+			m.userInput.otherInput.Focus()
+			return nil
+		}
 		opt := q.Options[m.userInput.selectedOption]
 		m.userInput.answers = append(m.userInput.answers, protocol.UserInputAnswer{ID: q.ID, Label: opt.Label, Value: opt.Label})
 		m.userInput.index++

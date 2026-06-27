@@ -10,7 +10,7 @@ func (b *Toolset) requestInputTools() []core.Tool {
 	return []core.Tool{
 		toolFn{
 			name:        "request_user_input",
-			description: "Request user input for one to three short questions and wait for the response. Use this for branch decisions and key assumptions.",
+			description: "Request user input for one to three short questions and wait for the response. Use this for branch decisions and key assumptions. The UI will add a free-form \"None of the above\" option automatically — do not include an \"Other\" option in your list.",
 			parameters: map[string]any{
 				"type":                 "object",
 				"additionalProperties": false,
@@ -28,9 +28,10 @@ func (b *Toolset) requestInputTools() []core.Tool {
 								"header":   map[string]any{"type": "string"},
 								"question": map[string]any{"type": "string"},
 								"options": map[string]any{
-									"type":     "array",
-									"minItems": 2,
-									"maxItems": 3,
+									"type":        "array",
+									"minItems":    1,
+									"maxItems":    4,
+									"description": "Provide 1-4 mutually exclusive choices. The UI will add a free-form \"None of the above\" automatically; do not include an Other option.",
 									"items": map[string]any{
 										"type":                 "object",
 										"additionalProperties": false,
