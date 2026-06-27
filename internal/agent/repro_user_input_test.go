@@ -31,8 +31,8 @@ func requestUserInputSpec() core.ToolSpec {
 							"question": map[string]any{"type": "string"},
 							"options": map[string]any{
 								"type":     "array",
-								"minItems": 2,
-								"maxItems": 3,
+								"minItems": 1,
+								"maxItems": 4,
 								"items": map[string]any{
 									"type":                 "object",
 									"additionalProperties": false,
@@ -108,9 +108,9 @@ func TestReproInvalidRequestUserInput(t *testing.T) {
 			var in core.UserInputRequest
 			unmarshalErr := json.Unmarshal([]byte(fixed), &in)
 
-			validateErr := error(nil)
+			normalizeErr := error(nil)
 			if unmarshalErr == nil {
-				validateErr = validateUserInputRequest(in)
+				normalizeErr = normalizeUserInputRequest(&in)
 			}
 
 			switch {
@@ -140,8 +140,8 @@ func TestReproInvalidRequestUserInput(t *testing.T) {
 					t.Fatalf("handler output dropped the concrete serde reason %q: %s", unmarshalErr.Error(), res.ModelText)
 				}
 				t.Logf("REPRO ❌ unmarshal failed -> handler returned informed message | repairs=%d detail=%q", len(repairs), unmarshalErr.Error())
-			case validateErr != nil:
-				t.Logf("validation failed (different error): %v | repairs=%d", validateErr, len(repairs))
+			case normalizeErr != nil:
+				t.Logf("normalization failed: %v | repairs=%d", normalizeErr, len(repairs))
 			default:
 				t.Logf("OK ✅ repaired & valid | repairs=%d", len(repairs))
 			}

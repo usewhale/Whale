@@ -103,8 +103,16 @@ func (m model) renderUserInputPicker() string {
 		return ""
 	}
 	q := m.userInput.questions[m.userInput.index]
-	rows := make([]string, 0, len(q.Options)+4)
+	rows := make([]string, 0, len(q.Options)+5)
 	rows = append(rows, pickerTitle(q.Question), "")
+
+	if m.userInput.editingOther {
+		rows = append(rows, "💬 Other — type your answer:", "")
+		rows = append(rows, m.userInput.otherInput.View())
+		rows = append(rows, "", pickerHint("(enter submit, esc cancel)"))
+		return strings.Join(rows, "\n")
+	}
+
 	labelWidth := 0
 	for _, opt := range q.Options {
 		labelWidth = max(labelWidth, lipgloss.Width(opt.Label))
@@ -113,6 +121,9 @@ func (m model) renderUserInputPicker() string {
 	for i, opt := range q.Options {
 		rows = append(rows, pickerInlineDescriptionRow(opt.Label, opt.Description, i == m.userInput.selectedOption, labelWidth))
 	}
+	// "None of the above" row
+	otherSelected := m.userInput.selectedOption == len(q.Options)
+	rows = append(rows, pickerInlineDescriptionRow("💬 Other", "None of the above — type your own answer", otherSelected, labelWidth))
 	rows = append(rows, "", pickerHint("(up/down choose, enter confirm, esc cancel)"))
 	return strings.Join(rows, "\n")
 }

@@ -440,6 +440,8 @@ func (m *model) handleUserInputRequiredEvent(ev protocol.Event) {
 	m.userInput.questions = ev.Questions
 	m.userInput.index = 0
 	m.userInput.selectedOption = 0
+	m.userInput.editingOther = false
+	m.userInput.otherInput.SetValue("")
 	m.userInput.answers = nil
 	m.addLog(logEntry{Kind: "user_input_required", Source: ev.ToolName, Summary: fmt.Sprintf("%d questions", len(ev.Questions)), Raw: fmt.Sprintf("%+v", ev.Questions)})
 	m.status = "user input required"

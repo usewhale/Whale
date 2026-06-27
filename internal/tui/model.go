@@ -143,6 +143,8 @@ type model struct {
 		questions      []protocol.UserInputQuestion
 		index          int
 		selectedOption int
+		editingOther   bool
+		otherInput     textinput.Model
 		answers        []protocol.UserInputAnswer
 	}
 	palette struct {
@@ -313,6 +315,14 @@ type busyTickMsg struct{}
 
 const serviceDeltaFrame = 100 * time.Millisecond
 
+func newOtherInput() textinput.Model {
+	ti := textinput.New()
+	ti.Placeholder = "Type your own answer..."
+	ti.CharLimit = 500
+	ti.Focus()
+	return ti
+}
+
 func newModel(rt Runtime, modelName, effort, thinking string) model {
 	filter := textinput.New()
 	filter.Placeholder = "filter logs (press /)"
@@ -368,6 +378,7 @@ func newModel(rt Runtime, modelName, effort, thinking string) model {
 	}
 	m.slash.all = appcommands.DefaultSlashCommands()
 	m.resetTranscript()
+	m.userInput.otherInput = newOtherInput()
 	return m
 }
 
