@@ -21,6 +21,7 @@ type UsageRecord struct {
 	CompletionTokens         int         `json:"completion_tokens"`
 	PromptCacheHit           int         `json:"prompt_cache_hit_tokens"`
 	PromptCacheMiss          int         `json:"prompt_cache_miss_tokens"`
+	PromptCacheWrite         int         `json:"prompt_cache_write_tokens,omitempty"`
 	PrefixCompletionRequests int         `json:"prefix_completion_requests,omitempty"`
 	CacheHitRatio            float64     `json:"cache_hit_ratio,omitempty"`
 	ReasoningReplayTok       int         `json:"reasoning_replay_tokens,omitempty"`

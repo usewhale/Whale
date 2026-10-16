@@ -8,9 +8,10 @@ import (
 )
 
 type Pricing struct {
-	InputMissUSDPerMTok float64
-	InputHitUSDPerMTok  float64
-	OutputUSDPerMTok    float64
+	InputMissUSDPerMTok  float64
+	InputHitUSDPerMTok   float64
+	OutputUSDPerMTok     float64
+	CacheWriteUSDPerMTok float64
 }
 
 var defaultPricing = map[string]Pricing{
@@ -19,10 +20,15 @@ var defaultPricing = map[string]Pricing{
 	// discount, which DeepSeek says runs through 2026-05-31 15:59 UTC.
 	defaults.DefaultModel: {InputMissUSDPerMTok: 0.14, InputHitUSDPerMTok: 0.0028, OutputUSDPerMTok: 0.28},
 	defaults.ProModel:     {InputMissUSDPerMTok: 0.435, InputHitUSDPerMTok: 0.003625, OutputUSDPerMTok: 0.87},
+	"minimax-m3":          {InputMissUSDPerMTok: 0.6, InputHitUSDPerMTok: 0.12, OutputUSDPerMTok: 2.4},
+	"minimax-m2.7":        {InputMissUSDPerMTok: 0.3, InputHitUSDPerMTok: 0.06, OutputUSDPerMTok: 1.2, CacheWriteUSDPerMTok: 0.375},
 }
 
 func pricingForModel(model string) Pricing {
 	m := strings.ToLower(strings.TrimSpace(model))
+	if p, ok := defaultPricing[m]; ok {
+		return p
+	}
 	if strings.Contains(m, "pro") {
 		return defaultPricing[defaults.ProModel]
 	}
@@ -31,20 +37,23 @@ func pricingForModel(model string) Pricing {
 
 func EstimateTurnUSD(model string, usage llm.Usage) float64 {
 	p := pricingForModel(model)
-	promptNonCache := max(usage.PromptTokens-usage.PromptCacheHitTokens, 0)
+	promptWrite := max(usage.PromptCacheWriteTokens, 0)
+	promptNonCache := max(usage.PromptTokens-usage.PromptCacheHitTokens-promptWrite, 0)
 	promptCache := max(usage.PromptCacheHitTokens, 0)
 	completion := max(usage.CompletionTokens, 0)
 	return (float64(promptNonCache)/1_000_000.0)*p.InputMissUSDPerMTok +
 		(float64(promptCache)/1_000_000.0)*p.InputHitUSDPerMTok +
+		(float64(promptWrite)/1_000_000.0)*p.CacheWriteUSDPerMTok +
 		(float64(completion)/1_000_000.0)*p.OutputUSDPerMTok
 }
 
 func EstimateUsageRecordUSD(rec UsageRecord) float64 {
 	return EstimateTurnUSD(rec.Model, llm.Usage{
-		PromptTokens:          rec.PromptTokens,
-		CompletionTokens:      rec.CompletionTokens,
-		PromptCacheHitTokens:  rec.PromptCacheHit,
-		PromptCacheMissTokens: rec.PromptCacheMiss,
+		PromptTokens:           rec.PromptTokens,
+		CompletionTokens:       rec.CompletionTokens,
+		PromptCacheHitTokens:   rec.PromptCacheHit,
+		PromptCacheMissTokens:  rec.PromptCacheMiss,
+		PromptCacheWriteTokens: rec.PromptCacheWrite,
 	})
 }
 
@@ -65,10 +74,12 @@ func EstimateUsageRecordCacheSavingsUSD(rec UsageRecord) float64 {
 
 func InputCostUSD(model string, usage llm.Usage) float64 {
 	p := pricingForModel(model)
-	promptNonCache := max(usage.PromptTokens-usage.PromptCacheHitTokens, 0)
+	promptWrite := max(usage.PromptCacheWriteTokens, 0)
+	promptNonCache := max(usage.PromptTokens-usage.PromptCacheHitTokens-promptWrite, 0)
 	promptCache := max(usage.PromptCacheHitTokens, 0)
 	return (float64(promptNonCache)/1_000_000.0)*p.InputMissUSDPerMTok +
-		(float64(promptCache)/1_000_000.0)*p.InputHitUSDPerMTok
+		(float64(promptCache)/1_000_000.0)*p.InputHitUSDPerMTok +
+		(float64(promptWrite)/1_000_000.0)*p.CacheWriteUSDPerMTok
 }
 
 func OutputCostUSD(model string, usage llm.Usage) float64 {

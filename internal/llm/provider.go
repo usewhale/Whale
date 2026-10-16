@@ -39,6 +39,7 @@ type Usage struct {
 	TotalTokens              int
 	PromptCacheHitTokens     int
 	PromptCacheMissTokens    int
+	PromptCacheWriteTokens   int
 	PrefixCompletionRequests int
 	ReasoningReplayTokens    int
 	ToolResultRawChars       int

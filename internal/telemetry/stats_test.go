@@ -48,3 +48,17 @@ func TestBuildTurnStats_ReasoningReplayAndCacheRatio(t *testing.T) {
 		t.Fatalf("unexpected cache hit ratio: %f", st.CacheHitRatio)
 	}
 }
+
+func TestEstimateTurnUSD_MiniMaxPricingAndCacheWrite(t *testing.T) {
+	usage := llm.Usage{PromptTokens: 1_000_000, PromptCacheHitTokens: 100_000, PromptCacheWriteTokens: 200_000, CompletionTokens: 100_000}
+	m3 := EstimateTurnUSD("MiniMax-M3", usage)
+	wantM3 := 700_000.0/1_000_000*0.6 + 100_000.0/1_000_000*0.12 + 100_000.0/1_000_000*2.4
+	if math.Abs(m3-wantM3) > 1e-9 {
+		t.Fatalf("MiniMax-M3 cost = %.9f, want %.9f", m3, wantM3)
+	}
+	m27 := EstimateTurnUSD("MiniMax-M2.7", usage)
+	wantM27 := 700_000.0/1_000_000*0.3 + 100_000.0/1_000_000*0.06 + 200_000.0/1_000_000*0.375 + 100_000.0/1_000_000*1.2
+	if math.Abs(m27-wantM27) > 1e-9 {
+		t.Fatalf("MiniMax-M2.7 cost = %.9f, want %.9f", m27, wantM27)
+	}
+}
